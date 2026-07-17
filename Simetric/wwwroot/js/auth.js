@@ -1,87 +1,99 @@
-window.authInterop = {
-    login: function (payload) {
-        return this.postJson("/api/auth/login", payload);
-    },
-    check: async function () {
-        try {
-            const response = await fetch("/api/auth/check", {
-                method: "GET",
-                credentials: "include"
-            });
-            return await response.json();
-        } catch {
-            return { authenticated: false, idUsuario: 0 };
-        }
-    },
-    mfaLogin: function (payload) {
-        return this.postJson("/api/auth/mfa-login", payload);
-    },
+window.authInterop = window.authInterop || {};
 
-    logout: async function () {
-        try {
-            return await this.postJson("/api/auth/logout", {});
-        } finally {
-            this.clearClientSession();
-        }
-    },
+window.authInterop.login = window.authInterop.login || function (payload) {
+    return this.postJson("/api/auth/login", payload);
+};
 
-    logoutAndRedirect: async function (url) {
-        try {
-            await this.logout();
-        } finally {
-            window.location.replace(url || "/login");
-        }
-    },
+window.authInterop.check = window.authInterop.check || async function () {
+    let timeoutId;
 
-    clearClientSession: function () {
-        try {
-            localStorage.removeItem("userSession");
-            localStorage.removeItem("numerica:last-activity");
-            localStorage.removeItem("numerica:current-service");
-            localStorage.removeItem("selectedAppService");
-            sessionStorage.removeItem("numerica:session-expired");
-        } catch {
-            // Ignorado a proposito.
-        }
-    },
+    try {
+        const controller = new AbortController();
+        timeoutId = window.setTimeout(function () {
+            controller.abort();
+        }, 4000);
 
-    postJson: async function (url, payload) {
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
+        const response = await fetch("/api/auth/check", {
+            method: "GET",
             credentials: "include",
-            body: JSON.stringify(payload)
+            cache: "no-store",
+            signal: controller.signal
         });
 
-        const text = await response.text();
-
-        if (!text) {
-            return {
-                ok: response.ok,
-                status: response.status,
-                statusText: response.statusText,
-                message: response.ok ? "" : `HTTP ${response.status} ${response.statusText}`
-            };
+        return await response.json();
+    } catch {
+        return { authenticated: false, idUsuario: 0 };
+    } finally {
+        if (timeoutId) {
+            window.clearTimeout(timeoutId);
         }
+    }
+};
 
-        try {
-            const data = JSON.parse(text);
-            return {
-                ok: response.ok,
-                status: response.status,
-                statusText: response.statusText,
-                ...data
-            };
-        } catch {
-            return {
-                ok: response.ok,
-                status: response.status,
-                statusText: response.statusText,
-                message: text
-            };
-        }
+window.authInterop.logout = window.authInterop.logout || async function () {
+    try {
+        return await this.postJson("/api/auth/logout", {});
+    } finally {
+        this.clearClientSession();
+    }
+};
+
+window.authInterop.logoutAndRedirect = window.authInterop.logoutAndRedirect || async function (url) {
+    try {
+        await this.logout();
+    } finally {
+        window.location.replace(url || "/login");
+    }
+};
+
+window.authInterop.clearClientSession = window.authInterop.clearClientSession || function () {
+    try {
+        localStorage.removeItem("userSession");
+        localStorage.removeItem("numerica:last-activity");
+        localStorage.removeItem("numerica:current-service");
+        localStorage.removeItem("selectedAppService");
+        sessionStorage.removeItem("numerica:session-expired");
+    } catch {
+        // Ignorado a proposito.
+    }
+};
+
+window.authInterop.postJson = window.authInterop.postJson || async function (url, payload) {
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify(payload)
+    });
+
+    const text = await response.text();
+
+    if (!text) {
+        return {
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+            message: response.ok ? "" : `HTTP ${response.status} ${response.statusText}`
+        };
+    }
+
+    try {
+        const data = JSON.parse(text);
+        return {
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+            ...data
+        };
+    } catch {
+        return {
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+            message: text
+        };
     }
 };
 

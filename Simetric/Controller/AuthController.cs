@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -16,21 +15,25 @@ namespace Simetric.Controllers
     {
         private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
-        [HttpGet("check")]
-        public IActionResult Check()
-        {
-            if (User.Identity?.IsAuthenticated == true)
-            {
-                var idUsuario = User.FindFirst("IdUsuario")?.Value ?? "0";
-                return Ok(new { authenticated = true, idUsuario = int.Parse(idUsuario) });
-            }
-
-            return Ok(new { authenticated = false, idUsuario = 0 });
-        }
-
         public AuthController(IDbContextFactory<AppDbContext> dbFactory)
         {
             _dbFactory = dbFactory;
+        }
+
+        [HttpGet("check")]
+        public IActionResult Check()
+        {
+            Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+            Response.Headers.Pragma = "no-cache";
+
+            if (User.Identity?.IsAuthenticated == true)
+            {
+                var claimValue = User.FindFirst("IdUsuario")?.Value;
+                var idUsuario = int.TryParse(claimValue, out var parsedId) ? parsedId : 0;
+                return Ok(new { authenticated = idUsuario > 0, idUsuario });
+            }
+
+            return Ok(new { authenticated = false, idUsuario = 0 });
         }
 
         [HttpPost("login")]
@@ -56,7 +59,9 @@ namespace Simetric.Controllers
                         (!string.IsNullOrWhiteSpace(u.Nombres) && u.Nombres.ToLower() == normalizedUsername));
 
                 if (userInDb == null)
+                {
                     return Unauthorized("Usuario no registrado.");
+                }
 
                 if (userInDb.CuentaBloqueada == true &&
                     userInDb.FechaDesbloqueo.HasValue &&
@@ -75,7 +80,7 @@ namespace Simetric.Controllers
                     await context.SaveChangesAsync();
                 }
 
-                bool isPasswordValid = SecurityHelper.VerifyPassword(request.Password.Trim(), userInDb.PasswordHash);
+                var isPasswordValid = SecurityHelper.VerifyPassword(request.Password.Trim(), userInDb.PasswordHash);
 
                 if (!isPasswordValid)
                 {
@@ -103,25 +108,25 @@ namespace Simetric.Controllers
                     return Unauthorized("Tu cuenta está desactivada por el administrador.");
                 }
 
-            var esEmpleadoBackOffice = userInDb.IdTipoUsuario == 7 || userInDb.IdTipoUsuario == 2;
+                var esEmpleadoBackOffice = userInDb.IdTipoUsuario == 7 || userInDb.IdTipoUsuario == 2;
 
-            var politicasAceptadas = await context.Auditorias
-                .AsNoTracking()
-                .AnyAsync(a => a.IdUsuario == userInDb.IdUsuario && a.Accion == "Aceptación de Políticas de Privacidad");
+                var politicasAceptadas = await context.Auditorias
+                    .AsNoTracking()
+                    .AnyAsync(a => a.IdUsuario == userInDb.IdUsuario && a.Accion == "Aceptación de Políticas de Privacidad");
 
-            if (!esEmpleadoBackOffice && !politicasAceptadas)
-            {
-                return Ok(new
+                if (!esEmpleadoBackOffice && !politicasAceptadas)
                 {
-                    requierePoliticas = true,
-                    idUsuario = userInDb.IdUsuario
-                });
-            }
+                    return Ok(new
+                    {
+                        requierePoliticas = true,
+                        idUsuario = userInDb.IdUsuario
+                    });
+                }
 
-            if (!esEmpleadoBackOffice && userInDb.ClaveTemporal == true)
-            {
-                return Ok(new
+                if (!esEmpleadoBackOffice && userInDb.ClaveTemporal == true)
                 {
+                    return Ok(new
+                    {
                         requiereCambioClave = true,
                         idUsuario = userInDb.IdUsuario
                     });
@@ -134,32 +139,20 @@ namespace Simetric.Controllers
                     userInDb.FechaExpiracionToken = null;
                 }
 
-                if (userInDb.MfaHabilitado == true)
-                {
-                    HttpContext.Session.SetInt32("PendingMfa.IdUsuario", userInDb.IdUsuario);
-                    HttpContext.Session.SetString("PendingMfa.Recordarme", request.Recordarme ? "true" : "false");
-
-                    return Ok(new
-                    {
-                        requiereMfa = true,
-                        idUsuario = userInDb.IdUsuario
-                    });
-                }
-
                 userInDb.IntentosFallidos = 0;
                 userInDb.CuentaBloqueada = false;
                 await context.SaveChangesAsync();
 
                 var claims = new List<Claim>
                 {
-                    new Claim(ClaimTypes.Name, userInDb.Nombres ?? "Usuario"),
-                    new Claim(ClaimTypes.NameIdentifier, userInDb.IdUsuario.ToString()),
-                    new Claim(ClaimTypes.Surname, userInDb.Apellidos ?? ""),
-                    new Claim(ClaimTypes.Email, userInDb.Email ?? ""),
-                    new Claim("IdUsuario", userInDb.IdUsuario.ToString()),
-                    new Claim("IdTipoUsuario", userInDb.IdTipoUsuario?.ToString() ?? "0"),
-                    new Claim("EstadoAsociado", (userInDb.estadoAsociado ?? false).ToString()),
-                    new Claim("TipoCliente", userInDb.TipoCliente?.ToString() ?? "0")
+                    new(ClaimTypes.Name, userInDb.Nombres ?? "Usuario"),
+                    new(ClaimTypes.NameIdentifier, userInDb.IdUsuario.ToString()),
+                    new(ClaimTypes.Surname, userInDb.Apellidos ?? ""),
+                    new(ClaimTypes.Email, userInDb.Email ?? ""),
+                    new("IdUsuario", userInDb.IdUsuario.ToString()),
+                    new("IdTipoUsuario", userInDb.IdTipoUsuario?.ToString() ?? "0"),
+                    new("EstadoAsociado", (userInDb.estadoAsociado ?? false).ToString()),
+                    new("TipoCliente", userInDb.TipoCliente?.ToString() ?? "0")
                 };
 
                 if (userInDb.idJefe is > 0)
@@ -198,106 +191,25 @@ namespace Simetric.Controllers
 
                 StoreUserSession(userInDb, request.Recordarme);
 
-            return Ok(new
-            {
-                success = true,
-                idUsuario = userInDb.IdUsuario,
-                idTipoUsuario = userInDb.IdTipoUsuario,
-                nombres = userInDb.Nombres,
-                apellidos = userInDb.Apellidos,
-                email = userInDb.Email,
-                avatarUrl = userInDb.AvatarUrl,
-                tipoCliente = userInDb.TipoCliente,
-                idJefe = userInDb.idJefe,
-                estadoAsociado = userInDb.estadoAsociado
-            });
-        }
-            catch (Exception ex)
-            {
-                var diagnostic = await BuildRuntimeDatabaseDiagnosticAsync();
-                return StatusCode(StatusCodes.Status500InternalServerError,
-                    $"Error al iniciar sesion. {diagnostic}Detalle: {ex.Message}");
-            }
-        }
-
-        [HttpPost("mfa-login")]
-        public async Task<IActionResult> MfaLogin([FromBody] MfaLoginRequest request)
-        {
-            if (request == null || request.IdUsuario <= 0)
-                return BadRequest("Solicitud inválida.");
-
-            var pendingUserId = HttpContext.Session.GetInt32("PendingMfa.IdUsuario");
-            if (pendingUserId != request.IdUsuario)
-                return Unauthorized("La validacion MFA expiro. Vuelve a iniciar sesion.");
-
-            var recordarmePendiente = string.Equals(
-                HttpContext.Session.GetString("PendingMfa.Recordarme"),
-                "true",
-                StringComparison.OrdinalIgnoreCase);
-
-            using var context = await _dbFactory.CreateDbContextAsync();
-            var userInDb = await context.Usuarios.FindAsync(request.IdUsuario);
-
-            if (userInDb == null)
-                return Unauthorized("Usuario no encontrado.");
-
-            if (userInDb.Estado != true)
-            {
-                if (userInDb.idJefe is > 0 && userInDb.estadoAsociado != true)
+                return Ok(new
                 {
-                    return Unauthorized("Tu solicitud de asociado esta pendiente de aprobacion.");
-                }
-
-                return Unauthorized("Tu cuenta está desactivada por el administrador.");
+                    success = true,
+                    idUsuario = userInDb.IdUsuario,
+                    idTipoUsuario = userInDb.IdTipoUsuario,
+                    nombres = userInDb.Nombres,
+                    apellidos = userInDb.Apellidos,
+                    email = userInDb.Email,
+                    avatarUrl = userInDb.AvatarUrl,
+                    tipoCliente = userInDb.TipoCliente,
+                    idJefe = userInDb.idJefe,
+                    estadoAsociado = userInDb.estadoAsociado
+                });
             }
-
-            var claims = new List<Claim>
+            catch (Exception)
             {
-                new Claim(ClaimTypes.Name, userInDb.Nombres ?? "Usuario"),
-                new Claim(ClaimTypes.NameIdentifier, userInDb.IdUsuario.ToString()),
-                new Claim(ClaimTypes.Surname, userInDb.Apellidos ?? ""),
-                new Claim(ClaimTypes.Email, userInDb.Email ?? ""),
-                new Claim("IdUsuario", userInDb.IdUsuario.ToString()),
-                new Claim("IdTipoUsuario", userInDb.IdTipoUsuario?.ToString() ?? "0"),
-                new Claim("EstadoAsociado", (userInDb.estadoAsociado ?? false).ToString())
-            };
-
-            if (userInDb.idJefe is > 0)
-            {
-                claims.Add(new Claim("IdJefe", userInDb.idJefe.Value.ToString()));
+                return StatusCode(StatusCodes.Status500InternalServerError,
+                    "Error al iniciar sesion. Intenta nuevamente en unos segundos.");
             }
-
-            if (!string.IsNullOrWhiteSpace(userInDb.AvatarUrl))
-            {
-                claims.Add(new Claim("AvatarUrl", userInDb.AvatarUrl));
-            }
-
-            if (userInDb.IdTipoUsuario != null)
-            {
-                claims.Add(new Claim(ClaimTypes.Role, userInDb.IdTipoUsuario.ToString()!));
-            }
-
-            var principal = new ClaimsPrincipal(
-                new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
-
-            var authProperties = new AuthenticationProperties
-            {
-                IsPersistent = recordarmePendiente,
-                AllowRefresh = true,
-                IssuedUtc = DateTimeOffset.UtcNow,
-                ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(30)
-            };
-
-            await HttpContext.SignInAsync(
-                CookieAuthenticationDefaults.AuthenticationScheme,
-                principal,
-                authProperties);
-
-            HttpContext.Session.Remove("PendingMfa.IdUsuario");
-            HttpContext.Session.Remove("PendingMfa.Recordarme");
-            StoreUserSession(userInDb, recordarmePendiente);
-
-            return Ok(new { success = true });
         }
 
         [HttpPost("logout")]
@@ -320,61 +232,12 @@ namespace Simetric.Controllers
             HttpContext.Session.SetString("Session.Recordarme", recordarme ? "true" : "false");
         }
 
-        private async Task<string> BuildRuntimeDatabaseDiagnosticAsync()
-        {
-            try
-            {
-                await using var context = await _dbFactory.CreateDbContextAsync();
-                var connection = context.Database.GetDbConnection();
-                var usuariosObjectId = "NULL";
-                var saldoColumnLength = "NULL";
-
-                if (connection.State != System.Data.ConnectionState.Open)
-                {
-                    await connection.OpenAsync();
-                }
-
-                await using var command = connection.CreateCommand();
-                command.CommandText = """
-                    SELECT
-                        OBJECT_ID(N'Usuarios') AS UsuariosObjectId,
-                        COL_LENGTH(N'Usuarios', N'SaldoDocumentos') AS SaldoDocumentosLength;
-                    """;
-
-                await using var reader = await command.ExecuteReaderAsync();
-                if (await reader.ReadAsync())
-                {
-                    usuariosObjectId = reader.IsDBNull(0) ? "NULL" : reader.GetValue(0).ToString() ?? "NULL";
-                    saldoColumnLength = reader.IsDBNull(1) ? "NULL" : reader.GetValue(1).ToString() ?? "NULL";
-                }
-
-                return new StringBuilder()
-                    .Append("Diagnostico runtime -> ")
-                    .Append("DataSource: ").Append(connection.DataSource)
-                    .Append(", Database: ").Append(connection.Database)
-                    .Append(", Usuarios OBJECT_ID: ").Append(usuariosObjectId)
-                    .Append(", SaldoDocumentos COL_LENGTH: ").Append(saldoColumnLength)
-                    .Append(", BaseDir: ").Append(AppContext.BaseDirectory)
-                    .Append(". ")
-                    .ToString();
-            }
-            catch (Exception diagnosticEx)
-            {
-                return $"Diagnostico runtime no disponible ({diagnosticEx.Message}). ";
-            }
-        }
     }
 
     public class LoginCookieRequest
     {
         public string Username { get; set; } = "";
         public string Password { get; set; } = "";
-        public bool Recordarme { get; set; }
-    }
-
-    public class MfaLoginRequest
-    {
-        public int IdUsuario { get; set; }
         public bool Recordarme { get; set; }
     }
 }

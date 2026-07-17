@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.Components.Forms
 @using Simetric.DTOs
 @using Simetric.Services
+@using System.Text
 @using System.Text.Json
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
@@ -13,7 +14,6 @@
 @inject NotaCreditoService NotaCreditoService
 @inject SweetAlertService AlertService
 @inject IJSRuntime JS
-@using System.Text
 @using Simetric.Models.Glogales
 <PageTitle>Mis Facturas BackOffice | Numerica e-fact</PageTitle>
 
@@ -1131,54 +1131,29 @@
     }
     private async Task ReenviarAlSriAsync(FacturaListDto factura)
     {
-        string pathCertificado = "";
-        string pass = "";
-        var emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
-        emisores = emisorMaestro == null ? new List<Simetric.Models.Emisor>() : new List<Simetric.Models.Emisor> { emisorMaestro };
-        var rutaXml = await FacturacionService.AsegurarRutaXmlFacturaUsuarioAsync(factura.Codfactura, currentUserId, true);
-        if (string.IsNullOrWhiteSpace(rutaXml))
+        var resultadoSri = await FacturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
+        await Recargar();
+
+        if (string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
         {
-            await AlertService.ShowErrorAsync("No se pudo regenerar el XML desde los datos guardados de la factura.", "XML no disponible");
-            return;
-        }
-        var correosFactura = ObtenerCorreosOpcionalesFactura();
-
-        mensajeSRI m = new mensajeSRI();
-        var mensajeResultado = "";
-        if (emisores.Any())
-        {
-
-            pathCertificado = $"App_Data/{emisores.First().PathCertificado}";
-            pass = emisores.First().ClaveCertificado;
-
-            //EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass).Wait();
-            m = await EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass);
-        }
-
-        if (m.autorizacion != "")
-        {
-
-            await FacturacionService.ActualizarAutorizacionFacturaAsync(factura.Codfactura, m.autorizacion, m.fecha,"",true);
-            var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, rutaXml, m);
+            var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, forzarReenvio: true);
             if (resultadoCorreo.Enviado || resultadoCorreo.YaEnviado)
             {
-                mensajeResultado = resultadoCorreo.Enviado
-                    ? resultadoCorreo.Mensaje
-                    : "Factura guardada correctamente.";
-                await AlertService.ShowSuccessAsync(mensajeResultado, "Factura guardada");
+                await AlertService.ShowSuccessAsync(resultadoCorreo.Mensaje, "Factura autorizada");
             }
             else
             {
-                await AlertService.ShowErrorAsync(
-                    $"La factura fue autorizada, pero no se pudo enviar el correo al cliente. {resultadoCorreo.Mensaje}",
-                    "Error al enviar correo");
+                await AlertService.ShowWarningAsync(
+                    $"La factura se autorizó, pero el correo no salió todavía. {resultadoCorreo.Mensaje}",
+                    "Correo pendiente");
             }
+
+            return;
         }
-        else
-        {
-            await FacturacionService.ActualizarAutorizacionFacturaAsync(factura.Codfactura, m.autorizacion, m.fecha, m.xml, false);
-            await AlertService.ShowSuccessAsync("Factura guardada no autorizada, por favor revise el error enviado por el SRI: " + m.mensaje + " puede reenviar la factura desde el listado de facturas", "Factura guardada con observaciones");
-        }
+
+        await AlertService.ShowWarningAsync(
+            resultadoSri.mensaje ?? "La factura sigue pendiente o con observaciones del SRI.",
+            "SRI");
     }
     public async Task<mensajeSRI> EnviarXmlAApiFrameworkAsync(string rutaArchivoxml, string rutaFirma, string password)
     {

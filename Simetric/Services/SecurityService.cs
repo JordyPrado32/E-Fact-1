@@ -25,7 +25,7 @@ namespace Simetric.Services
             _http = http;
         }
 
-        // ✅ LOGS (LOGIN / MFA / ERRORES)
+        // ✅ LOGS (LOGIN / ERRORES)
         public async Task RegistrarLogInicioSesionAsync(int? idUsuario, bool exitoso, string? detalle)
         {
             try

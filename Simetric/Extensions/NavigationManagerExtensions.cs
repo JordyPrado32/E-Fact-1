@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.JSInterop;
 
 namespace Simetric.Extensions;
 
@@ -21,7 +22,18 @@ public static class NavigationManagerExtensions
         if (navigationManager.IsCurrentTarget(target))
             return;
 
-        navigationManager.NavigateTo(target, forceLoad, replace);
+        try
+        {
+            navigationManager.NavigateTo(target, forceLoad, replace);
+        }
+        catch (JSDisconnectedException)
+        {
+            // El circuito ya se desconecto; no intentamos navegar de nuevo.
+        }
+        catch (ObjectDisposedException)
+        {
+            // El NavigationManager ya se esta descartando.
+        }
     }
 
     private static string BuildComparableUri(NavigationManager navigationManager, string uri)

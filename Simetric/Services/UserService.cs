@@ -172,7 +172,6 @@ namespace Simetric.Services
                 usuario.Estado = true;
                 usuario.IntentosFallidos = 0;
                 usuario.CuentaBloqueada = false;
-                usuario.MfaHabilitado = false;
                 usuario.SaldoDocumentos = usuario.SaldoDocumentos > 0 ? usuario.SaldoDocumentos : 9;
 
                 // Nota: La ClaveTemporal y PasswordHash ya deben venir asignados desde la UI/Controlador
@@ -239,9 +238,6 @@ namespace Simetric.Services
             user.CuentaBloqueada = false;
             user.IntentosFallidos = 0;
             user.FechaDesbloqueo = null;
-            user.MfaHabilitado = false;
-            user.MfaSecretKey = null;
-            user.CodigoSmsTemp = null;
             user.TokenRecuperacion = null;
             user.FechaExpiracionToken = null;
 

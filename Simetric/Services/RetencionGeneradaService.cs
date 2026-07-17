@@ -318,7 +318,7 @@ public class RetencionGeneradaService
         if (string.IsNullOrWhiteSpace(rutaPdf) || !File.Exists(rutaPdf))
             return null;
 
-        return ConstruirPdfUrl(detalle.Emisor.Ruc, detalle.RetencionInfo.NumRetencion, detalle.RetencionInfo.Sec, formato);
+        return ConstruirPdfUrlDesdeRutaLocal(rutaPdf);
     }
 
     private async Task<RetencionGeneradaDetalleViewDto?> GetRetencionDetalleCoreAsync(int sec, int? idUsuario)
@@ -708,6 +708,13 @@ public class RetencionGeneradaService
 
     private static string ConstruirPdfUrl(string? ruc, string? numeroRetencion, int sec, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
         => $"/retenciones/{ConstruirNombreArchivoPdf(ruc, numeroRetencion, sec, formato)}";
+
+    private string ConstruirPdfUrlDesdeRutaLocal(string rutaPdf)
+    {
+        var webRoot = ObtenerWebRootPath();
+        var relativa = Path.GetRelativePath(webRoot, rutaPdf).Replace(Path.DirectorySeparatorChar, '/');
+        return "/" + relativa.TrimStart('/');
+    }
 
     private static string ConstruirNombreArchivoPdf(string? ruc, string? numeroRetencion, int sec, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
     {

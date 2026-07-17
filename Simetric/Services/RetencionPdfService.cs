@@ -42,7 +42,7 @@ public sealed class RetencionPdfService : IRetencionPdfService
         var numero = LimpiarSegmentoArchivo(retencionView.RetencionInfo.NumRetencion, retencionView.RetencionInfo.Sec.ToString(Cultura));
         var rutaPdf = Path.Combine(carpeta, $"{ruc}_07_{numero.PadLeft(9, '0')}{formato.ObtenerSufijoArchivo()}.pdf");
 
-        GenerarPdfRetencionInterno(retencionView, formato, rutaPdf);
+        rutaPdf = GenerarPdfRetencionSeguro(retencionView, formato, rutaPdf);
 
         return Task.FromResult(rutaPdf);
     }
@@ -111,6 +111,37 @@ public sealed class RetencionPdfService : IRetencionPdfService
                 }
             });
         }).GeneratePdf(rutaPdf);
+    }
+
+    private string GenerarPdfRetencionSeguro(RetencionGeneradaDetalleViewDto retencionView, FormatoImpresionDocumento formato, string rutaPdf)
+    {
+        var carpeta = Path.GetDirectoryName(rutaPdf) ?? ObtenerWebRootPath();
+        Directory.CreateDirectory(carpeta);
+
+        var nombreBase = Path.GetFileNameWithoutExtension(rutaPdf);
+        var extension = Path.GetExtension(rutaPdf);
+        var rutaTemporal = Path.Combine(carpeta, $"{nombreBase}_{Guid.NewGuid():N}.tmp");
+
+        GenerarPdfRetencionInterno(retencionView, formato, rutaTemporal);
+
+        try
+        {
+            File.Copy(rutaTemporal, rutaPdf, overwrite: true);
+            File.Delete(rutaTemporal);
+            return rutaPdf;
+        }
+        catch (IOException)
+        {
+            var rutaVersionada = Path.Combine(carpeta, $"{nombreBase}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}{extension}");
+            File.Move(rutaTemporal, rutaVersionada);
+            return rutaVersionada;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            var rutaVersionada = Path.Combine(carpeta, $"{nombreBase}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}{extension}");
+            File.Move(rutaTemporal, rutaVersionada);
+            return rutaVersionada;
+        }
     }
 
     private string ObtenerWebRootPath()

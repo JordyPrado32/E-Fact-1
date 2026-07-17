@@ -303,12 +303,6 @@
                                             <span class="status-pill status-pill-warning text-dark">
                                                 PENDIENTE
                                             </span>
-                                            <button class="btn btn-sm btn-outline-warning mt-1 py-0 px-2"
-                                                    style="font-size: 0.75rem; border-radius: 20px;"
-                                                    disabled="@(procesandoReenvio || procesandoAnulacion)"
-                                                    @onclick="() => ReenviarAlSriAsync(f)">
-                                                <i class="bi bi-send-fill me-1"></i> Reenviar
-                                            </button>
                                         }
                                     </div>
                                 </td>
@@ -336,6 +330,17 @@
                                                  @onclick="() => AbrirPdfAsync(f.Codfactura)">
                                              <i class="bi bi-file-earmark-pdf"></i>
                                          </button>
+
+                                         @if (PuedeReenviarSri(f))
+                                         {
+                                             <button class="row-action-btn row-action-sri"
+                                                     type="button"
+                                                     title="Reenviar al SRI"
+                                                     disabled="@(procesandoReenvio || procesandoAnulacion || procesandoNotaCreditoAutomatica)"
+                                                     @onclick="() => ReenviarAlSriAsync(f)">
+                                                 <i class="bi bi-send-check"></i>
+                                             </button>
+                                         }
 
                                          <button class="row-action-btn row-action-mail"
                                                  type="button"
@@ -391,6 +396,16 @@
                                                  <i class="bi bi-file-earmark-pdf"></i>
                                                  <span>Descargar PDF</span>
                                              </button>
+
+                                             @if (PuedeReenviarSri(f))
+                                             {
+                                                 <button class="actions-dropdown-item item-sri" type="button"
+                                                         disabled="@(procesandoReenvio || procesandoAnulacion || procesandoNotaCreditoAutomatica)"
+                                                         @onclick="() => ReenviarAlSriAsync(f)">
+                                                     <i class="bi bi-send-check"></i>
+                                                     <span>Reenviar al SRI</span>
+                                                 </button>
+                                             }
 
                                              <button class="actions-dropdown-item item-mail" type="button"
                                                      disabled="@(esAnulada || procesandoReenvio || procesandoAnulacion || procesandoNotaCreditoAutomatica)"
@@ -749,6 +764,9 @@
 
     private static bool EsNoAutorizada(FacturaListDto factura) =>
         ObtenerEstadoSriTexto(factura.EstadoSri) == DocumentoAutorizacionHelper.EstadoNoAutorizado;
+
+    private static bool PuedeReenviarSri(FacturaListDto factura) =>
+        ObtenerEstadoSriTexto(factura.EstadoSri) == DocumentoAutorizacionHelper.EstadoPendiente;
 
     private static string ObtenerErrorSriTexto(FacturaListDto factura)
     {
@@ -1134,9 +1152,14 @@
         var mensajeResultado = "";
         if (emisores.Any())
         {
+            var emisorFirma = emisores.First();
+            pathCertificado = $"App_Data/{emisorFirma.PathCertificado}";
+            pass = emisorFirma.ClaveCertificado;
 
-            pathCertificado = $"App_Data/{emisores.First().PathCertificado}";
-            pass = emisores.First().ClaveCertificado;
+            if (string.IsNullOrWhiteSpace(pass))
+            {
+                throw new InvalidOperationException("La firma electronica configurada no tiene clave registrada.");
+            }
 
             //EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass).Wait();
             m = await EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass);
@@ -1219,7 +1242,8 @@
                     var serializer = new System.Xml.Serialization.XmlSerializer(typeof(mensajeSRI));
                     using (var reader = new System.IO.StringReader(xmlRespuesta))
                     {
-                        return (mensajeSRI)serializer.Deserialize(reader);
+                        var resultado = serializer.Deserialize(reader) as mensajeSRI;
+                        return resultado ?? new mensajeSRI();
                     }
                 }
                 else

