@@ -70,13 +70,24 @@ public sealed class CompraDocumentosFacturacionService
         {
             facturaExistente = await context.Facturas
                 .AsNoTracking()
+                .Include(f => f.CodemisorNavigation)
                 .FirstOrDefaultAsync(f => f.Codfactura == compra.CodFactura.Value);
+
+            if (facturaExistente?.Codemisor != secuenciaSistema.EmisorCodigo ||
+                facturaExistente.CodemisorNavigation?.EsEmisorSistema != true)
+            {
+                facturaExistente = null;
+            }
         }
 
         facturaExistente ??= await context.Facturas
             .AsNoTracking()
+            .Include(f => f.CodemisorNavigation)
             .Where(f =>
                 f.Idusuario == emisorOwnerId &&
+                f.Codemisor == secuenciaSistema.EmisorCodigo &&
+                f.CodemisorNavigation != null &&
+                f.CodemisorNavigation.EsEmisorSistema &&
                 f.Notas != null &&
                 EF.Functions.Like(f.Notas, $"%{marker}%"))
             .OrderByDescending(f => f.Codfactura)

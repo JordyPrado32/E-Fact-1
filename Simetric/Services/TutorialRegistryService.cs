@@ -45,7 +45,6 @@ public sealed class TutorialRegistryService
             BuildAsociadosTutorial(),
             BuildUsuariosTutorial(),
             BuildTiposClienteTutorial(),
-            BuildMfaTutorial(),
             BuildRolesPermisosTutorial()
         };
 
@@ -1606,56 +1605,6 @@ public sealed class TutorialRegistryService
                     Title = "Catalogo tributario",
                     Description = "La tabla muestra las retenciones del tipo seleccionado y sus acciones de consulta, edicion y eliminacion.",
                     TargetSelector = "[data-tour='retenciones.table']",
-                    Padding = 12,
-                    CardPlacement = "top"
-                }
-            }
-        };
-
-    private static TutorialDefinition BuildMfaTutorial() =>
-        new()
-        {
-            Id = "mfa-configuracion",
-            Title = "Autenticacion multifactor",
-            Description = "Guia para revisar el estado de MFA y activar o desactivar el segundo factor de seguridad.",
-            Route = "/configuracion/mfa",
-            DefaultTargetSelector = "[data-tour='mfa.page']",
-            Category = "Seguridad",
-            Steps = new[]
-            {
-                new TutorialStep
-                {
-                    Id = "mfa-hero",
-                    Title = "Estado de seguridad",
-                    Description = "Esta cabecera resume si MFA esta activo y en que etapa del proceso se encuentra la cuenta actual.",
-                    TargetSelector = "[data-tour='mfa.hero']",
-                    Padding = 12,
-                    CardPlacement = "bottom"
-                },
-                new TutorialStep
-                {
-                    Id = "mfa-panel",
-                    Title = "Panel de accion",
-                    Description = "En este bloque ves el flujo completo de activacion o desactivacion segun el estado actual del usuario.",
-                    TargetSelector = "[data-tour='mfa.panel']",
-                    Padding = 12,
-                    CardPlacement = "bottom"
-                },
-                new TutorialStep
-                {
-                    Id = "mfa-primary-action",
-                    Title = "Accion principal",
-                    Description = "Este boton ejecuta la accion clave del proceso: activar, confirmar o desactivar MFA segun el caso.",
-                    TargetSelector = "[data-tour='mfa.primary-action']",
-                    Padding = 10,
-                    CardPlacement = "left"
-                },
-                new TutorialStep
-                {
-                    Id = "mfa-setup",
-                    Title = "Vinculacion con autenticador",
-                    Description = "Cuando entras al paso de configuracion, aqui escaneas el QR e ingresas el codigo temporal para finalizar.",
-                    TargetSelector = "[data-tour='mfa.setup']",
                     Padding = 12,
                     CardPlacement = "top"
                 }

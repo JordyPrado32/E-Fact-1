@@ -222,12 +222,6 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
             NumeroFactura = numeroFactura
         };
 
-        return new FacturaEmissionResult
-        {
-            Success = true,
-            Message = $"Factura emitida correctamente con número {numeroFactura}.",
-            NumeroFactura = numeroFactura
-        };
     }
 
     public async Task<NotaCreditoEmissionResult> EmitirNotaCreditoAsync(int userId, int facturaId, string? motivo = null, CancellationToken cancellationToken = default)
