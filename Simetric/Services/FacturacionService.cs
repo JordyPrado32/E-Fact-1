@@ -1443,6 +1443,7 @@ namespace Simetric.Services
             factura.CodemisorNavigation = emisor;
             factura.Codemisor = emisor.Codigo;
 
+            EliminarXmlFacturaGenerado(factura.Serie, factura.Numfactura);
             var rutaXml = await ProcesarXmlFacturaAsync(codFactura);
             var rutaCertificado = ResolverRutaFirmaElectronica(emisor.PathCertificado);
             var resultado = await _sriXmlProcessorService.ProcessXmlAsync(
@@ -2479,6 +2480,7 @@ namespace Simetric.Services
             {
                 try
                 {
+                    EliminarXmlFacturaGenerado(facturaView.Factura.Serie, facturaView.Factura.Numfactura);
                     rutaXml = await ProcesarXmlFacturaAsync(codfactura);
                 }
                 catch (InvalidOperationException ex)
@@ -2491,7 +2493,7 @@ namespace Simetric.Services
             if (string.IsNullOrWhiteSpace(rutaXml) || !File.Exists(rutaXml))
                 return null;
 
-            return $"/FacturasGeneradas/{Path.GetFileName(rutaXml)}";
+            return $"/FacturasGeneradas/{Path.GetFileName(rutaXml)}?v={File.GetLastWriteTimeUtc(rutaXml).Ticks}";
         }
 
         public async Task<string?> AsegurarPdfFacturaUsuarioAsync(int codfactura, int idUsuario, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
@@ -3008,6 +3010,10 @@ namespace Simetric.Services
             string serieLimpia = factura.Serie?.Replace("-", "") ?? "001001";
             string secuencial = factura.Numfactura?.PadLeft(9, '0') ?? "000000001";
             var fechaEmision = (factura.Fechaentrega ?? factura.Fchautorizacion ?? DateTime.Now).Date;
+            var identificacionComprador = (factura.CodclientesNavigation?.Numeroidentificacion ?? string.Empty).Trim();
+            var tipoIdentificacionComprador = ResolverTipoIdentificacionCompradorXml(
+                factura.CodclientesNavigation?.Tipoidentificacion,
+                identificacionComprador);
             string? guiaRemisionXml = FormatearNumeroGuiaRemision(factura.Guiaremision);
             decimal baseDescuentoGlobal = detalles.Sum(d => Math.Round(d.Valortproducto, 2));
             decimal descuentoGlobalTotal = factura.DescuentoGlobalValor
@@ -3054,12 +3060,12 @@ namespace Simetric.Services
                     new XElement("fechaEmision", fechaEmision.ToString("dd/MM/yyyy")),
                     new XElement("dirEstablecimiento", factura.CodemisorNavigation?.DirEstablecimiento ?? factura.CodemisorNavigation?.DireccionMatriz),
                     new XElement("obligadoContabilidad", factura.CodemisorNavigation?.LlevaContabilidad),
-                    new XElement("tipoIdentificacionComprador", factura.CodclientesNavigation?.Tipoidentificacion ?? "05"),
+                    new XElement("tipoIdentificacionComprador", tipoIdentificacionComprador),
                     new XElement("razonSocialComprador",
                         !string.IsNullOrWhiteSpace(factura.CodclientesNavigation?.Nombrerazonsocial)
                             ? factura.CodclientesNavigation.Nombrerazonsocial
                             : ((factura.CodclientesNavigation?.Nombres ?? "") + " " + (factura.CodclientesNavigation?.Apellidos ?? "")).Trim()),
-                    new XElement("identificacionComprador", factura.CodclientesNavigation?.Numeroidentificacion),
+                    new XElement("identificacionComprador", identificacionComprador),
                     new XElement("direccionComprador", factura.CodclientesNavigation?.Direccion ?? "SANTO DOMINGO"),
                     !string.IsNullOrWhiteSpace(guiaRemisionXml)
                         ? new XElement("guiaRemision", guiaRemisionXml)
@@ -3112,11 +3118,18 @@ namespace Simetric.Services
                         }
 
                         var baseImponibleXml = Math.Max(0m, Math.Round(baseLinea - descuentoXml, 2));
+                        var codigoPrincipal = ResolverCodigoDetalleXml(d, index, factura);
+                        var codigoAuxiliar = string.IsNullOrWhiteSpace(d.Codauxiliar)
+                            ? codigoPrincipal
+                            : d.Codauxiliar.Trim();
+                        var descripcionDetalle = string.IsNullOrWhiteSpace(d.Descripproducto)
+                            ? "Recarga de documentos"
+                            : d.Descripproducto.Trim();
 
                         return new XElement("detalle",
-                            new XElement("codigoPrincipal", d.Codprincipal),
-                            new XElement("codigoAuxiliar", d.Codauxiliar ?? d.Codprincipal),
-                            new XElement("descripcion", d.Descripproducto),
+                            new XElement("codigoPrincipal", codigoPrincipal),
+                            new XElement("codigoAuxiliar", codigoAuxiliar),
+                            new XElement("descripcion", descripcionDetalle),
                             new XElement("cantidad", d.Cantproducto.ToString("F2", cultura)),
                             new XElement("precioUnitario", d.Precioproducto.ToString("F2", cultura)),
                             new XElement("descuento", descuentoXml.ToString("F2", cultura)),
@@ -3161,6 +3174,35 @@ namespace Simetric.Services
             return document.ToString();
         }
 
+        private static string ResolverTipoIdentificacionCompradorXml(string? tipoIdentificacionActual, string? identificacionComprador)
+        {
+            var digitos = new string((identificacionComprador ?? string.Empty).Where(char.IsDigit).ToArray());
+            if (digitos.Length == 10)
+                return "05";
+
+            if (digitos.Length == 13)
+                return "04";
+
+            return string.IsNullOrWhiteSpace(tipoIdentificacionActual) ? "05" : tipoIdentificacionActual.Trim();
+        }
+
+        private static string ResolverCodigoDetalleXml(Detallefactura detalle, int index, Factura factura)
+        {
+            if (!string.IsNullOrWhiteSpace(detalle.Codprincipal))
+                return detalle.Codprincipal.Trim();
+
+            if (detalle.Codproducto > 0)
+                return detalle.Codproducto.ToString(CultureInfo.InvariantCulture);
+
+            if (!string.IsNullOrWhiteSpace(factura.Notas) &&
+                factura.Notas.Contains(MarcadorCompraDocumentosNotas, StringComparison.OrdinalIgnoreCase))
+            {
+                return "001";
+            }
+
+            return "001";
+        }
+
         public async Task<string> ProcesarXmlFacturaAsync(int idFactura)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
@@ -3182,6 +3224,18 @@ namespace Simetric.Services
 
             factura.CodemisorNavigation = emisor;
             factura.Codemisor = emisor.Codigo;
+            if (factura.CodclientesNavigation != null)
+            {
+                var identificacionComprador = new string((factura.CodclientesNavigation.Numeroidentificacion ?? string.Empty)
+                    .Where(char.IsDigit)
+                    .ToArray());
+
+                if (identificacionComprador.Length == 10)
+                    factura.CodclientesNavigation.Tipoidentificacion = "05";
+                else if (identificacionComprador.Length == 13)
+                    factura.CodclientesNavigation.Tipoidentificacion = "04";
+            }
+
             ValidarDatosAutorizacionFactura(factura);
 
             string formaPago = !string.IsNullOrWhiteSpace(factura.Tipopago) ? factura.Tipopago : "01";
@@ -3191,12 +3245,35 @@ namespace Simetric.Services
             if (!Directory.Exists(carpetaPath))
                 Directory.CreateDirectory(carpetaPath);
 
+            EliminarXmlFacturaGenerado(factura.Serie, factura.Numfactura);
             string nombreArchivo = $"{factura.CodemisorNavigation?.Ruc}_{factura.Serie}_{factura.Numfactura}.xml";
             string rutaCompleta = Path.Combine(carpetaPath, nombreArchivo);
 
             await File.WriteAllTextAsync(rutaCompleta, xmlContenido, System.Text.Encoding.UTF8);
 
             return rutaCompleta;
+        }
+
+        private static void EliminarXmlFacturaGenerado(string? serie, string? numero)
+        {
+            if (string.IsNullOrWhiteSpace(serie) || string.IsNullOrWhiteSpace(numero))
+                return;
+
+            var carpetaPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "FacturasGeneradas");
+            if (!Directory.Exists(carpetaPath))
+                return;
+
+            var patron = $"*_{serie}_{numero}.xml";
+            foreach (var ruta in Directory.GetFiles(carpetaPath, patron, SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    File.Delete(ruta);
+                }
+                catch
+                {
+                }
+            }
         }
 
         private static string ConstruirUrlXmlFactura(string? ruc, string? serie, string? numero)
