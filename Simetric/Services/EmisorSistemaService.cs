@@ -175,19 +175,26 @@ public sealed class EmisorSistemaService
         await EnsureSchemaAsync();
 
         await using var context = await _dbFactory.CreateDbContextAsync();
+        var codEmisorSistema = await context.Emisores
+            .AsNoTracking()
+            .Where(e => e.Estado && e.EsEmisorSistema)
+            .OrderByDescending(e => e.Codigo)
+            .Select(e => (int?)e.Codigo)
+            .FirstOrDefaultAsync();
+
+        if (!codEmisorSistema.HasValue)
+            return new List<FacturaListDto>();
+
         IQueryable<Factura> query = context.Facturas
             .AsNoTracking()
-            .Include(f => f.CodemisorNavigation)
             .Include(f => f.CodclientesNavigation)
-            .Where(f =>
-                f.CodemisorNavigation != null &&
-                f.CodemisorNavigation.EsEmisorSistema);
+            .Where(f => f.Codemisor == codEmisorSistema.Value);
 
         if (soloRecargas)
         {
             query = query.Where(f =>
                 f.Notas != null &&
-                EF.Functions.Like(f.Notas, $"%{MarcadorCompraNotas}%"));
+                f.Notas.Contains(MarcadorCompraNotas));
         }
 
         query = query.OrderByDescending(f => f.Codfactura);
@@ -238,7 +245,7 @@ public sealed class EmisorSistemaService
                 f.CodemisorNavigation != null &&
                 f.CodemisorNavigation.EsEmisorSistema &&
                 f.Notas != null &&
-                EF.Functions.Like(f.Notas, $"%{MarcadorCompraNotas}%"))
+                f.Notas.Contains(MarcadorCompraNotas))
             .OrderByDescending(f => f.Codfactura);
 
         if (top > 0)

@@ -63,7 +63,7 @@ public sealed class CompraDocumentosFacturacionService
                 "Debes configurar primero la secuencia inicial del facturador del sistema en BackOffice > Emisor Maestro para evitar duplicidad de facturas.");
         }
 
-        var marker = ConstruirMarcadorCompra(compra.Id);
+        var marker = ConstruirMarcadorCompra(compra.Id, reference);
 
         Factura? facturaExistente = null;
         if (compra.CodFactura is > 0)
@@ -74,7 +74,8 @@ public sealed class CompraDocumentosFacturacionService
                 .FirstOrDefaultAsync(f => f.Codfactura == compra.CodFactura.Value);
 
             if (facturaExistente?.Codemisor != secuenciaSistema.EmisorCodigo ||
-                facturaExistente.CodemisorNavigation?.EsEmisorSistema != true)
+                facturaExistente.CodemisorNavigation?.EsEmisorSistema != true ||
+                !PerteneceMismaSolicitud(facturaExistente.Notas, marker, reference))
             {
                 facturaExistente = null;
             }
@@ -89,7 +90,7 @@ public sealed class CompraDocumentosFacturacionService
                 f.CodemisorNavigation != null &&
                 f.CodemisorNavigation.EsEmisorSistema &&
                 f.Notas != null &&
-                EF.Functions.Like(f.Notas, $"%{marker}%"))
+                f.Notas.Contains(marker))
             .OrderByDescending(f => f.Codfactura)
             .FirstOrDefaultAsync();
 
@@ -382,7 +383,29 @@ public sealed class CompraDocumentosFacturacionService
             ?? tipos.FirstOrDefault()?.TclCodigo;
     }
 
-    private static string ConstruirMarcadorCompra(string compraId) => $"{MarcadorCompraNotas}{compraId}]";
+    private static string ConstruirMarcadorCompra(string compraId, string? reference)
+    {
+        var claveSolicitud = string.IsNullOrWhiteSpace(reference)
+            ? compraId.Trim()
+            : $"REF:{reference.Trim()}";
+
+        return $"{MarcadorCompraNotas}{claveSolicitud}]";
+    }
+
+    private static bool PerteneceMismaSolicitud(string? notas, string marker, string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(notas))
+            return false;
+
+        if (notas.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(reference))
+            return false;
+
+        var referenciaPago = $"Ref/Auth: {reference.Trim()}";
+        return notas.Contains(referenciaPago, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string ConstruirCodigoPrincipalRecarga(CompraDocumentosHistorialItem compra)
         => compra.EsIlimitado

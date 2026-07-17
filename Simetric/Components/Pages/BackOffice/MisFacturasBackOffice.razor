@@ -691,35 +691,47 @@
     private async Task Recargar()
     {
         cargando = true;
-
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
-        var idUsuarioSesion = int.TryParse(userClaim, out var id) ? id : 0;
-
-        if (idUsuarioSesion <= 0)
+        try
         {
-            NavManager.NavigateTo("/", true);
-            return;
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+            var idUsuarioSesion = int.TryParse(userClaim, out var id) ? id : 0;
+
+            if (idUsuarioSesion <= 0)
+            {
+                NavManager.NavigateTo("/", true);
+                return;
+            }
+
+            var tieneAccesoBackOffice = await EmisorSistemaService.TieneAccesoBackOfficeAsync(idUsuarioSesion);
+            if (!tieneAccesoBackOffice)
+            {
+                NavManager.NavigateTo("/", true);
+                return;
+            }
+
+            var emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
+            currentUserId = emisorMaestro?.IdUsuario ?? 0;
+
+            facturas.Clear();
+            if (currentUserId <= 0)
+            {
+                await AlertService.ShowWarningAsync("Primero debes configurar el emisor maestro del BackOffice.");
+                return;
+            }
+
+            facturas.AddRange(await EmisorSistemaService.ListarFacturasRecargasSistemaAsync(0, soloRecargas: false));
+            paginaActual = 1;
         }
-
-        currentUserId = idUsuarioSesion;
-        var emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
-
-        facturas.Clear();
-        if (currentUserId <= 0)
+        catch (Exception ex)
+        {
+            facturas.Clear();
+            await AlertService.ShowErrorAsync($"No se pudieron cargar las facturas BackOffice: {ex.Message}");
+        }
+        finally
         {
             cargando = false;
-            await AlertService.ShowWarningAsync("Primero debes configurar el emisor maestro del BackOffice.");
-            return;
         }
-
-        if (emisorMaestro?.IdUsuario == currentUserId)
-        {
-            facturas.AddRange(await EmisorSistemaService.ListarMisFacturasRecargasSistemaAsync(currentUserId, 0));
-        }
-
-        paginaActual = 1;
-        cargando = false;
     }
 
     private bool CumpleFiltroFactura(FacturaListDto factura)
@@ -838,7 +850,10 @@
 
     private async Task VerFacturaAsync(int codfactura)
     {
-        facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(codfactura, currentUserId);
+        facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(
+            codfactura,
+            currentUserId,
+            incluirFacturasEmisorSistema: true);
 
         if (facturaSeleccionada != null)
             mostrarModal = true;
@@ -969,7 +984,10 @@
             await Recargar();
 
             if (mostrarModal && facturaSeleccionada?.Factura?.Codfactura == factura.Codfactura)
-                facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(factura.Codfactura, currentUserId);
+                facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(
+                    factura.Codfactura,
+                    currentUserId,
+                    incluirFacturasEmisorSistema: true);
 
             await MostrarResultadoNotaCreditoAutomaticaAsync(factura, resultado);
         }

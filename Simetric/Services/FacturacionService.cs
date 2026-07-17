@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -42,6 +43,7 @@ namespace Simetric.Services
         private readonly ILogger<FacturacionService> _logger;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly FacturaStoredProcedureBootstrapService _facturaStoredProcedureBootstrapService;
+        private readonly IWebHostEnvironment _hostEnvironment;
         public string? UltimoErrorGuardarFactura { get; private set; }
 
         public FacturacionService(
@@ -57,7 +59,8 @@ namespace Simetric.Services
             SriXmlProcessorService sriXmlProcessorService,
             ILogger<FacturacionService> logger,
             IHttpContextAccessor httpContextAccessor,
-            FacturaStoredProcedureBootstrapService facturaStoredProcedureBootstrapService)
+            FacturaStoredProcedureBootstrapService facturaStoredProcedureBootstrapService,
+            IWebHostEnvironment hostEnvironment)
         {
             _dbFactory = dbFactory;
             _emailService = emailService;
@@ -72,6 +75,7 @@ namespace Simetric.Services
             _logger = logger;
             _httpContextAccessor = httpContextAccessor;
             _facturaStoredProcedureBootstrapService = facturaStoredProcedureBootstrapService;
+            _hostEnvironment = hostEnvironment;
         }
 
         private static object SnapshotCliente(Cliente c) => new
@@ -940,6 +944,7 @@ namespace Simetric.Services
                             .Select(e => new
                             {
                                 e.Codigo,
+                                e.EsEmisorSistema,
                                 e.PathCertificado,
                                 e.ClaveCertificado
                             })
@@ -948,13 +953,25 @@ namespace Simetric.Services
                         if (emisor is null)
                             throw new Exception("El emisor seleccionado no pertenece a tu cuenta principal o está inactivo.");
 
-                        if (string.IsNullOrWhiteSpace(emisor.PathCertificado) ||
-                            string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
+                        var tieneFirmaConfigurada =
+                            !string.IsNullOrWhiteSpace(emisor.PathCertificado) &&
+                            !string.IsNullOrWhiteSpace(emisor.ClaveCertificado);
+
+                        if (!tieneFirmaConfigurada && !emisor.EsEmisorSistema)
                         {
                             throw new Exception(EmisionControlService.MensajeFirmaRequerida);
                         }
 
-                        var estadoEmision = await _emisionControlService.ObtenerEstadoAsync(context, idUsuario);
+                        var estadoEmision = emisor.EsEmisorSistema
+                            ? new EmisionEstado
+                            {
+                                TieneEmisorActivo = true,
+                                TieneFirmaElectronica = true,
+                                PuedeEmitir = true,
+                                EmisionPermitidaPorConfiguracion = true,
+                                PlanIlimitadoActivo = true
+                            }
+                            : await _emisionControlService.ObtenerEstadoAsync(context, idUsuario);
                         if (!estadoEmision.PuedeEmitir)
                         {
                             throw new EmisionBloqueadaException(estadoEmision.Mensaje);
@@ -1614,23 +1631,45 @@ namespace Simetric.Services
             facturaView.Factura.Codemisor = emisorSistema.Codigo;
         }
 
-        private static string ResolverRutaFirmaElectronica(string? rutaFirma)
+        private string ResolverRutaFirmaElectronica(string? rutaFirma)
         {
             var rutaNormalizada = (rutaFirma ?? string.Empty).Trim().TrimStart('~', '/', '\\').Replace('\\', '/');
-            var nombreArchivo = Path.GetFileName(rutaNormalizada);
-            var basePath = Directory.GetCurrentDirectory();
-            var candidatos = new[]
-            {
-                Path.Combine(basePath, "wwwroot", "App_Data", rutaNormalizada.Replace('/', Path.DirectorySeparatorChar)),
-                Path.Combine(basePath, "App_Data", rutaNormalizada.Replace('/', Path.DirectorySeparatorChar)),
-                Path.Combine(basePath, rutaNormalizada.Replace('/', Path.DirectorySeparatorChar)),
-                Path.Combine(basePath, "wwwroot", "App_Data", "certs", "path", nombreArchivo),
-                Path.Combine(basePath, "App_Data", "certs", "path", nombreArchivo),
-                Path.Combine(basePath, "wwwroot", "App_Data", "certs", "system", nombreArchivo),
-                Path.Combine(basePath, "App_Data", "certs", "system", nombreArchivo)
-            };
+            if (string.IsNullOrWhiteSpace(rutaNormalizada))
+                throw new FileNotFoundException("No se encontro la firma electronica configurada.");
 
-            return candidatos.FirstOrDefault(File.Exists)
+            var rutaOriginal = (rutaFirma ?? string.Empty).Trim().Replace('\\', '/');
+            var nombreArchivo = Path.GetFileName(rutaNormalizada);
+            var contentRoot = _hostEnvironment.ContentRootPath;
+            var webRoot = string.IsNullOrWhiteSpace(_hostEnvironment.WebRootPath)
+                ? Path.Combine(contentRoot, "wwwroot")
+                : _hostEnvironment.WebRootPath;
+            var candidatos = new List<string>();
+
+            if (Path.IsPathRooted(rutaOriginal))
+                candidatos.Add(rutaOriginal.Replace('/', Path.DirectorySeparatorChar));
+
+            if (Path.IsPathRooted(rutaNormalizada))
+                candidatos.Add(rutaNormalizada.Replace('/', Path.DirectorySeparatorChar));
+
+            void AgregarCandidato(string baseDir, string relativePath)
+            {
+                if (string.IsNullOrWhiteSpace(baseDir))
+                    return;
+
+                candidatos.Add(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            }
+
+            AgregarCandidato(webRoot, $"App_Data/{rutaNormalizada}");
+            AgregarCandidato(contentRoot, $"App_Data/{rutaNormalizada}");
+            AgregarCandidato(contentRoot, rutaNormalizada);
+            AgregarCandidato(webRoot, $"App_Data/certs/path/{nombreArchivo}");
+            AgregarCandidato(contentRoot, $"App_Data/certs/path/{nombreArchivo}");
+            AgregarCandidato(webRoot, $"App_Data/certs/system/{nombreArchivo}");
+            AgregarCandidato(contentRoot, $"App_Data/certs/system/{nombreArchivo}");
+
+            return candidatos
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(File.Exists)
                 ?? throw new FileNotFoundException($"No se encontro la firma electronica configurada: {rutaNormalizada}");
         }
 
@@ -2256,7 +2295,10 @@ namespace Simetric.Services
 
             IQueryable<Factura> query = context.Facturas
                 .AsNoTracking()
-                .Where(f => f.Idusuario == idUsuario)
+                .Where(f =>
+                    f.Idusuario == idUsuario &&
+                    (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true) &&
+                    (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)))
                 .OrderByDescending(f => f.Codfactura);
 
             if (top > 0)
@@ -2302,6 +2344,8 @@ namespace Simetric.Services
                 .AsNoTracking()
                 .Where(f =>
                     f.Idusuario == idUsuario &&
+                    (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true) &&
+                    (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)) &&
                     f.CodclientesNavigation != null &&
                     f.CodclientesNavigation.Numeroidentificacion == identificacionNormalizada)
                 .OrderByDescending(f => f.Codfactura);
@@ -2335,13 +2379,21 @@ namespace Simetric.Services
                 .ToListAsync();
         }
 
-        public async Task<FacturaViewDto?> GetFacturaCompletaUsuarioAsync(int codfactura, int idUsuario)
+        public async Task<FacturaViewDto?> GetFacturaCompletaUsuarioAsync(
+            int codfactura,
+            int idUsuario,
+            bool incluirFacturasEmisorSistema = false)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
             return await context.Facturas
                 .AsNoTracking()
-                .Where(f => f.Codfactura == codfactura && f.Idusuario == idUsuario)
+                .Where(f =>
+                    f.Codfactura == codfactura &&
+                    f.Idusuario == idUsuario &&
+                    (incluirFacturasEmisorSistema ||
+                        ((f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true) &&
+                         (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)))))
                 .Select(f => new FacturaViewDto
                 {
                     Factura = new Factura

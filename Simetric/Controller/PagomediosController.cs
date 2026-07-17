@@ -356,7 +356,10 @@ namespace Simetric.Controllers
                         }
                         catch (Exception ex)
                         {
-                            compraHistorial.MensajeFactura = "La compra fue aprobada, pero la facturación automática falló. Revisa logs.";
+                            var detalleError = string.IsNullOrWhiteSpace(ex.Message)
+                                ? "La compra fue aprobada, pero la facturación automática falló."
+                                : $"La compra fue aprobada, pero la facturación automática falló: {ex.Message}";
+                            compraHistorial.MensajeFactura = detalleError;
                             _logger.LogError(
                                 ex,
                                 "La compra de documentos {CompraId} del usuario {UsuarioId} fue aprobada pero falló la facturación automática.",

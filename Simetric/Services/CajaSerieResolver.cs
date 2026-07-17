@@ -168,6 +168,20 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
                     return cajaPreferida;
                 }
             }
+
+            var cajaSistemaPreferida = await query
+                .Where(c =>
+                    c.Estado == true &&
+                    c.EsCajaSistema == true &&
+                    c.SerieFactura != null)
+                .OrderBy(c => c.NumCaja)
+                .ThenBy(c => c.Sec)
+                .FirstOrDefaultAsync(c => SoloDigitos(c.SerieFactura) == preferredSeries);
+
+            if (cajaSistemaPreferida != null)
+            {
+                return cajaSistemaPreferida;
+            }
         }
 
         var usuariosSincronizados = await GetUsuariosSincronizadosPorEmisorRucAsync(context, idUsuario);
@@ -186,6 +200,17 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
             {
                 return cajaSincronizada;
             }
+        }
+
+        var cajaSistema = await query
+            .Where(c => c.Estado == true && c.EsCajaSistema == true)
+            .OrderBy(c => c.NumCaja)
+            .ThenBy(c => c.Sec)
+            .FirstOrDefaultAsync();
+
+        if (cajaSistema != null)
+        {
+            return cajaSistema;
         }
 
         return await query
