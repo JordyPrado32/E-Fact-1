@@ -28,6 +28,7 @@ namespace Simetric.Services
 {
     public class FacturacionService
     {
+        private const string MarcadorCompraDocumentosNotas = "[COMPRA_DOCS:";
         private readonly IDbContextFactory<AppDbContext> _dbFactory;
         private readonly IEmailService _emailService;
         private readonly IFacturaPdfService _facturaPdfService;
@@ -1429,7 +1430,7 @@ namespace Simetric.Services
                 await context.SaveChangesAsync();
             }
 
-            var emisor = factura.CodemisorNavigation;
+            var emisor = await ResolverEmisorFacturaAsync(context, factura);
             if (emisor == null)
             {
                 return new mensajeSRI
@@ -1438,6 +1439,9 @@ namespace Simetric.Services
                     mensaje = "No se encontro el emisor de la factura para reintentar el envio."
                 };
             }
+
+            factura.CodemisorNavigation = emisor;
+            factura.Codemisor = emisor.Codigo;
 
             var rutaXml = await ProcesarXmlFacturaAsync(codFactura);
             var rutaCertificado = ResolverRutaFirmaElectronica(emisor.PathCertificado);
@@ -1540,18 +1544,93 @@ namespace Simetric.Services
             return !ContieneErrorSecuenciaSri(mensaje);
         }
 
+        private static bool EsFacturaBackOfficeSistema(Factura factura)
+        {
+            if (factura.CodemisorNavigation?.EsEmisorSistema == true)
+                return true;
+
+            return !string.IsNullOrWhiteSpace(factura.Notas) &&
+                   factura.Notas.Contains(MarcadorCompraDocumentosNotas, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool EsFacturaBackOfficeSistema(FacturaViewDto facturaView)
+        {
+            if (facturaView.Emisor?.EsEmisorSistema == true)
+                return true;
+
+            return !string.IsNullOrWhiteSpace(facturaView.Factura?.Notas) &&
+                   facturaView.Factura.Notas.Contains(MarcadorCompraDocumentosNotas, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static Emisor CrearEmisorFacturaView(Emisor emisor)
+        {
+            return new Emisor
+            {
+                Codigo = emisor.Codigo,
+                Ruc = emisor.Ruc,
+                RazonSocial = emisor.RazonSocial,
+                NomComercial = emisor.NomComercial,
+                DirEstablecimiento = emisor.DirEstablecimiento,
+                CodEstablecimiento = emisor.CodEstablecimiento,
+                CodPuntoEmision = emisor.CodPuntoEmision,
+                DireccionMatriz = emisor.DireccionMatriz,
+                Telefono = emisor.Telefono,
+                LogoImagen = emisor.LogoImagen,
+                TipoEmision = emisor.TipoEmision,
+                TipoAmbiente = emisor.TipoAmbiente,
+                EsEmisorSistema = emisor.EsEmisorSistema
+            };
+        }
+
+        private static async Task<Emisor?> ObtenerEmisorSistemaActivoAsync(AppDbContext context)
+        {
+            return await context.Emisores
+                .AsNoTracking()
+                .Where(e => e.Estado && e.EsEmisorSistema)
+                .OrderByDescending(e => e.Codigo)
+                .FirstOrDefaultAsync();
+        }
+
+        private static async Task<Emisor?> ResolverEmisorFacturaAsync(AppDbContext context, Factura factura)
+        {
+            if (!EsFacturaBackOfficeSistema(factura))
+                return factura.CodemisorNavigation;
+
+            var emisorSistema = await ObtenerEmisorSistemaActivoAsync(context);
+            return emisorSistema ?? factura.CodemisorNavigation;
+        }
+
+        private static async Task AplicarEmisorSistemaAFacturaViewAsync(AppDbContext context, FacturaViewDto? facturaView)
+        {
+            if (facturaView?.Factura == null || !EsFacturaBackOfficeSistema(facturaView))
+                return;
+
+            var emisorSistema = await ObtenerEmisorSistemaActivoAsync(context);
+            if (emisorSistema == null)
+                return;
+
+            facturaView.Emisor = CrearEmisorFacturaView(emisorSistema);
+            facturaView.Factura.Codemisor = emisorSistema.Codigo;
+        }
+
         private static string ResolverRutaFirmaElectronica(string? rutaFirma)
         {
-            var nombreArchivo = Path.GetFileName((rutaFirma ?? string.Empty).Trim().Replace('\\', '/'));
+            var rutaNormalizada = (rutaFirma ?? string.Empty).Trim().TrimStart('~', '/', '\\').Replace('\\', '/');
+            var nombreArchivo = Path.GetFileName(rutaNormalizada);
             var basePath = Directory.GetCurrentDirectory();
             var candidatos = new[]
             {
+                Path.Combine(basePath, "wwwroot", "App_Data", rutaNormalizada.Replace('/', Path.DirectorySeparatorChar)),
+                Path.Combine(basePath, "App_Data", rutaNormalizada.Replace('/', Path.DirectorySeparatorChar)),
+                Path.Combine(basePath, rutaNormalizada.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(basePath, "wwwroot", "App_Data", "certs", "path", nombreArchivo),
-                Path.Combine(basePath, "App_Data", "certs", "path", nombreArchivo)
+                Path.Combine(basePath, "App_Data", "certs", "path", nombreArchivo),
+                Path.Combine(basePath, "wwwroot", "App_Data", "certs", "system", nombreArchivo),
+                Path.Combine(basePath, "App_Data", "certs", "system", nombreArchivo)
             };
 
             return candidatos.FirstOrDefault(File.Exists)
-                ?? throw new FileNotFoundException($"No se encontro la firma electronica en wwwroot/App_Data/certs/path: {nombreArchivo}");
+                ?? throw new FileNotFoundException($"No se encontro la firma electronica configurada: {rutaNormalizada}");
         }
 
         private void QueuePostCommitFacturaWork(
@@ -2388,6 +2467,9 @@ namespace Simetric.Services
             if (facturaView?.Factura == null || string.IsNullOrWhiteSpace(facturaView.Emisor?.Ruc))
                 return null;
 
+            if (EsFacturaBackOfficeSistema(facturaView))
+                forzarRegeneracion = true;
+
             var rutaXml = ConstruirRutaLocalXmlFactura(
                 facturaView.Emisor.Ruc,
                 facturaView.Factura.Serie,
@@ -2409,7 +2491,7 @@ namespace Simetric.Services
             if (string.IsNullOrWhiteSpace(rutaXml) || !File.Exists(rutaXml))
                 return null;
 
-            return rutaXml;
+            return $"/FacturasGeneradas/{Path.GetFileName(rutaXml)}";
         }
 
         public async Task<string?> AsegurarPdfFacturaUsuarioAsync(int codfactura, int idUsuario, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
@@ -2744,7 +2826,7 @@ namespace Simetric.Services
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
-            return await context.Facturas
+            var facturaView = await context.Facturas
                 .AsNoTracking()
                 .Where(f => f.Codfactura == codfactura)
                 .Select(f => new FacturaViewDto
@@ -2841,6 +2923,9 @@ namespace Simetric.Services
                     }).ToList()
                 })
                 .SingleOrDefaultAsync();
+
+            await AplicarEmisorSistemaAFacturaViewAsync(context, facturaView);
+            return facturaView;
         }
 
         public string GenerarClaveAcceso(DateTime fecha, string ruc, string ambiente, string serie, string secuencial, string tipoEmi)
@@ -2922,6 +3007,7 @@ namespace Simetric.Services
             string ambiente = factura.Ambiente?.ToString() ?? "2";
             string serieLimpia = factura.Serie?.Replace("-", "") ?? "001001";
             string secuencial = factura.Numfactura?.PadLeft(9, '0') ?? "000000001";
+            var fechaEmision = (factura.Fechaentrega ?? factura.Fchautorizacion ?? DateTime.Now).Date;
             string? guiaRemisionXml = FormatearNumeroGuiaRemision(factura.Guiaremision);
             decimal baseDescuentoGlobal = detalles.Sum(d => Math.Round(d.Valortproducto, 2));
             decimal descuentoGlobalTotal = factura.DescuentoGlobalValor
@@ -2935,13 +3021,15 @@ namespace Simetric.Services
 
             ValidarDatosAutorizacionFactura(factura);
 
-            string claveAcceso = GenerarClaveAcceso(
-                DateTime.Now,
-                factura.CodemisorNavigation?.Ruc,
-                ambiente,
-                serieLimpia,
-                secuencial,
-                "1");
+            string claveAcceso = string.IsNullOrWhiteSpace(factura.Codclave)
+                ? GenerarClaveAcceso(
+                    fechaEmision,
+                    factura.CodemisorNavigation?.Ruc,
+                    ambiente,
+                    serieLimpia,
+                    secuencial,
+                    "1")
+                : factura.Codclave.Trim();
 
             XElement xml = new XElement("factura",
                 new XAttribute("id", "comprobante"),
@@ -2963,7 +3051,7 @@ namespace Simetric.Services
                     : null
                 ),
                 new XElement("infoFactura",
-                    new XElement("fechaEmision", DateTime.Now.ToString("dd/MM/yyyy")),
+                    new XElement("fechaEmision", fechaEmision.ToString("dd/MM/yyyy")),
                     new XElement("dirEstablecimiento", factura.CodemisorNavigation?.DirEstablecimiento ?? factura.CodemisorNavigation?.DireccionMatriz),
                     new XElement("obligadoContabilidad", factura.CodemisorNavigation?.LlevaContabilidad),
                     new XElement("tipoIdentificacionComprador", factura.CodclientesNavigation?.Tipoidentificacion ?? "05"),
@@ -3058,7 +3146,7 @@ namespace Simetric.Services
                         ? new XElement("campoAdicional", new XAttribute("nombre", "DatosBancarios"), factura.Notas.Trim())
                         : null,
                     DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri)
-                        ? new XElement("campoAdicional", new XAttribute("nombre", "ClaveAcceso"), factura.Codclave ?? claveAcceso)
+                        ? new XElement("campoAdicional", new XAttribute("nombre", "ClaveAcceso"), claveAcceso)
                         : null,
                     DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri)
                         ? new XElement("campoAdicional", new XAttribute("nombre", "NumeroAutorizacion"), factura.Numautorizacion ?? string.Empty)
@@ -3069,7 +3157,8 @@ namespace Simetric.Services
                 )
             );
 
-            return xml.ToString();
+            var document = new XDocument(new XDeclaration("1.0", "utf-8", null), xml);
+            return document.ToString();
         }
 
         public async Task<string> ProcesarXmlFacturaAsync(int idFactura)
@@ -3087,6 +3176,12 @@ namespace Simetric.Services
             if (factura == null)
                 return "Error: Factura no encontrada";
 
+            var emisor = await ResolverEmisorFacturaAsync(context, factura);
+            if (emisor == null)
+                throw new InvalidOperationException("No se encontro el emisor de la factura para generar el XML.");
+
+            factura.CodemisorNavigation = emisor;
+            factura.Codemisor = emisor.Codigo;
             ValidarDatosAutorizacionFactura(factura);
 
             string formaPago = !string.IsNullOrWhiteSpace(factura.Tipopago) ? factura.Tipopago : "01";

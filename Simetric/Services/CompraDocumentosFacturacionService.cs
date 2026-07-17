@@ -206,7 +206,7 @@ public sealed class CompraDocumentosFacturacionService
     private async Task<Cliente> ConstruirClienteDesdeUsuarioAsync(AppDbContext context, Usuario usuario, int ownerId)
     {
         var numeroIdentificacion = NormalizarIdentificacion(usuario.Identificacion, usuario.IdTipoIdentificacion);
-        var tipoIdentificacion = await ResolverCodigoIdentificacionAsync(context, usuario.IdTipoIdentificacion);
+        var tipoIdentificacion = await ResolverCodigoIdentificacionAsync(context, usuario.IdTipoIdentificacion, numeroIdentificacion);
         var tipoCliente = usuario.TipoCliente ?? await ResolverTipoClienteNaturalAsync(context);
 
         return new Cliente
@@ -241,10 +241,14 @@ public sealed class CompraDocumentosFacturacionService
         return new Detallefactura
         {
             Codproducto = producto?.Codigo ?? 0,
-            Codprincipal = producto?.CodigoPrincipal,
-            Codauxiliar = producto?.CodAuxiliar,
+            Codprincipal = !string.IsNullOrWhiteSpace(producto?.CodigoPrincipal)
+                ? producto.CodigoPrincipal!.Trim()
+                : ConstruirCodigoPrincipalRecarga(compra),
+            Codauxiliar = !string.IsNullOrWhiteSpace(producto?.CodAuxiliar)
+                ? producto.CodAuxiliar!.Trim()
+                : ConstruirCodigoAuxiliarRecarga(compra),
             Cantproducto = 1,
-            Descripproducto = producto?.Nombre ?? descripcion,
+            Descripproducto = descripcion,
             Precioproducto = baseImponible,
             Descuento = 0m,
             Tarifa = tarifa,
@@ -321,9 +325,9 @@ public sealed class CompraDocumentosFacturacionService
         return 0;
     }
 
-    private async Task<string> ResolverCodigoIdentificacionAsync(AppDbContext context, int? idTipoIdentificacionUsuario)
+    private async Task<string> ResolverCodigoIdentificacionAsync(AppDbContext context, int? idTipoIdentificacionUsuario, string numeroIdentificacion)
     {
-        var codigoPreferido = idTipoIdentificacionUsuario switch
+        var codigoPreferido = ResolverCodigoIdentificacionPorNumero(numeroIdentificacion) ?? idTipoIdentificacionUsuario switch
         {
             2 => "04",
             3 => "06",
@@ -360,6 +364,16 @@ public sealed class CompraDocumentosFacturacionService
 
     private static string ConstruirMarcadorCompra(string compraId) => $"{MarcadorCompraNotas}{compraId}]";
 
+    private static string ConstruirCodigoPrincipalRecarga(CompraDocumentosHistorialItem compra)
+        => compra.EsIlimitado
+            ? "REC-PLAN-ANUAL"
+            : $"REC-DOC-{Math.Max(1, compra.Documentos)}";
+
+    private static string ConstruirCodigoAuxiliarRecarga(CompraDocumentosHistorialItem compra)
+        => compra.EsIlimitado
+            ? "EFACT-ILIMITADO"
+            : $"EFACT-REC-{Math.Max(1, compra.Documentos)}";
+
     private static string ObtenerDescripcionCompra(CompraDocumentosHistorialItem compra)
     {
         if (!string.IsNullOrWhiteSpace(compra.Descripcion))
@@ -386,6 +400,17 @@ public sealed class CompraDocumentosFacturacionService
             3 => (identificacion ?? string.Empty).Trim(),
             _ when limpio.Length == 9 => "0" + limpio,
             _ => limpio
+        };
+    }
+
+    private static string? ResolverCodigoIdentificacionPorNumero(string? identificacion)
+    {
+        var limpio = new string((identificacion ?? string.Empty).Where(char.IsDigit).ToArray());
+        return limpio.Length switch
+        {
+            13 => "04",
+            10 => "05",
+            _ => null
         };
     }
 
