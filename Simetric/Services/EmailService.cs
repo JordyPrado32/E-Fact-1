@@ -1,4 +1,4 @@
-﻿using MailKit.Net.Smtp;
+using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
 using Microsoft.Extensions.Configuration;
@@ -480,30 +480,45 @@ public class EmailService : IEmailService
         var esContrasenaDirecta = incluyeCodigo && string.IsNullOrWhiteSpace(setupUrl);
         var botonUrl = esContrasenaDirecta ? loginSeguro : setupSeguro;
         var botonTexto = esContrasenaDirecta ? "Abrir BackOffice" : "Crear contraseña";
-        var bloqueAccesoHtml = incluyeCodigo
-            ? $@"
-      <div style='margin:18px 0;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;'>
-        <div style='padding:12px 16px;background:#111827;color:#fff;font-weight:800;'>Pasos para ingresar</div>
-        <ol style='margin:0;padding:16px 18px 16px 38px;color:#374151;line-height:1.65;font-size:14px;'>
-          <li>Haz clic en el boton <strong>{botonTexto}</strong></li>
-          <li>En la pantalla de login escribe este usuario/correo: <strong>{usuarioSeguro}</strong></li>
-          <li>En el campo de contraseña escribe la contraseña temporal que aparece abajo: <strong>{codigoSeguro}</strong></li>
-          <li>Presiona <strong>Iniciar sesion</strong></li>
-        </ol>
-      </div>
-      <div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin:18px 0;'>
-        <p style='margin:0 0 8px;font-size:14px;'><strong>Usuario / correo:</strong> <a href='mailto:{usuarioSeguro}' style='color:#2563eb;'>{usuarioSeguro}</a></p>
-        <p style='margin:0 0 8px;font-size:14px;'><strong>{(esContrasenaDirecta ? "Contraseña temporal" : "Codigo de acceso")}:</strong></p>
-        <div style='display:inline-block;background:#111827;color:#fff;border-radius:12px;padding:12px 18px;font-size:22px;font-weight:900;letter-spacing:.16em;'>{codigoSeguro}</div>
-        {(esContrasenaDirecta ? "" : $"<p style='margin:12px 0 0;font-size:12px;color:#6b7280;'>Este codigo vence en {minutosTexto} minutos.</p>")}
-      </div>
-      <a href='{botonUrl}' style='display:inline-block;background:#111827;color:#fff;text-decoration:none;border-radius:10px;padding:12px 18px;font-weight:800;font-size:14px;margin-top:18px;'>{botonTexto}</a>
-      <p style='margin:18px 0 0;font-size:13px;color:#6b7280;'>{(esContrasenaDirecta ? "" : "Primero crea tu contraseña con el codigo de acceso. Luego podras iniciar sesion normalmente.")}</p>"
-            : $@"
-      <div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin:18px 0;'>
-        <p style='margin:0;font-size:14px;'><strong>Usuario:</strong> {usuarioSeguro}</p>
-      </div>
-      <p style='margin:18px 0 0;font-size:13px;color:#6b7280;'>Puedes cambiar la contraseña cuando quieras desde Mi perfil dentro del BackOffice.</p>";
+        string bloqueAccesoHtml;
+        if (incluyeCodigo)
+        {
+            var pasosVendedor = new[]
+            {
+                $"Haz clic en el boton <strong>{botonTexto}</strong>",
+                $"En la pantalla de login escribe este usuario/correo: <strong>{usuarioSeguro}</strong>",
+                $"En el campo de contrasena escribe la contrasena temporal que aparece abajo: <strong>{codigoSeguro}</strong>",
+                "Presiona <strong>Iniciar sesion</strong>"
+            };
+            var credencialesVendedor = esContrasenaDirecta
+                ? new (string? Label, string? Value)[]
+                {
+                    ("Usuario / correo", $"<a href='mailto:{usuarioSeguro}' style='color:#2563eb;text-decoration:underline;'>{usuarioSeguro}</a>"),
+                    ("Contrasena temporal", BuildOutlookCodeBox(codigoSeguro))
+                }
+                : new (string? Label, string? Value)[]
+                {
+                    ("Usuario / correo", $"<a href='mailto:{usuarioSeguro}' style='color:#2563eb;text-decoration:underline;'>{usuarioSeguro}</a>"),
+                    ("Codigo de acceso", BuildOutlookCodeBox(codigoSeguro)),
+                    ("Vigencia", $"Este codigo vence en {minutosTexto} minutos.")
+                };
+            var notaCrearClave = esContrasenaDirecta
+                ? string.Empty
+                : "<p style='Margin:18px 0 0 0;font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#6b7280;'>Primero crea tu contrasena con el codigo de acceso. Luego podras iniciar sesion normalmente.</p>";
+
+            bloqueAccesoHtml = BuildOutlookStepsTable(pasosVendedor)
+                + BuildOutlookCredentialBox(credencialesVendedor)
+                + BuildOutlookButton(botonUrl, botonTexto)
+                + notaCrearClave;
+        }
+        else
+        {
+            bloqueAccesoHtml = BuildOutlookCredentialBox(new (string? Label, string? Value)[]
+                {
+                    ("Usuario", usuarioSeguro)
+                })
+                + "<p style='Margin:18px 0 0 0;font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#6b7280;'>Puedes cambiar la contrasena cuando quieras desde Mi perfil dentro del BackOffice.</p>";
+        }
         var bloqueAccesoTexto = incluyeCodigo
             ? esContrasenaDirecta
                 ? $"\nPasos:\n1. Abre BackOffice: {loginUrl}\n2. Escribe este usuario/correo: {usuario}\n3. Escribe esta contraseña temporal: {codigoAcceso}\n4. Presiona Iniciar sesion\n5. Luego puedes cambiarla desde Mi perfil\n\nCredenciales:\nUsuario: {usuario}\nContraseña temporal: {codigoAcceso}\n"
@@ -517,19 +532,12 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='margin:0;padding:0;background:#f4f6f8;font-family:Segoe UI,Arial,sans-serif;color:#111827;'>
-  <div style='max-width:640px;margin:0 auto;padding:28px 16px;'>
-    <div style='background:#111827;border-radius:18px 18px 0 0;padding:26px 30px;color:#fff;'>
-      <div style='font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#9ca3af;font-weight:800;'>Numerica BackOffice</div>
-      <h1 style='margin:8px 0 0;font-size:24px;line-height:1.25;'>Bienvenido, {nombreSeguro}</h1>
-    </div>
-    <div style='background:#fff;border:1px solid #e5e7eb;border-top:0;border-radius:0 0 18px 18px;padding:28px 30px;'>
-      <p style='margin:0 0 18px;font-size:15px;color:#374151;'>Se creo tu usuario de vendedor. Sigue estos pasos uno por uno para entrar a BackOffice.</p>
-      {bloqueAccesoHtml}
-    </div>
-  </div>
-</div>",
+            HtmlBody = BuildOutlookEmailShell(
+                "Tus credenciales de acceso BackOffice",
+                "Numerica BackOffice",
+                $"Bienvenido, {nombreSeguro}",
+                "Se creo tu usuario de vendedor. Sigue estos pasos uno por uno para entrar a BackOffice.",
+                bloqueAccesoHtml),
             TextBody = $"Bienvenido, {nombreVendedor}\n\nLogin: {loginUrl}\nUsuario: {usuario}\n{bloqueAccesoTexto}"
         };
 
@@ -548,6 +556,23 @@ public class EmailService : IEmailService
         var loginSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(loginUrl) ? "/login" : loginUrl.Trim());
         var usuarioSeguro = WebUtility.HtmlEncode((usuario ?? string.Empty).Trim());
         var claveSeguro = WebUtility.HtmlEncode((contrasenaTemporal ?? string.Empty).Trim());
+        var pasosBackOffice = new[]
+        {
+            "Haz clic en el boton <strong>Abrir BackOffice</strong>",
+            $"En la pantalla de login escribe este usuario/correo: <strong>{usuarioSeguro}</strong>",
+            $"En el campo de contrasena escribe la contrasena temporal que aparece abajo: <strong>{claveSeguro}</strong>",
+            "Presiona <strong>Iniciar sesion</strong>",
+            "Cuando ya estes dentro, puedes cambiar la contrasena desde <strong>Mi perfil</strong>"
+        };
+        var contenidoBackOffice = BuildOutlookStepsTable(pasosBackOffice)
+            + BuildOutlookCredentialBox(new (string? Label, string? Value)[]
+            {
+                ("Perfil", perfilSeguro),
+                ("Usuario / correo", $"<a href='mailto:{usuarioSeguro}' style='color:#2563eb;text-decoration:underline;'>{usuarioSeguro}</a>"),
+                ("Contrasena temporal", BuildOutlookCodeBox(claveSeguro))
+            })
+            + BuildOutlookButton(loginSeguro, "Abrir BackOffice")
+            + "<p style='Margin:18px 0 0 0;font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#6b7280;'>No necesitas crear una contrasena antes de entrar. Usa la contrasena temporal de este correo y luego cambiala desde Mi perfil.</p>";
 
         var mensaje = new MimeMessage();
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
@@ -556,36 +581,12 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='margin:0;padding:0;background:#f4f6f8;font-family:Segoe UI,Arial,sans-serif;color:#111827;'>
-  <div style='max-width:640px;margin:0 auto;padding:28px 16px;'>
-    <div style='background:#111827;border-radius:18px 18px 0 0;padding:26px 30px;color:#fff;'>
-      <div style='font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#9ca3af;font-weight:800;'>Numerica BackOffice</div>
-      <h1 style='margin:8px 0 0;font-size:24px;line-height:1.25;'>Bienvenido, {nombreSeguro}</h1>
-    </div>
-    <div style='background:#fff;border:1px solid #e5e7eb;border-top:0;border-radius:0 0 18px 18px;padding:28px 30px;'>
-      <p style='margin:0 0 18px;font-size:15px;color:#374151;'>Se creo tu usuario de <strong>{perfilSeguro}</strong>. Sigue estos pasos uno por uno para entrar a BackOffice.</p>
-      <div style='margin:18px 0;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;'>
-        <div style='padding:12px 16px;background:#111827;color:#fff;font-weight:800;'>Pasos para ingresar</div>
-        <ol style='margin:0;padding:16px 18px 16px 38px;color:#374151;line-height:1.65;font-size:14px;'>
-          <li>Haz clic en el boton <strong>Abrir BackOffice</strong></li>
-          <li>En la pantalla de login escribe este usuario/correo: <strong>{usuarioSeguro}</strong></li>
-          <li>En el campo de contrasena escribe la contrasena temporal que aparece abajo: <strong>{claveSeguro}</strong></li>
-          <li>Presiona <strong>Iniciar sesion</strong></li>
-          <li>Cuando ya estes dentro, puedes cambiar la contrasena desde <strong>Mi perfil</strong></li>
-        </ol>
-      </div>
-      <div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin:18px 0;'>
-        <p style='margin:0 0 8px;font-size:14px;'><strong>Perfil:</strong> {perfilSeguro}</p>
-        <p style='margin:0 0 8px;font-size:14px;'><strong>Usuario / correo:</strong> <a href='mailto:{usuarioSeguro}' style='color:#2563eb;'>{usuarioSeguro}</a></p>
-        <p style='margin:0 0 8px;font-size:14px;'><strong>Contrasena temporal:</strong></p>
-        <div style='display:inline-block;background:#111827;color:#fff;border-radius:12px;padding:12px 18px;font-size:22px;font-weight:900;letter-spacing:.16em;'>{claveSeguro}</div>
-      </div>
-      <a href='{loginSeguro}' style='display:inline-block;background:#111827;color:#fff;text-decoration:none;border-radius:10px;padding:12px 18px;font-weight:800;font-size:14px;margin-top:4px;'>Abrir BackOffice</a>
-      <p style='margin:18px 0 0;font-size:13px;color:#6b7280;'>No necesitas crear una contrasena antes de entrar. Usa la contrasena temporal de este correo y luego cambiala desde Mi perfil.</p>
-    </div>
-  </div>
-</div>",
+            HtmlBody = BuildOutlookEmailShell(
+                $"Tus credenciales de acceso {perfilSeguro}",
+                "Numerica BackOffice",
+                $"Bienvenido, {nombreSeguro}",
+                $"Se creo tu usuario de <strong>{perfilSeguro}</strong>. Sigue estos pasos uno por uno para entrar a BackOffice.",
+                contenidoBackOffice),
             TextBody = $"Bienvenido, {nombreUsuario}\n\nPasos:\n1. Abre BackOffice: {loginUrl}\n2. Escribe este usuario/correo: {usuario}\n3. Escribe esta contrasena temporal: {contrasenaTemporal}\n4. Presiona Iniciar sesion\n5. Luego puedes cambiarla desde Mi perfil\n\nCredenciales:\nPerfil: {perfil}\nUsuario: {usuario}\nContrasena temporal: {contrasenaTemporal}\n"
         };
 
@@ -667,30 +668,20 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='font-family:Segoe UI,Arial,sans-serif;background:#f6f8fb;padding:24px'>
-  <div style='max-width:620px;margin:auto;background:#ffffff;border:1px solid #e8eef5;border-radius:14px;overflow:hidden'>
-    <div style='background:#0f172a;color:#fff;padding:18px 22px'>
-      <div style='font-size:18px;font-weight:700'>E-FACT</div>
-      <div style='opacity:.85;font-size:13px;margin-top:4px'>Entrega de comprobante electrónico</div>
-    </div>
-    <div style='padding:22px'>
-      <p style='margin:0 0 10px 0;color:#111827'>Estimado cliente,</p>
-      <p style='margin:0 0 16px 0;color:#374151;line-height:1.5'>
-        Adjuntamos los archivos correspondientes a la factura electrónica <b>{numeroFactura}</b> emitida para <b>{clienteSeguro}</b>.
-      </p>
-      <div style='background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;line-height:1.7;color:#1f2937'>
-        <div><b>Factura:</b> {numeroFactura}</div>
-        <div><b>Cliente:</b> {clienteSeguro}</div>
-        <div><b>Total:</b> ${totalTexto}</div>
-        <div><b>Archivos adjuntos:</b> {archivosAdjuntos}</div>
-      </div>
-      <p style='margin:16px 0 0 0;color:#374151;line-height:1.5'>
-        Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.
-      </p>
-    </div>
-  </div>
-</div>"
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Factura electrónica {numeroFactura} disponible en PDF y XML.",
+                eyebrow: "Comprobante electrónico",
+                title: $"Factura electrónica {WebUtility.HtmlEncode(numeroFactura)}",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con un formato compatible con Outlook.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimado cliente,")}
+{BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la factura electrónica <strong>{WebUtility.HtmlEncode(numeroFactura)}</strong> emitida para <strong>{clienteSeguro}</strong>.")}
+{BuildInfoTable(
+    ("Factura", WebUtility.HtmlEncode(numeroFactura)),
+    ("Cliente", clienteSeguro),
+    ("Total", $"${totalTexto}"),
+    ("Archivos adjuntos", WebUtility.HtmlEncode(archivosAdjuntos)))}
+{BuildNoticeBox("Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.")}")
         };
 
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
@@ -748,31 +739,21 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='font-family:Segoe UI,Arial,sans-serif;background:#f6f8fb;padding:24px'>
-  <div style='max-width:620px;margin:auto;background:#ffffff;border:1px solid #e8eef5;border-radius:14px;overflow:hidden'>
-    <div style='background:#0f172a;color:#fff;padding:18px 22px'>
-      <div style='font-size:18px;font-weight:700'>E-FACT</div>
-      <div style='opacity:.85;font-size:13px;margin-top:4px'>Entrega de comprobante electrónico</div>
-    </div>
-    <div style='padding:22px'>
-      <p style='margin:0 0 10px 0;color:#111827'>Estimado cliente,</p>
-      <p style='margin:0 0 16px 0;color:#374151;line-height:1.5'>
-        Adjuntamos los archivos correspondientes a la nota de crédito electrónica <b>{numeroNotaCredito}</b> emitida para <b>{clienteSeguro}</b>.
-      </p>
-      <div style='background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;line-height:1.7;color:#1f2937'>
-        <div><b>Nota de crédito:</b> {numeroNotaCredito}</div>
-        <div><b>Documento relacionado:</b> {documentoModificadoSeguro}</div>
-        <div><b>Cliente:</b> {clienteSeguro}</div>
-        <div><b>Total:</b> ${totalTexto}</div>
-        <div><b>Archivos adjuntos:</b> {archivosAdjuntos}</div>
-      </div>
-      <p style='margin:16px 0 0 0;color:#374151;line-height:1.5'>
-        Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.
-      </p>
-    </div>
-  </div>
-</div>"
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Nota de crédito electrónica {numeroNotaCredito} disponible en PDF y XML.",
+                eyebrow: "Comprobante electrónico",
+                title: $"Nota de crédito {WebUtility.HtmlEncode(numeroNotaCredito)}",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con una estructura estable para Outlook.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimado cliente,")}
+{BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la nota de crédito electrónica <strong>{WebUtility.HtmlEncode(numeroNotaCredito)}</strong> emitida para <strong>{clienteSeguro}</strong>.")}
+{BuildInfoTable(
+    ("Nota de crédito", WebUtility.HtmlEncode(numeroNotaCredito)),
+    ("Documento relacionado", documentoModificadoSeguro),
+    ("Cliente", clienteSeguro),
+    ("Total", $"${totalTexto}"),
+    ("Archivos adjuntos", WebUtility.HtmlEncode(archivosAdjuntos)))}
+{BuildNoticeBox("Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.")}")
         };
 
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
@@ -830,31 +811,21 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='font-family:Segoe UI,Arial,sans-serif;background:#f6f8fb;padding:24px'>
-  <div style='max-width:620px;margin:auto;background:#ffffff;border:1px solid #e8eef5;border-radius:14px;overflow:hidden'>
-    <div style='background:#0f172a;color:#fff;padding:18px 22px'>
-      <div style='font-size:18px;font-weight:700'>E-FACT</div>
-      <div style='opacity:.85;font-size:13px;margin-top:4px'>Entrega de comprobante electrónico</div>
-    </div>
-    <div style='padding:22px'>
-      <p style='margin:0 0 10px 0;color:#111827'>Estimado cliente,</p>
-      <p style='margin:0 0 16px 0;color:#374151;line-height:1.5'>
-        Adjuntamos los archivos correspondientes a la nota de débito electrónica <b>{numeroNotaDebito}</b> emitida para <b>{clienteSeguro}</b>.
-      </p>
-      <div style='background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;line-height:1.7;color:#1f2937'>
-        <div><b>Nota de débito:</b> {numeroNotaDebito}</div>
-        <div><b>Documento relacionado:</b> {documentoModificadoSeguro}</div>
-        <div><b>Cliente:</b> {clienteSeguro}</div>
-        <div><b>Total:</b> ${totalTexto}</div>
-        <div><b>Archivos adjuntos:</b> {archivosAdjuntos}</div>
-      </div>
-      <p style='margin:16px 0 0 0;color:#374151;line-height:1.5'>
-        Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.
-      </p>
-    </div>
-  </div>
-</div>"
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Nota de débito electrónica {numeroNotaDebito} disponible en PDF y XML.",
+                eyebrow: "Comprobante electrónico",
+                title: $"Nota de débito {WebUtility.HtmlEncode(numeroNotaDebito)}",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con una maquetación estable para Outlook.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimado cliente,")}
+{BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la nota de débito electrónica <strong>{WebUtility.HtmlEncode(numeroNotaDebito)}</strong> emitida para <strong>{clienteSeguro}</strong>.")}
+{BuildInfoTable(
+    ("Nota de débito", WebUtility.HtmlEncode(numeroNotaDebito)),
+    ("Documento relacionado", documentoModificadoSeguro),
+    ("Cliente", clienteSeguro),
+    ("Total", $"${totalTexto}"),
+    ("Archivos adjuntos", WebUtility.HtmlEncode(archivosAdjuntos)))}
+{BuildNoticeBox("Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.")}")
         };
 
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
@@ -909,30 +880,20 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='font-family:Segoe UI,Arial,sans-serif;background:#f6f8fb;padding:24px'>
-  <div style='max-width:620px;margin:auto;background:#ffffff;border:1px solid #e8eef5;border-radius:14px;overflow:hidden'>
-    <div style='background:#0f172a;color:#fff;padding:18px 22px'>
-      <div style='font-size:18px;font-weight:700'>E-FACT</div>
-      <div style='opacity:.85;font-size:13px;margin-top:4px'>Entrega de comprobante electrónico</div>
-    </div>
-    <div style='padding:22px'>
-      <p style='margin:0 0 10px 0;color:#111827'>Estimado cliente,</p>
-      <p style='margin:0 0 16px 0;color:#374151;line-height:1.5'>
-        Adjuntamos los archivos correspondientes a la guía de remisión electrónica <b>{numeroGuiaRemision}</b> emitida para <b>{destinatarioSeguro}</b>.
-      </p>
-      <div style='background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;line-height:1.7;color:#1f2937'>
-        <div><b>Guía de remisión:</b> {numeroGuiaRemision}</div>
-        <div><b>Destinatario:</b> {destinatarioSeguro}</div>
-        <div><b>Documento sustento:</b> {documentoSustentoSeguro}</div>
-        <div><b>Archivos adjuntos:</b> {archivosAdjuntos}</div>
-      </div>
-      <p style='margin:16px 0 0 0;color:#374151;line-height:1.5'>
-        Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.
-      </p>
-    </div>
-  </div>
-</div>"
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Guía de remisión electrónica {numeroGuiaRemision} disponible en PDF y XML.",
+                eyebrow: "Comprobante electrónico",
+                title: $"Guía de remisión {WebUtility.HtmlEncode(numeroGuiaRemision)}",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con compatibilidad reforzada para Outlook.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimado cliente,")}
+{BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la guía de remisión electrónica <strong>{WebUtility.HtmlEncode(numeroGuiaRemision)}</strong> emitida para <strong>{destinatarioSeguro}</strong>.")}
+{BuildInfoTable(
+    ("Guía de remisión", WebUtility.HtmlEncode(numeroGuiaRemision)),
+    ("Destinatario", destinatarioSeguro),
+    ("Documento sustento", documentoSustentoSeguro),
+    ("Archivos adjuntos", WebUtility.HtmlEncode(archivosAdjuntos)))}
+{BuildNoticeBox("Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.")}")
         };
 
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
@@ -985,30 +946,20 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='font-family:Segoe UI,Arial,sans-serif;background:#f6f8fb;padding:24px'>
-  <div style='max-width:620px;margin:auto;background:#ffffff;border:1px solid #e8eef5;border-radius:14px;overflow:hidden'>
-    <div style='background:#0f172a;color:#fff;padding:18px 22px'>
-      <div style='font-size:18px;font-weight:700'>E-FACT</div>
-      <div style='opacity:.85;font-size:13px;margin-top:4px'>Entrega de comprobante electrónico</div>
-    </div>
-    <div style='padding:22px'>
-      <p style='margin:0 0 10px 0;color:#111827'>Estimado proveedor,</p>
-      <p style='margin:0 0 16px 0;color:#374151;line-height:1.5'>
-        Adjuntamos los archivos correspondientes a la liquidación de compra electrónica <b>{numeroLiquidacion}</b> emitida para <b>{proveedorSeguro}</b>.
-      </p>
-      <div style='background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;line-height:1.7;color:#1f2937'>
-        <div><b>Liquidación:</b> {numeroLiquidacion}</div>
-        <div><b>Proveedor:</b> {proveedorSeguro}</div>
-        <div><b>Total:</b> ${totalTexto}</div>
-        <div><b>Archivos adjuntos:</b> {archivosAdjuntos}</div>
-      </div>
-      <p style='margin:16px 0 0 0;color:#374151;line-height:1.5'>
-        Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.
-      </p>
-    </div>
-  </div>
-</div>"
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Liquidación de compra electrónica {numeroLiquidacion} disponible en PDF y XML.",
+                eyebrow: "Comprobante electrónico",
+                title: $"Liquidación de compra {WebUtility.HtmlEncode(numeroLiquidacion)}",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT usando tablas y estilos inline compatibles con Outlook.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimado proveedor,")}
+{BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la liquidación de compra electrónica <strong>{WebUtility.HtmlEncode(numeroLiquidacion)}</strong> emitida para <strong>{proveedorSeguro}</strong>.")}
+{BuildInfoTable(
+    ("Liquidación", WebUtility.HtmlEncode(numeroLiquidacion)),
+    ("Proveedor", proveedorSeguro),
+    ("Total", $"${totalTexto}"),
+    ("Archivos adjuntos", WebUtility.HtmlEncode(archivosAdjuntos)))}
+{BuildNoticeBox("Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.")}")
         };
 
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
@@ -1067,31 +1018,21 @@ public class EmailService : IEmailService
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<div style='font-family:Segoe UI,Arial,sans-serif;background:#f6f8fb;padding:24px'>
-  <div style='max-width:620px;margin:auto;background:#ffffff;border:1px solid #e8eef5;border-radius:14px;overflow:hidden'>
-    <div style='background:#0f172a;color:#fff;padding:18px 22px'>
-      <div style='font-size:18px;font-weight:700'>E-FACT</div>
-      <div style='opacity:.85;font-size:13px;margin-top:4px'>Entrega de comprobante electrónico</div>
-    </div>
-    <div style='padding:22px'>
-      <p style='margin:0 0 10px 0;color:#111827'>Estimado proveedor,</p>
-      <p style='margin:0 0 16px 0;color:#374151;line-height:1.5'>
-        Adjuntamos los archivos correspondientes al comprobante de retención electrónico <b>{numeroRetencion}</b> emitido para <b>{proveedorSeguro}</b>.
-      </p>
-      <div style='background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;line-height:1.7;color:#1f2937'>
-        <div><b>Retención:</b> {numeroRetencion}</div>
-        <div><b>Documento sustento:</b> {documentoSustentoSeguro}</div>
-        <div><b>Proveedor:</b> {proveedorSeguro}</div>
-        <div><b>Total retenido:</b> ${totalTexto}</div>
-        <div><b>Archivos adjuntos:</b> {archivosAdjuntos}</div>
-      </div>
-      <p style='margin:16px 0 0 0;color:#374151;line-height:1.5'>
-        Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.
-      </p>
-    </div>
-  </div>
-</div>"
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Comprobante de retención electrónico {numeroRetencion} disponible en PDF y XML.",
+                eyebrow: "Comprobante electrónico",
+                title: $"Comprobante de retención {WebUtility.HtmlEncode(numeroRetencion)}",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con una estructura apta para Outlook.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimado proveedor,")}
+{BuildBodyParagraph($"Adjuntamos los archivos correspondientes al comprobante de retención electrónico <strong>{WebUtility.HtmlEncode(numeroRetencion)}</strong> emitido para <strong>{proveedorSeguro}</strong>.")}
+{BuildInfoTable(
+    ("Retención", WebUtility.HtmlEncode(numeroRetencion)),
+    ("Documento sustento", documentoSustentoSeguro),
+    ("Proveedor", proveedorSeguro),
+    ("Total retenido", $"${totalTexto}"),
+    ("Archivos adjuntos", WebUtility.HtmlEncode(archivosAdjuntos)))}
+{BuildNoticeBox("Este correo fue generado automáticamente por el sistema de facturación electrónica. Si necesitas una nueva copia o una corrección en los destinatarios, por favor contacta al emisor.")}")
         };
 
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
@@ -1312,7 +1253,7 @@ Atentamente,
         if (!destinatarios.Any())
         {
             _logger.LogWarning(
-                "Se omitio la notificacion administrativa del pago de firma electronica {SolicitudId} porque no hay destinatarios configurados.",
+                "Se omitio la notificacion administrativa del pago de eRúbrica {SolicitudId} porque no hay destinatarios configurados.",
                 solicitudId);
             return;
         }
@@ -1339,7 +1280,7 @@ Atentamente,
         foreach (var destinatario in destinatarios)
             mensaje.To.Add(MailboxAddress.Parse(destinatario));
 
-        mensaje.Subject = $"Notificacion de pago aprobado de firma electronica | Solicitud #{solicitudId}";
+        mensaje.Subject = $"Notificacion de pago aprobado de eRúbrica | Solicitud #{solicitudId}";
 
         var bodyBuilder = new BodyBuilder
         {
@@ -1351,9 +1292,9 @@ Atentamente,
         <tr>
           <td style='padding:28px 30px;background:#0b5ed7;color:#ffffff;'>
             <div style='font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;'>Registro contable</div>
-            <div style='font-size:30px;font-weight:800;line-height:1.1;margin-top:10px;'>Pago aprobado de firma electronica</div>
+            <div style='font-size:30px;font-weight:800;line-height:1.1;margin-top:10px;'>Pago aprobado de eRúbrica</div>
             <div style='font-size:14px;line-height:1.6;margin-top:10px;color:#dcecff;'>
-              Se aprobo un pago de solicitud de firma electronica y se envia este aviso para control administrativo.
+              Se aprobo un pago de solicitud de eRúbrica y se envia este aviso para control administrativo.
             </div>
           </td>
         </tr>
@@ -1384,6 +1325,136 @@ Atentamente,
         mensaje.Body = bodyBuilder.ToMessageBody();
 
         await SendMessageAsync(mensaje);
+    }
+
+    private static string BuildOutlookEmailShell(string preheader, string brand, string title, string introHtml, string contentHtml)
+    {
+        var preheaderSeguro = WebUtility.HtmlEncode(preheader);
+
+        return $@"
+<!doctype html>
+<html>
+<head>
+  <meta http-equiv='Content-Type' content='text/html; charset=utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+  <meta name='x-apple-disable-message-reformatting'>
+  <!--[if mso]>
+  <style type='text/css'>
+    body, table, td, p, a, span {{ font-family: Arial, sans-serif !important; }}
+  </style>
+  <![endif]-->
+</head>
+<body style='Margin:0;padding:0;background-color:#f4f6f8;'>
+  <div style='display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;color:#f4f6f8;mso-hide:all;'>
+    {preheaderSeguro}
+  </div>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' bgcolor='#f4f6f8' style='width:100%;background-color:#f4f6f8;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;'>
+    <tr>
+      <td align='center' style='padding:28px 12px;'>
+        <table role='presentation' width='640' cellpadding='0' cellspacing='0' border='0' style='width:640px;max-width:640px;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;'>
+          <tr>
+            <td bgcolor='#111827' style='background-color:#111827;padding:26px 30px 24px 30px;font-family:Segoe UI,Arial,sans-serif;color:#ffffff;'>
+              <p style='Margin:0 0 8px 0;font-size:12px;line-height:16px;text-transform:uppercase;letter-spacing:2px;color:#cbd5e1;font-weight:700;'>{brand}</p>
+              <h1 style='Margin:0;font-size:24px;line-height:31px;color:#ffffff;font-weight:800;'>{title}</h1>
+            </td>
+          </tr>
+          <tr>
+            <td bgcolor='#ffffff' style='background-color:#ffffff;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;padding:28px 30px 30px 30px;font-family:Segoe UI,Arial,sans-serif;color:#111827;'>
+              <p style='Margin:0 0 18px 0;font-size:15px;line-height:24px;color:#374151;'>{introHtml}</p>
+              {contentHtml}
+            </td>
+          </tr>
+          <tr>
+            <td align='center' style='padding:16px 8px 0 8px;font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;color:#6b7280;'>
+              Correo generado automaticamente por Numerica Software.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>";
+    }
+
+    private static string BuildOutlookStepsTable(IEnumerable<string> steps)
+    {
+        var rows = string.Join(
+            string.Empty,
+            steps.Select((step, index) => $@"
+              <tr>
+                <td width='34' valign='top' style='width:34px;padding:10px 0 0 0;font-family:Segoe UI,Arial,sans-serif;'>
+                  <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;'>
+                    <tr>
+                      <td align='center' valign='middle' bgcolor='#111827' style='width:24px;height:24px;background-color:#111827;color:#ffffff;font-size:13px;line-height:24px;font-weight:800;'>{index + 1}</td>
+                    </tr>
+                  </table>
+                </td>
+                <td valign='top' style='padding:10px 0 0 0;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:22px;color:#374151;'>{step}</td>
+              </tr>"));
+
+        return $@"
+        <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border:1px solid #e5e7eb;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;Margin:18px 0;'>
+          <tr>
+            <td bgcolor='#111827' style='background-color:#111827;padding:12px 16px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:20px;color:#ffffff;font-weight:800;'>Pasos para ingresar</td>
+          </tr>
+          <tr>
+            <td bgcolor='#ffffff' style='background-color:#ffffff;padding:6px 16px 16px 16px;'>
+              <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;'>
+                {rows}
+              </table>
+            </td>
+          </tr>
+        </table>";
+    }
+
+    private static string BuildOutlookCredentialBox(IEnumerable<(string? Label, string? Value)> rows)
+    {
+        var validRows = rows
+            .Where(row => !string.IsNullOrWhiteSpace(row.Label) && !string.IsNullOrWhiteSpace(row.Value))
+            .Select(row => $@"
+              <tr>
+                <td style='padding:6px 0;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:22px;color:#374151;'>
+                  <strong style='color:#111827;'>{row.Label}:</strong> {row.Value}
+                </td>
+              </tr>");
+
+        return $@"
+        <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' bgcolor='#f9fafb' style='width:100%;background-color:#f9fafb;border:1px solid #e5e7eb;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;Margin:18px 0;'>
+          <tr>
+            <td style='padding:14px 18px;'>
+              <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;'>
+                {string.Join(string.Empty, validRows)}
+              </table>
+            </td>
+          </tr>
+        </table>";
+    }
+
+    private static string BuildOutlookCodeBox(string value)
+    {
+        return $@"
+        <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;Margin-top:8px;'>
+          <tr>
+            <td bgcolor='#111827' style='background-color:#111827;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:22px;line-height:26px;font-weight:900;letter-spacing:4px;padding:12px 18px;'>{value}</td>
+          </tr>
+        </table>";
+    }
+
+    private static string BuildOutlookButton(string url, string text)
+    {
+        return $@"
+        <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;Margin-top:4px;'>
+          <tr>
+            <td bgcolor='#111827' style='background-color:#111827;padding:0;'>
+              <a href='{url}' target='_blank' style='display:inline-block;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:18px;font-weight:800;color:#ffffff;text-decoration:none;padding:13px 20px;border:1px solid #111827;mso-padding-alt:0;'>
+                <!--[if mso]><i style='letter-spacing:20px;mso-font-width:-100%;mso-text-raise:13pt'>&nbsp;</i><![endif]-->
+                <span style='mso-text-raise:7pt;color:#ffffff;'>{text}</span>
+                <!--[if mso]><i style='letter-spacing:20px;mso-font-width:-100%'>&nbsp;</i><![endif]-->
+              </a>
+            </td>
+          </tr>
+        </table>";
     }
 
     private async Task SendMessageAsync(MimeMessage mensaje)
@@ -1613,5 +1684,106 @@ Atentamente,
         var dom = parts[1];
         var visible = user.Length <= 2 ? user : user.Substring(0, 2);
         return $"{visible}***@{dom}";
+    }
+
+    private static string BuildTransactionalEmailLayout(
+        string previewText,
+        string eyebrow,
+        string title,
+        string subtitle,
+        string bodyHtml,
+        string? footerText = null)
+    {
+        var previewSafe = WebUtility.HtmlEncode(previewText);
+        var eyebrowSafe = WebUtility.HtmlEncode(eyebrow);
+        var titleSafe = title;
+        var subtitleSafe = subtitle;
+        var footerSafe = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(footerText)
+            ? "Correo generado automáticamente por Numerica E-FACT."
+            : footerText.Trim());
+
+        return $@"
+<!DOCTYPE html>
+<html lang='es'>
+  <body style='margin:0;padding:0;background-color:#eef3f8;'>
+    <div style='display:none;font-size:1px;color:#eef3f8;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;'>
+      {previewSafe}
+    </div>
+    <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;background-color:#eef3f8;margin:0;padding:0;'>
+      <tr>
+        <td align='center' style='padding:24px 12px;'>
+          <!--[if mso]>
+          <table role='presentation' width='640' cellpadding='0' cellspacing='0' border='0'><tr><td>
+          <![endif]-->
+          <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:640px;border-collapse:collapse;background-color:#ffffff;border:1px solid #d9e4ef;'>
+            <tr>
+              <td style='padding:24px 28px;background-color:#0f3d66;'>
+                <div style='font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#cfe4f8;'>
+                  {eyebrowSafe}
+                </div>
+                <div style='font-family:Segoe UI,Arial,sans-serif;font-size:28px;line-height:34px;font-weight:700;color:#ffffff;padding-top:8px;'>
+                  {titleSafe}
+                </div>
+                <div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:22px;color:#dbe9f7;padding-top:10px;'>
+                  {subtitleSafe}
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style='padding:28px;background-color:#ffffff;'>
+                {bodyHtml}
+              </td>
+            </tr>
+            <tr>
+              <td style='padding:18px 28px;background-color:#f7fafc;border-top:1px solid #dde6ef;font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;color:#6b7c8f;'>
+                {footerSafe}
+              </td>
+            </tr>
+          </table>
+          <!--[if mso]>
+          </td></tr></table>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>";
+    }
+
+    private static string BuildBodyParagraph(string htmlText)
+        => $"<p style='margin:0 0 16px 0;font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:24px;color:#334155;'>{htmlText}</p>";
+
+    private static string BuildNoticeBox(string htmlText)
+        => $@"
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;background-color:#f8fbfe;border:1px solid #dbe7f1;'>
+  <tr>
+    <td style='padding:16px 18px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:22px;color:#475569;'>
+      {htmlText}
+    </td>
+  </tr>
+</table>";
+
+    private static string BuildInfoTable(params (string Label, string Value)[] rows)
+    {
+        var builder = new System.Text.StringBuilder();
+        builder.Append("<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;border:1px solid #dbe5ef;background-color:#f8fbff;margin:0 0 18px 0;'>");
+
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var (label, value) = rows[i];
+            var borderStyle = i == rows.Length - 1 ? string.Empty : "border-bottom:1px solid #e5edf5;";
+            builder.Append($@"
+<tr>
+  <td style='width:38%;padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;font-weight:700;color:#1e3a5f;background-color:#f1f7fd;vertical-align:top;'>
+    {WebUtility.HtmlEncode(label)}
+  </td>
+  <td style='padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#334155;vertical-align:top;'>
+    {value}
+  </td>
+</tr>");
+        }
+
+        builder.Append("</table>");
+        return builder.ToString();
     }
 }

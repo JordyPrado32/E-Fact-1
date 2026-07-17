@@ -562,7 +562,7 @@ USING (VALUES
     (N'e-conta',    N'E-CONTAX',   N'Contabilidad y control financiero habilitado por suscripcion.',                 N'/e-contax',         CAST(1 AS bit), CAST(1 AS bit), 3, N'ri-line-chart-line',  N'#00A896'),
     (N'e-declara',  N'E-DECLARA',  N'Declaraciones tributarias con acceso segun plan activo.',                       N'/e-declara',        CAST(1 AS bit), CAST(1 AS bit), 4, N'ri-government-line',  N'#fd7e14'),
     (N'e-people',   N'E-PEOPLE',   N'Gestion de talento humano y colaboradores bajo suscripcion.',                  N'/servicios/e-people',CAST(1 AS bit), CAST(1 AS bit), 5, N'ri-team-line',        N'#6f42c1'),
-    (N'e-sign',     N'E-SIGN',     N'Firma electronica y certificado digital para firma de documentos en linea.', N'/e-sign',            CAST(0 AS bit), CAST(1 AS bit), 2, N'ri-key-2-line',        N'#2E7D32'),
+    (N'e-sign',     N'eRúbrica',   N'eRúbrica para firma electronica y certificado digital de documentos en linea.', N'/e-sign',            CAST(0 AS bit), CAST(1 AS bit), 2, N'ri-key-2-line',        N'#2E7D32'),
     (N'backoffice', N'BACKOFFICE', N'Acceso exclusivo para administradores y personal de backoffice.',               N'/backoffice',        CAST(0 AS bit), CAST(1 AS bit), 6, N'ri-shield-user-line', N'#0a1c3e')
 ) AS source ([Clave], [Nombre], [Descripcion], [RutaAcceso], [RequiereSuscripcion], [Estado], [OrdenVisual], [Icono], [ColorHex])
 ON target.[Clave] = source.[Clave]
