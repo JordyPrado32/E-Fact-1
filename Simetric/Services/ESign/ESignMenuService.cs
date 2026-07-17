@@ -160,7 +160,7 @@ namespace Simetric.Services.ESign
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (2, NULL, 'Documentos firmados', 1, '/e-sign/documentos', 'ri-file-shield-2-line');
                 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 3)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (3, NULL, 'Firma Electronica', 1, '', 'ri-pen-nib-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (3, NULL, N'eRúbrica', 1, '', 'ri-pen-nib-line');
                 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 4)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (4, 3, 'Nueva Solicitud', 1, '/solicitud/nueva', 'ri-file-add-line');
@@ -200,6 +200,9 @@ namespace Simetric.Services.ESign
 
                 // Asegurar que Soporte quede fuera de Configuración a nivel raíz
                 await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [IDMENUPADRE] = NULL WHERE [IDMENU] = 7;");
+
+                // Actualizar el nombre visible del módulo si ya fue sembrado con la marca anterior.
+                await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [NOMBREMENU] = N'eRúbrica' WHERE [IDMENU] = 3 AND [NOMBREMENU] IN ('E-Sign', 'e-sign', 'ESign', 'Firma Electronica', N'Firma Electrónica');");
 
                 // Actualizar icono de Administración a ri-settings-3-line (igual a e-fact)
                 await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [ICONOMENU] = 'ri-settings-3-line' WHERE [IDMENU] = 12;");
