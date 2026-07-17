@@ -129,6 +129,26 @@ public sealed class CompraDocumentosFacturacionService
             }
         }
 
+        try
+        {
+            var xmlUrl = await _facturacionService.AsegurarXmlFacturaAsync(facturaExistente.Codfactura, true);
+            if (string.IsNullOrWhiteSpace(xmlUrl))
+            {
+                _logger.LogWarning(
+                    "La factura {CodFactura} de la compra {CompraId} se guardo, pero no se pudo confirmar la generacion del XML.",
+                    facturaExistente.Codfactura,
+                    compra.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "La factura {CodFactura} de la compra {CompraId} se guardo, pero fallo la generacion previa del XML.",
+                facturaExistente.Codfactura,
+                compra.Id);
+        }
+
         mensajeSRI resultadoSri;
         try
         {
