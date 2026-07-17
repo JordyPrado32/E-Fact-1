@@ -1,0 +1,2837 @@
+@page "/productos"
+@page "/demo/productos"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using System.Net.Http.Json
+@using System.Text
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Security.Claims
+@using Simetric.Services
+@using Simetric.Models
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject ProductCategoryService CategoryService
+@inject EmisionControlService EmisionControlService
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject NavigationManager NavManager
+@rendermode InteractiveServer
+@attribute [AllowAnonymous]
+
+@{
+    var filteredProducts = ProductosPaginados.ToList();
+    var totalFilteredProducts = CurrentTotalRecords;
+    var totalActivos = productos.Count(p => p.Estado == true);
+    var totalServicios = productos.Count(p => p.Estado == true && string.Equals(p.TipoCompravena, "SERVICIO", StringComparison.OrdinalIgnoreCase));
+    var totalConIva = productos.Count(p => p.Estado == true && p.Codigoimpuesto == "2");
+}
+
+<PageTitle>Productos | @PageBrandTitle</PageTitle>
+
+<div class="products-shell" data-tour="productos.page">
+    @if (MostrarVolverInicioOnboarding)
+    {
+        <div class="breadcrumb-container">
+            <button type="button" class="breadcrumb-home-btn" @onclick='() => NavManager.NavigateTo("/dashboard")'>
+                <i class="bi bi-house-door"></i>
+                <span>Volver al inicio</span>
+            </button>
+        </div>
+    }
+    <section class="products-hero" data-tour="productos.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Catálogo comercial</span>
+            <h2>Gestión de productos y servicios</h2>
+            <p>
+                Administra tu catálogo, configura precios, IVA y organiza tus registros por categoría y subcategoría.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Activos</span>
+                <strong>@totalActivos</strong>
+                <small>Productos y servicios visibles.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Servicios</span>
+                <strong>@totalServicios</strong>
+                <small>Registros marcados como servicio.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Con IVA</span>
+                <strong>@totalConIva</strong>
+                <small>Registros configurados con impuesto.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="quick-action-bar" aria-label="Acciones rápidas de productos">
+        <button type="button" class="quick-action-card quick-action-primary" @onclick="AbrirNuevoProductoModal">
+            <span class="quick-action-icon"><i class="bi bi-plus-lg"></i></span>
+            <span>
+                <strong>Nuevo producto / servicio</strong>
+                <small>Crear registro</small>
+            </span>
+        </button>
+
+        <button type="button" class="quick-action-card" @onclick="AbrirImportacion">
+            <span class="quick-action-icon quick-action-icon-green"><i class="bi bi-file-earmark-spreadsheet"></i></span>
+            <span>
+                <strong>Importar desde Excel</strong>
+                <small>Carga masiva de productos</small>
+            </span>
+        </button>
+
+
+
+        <button type="button" class="quick-action-card" @onclick="ExportarProductosCsvAsync">
+            <span class="quick-action-icon quick-action-icon-blue"><i class="bi bi-download"></i></span>
+            <span>
+                <strong>Exportar todos</strong>
+                <small>Descargar Excel</small>
+            </span>
+        </button>
+
+        <button type="button" class="quick-action-card" @onclick='() => NavManager.NavigateTo("/configuracion/categorias")'>
+            <span class="quick-action-icon quick-action-icon-violet"><i class="bi bi-tags"></i></span>
+            <span>
+                <strong>Categorías</strong>
+                <small>Gestionar catálogo</small>
+            </span>
+        </button>
+
+
+        <div class="quick-action-search">
+            <i class="bi bi-search"></i>
+            <input placeholder="Buscar por nombre, código o descripción..."
+                   @bind="FiltroBusqueda"
+                   @bind:event="oninput" />
+        </div>
+
+        <button type="button" class="filter-toggle-btn @(mostrarPanelFiltros ? "active" : "")" @onclick="AlternarPanelFiltros">
+            <i class="bi bi-funnel"></i>
+            <span>Filtros</span>
+            @if (filtroTipo.HasValue || filtroSubtipo.HasValue || !string.IsNullOrWhiteSpace(filtroCompraventa) || !string.IsNullOrWhiteSpace(filtro) || pageSize != 10)
+            {
+                <b></b>
+            }
+        </button>
+    </section>
+
+
+
+    <section class="toolbar-card @(mostrarPanelFiltros ? "filters-visible" : "")" data-tour="productos.toolbar">
+        @if (isDemoMode)
+        {
+            <div class="status-banner status-banner-info mb-3">
+                <i class="bi bi-eye"></i>
+                <span>Modo demo: puedes explorar el catálogo y revisar fichas, pero crear, editar o desactivar productos está bloqueado.</span>
+            </div>
+        }
+
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Control</span>
+            <h3>Catálogo</h3>
+            <p>Busca, filtra y administra tus productos o servicios.</p>
+        </div>
+
+        <div class="toolbar-actions">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+                <input class="search-input"
+                       placeholder="Buscar por nombre o código"
+                       @bind="FiltroBusqueda"
+                       @bind:event="oninput" />
+            </div>
+
+            <div class="toolbar-secondary-actions">
+                <div class="filter-box">
+                    <label class="filter-label" for="tipoFiltro">Categoría</label>
+                    <select id="tipoFiltro" class="filter-select" @bind="FiltroCategoriaSeleccionada">
+                        <option value="">Todas</option>
+                        @foreach (var t in tiposProducto)
+                        {
+                            <option value="@t.Idtipoproducto">@t.Descripcion</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="filter-box">
+                    <label class="filter-label" for="subtipoFiltro">Subcategorí­a</label>
+                    <select id="subtipoFiltro" class="filter-select" @bind="FiltroSubcategoriaSeleccionada">
+                        <option value="">Todas</option>
+                        @foreach (var s in SubcategoriasFiltroDisponibles)
+                        {
+                            <option value="@s.Idsubtipo">@s.Descripcion</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="filter-box">
+                    <label class="filter-label" for="compraventaFiltro">Tipo</label>
+                    <select id="compraventaFiltro" class="filter-select" @bind="FiltroCompraventaSeleccionado">
+                        <option value="">Todos</option>
+                        <option value="PRODUCTO">Producto</option>
+                        <option value="SERVICIO">Servicio</option>
+                    </select>
+                </div>
+
+                <div class="filter-box">
+                    <label class="filter-label" for="pageSizeFiltro">Registros</label>
+                    <select id="pageSizeFiltro" class="filter-select" @bind="CurrentPageSize">
+                        <option value="5">5 registros</option>
+                        <option value="10">10 registros</option>
+                        <option value="20">20 registros</option>
+                    </select>
+                </div>
+
+                <button type="button" class="secondary-btn toolbar-secondary-btn filter-refresh-btn" @onclick="CargarTodo">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    <span>Refrescar</span>
+                </button>
+                <button type="button" class="secondary-btn toolbar-secondary-btn filter-reset-btn" @onclick="LimpiarFiltros">
+                    <i class="bi bi-eraser"></i>
+                    <span>Limpiar filtros</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="products-grid">
+        <section class="table-card" data-tour="productos.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>Productos registrados</h3>
+                </div>
+                <div class="table-head-actions">
+                    <span class="table-badge">@totalFilteredProducts registros</span>
+                    <button type="button" class="primary-btn" @onclick="AbrirNuevoProductoModal">
+                        <i class="bi bi-plus-lg"></i>
+                        <span>Nuevo producto</span>
+                    </button>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-info-circle"></i>
+                    <span>@mensaje</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(debugError))
+            {
+                <div class="status-banner status-banner-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@debugError</span>
+                </div>
+            }
+
+            @if (cargando)
+            {
+                <div class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando catálogo</h3>
+                    <p>Estamos consultando productos, categorías y tarifas IVA.</p>
+                </div>
+            }
+            else if (!filteredProducts.Any())
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-box-seam"></i>
+                    </div>
+                    <h3>No hay registros para mostrar</h3>
+                    <p>No existen productos o servicios activos con los filtros aplicados.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table table-hover align-middle mb-0 products-table products-table-compact">
+                        <thead>
+                            <tr>
+                                <th>Código</th>
+                                <th>Nombre</th>
+                                <th>Clasificacion</th>
+                                <th class="list-extra-col">Detalles</th>
+                                <th>Precio</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in filteredProducts)
+                            {
+                                <tr>
+                                    <td>
+                                        <span class="code-pill">@(string.IsNullOrWhiteSpace(p.CodigoPrincipal) ? $"#{p.Codigo}" : p.CodigoPrincipal)</span>
+                                    </td>
+                                    <td>
+                                        <div class="cell-main cell-main-stacked">
+                                            <strong>@(string.IsNullOrWhiteSpace(p.Nombre) ? "Sin nombre" : p.Nombre)</strong>
+                                            <span>@(string.IsNullOrWhiteSpace(p.TipoCompravena) ? "Sin tipo" : p.TipoCompravena)</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="classification-stack">
+                                            <span class="category-pill">@GetCategoriaDescripcion(p.TipoProducto)</span>
+                                            <span class="subcategory-line">
+                                                <i class="bi bi-diagram-2"></i>
+                                                @GetSubcategoriaDescripcion(p.Idsubtipo)
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td class="list-extra-col">
+                                        <div class="compact-detail">
+                                            <span><i class="bi bi-receipt"></i> @GetImpuestoDescripcion(p.Codigoimpuesto)</span>
+                                            <span><i class="bi bi-card-text"></i> @GetTarifaDescripcion(p.Porcentajeimpuesto)</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="price-stack">
+                                            <strong>@FormatCurrency(p.ValorUnitario)</strong>
+                                        </div>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view" @onclick="() => VerProducto(p)" title="Ver">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            <button type="button"
+                                                    class="action-btn action-edit"
+                                                    @onclick="() => Editar(p.Codigo)"
+                                                    disabled="@(isSaving || (editando && model.Codigo == p.Codigo))"
+                                                    title="@(editando && model.Codigo == p.Codigo ? "Editando" : "Editar")">
+                                                <i class="bi bi-pencil-square"></i>
+                                            </button>
+                                            <button type="button" class="action-btn action-delete" @onclick="() => ConfirmarEliminar(p)" disabled="@isSaving" title="Desactivar">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (mostrarConfirmacion && productoAEliminar is not null)
+            {
+                <div class="confirm-card">
+                    <div class="confirm-copy">
+                        <span class="confirm-kicker">Confirmación</span>
+                        <strong>Desactivar @productoAEliminar.Nombre?</strong>
+                        <p>El registro se conserva en base de datos, pero dejará de mostrarse en el catálogo activo.</p>
+                    </div>
+
+                    <div class="confirm-actions">
+                        <button type="button" class="danger-btn" @onclick="EliminarConfirmado">
+                            <i class="bi bi-trash3"></i>
+                            <span>Sí, desactivar</span>
+                        </button>
+                        <button type="button" class="secondary-btn" @onclick="CancelarEliminar">
+                            <span>Cancelar</span>
+                        </button>
+                    </div>
+                </div>
+            }
+
+            @if (productoEnVista is not null)
+            {
+                <div class="products-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+                <div class="products-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="productoDetalleTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+                    <div class="products-modal-content" @onclick:stopPropagation="true">
+                        <div class="products-modal-header">
+                            <div>
+                                <h3 id="productoDetalleTitulo">@(string.IsNullOrWhiteSpace(productoEnVista.Nombre) ? $"Registro #{productoEnVista.Codigo}" : productoEnVista.Nombre)</h3>
+                                <p>@(string.IsNullOrWhiteSpace(productoEnVista.TipoCompravena) ? "Sin tipo de registro" : productoEnVista.TipoCompravena) - @GetEstadoProductoDescripcion(productoEnVista.Estado)</p>
+                            </div>
+
+                            <button type="button" class="modal-close" @onclick="CerrarVistaProducto" aria-label="Cerrar detalle" title="Cerrar">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+
+                        <div class="products-modal-body">
+                            <div class="detail-sections">
+                                <section class="detail-section">
+                                    <h4 class="detail-section-title">Clasificación</h4>
+                                    <div class="detail-grid">
+                                        <div class="detail-item">
+                                            <span>Código principal</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(productoEnVista.CodigoPrincipal) ? $"#{productoEnVista.Codigo}" : productoEnVista.CodigoPrincipal)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Tipo</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(productoEnVista.TipoCompravena) ? "Sin tipo" : productoEnVista.TipoCompravena)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Categoría</span>
+                                            <strong>@GetCategoriaDescripcion(productoEnVista.TipoProducto)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Subcategoría</span>
+                                            <strong>@GetSubcategoriaDescripcion(productoEnVista.Idsubtipo)</strong>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section class="detail-section">
+                                    <h4 class="detail-section-title">Precios e impuestos</h4>
+                                    <div class="detail-grid">
+                                        <div class="detail-item">
+                                            <span>Precio base</span>
+                                            <strong>@FormatCurrency(productoEnVista.ValorUnitario)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Precio 2</span>
+                                            <strong>@FormatCurrency(productoEnVista.Precio2)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Precio 3</span>
+                                            <strong>@FormatCurrency(productoEnVista.Precio3)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Impuesto</span>
+                                            <strong>@GetImpuestoDescripcion(productoEnVista.Codigoimpuesto)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Tarifa IVA</span>
+                                            <strong>@GetTarifaDescripcion(productoEnVista.Porcentajeimpuesto)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Estado</span>
+                                            <strong>@GetEstadoProductoDescripcion(productoEnVista.Estado)</strong>
+                                        </div>
+                                    </div>
+                                </section>
+
+                            </div>
+                        </div>
+
+                        <div class="products-modal-footer">
+                            <button type="button" class="secondary-btn" @onclick="CerrarVistaProducto">Cerrar</button>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="products-pagination">
+                <span class="products-pagination-meta">
+                    Mostrando @CurrentPageStart - @CurrentPageEnd de @CurrentTotalRecords registros
+                </span>
+
+                <div class="products-pagination-actions">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaAnterior" disabled="@(currentPage <= 1)">
+                        <i class="bi bi-chevron-left"></i>
+                    </button>
+                    <span class="products-page-indicator">Pagina @currentPage de @CurrentTotalPages</span>
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaSiguiente" disabled="@(currentPage >= CurrentTotalPages)">
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        @if (mostrarModalFormularioProducto)
+        {
+        <div class="products-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+        <div class="products-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="productoFormularioTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+            <div class="products-modal-content products-form-modal-content" @onclick:stopPropagation="true">
+                <div class="products-modal-header">
+                    <div>
+                        <span class="modal-kicker">Catálogo comercial</span>
+                        <h3 id="productoFormularioTitulo">@(editando ? "Editar registro" : "Registrar producto o servicio")</h3>
+                    </div>
+                    <button type="button" class="modal-close" @onclick="CerrarModalFormularioProducto" aria-label="Cerrar formulario" title="Cerrar">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="products-modal-body products-form-modal-body">
+        <section class="editor-card product-editor-shell" data-tour="productos.editor">
+            <div class="card shadow-sm border-top border-success border-4 product-editor-card product-editor-card-accent">
+                <div class="card-body product-card-body">
+                    <div class="product-form-copy product-editor-header">
+                        <div>
+                        <span class="panel-kicker"></span>
+                        <h5 class="card-title fw-bold product-editor-title">@(editando ? "Editar registro" : "Registrar producto o servicio")</h5>
+                        <p class="text-muted small mb-0">Completa los campos visibles y, si deseas, agrega información opcional.</p>
+                        </div>
+                        
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(mensajeEdicion))
+                    {
+                        <div class="status-banner status-banner-info product-edit-banner">
+                            <i class="bi bi-info-circle"></i>
+                            <span>@mensajeEdicion</span>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(mensajeFormularioError))
+                    {
+                        <div class="status-banner status-banner-error product-edit-banner">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <span>@mensajeFormularioError</span>
+                        </div>
+                    }
+
+                    <EditForm EditContext="productEditContext"
+                              OnValidSubmit="Guardar"
+                              OnInvalidSubmit="ManejarFormularioInvalido"
+                              @key="formKey"
+                              class="product-form-legacy">
+                        <DataAnnotationsValidator />
+
+                        <details class="form-accordion" open>
+                        <summary class="form-section-heading">
+                            <span>1</span>
+                            <strong>Información básica</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body">
+
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold d-block">Tipo *</label>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button type="button"
+                                        class="btn @(model.TipoCompravena == "PRODUCTO" ? "btn-primary" : "btn-outline-primary")"
+                                        @onclick='() => model.TipoCompravena = "PRODUCTO"'>
+                                    Producto
+                                </button>
+
+                                <button type="button"
+                                        class="btn @(model.TipoCompravena == "SERVICIO" ? "btn-primary" : "btn-outline-primary")"
+                                        @onclick='() => model.TipoCompravena = "SERVICIO"'>
+                                    Servicio
+                                </button>
+                            </div>
+                            <ValidationMessage For="() => model.TipoCompravena" class="text-danger small d-block mt-2" />
+                        </div>
+
+                        <div class="row mb-2">
+                            <div class="col-md-8">
+                                <label class="form-label small fw-bold">Nombre *</label>
+                                <InputText class="form-control form-control-sm"
+                                           @bind-Value="model.Nombre" />
+                                <ValidationMessage For="() => model.Nombre" class="text-danger small d-block mt-1" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold">Código (opcional)</label>
+                                <InputText class="form-control form-control-sm"
+                                           @bind-Value="model.CodigoPrincipal" />
+                                <ValidationMessage For="() => model.CodigoPrincipal" class="text-danger small d-block mt-1" />
+                            </div>
+                        </div>
+
+                        </div>
+                        </details>
+
+                        <details class="form-accordion">
+                        <summary class="form-section-heading">
+                            <span>2</span>
+                            <strong>Precios y tarifas</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body">
+
+                        <div class="product-price-panel mb-3">
+                            <div class="product-price-main-row">
+                                <div class="product-price-field product-price-field-primary">
+                                    <div class="product-price-field-head">
+                                        <label class="form-label small fw-bold">Precio base *</label>
+                                        <button type="button"
+                                                class="product-price-add-btn"
+                                                @onclick="AgregarCampoPrecioAdicional"
+                                                disabled="@(!PuedeAgregarCampoPrecioAdicional)"
+                                                title="Agregar precio adicional"
+                                                aria-label="Agregar precio adicional">
+                                            <i class="bi bi-plus-lg"></i>
+                                        </button>
+                                    </div>
+                                     <input type="number"
+                                            min="0"
+                                            max="@PrecioMaximoPermitidoTexto"
+                                            step="0.01"
+                                            class="form-control form-control-sm"
+                                            @bind="model.ValorUnitario"
+                                            @bind:event="oninput"
+                                            @onblur='() => NormalizarCampoPrecio(1)' />
+                                    <ValidationMessage For="() => model.ValorUnitario" class="text-danger small d-block mt-1" />
+                                    <small class="text-muted">Este será el precio base del producto o servicio.</small>
+                                </div>
+                            </div>
+
+                            @if (MostrarPrecio2)
+                            {
+                                <div class="product-price-field product-price-field-secondary">
+                                    <div class="product-price-field-head">
+                                        <label class="form-label small fw-bold">Precio 2 (opcional)</label>
+                                        <button type="button"
+                                                class="product-price-remove-btn"
+                                                @onclick="() => EliminarCampoPrecioAdicional(2)"
+                                                title="Eliminar precio 2"
+                                                aria-label="Eliminar precio 2">
+                                            <i class="bi bi-x-lg"></i>
+                                        </button>
+                                    </div>
+                                     <input type="number"
+                                            min="0"
+                                            max="@PrecioMaximoPermitidoTexto"
+                                            step="0.01"
+                                            class="form-control form-control-sm"
+                                            @bind="model.Precio2"
+                                            @bind:event="oninput"
+                                            @onblur='() => NormalizarCampoPrecio(2)' />
+                                    <ValidationMessage For="() => model.Precio2" class="text-danger small d-block mt-1" />
+                                </div>
+                            }
+
+                            @if (MostrarPrecio3)
+                            {
+                                <div class="product-price-field product-price-field-secondary">
+                                    <div class="product-price-field-head">
+                                        <label class="form-label small fw-bold">Precio 3 (opcional)</label>
+                                        <button type="button"
+                                                class="product-price-remove-btn"
+                                                @onclick="() => EliminarCampoPrecioAdicional(3)"
+                                                title="Eliminar precio 3"
+                                                aria-label="Eliminar precio 3">
+                                            <i class="bi bi-x-lg"></i>
+                                        </button>
+                                    </div>
+                                     <input type="number"
+                                            min="0"
+                                            max="@PrecioMaximoPermitidoTexto"
+                                            step="0.01"
+                                            class="form-control form-control-sm"
+                                            @bind="model.Precio3"
+                                            @bind:event="oninput"
+                                            @onblur='() => NormalizarCampoPrecio(3)' />
+                                    <ValidationMessage For="() => model.Precio3" class="text-danger small d-block mt-1" />
+                                </div>
+                            }
+                        </div>
+
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <div class="form-check mt-4">
+                                    <input class="form-check-input"
+                                           type="checkbox"
+                                           checked="@(!string.IsNullOrWhiteSpace(model.Codigoimpuesto) && model.Codigoimpuesto == "2")"
+                                           @onchange="OnIvaChanged" />
+                                    <label class="form-check-label fw-semibold">IVA (opcional)</label>
+                                </div>
+                            </div>
+
+                            <div class="col-md-8">
+                                <label class="form-label small fw-bold">@(model.Codigoimpuesto == "2" ? "Tarifa *" : "Tarifa (opcional)")</label>
+                                <InputSelect class="form-select form-select-sm"
+                                             @bind-Value="model.Porcentajeimpuesto"
+                                             disabled="@(string.IsNullOrWhiteSpace(model.Codigoimpuesto) || model.Codigoimpuesto != "2")">
+                                    <option value="">-- Seleccione --</option>
+                                    @foreach (var iva in porcentajesIva)
+                                    {
+                                        <option value="@iva.Codigo">@iva.Descripcion (@iva.Valor%)</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => model.Porcentajeimpuesto" class="text-danger small d-block mt-1" />
+                            </div>
+                        </div>
+
+                        </div>
+                        </details>
+
+                        <details class="form-accordion">
+                        <summary class="form-section-heading">
+                            <span>3</span>
+                            <strong>Clasificación y configuración</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body">
+
+                        <details class="mb-3">
+                            <summary class="fw-bold small">Detalles adicionales</summary>
+                            <div class="mt-3">
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label small fw-bold">Categoría (opcional)</label>
+                                        <InputSelect class="form-select form-select-sm" @bind-Value="CategoriaSeleccionada">
+                                            <option value="">-- Sin categoría --</option>
+                                            @if (CategoriaActualFueraDeCatalogo)
+                                            {
+                                                <option value="@model.TipoProducto">Categoría actual no disponible</option>
+                                            }
+                                            @foreach (var t in tiposProducto)
+                                            {
+                                                <option value="@t.Idtipoproducto">@t.Descripcion</option>
+                                            }
+                                        </InputSelect>
+                                        <div class="inline-create-actions mt-2">
+                                            <button type="button" class="inline-create-btn" @onclick="AbrirModalCategoriaDesdeProducto" title="Crear categoría">
+                                                <i class="bi bi-plus-lg"></i>
+                                                <span>Nueva categoría</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class="col-md-6">
+                                        <label class="form-label small fw-bold">Subcategoría (opcional)</label>
+                                        <InputSelect class="form-select form-select-sm" @bind-Value="model.Idsubtipo">
+                                            <option value="">@(model.TipoProducto.HasValue ? "-- Seleccione --" : "-- Seleccione una categoría primero --")</option>
+                                            @if (SubcategoriaActualFueraDeCatalogo)
+                                            {
+                                                <option value="@model.Idsubtipo">Subcategoría actual no disponible</option>
+                                            }
+                                            @foreach (var s in SubtiposDisponibles)
+                                            {
+                                                <option value="@s.Idsubtipo">@s.Descripcion</option>
+                                            }
+                                        </InputSelect>
+                                        <div class="inline-create-actions mt-2">
+                                            <button type="button" class="inline-create-btn" @onclick="AbrirModalSubcategoriaDesdeProducto" title="Crear subcategoría">
+                                                <i class="bi bi-plus-lg"></i>
+                                                <span>Nueva subcategoría</span>
+                                            </button>
+                                        </div>
+                                        <ValidationMessage For="() => model.Idsubtipo" class="text-danger small d-block mt-1" />
+                                    </div>
+                                </div>
+
+                            </div>
+                        </details>
+                        </div>
+                        </details>
+
+                        <div class="product-form-actions pt-3 border-top mt-4">
+                            <button class="primary-btn" type="submit" disabled="@(isDemoMode || isSaving)">
+                                <i class="bi bi-save me-1"></i> @(isDemoMode ? "Guardar bloqueado" : isSaving ? "Guardando..." : (editando ? "Guardar Cambios" : "Crear Registro"))
+                            </button>
+                            <button class="secondary-btn clear-action-btn" type="button" @onclick="Nuevo" disabled="@isSaving">
+                                <i class="bi bi-eraser"></i>
+                                Limpiar formulario
+                            </button>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+        </section>
+                </div>
+            </div>
+        </div>
+        }
+    </section>
+
+    <section class="quick-tips-section" aria-label="Consejos rápidos de productos">
+        <div class="quick-tips-head">
+            <span class="quick-tips-head-icon"><i class="bi bi-lightbulb"></i></span>
+            <div>
+                <strong>Consejos rápidos</strong>
+                <small>Atajos útiles para mantener tu catálogo limpio y fácil de encontrar.</small>
+            </div>
+        </div>
+
+        <div class="quick-tip-grid">
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-green"><i class="bi bi-folder2-open"></i></span>
+                <div>
+                    <strong>Organiza por categorías</strong>
+                    <p>Agrupa productos y servicios para encontrarlos rápido al facturar.</p>
+                </div>
+            </article>
+
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-violet"><i class="bi bi-tags"></i></span>
+                <div>
+                    <strong>Usa códigos únicos</strong>
+                    <p>Asigna códigos claros para evitar duplicados y errores de selección.</p>
+                </div>
+            </article>
+
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-amber"><i class="bi bi-currency-dollar"></i></span>
+                <div>
+                    <strong>Precios y tarifas</strong>
+                    <p>Confirma IVA y precios antes de usar el producto en comprobantes.</p>
+                </div>
+            </article>
+        </div>
+    </section>
+
+</div>
+
+@if (mostrarImportacion)
+{
+    <div class="products-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+    <div class="products-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="importacionProductosTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+        <div class="products-modal-content import-modal-content" @onclick:stopPropagation="true">
+            <div class="products-modal-header products-modal-header-success">
+                <div>
+                    <span class="modal-kicker">Carga masiva</span>
+                    <h3 id="importacionProductosTitulo">Importar productos desde Excel</h3>
+                    <p>Descarga el modelo, edítalo en Excel y vuelve a cargarlo en formato CSV.</p>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarImportacion" aria-label="Cerrar modal">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+
+            <div class="products-modal-body">
+                <div class="import-steps">
+                    <article class="import-step">
+                        <span>1</span>
+                        <div>
+                            <strong>Descarga el modelo</strong>
+                            <p>Incluye ejemplos y las columnas requeridas para evitar errores.</p>
+                        </div>
+                        <button type="button" class="secondary-btn" @onclick="DescargarModeloImportacionAsync">
+                            <i class="bi bi-download"></i>
+                            Descargar modelo
+                        </button>
+                    </article>
+
+                    <article class="import-step">
+                        <span>2</span>
+                        <div>
+                            <strong>Edita y carga el archivo</strong>
+                            <p>Guárdalo como CSV UTF-8 separado por punto y coma.</p>
+                        </div>
+                        <label class="import-file-button">
+                            <i class="bi bi-upload"></i>
+                            Seleccionar archivo
+                            <InputFile accept=".csv,text/csv" OnChange="ImportarProductosAsync" />
+                        </label>
+                    </article>
+                </div>
+
+                <div class="import-guide">
+                    <strong>Columnas del modelo</strong>
+                    <p><b>Obligatorias:</b> Código, Nombre, Tipo y PrecioBase. <b>Opcionales:</b> Precio2, Precio3, Categoría, Subcategoría, AplicaIVA, TarifaIVA y Observación.</p>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(mensajeImportacion))
+                {
+                    <div class="status-banner @(erroresImportacion > 0 ? "status-banner-error" : "status-banner-success") import-result">
+                        <i class="bi @(erroresImportacion > 0 ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                        <span>@mensajeImportacion</span>
+                        </div>
+                }
+            </div>
+
+            <div class="products-modal-footer">
+                <button type="button" class="secondary-btn" @onclick="CerrarImportacion" disabled="@importandoProductos">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (mostrarConfirmacionCategorias)
+{
+    <div class="products-modal-backdrop" data-no-backdrop-dismiss="true" style="z-index: 1060;" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+    <div class="products-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" style="z-index: 1070;" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+        <div class="products-modal-content products-modal-content-sm" @onclick:stopPropagation="true">
+            <div class="products-modal-header" style="background: linear-gradient(135deg, #e67e22, #d35400); padding: 1.25rem;">
+                <div>
+                    <span class="modal-kicker text-white-50">Confirmación requerida</span>
+                    <h3 style="color: white !important; margin: 0.25rem 0 0;">Categorías nuevas detectadas</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CancelarCrearCategoriasFaltantes" aria-label="Cerrar modal" style="color: white; opacity: 0.8; background: transparent; border: none; font-size: 1.5rem;">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="products-modal-body text-start" style="padding: 1.5rem;">
+                <p class="text-muted small">Se detectaron las siguientes categorías o subcategorías nuevas en el archivo Excel que no existen en tu catálogo actual:</p>
+                
+                @if (categoriasFaltantes.Any())
+                {
+                    <div class="mb-3">
+                        <strong class="text-dark small">Categorías a crear:</strong>
+                        <ul class="mb-1 text-muted" style="font-size: 0.82rem; padding-left: 20px; list-style-type: none;">
+                            @foreach (var catName in categoriasFaltantes)
+                            {
+                                <li><i class="bi bi-folder-plus text-warning me-1"></i>@catName</li>
+                            }
+                        </ul>
+                    </div>
+                }
+                
+                @if (subcategoriasFaltantes.Any())
+                {
+                    <div class="mb-3">
+                        <strong class="text-dark small">Subcategorías a crear:</strong>
+                        <ul class="mb-1 text-muted" style="font-size: 0.82rem; padding-left: 20px; list-style-type: none;">
+                            @foreach (var subInfo in subcategoriasFaltantes)
+                            {
+                                <li>
+                                    <i class="bi bi-folder-symlink text-warning me-1"></i>
+                                    @subInfo.Subcategoria <span class="text-muted">(en categoría: @(string.IsNullOrWhiteSpace(subInfo.Categoria) ? "General" : subInfo.Categoria))</span>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                }
+
+                <div class="alert alert-warning d-flex align-items-center mt-3" style="font-size: 0.8rem; background-color: #fff3cd; border-color: #ffeeba; color: #856404; padding: 10px; border-radius: 8px;">
+                    <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
+                    <div>
+                        ¿Deseas crearlas automáticamente para poder continuar con la importación de productos?
+                    </div>
+                </div>
+            </div>
+            <div class="products-modal-footer d-flex justify-content-end gap-2 p-3" style="background-color: #f8fafc; border-top: 1px solid #edf2f7;">
+                <button type="button" class="secondary-btn" @onclick="CancelarCrearCategoriasFaltantes">Cancelar importación</button>
+                <button type="button" class="primary-btn" @onclick="ConfirmarCrearCategoriasFaltantesAsync" style="background: #e67e22; border-color: #e67e22; color: white;">Crear y continuar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (mostrarModalCategoriaProducto)
+{
+    <div class="products-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+    <div class="products-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="productoCategoriaModalTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+        <div class="products-modal-content products-modal-content-sm" @onclick:stopPropagation="true">
+            <div class="products-modal-header products-modal-header-success">
+                <div>
+                    <span class="modal-kicker">Catalogo comercial</span>
+                    <h3 id="productoCategoriaModalTitulo">@(modalCategoriaEsSubcategoria ? "Nueva subcategoria" : "Nueva categoria")</h3>
+                </div>
+
+                <button type="button" class="modal-close" @onclick="CerrarModalCategoriaProducto" aria-label="Cerrar modal">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+
+            <div class="products-modal-body">
+                @if (!string.IsNullOrWhiteSpace(mensajeModalCategoriaProducto))
+                {
+                    <div class="status-banner status-banner-info product-edit-banner mb-3">
+                        <i class="bi bi-info-circle"></i>
+                        <span>@mensajeModalCategoriaProducto</span>
+                    </div>
+                }
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold small">Descripcion</label>
+                    <input type="text"
+                           class="form-control"
+                           @bind="tempDescripcionCategoriaProducto"
+                           @bind:event="oninput"
+                           placeholder="Ej: Lacteos, Limpieza, Software..." />
+                </div>
+
+                @if (modalCategoriaEsSubcategoria)
+                {
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small">Categoria</label>
+                        <select class="form-select" @bind="tempCategoriaPadreProducto">
+                            <option value="0">-- Seleccione --</option>
+                            @foreach (var categoria in tiposProducto.OrderBy(x => x.Descripcion, StringComparer.OrdinalIgnoreCase))
+                            {
+                                <option value="@categoria.Idtipoproducto">@categoria.Descripcion</option>
+                            }
+                        </select>
+                    </div>
+                }
+            </div>
+
+            <div class="products-modal-footer">
+                <button type="button" class="secondary-btn" @onclick="CerrarModalCategoriaProducto" disabled="@guardandoCategoriaProducto">Cancelar</button>
+                <button type="button" class="primary-btn" @onclick="GuardarCategoriaDesdeProductoAsync" disabled="@guardandoCategoriaProducto">
+                    <i class="bi bi-save"></i>
+                    <span>@(guardandoCategoriaProducto ? "Guardando..." : "Guardar")</span>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+
+@code {
+
+    private int usuarioLogueadoId = 0;
+    private bool isDemoMode;
+    private EmisionEstado? emisionEstado;
+    private string PageBrandTitle => "Numerica e-fact";
+    private bool MostrarVolverInicioOnboarding =>
+        !isDemoMode &&
+        (EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false);
+    private int? filtroTipo = null;
+    private int? filtroSubtipo = null;
+    private string filtroCompraventa = string.Empty;
+
+    private class LookupResponse
+    {
+        public List<TipoDto> tipos { get; set; } = new();
+        public List<ImpuestoDto> impuestos { get; set; } = new();
+        public List<IvaDto> ivas { get; set; } = new();
+        public List<SubtipoDto> subtipos { get; set; } = new();
+    }
+
+    private class TipoDto
+    {
+        public int Idtipoproducto { get; set; }
+        public string Descripcion { get; set; } = "";
+    }
+
+    private class ImpuestoDto
+    {
+        public string Codigo { get; set; } = "";
+        public string Descripcion { get; set; } = "";
+    }
+
+    private class IvaDto
+    {
+        public string Codigo { get; set; } = "";
+        public string Descripcion { get; set; } = "";
+        public string? Valor { get; set; }
+    }
+
+    private class SubtipoDto
+    {
+        public int Idsubtipo { get; set; }
+        public string Descripcion { get; set; } = "";
+        public int Idtipoproducto { get; set; }
+    }
+
+    private class ProductoDto
+    {
+        public int Codigo { get; set; }
+        public string? Nombre { get; set; }
+        public string? CodigoPrincipal { get; set; }
+
+        public decimal? ValorUnitario { get; set; }
+        public decimal? Precio2 { get; set; }
+        public decimal? Precio3 { get; set; }
+
+        public string? TipoCompravena { get; set; }
+
+        public int? TipoProducto { get; set; }
+        public int? Idsubtipo { get; set; }
+
+        public string? Codigoimpuesto { get; set; }
+        public string? Porcentajeimpuesto { get; set; }
+
+        public bool? Estado { get; set; }
+        public string? Observacion { get; set; }
+        public int? Idusuario { get; set; }
+    }
+
+    private class ProductoUpsertDto : IValidatableObject
+    {
+        private const decimal PrecioMaximoPermitido = 99999999.99m;
+
+        public int Codigo { get; set; }
+
+        public string? Nombre { get; set; }
+        public string? CodigoPrincipal { get; set; }
+
+        public decimal? ValorUnitario { get; set; }
+        public decimal? Precio2 { get; set; }
+        public decimal? Precio3 { get; set; }
+
+        public string? TipoCompravena { get; set; }
+
+        public int? TipoProducto { get; set; }
+        public int? Idsubtipo { get; set; }
+
+        public string? Codigoimpuesto { get; set; }
+        public string? Porcentajeimpuesto { get; set; }
+
+        public bool? Estado { get; set; } = true;
+        public string? Observacion { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            Nombre = Nombre?.Trim();
+            CodigoPrincipal = CodigoPrincipal?.Trim();
+            TipoCompravena = TipoCompravena?.Trim().ToUpperInvariant();
+            Codigoimpuesto = Codigoimpuesto?.Trim();
+            Porcentajeimpuesto = Porcentajeimpuesto?.Trim();
+            Observacion = Observacion?.Trim();
+
+            if (string.IsNullOrWhiteSpace(TipoCompravena))
+            {
+                yield return new ValidationResult(
+                    "Debe seleccionar si el registro es producto o servicio.",
+                    new[] { nameof(TipoCompravena) });
+            }
+
+            if (string.IsNullOrWhiteSpace(Nombre))
+            {
+                yield return new ValidationResult(
+                    "Debe ingresar el nombre del producto o servicio.",
+                    new[] { nameof(Nombre) });
+            }
+            else if (Nombre.Length > 120)
+            {
+                yield return new ValidationResult(
+                    "El nombre no puede exceder 120 caracteres.",
+                    new[] { nameof(Nombre) });
+            }
+
+            if (!string.IsNullOrWhiteSpace(CodigoPrincipal) && CodigoPrincipal.Length > 50)
+            {
+                yield return new ValidationResult(
+                    "El código no puede exceder 50 caracteres.",
+                    new[] { nameof(CodigoPrincipal) });
+            }
+
+            if (!ValorUnitario.HasValue)
+            {
+                yield return new ValidationResult(
+                    "Debe ingresar el precio base.",
+                    new[] { nameof(ValorUnitario) });
+            }
+
+            if (ValorUnitario.HasValue && ValorUnitario < 0)
+            {
+                yield return new ValidationResult(
+                    "El precio 1 no puede ser menor a 0.",
+                    new[] { nameof(ValorUnitario) });
+            }
+
+            if (ValorUnitario.HasValue && ValorUnitario > PrecioMaximoPermitido)
+            {
+                yield return new ValidationResult(
+                    $"El precio base no puede superar {PrecioMaximoPermitido:N2}.",
+                    new[] { nameof(ValorUnitario) });
+            }
+
+            if (ValorUnitario.HasValue && TieneMasDeDosDecimales(ValorUnitario.Value))
+            {
+                yield return new ValidationResult(
+                    "El precio base solo admite hasta 2 decimales.",
+                    new[] { nameof(ValorUnitario) });
+            }
+
+            if (Precio2.HasValue && Precio2 < 0)
+            {
+                yield return new ValidationResult(
+                    "El precio 2 no puede ser menor a 0.",
+                    new[] { nameof(Precio2) });
+            }
+
+            if (Precio2.HasValue && Precio2 > PrecioMaximoPermitido)
+            {
+                yield return new ValidationResult(
+                    $"El precio 2 no puede superar {PrecioMaximoPermitido:N2}.",
+                    new[] { nameof(Precio2) });
+            }
+
+            if (Precio2.HasValue && TieneMasDeDosDecimales(Precio2.Value))
+            {
+                yield return new ValidationResult(
+                    "El precio 2 solo admite hasta 2 decimales.",
+                    new[] { nameof(Precio2) });
+            }
+
+            if (Precio3.HasValue && Precio3 < 0)
+            {
+                yield return new ValidationResult(
+                    "El precio 3 no puede ser menor a 0.",
+                    new[] { nameof(Precio3) });
+            }
+
+            if (Precio3.HasValue && Precio3 > PrecioMaximoPermitido)
+            {
+                yield return new ValidationResult(
+                    $"El precio 3 no puede superar {PrecioMaximoPermitido:N2}.",
+                    new[] { nameof(Precio3) });
+            }
+
+            if (Precio3.HasValue && TieneMasDeDosDecimales(Precio3.Value))
+            {
+                yield return new ValidationResult(
+                    "El precio 3 solo admite hasta 2 decimales.",
+                    new[] { nameof(Precio3) });
+            }
+
+            if (!string.IsNullOrWhiteSpace(TipoCompravena) &&
+                TipoCompravena != "PRODUCTO" &&
+                TipoCompravena != "SERVICIO")
+            {
+                yield return new ValidationResult(
+                    "Debe elegir PRODUCTO o SERVICIO.",
+                    new[] { nameof(TipoCompravena) });
+            }
+
+            if (Idsubtipo.HasValue && !TipoProducto.HasValue)
+            {
+                yield return new ValidationResult(
+                    "Debe seleccionar una categoría antes de elegir la subcategoría.",
+                    new[] { nameof(Idsubtipo), nameof(TipoProducto) });
+            }
+
+            if (Codigoimpuesto == "2" && string.IsNullOrWhiteSpace(Porcentajeimpuesto))
+            {
+                yield return new ValidationResult(
+                    "Debe seleccionar la tarifa IVA.",
+                    new[] { nameof(Porcentajeimpuesto) });
+            }
+
+            if (!string.IsNullOrWhiteSpace(Observacion) && Observacion.Length > 250)
+            {
+                yield return new ValidationResult(
+                    "La observación no puede exceder 250 caracteres.",
+                    new[] { nameof(Observacion) });
+            }
+        }
+
+        private static bool TieneMasDeDosDecimales(decimal valor) =>
+            decimal.Round(valor, 2, MidpointRounding.AwayFromZero) != valor;
+    }
+
+    private class BulkImportResult
+    {
+        public int Creados { get; set; }
+        public List<string> Errores { get; set; } = new();
+    }
+
+    private Guid formKey = Guid.NewGuid();
+    private List<ProductoDto> productos = new();
+    private string filtro = "";
+    private bool cargando = true;
+    private string? mensaje;
+    private string? mensajeEdicion;
+    private string? mensajeFormularioError;
+    private string? debugError;
+    private bool isSaving;
+    private bool mostrarModalFormularioProducto;
+    private int pageSize = 10;
+    private int currentPage = 1;
+
+    private ProductoUpsertDto model = new();
+    private EditContext productEditContext = default!;
+    private bool editando;
+    private int? tipoProductoOriginalEdicion;
+    private int? subtipoOriginalEdicion;
+
+    private List<TipoDto> tiposProducto = new();
+    private List<SubtipoDto> subtiposProducto = new();
+    private List<ImpuestoDto> codigosImpuesto = new();
+    private List<IvaDto> porcentajesIva = new();
+
+    private bool mostrarConfirmacion;
+    private ProductoDto? productoAEliminar;
+    private ProductoDto? productoEnVista;
+    private int camposPrecioVisibles = 1;
+    private bool mostrarModalCategoriaProducto;
+    private bool mostrarPanelFiltros = true;
+    private bool mostrarImportacion;
+    private bool importandoProductos;
+
+    private List<List<string>>? filasImportacionPendientes;
+    private bool mostrarConfirmacionCategorias;
+    private List<string> categoriasFaltantes = new();
+    private List<(string Categoria, string Subcategoria)> subcategoriasFaltantes = new();
+    private int erroresImportacion;
+    private string? mensajeImportacion;
+    private bool modalCategoriaEsSubcategoria;
+    private bool guardandoCategoriaProducto;
+    private string? mensajeModalCategoriaProducto;
+    private string tempDescripcionCategoriaProducto = string.Empty;
+    private int tempCategoriaPadreProducto;
+    private const decimal PrecioMaximoPermitido = 99999999.99m;
+    private const string PrecioMaximoPermitidoTexto = "99999999.99";
+    private bool MostrarPrecio2 => camposPrecioVisibles >= 2;
+    private bool MostrarPrecio3 => camposPrecioVisibles >= 3;
+    private bool PuedeAgregarCampoPrecioAdicional => camposPrecioVisibles < 3;
+    private IEnumerable<SubtipoDto> SubtiposDisponibles =>
+        model.TipoProducto.HasValue
+            ? subtiposProducto.Where(x => x.Idtipoproducto == model.TipoProducto.Value)
+            : Enumerable.Empty<SubtipoDto>();
+
+    private bool CategoriaActualFueraDeCatalogo =>
+        model.TipoProducto.HasValue &&
+        !tiposProducto.Any(x => x.Idtipoproducto == model.TipoProducto.Value);
+
+    private bool SubcategoriaActualFueraDeCatalogo =>
+        model.TipoProducto.HasValue &&
+        model.Idsubtipo.HasValue &&
+        !subtiposProducto.Any(x =>
+            x.Idsubtipo == model.Idsubtipo.Value &&
+            x.Idtipoproducto == model.TipoProducto.Value);
+
+    private IEnumerable<SubtipoDto> SubcategoriasFiltroDisponibles =>
+        filtroTipo.HasValue
+            ? subtiposProducto.Where(x => x.Idtipoproducto == filtroTipo.Value)
+            : subtiposProducto;
+
+    private int? CategoriaSeleccionada
+    {
+        get => model.TipoProducto;
+        set
+        {
+            model.TipoProducto = value;
+
+            if (!model.Idsubtipo.HasValue)
+            {
+                return;
+            }
+
+            var subtipoPerteneceACategoria = model.TipoProducto.HasValue &&
+                subtiposProducto.Any(s =>
+                    s.Idsubtipo == model.Idsubtipo.Value &&
+                    s.Idtipoproducto == model.TipoProducto.Value);
+
+            if (!subtipoPerteneceACategoria)
+            {
+                model.Idsubtipo = null;
+            }
+        }
+    }
+
+    private int? FiltroCategoriaSeleccionada
+    {
+        get => filtroTipo;
+        set
+        {
+            filtroTipo = value;
+            currentPage = 1;
+
+            if (!filtroSubtipo.HasValue)
+            {
+                return;
+            }
+
+            var subtipoPerteneceACategoria = !filtroTipo.HasValue ||
+                subtiposProducto.Any(s =>
+                    s.Idsubtipo == filtroSubtipo.Value &&
+                    s.Idtipoproducto == filtroTipo.Value);
+
+            if (!subtipoPerteneceACategoria)
+            {
+                filtroSubtipo = null;
+            }
+        }
+    }
+
+    private int? FiltroSubcategoriaSeleccionada
+    {
+        get => filtroSubtipo;
+        set
+        {
+            filtroSubtipo = value;
+            currentPage = 1;
+        }
+    }
+
+    private string FiltroCompraventaSeleccionado
+    {
+        get => filtroCompraventa;
+        set
+        {
+            filtroCompraventa = value;
+            currentPage = 1;
+        }
+    }
+
+    private string FiltroBusqueda
+    {
+        get => filtro;
+        set
+        {
+            filtro = value;
+            currentPage = 1;
+        }
+    }
+
+    private int CurrentPageSize
+    {
+        get => pageSize;
+        set
+        {
+            pageSize = value;
+            currentPage = 1;
+            AjustarPaginaActual();
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        Nuevo();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        isDemoMode = EsRutaDemoProductos();
+
+        if (isDemoMode)
+        {
+            CargarDemoProductos();
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        usuarioLogueadoId = ObtenerIdUsuario(user);
+
+        if (usuarioLogueadoId <= 0)
+        {
+            mensaje = "Sesión no válida (no se pudo obtener IdUsuario). Vuelve a iniciar sesión.";
+            cargando = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        await CargarTodo();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private async Task CargarTodo()
+    {
+        if (isDemoMode)
+        {
+            CargarDemoProductos();
+            return;
+        }
+
+        cargando = true;
+        try
+        {
+            var respLook = await Http.GetFromJsonAsync<LookupResponse>($"api/productos/lookups?userId={usuarioLogueadoId}");
+            if (respLook != null)
+            {
+                tiposProducto = respLook.tipos
+                    .OrderBy(x => x.Descripcion, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                codigosImpuesto = respLook.impuestos;
+                porcentajesIva = respLook.ivas;
+                subtiposProducto = respLook.subtipos
+                    .OrderBy(x => x.Descripcion, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (filtroTipo.HasValue && !tiposProducto.Any(x => x.Idtipoproducto == filtroTipo.Value))
+                {
+                    filtroTipo = null;
+                }
+
+                if (filtroSubtipo.HasValue && !subtiposProducto.Any(x => x.Idsubtipo == filtroSubtipo.Value))
+                {
+                    filtroSubtipo = null;
+                }
+            }
+
+            productos = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/productos?userId={usuarioLogueadoId}") ?? new();
+            await EmisorOnboardingService.RefreshRequirementAsync(usuarioLogueadoId);
+            emisionEstado = await EmisionControlService.ObtenerEstadoAsync(usuarioLogueadoId);
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+            AjustarPaginaActual();
+        }
+    }
+
+    private void AbrirModalCategoriaDesdeProducto()
+    {
+        mensajeModalCategoriaProducto = isDemoMode
+            ? "Modo demo: puedes revisar el flujo, pero no se guardaran categorias nuevas."
+            : null;
+        modalCategoriaEsSubcategoria = false;
+        tempDescripcionCategoriaProducto = string.Empty;
+        tempCategoriaPadreProducto = 0;
+        mostrarModalCategoriaProducto = true;
+    }
+
+    private async Task AbrirModalSubcategoriaDesdeProducto()
+    {
+        if (!model.TipoProducto.HasValue && !tiposProducto.Any())
+        {
+            await JS.ShowAlertAsync("Sin categorias", "Primero necesitas al menos una categoria activa para crear subcategorias.", "warning");
+            return;
+        }
+
+        mensajeModalCategoriaProducto = isDemoMode
+            ? "Modo demo: puedes revisar el flujo, pero no se guardaran subcategorias nuevas."
+            : null;
+        modalCategoriaEsSubcategoria = true;
+        tempDescripcionCategoriaProducto = string.Empty;
+        tempCategoriaPadreProducto = model.TipoProducto ?? tiposProducto.FirstOrDefault()?.Idtipoproducto ?? 0;
+        mostrarModalCategoriaProducto = true;
+    }
+
+    private void CerrarModalCategoriaProducto()
+    {
+        mostrarModalCategoriaProducto = false;
+        guardandoCategoriaProducto = false;
+        mensajeModalCategoriaProducto = null;
+    }
+
+    private async Task GuardarCategoriaDesdeProductoAsync()
+    {
+        if (guardandoCategoriaProducto)
+            return;
+
+        tempDescripcionCategoriaProducto = (tempDescripcionCategoriaProducto ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(tempDescripcionCategoriaProducto) || tempDescripcionCategoriaProducto.Length < 3)
+        {
+            await JS.ShowAlertAsync("Revisa la informacion", "La descripcion es obligatoria y debe tener al menos 3 caracteres.", "warning");
+            return;
+        }
+
+        if (modalCategoriaEsSubcategoria && tempCategoriaPadreProducto <= 0)
+        {
+            await JS.ShowAlertAsync("Categoria requerida", "Debes seleccionar una categoria para crear la subcategoria.", "warning");
+            return;
+        }
+
+        if (isDemoMode)
+        {
+            await JS.ShowAlertAsync("Modo demo", modalCategoriaEsSubcategoria
+                ? "La demo muestra el modal de subcategorias, pero el guardado real esta bloqueado."
+                : "La demo muestra el modal de categorias, pero el guardado real esta bloqueado.", "info");
+            return;
+        }
+
+        guardandoCategoriaProducto = true;
+
+        try
+        {
+            if (modalCategoriaEsSubcategoria)
+            {
+                await CategoryService.SaveSubtipoAsync(new Simetric.Models.Productosubtipo
+                {
+                    Descripcion = tempDescripcionCategoriaProducto,
+                    Idtipoproducto = tempCategoriaPadreProducto,
+                    Estado = "A"
+                }, usuarioLogueadoId);
+            }
+            else
+            {
+                await CategoryService.SaveTipoAsync(new Simetric.Models.Productotipo
+                {
+                    Descripcion = tempDescripcionCategoriaProducto,
+                    Estado = true
+                }, usuarioLogueadoId);
+            }
+
+            await CargarTodo();
+
+            if (modalCategoriaEsSubcategoria)
+            {
+                model.TipoProducto = tempCategoriaPadreProducto;
+                model.Idsubtipo = subtiposProducto
+                    .Where(x => x.Idtipoproducto == tempCategoriaPadreProducto)
+                    .OrderByDescending(x => x.Idsubtipo)
+                    .FirstOrDefault(x => string.Equals(x.Descripcion, tempDescripcionCategoriaProducto, StringComparison.OrdinalIgnoreCase))
+                    ?.Idsubtipo;
+            }
+            else
+            {
+                model.TipoProducto = tiposProducto
+                    .OrderByDescending(x => x.Idtipoproducto)
+                    .FirstOrDefault(x => string.Equals(x.Descripcion, tempDescripcionCategoriaProducto, StringComparison.OrdinalIgnoreCase))
+                    ?.Idtipoproducto;
+                model.Idsubtipo = null;
+            }
+
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.TipoProducto));
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Idsubtipo));
+            await InvokeAsync(StateHasChanged);
+
+            CerrarModalCategoriaProducto();
+            await JS.ShowToastAsync(modalCategoriaEsSubcategoria ? "Subcategoria guardada" : "Categoria guardada");
+        }
+        catch (Exception ex)
+        {
+            mensajeModalCategoriaProducto = ex.Message;
+        }
+        finally
+        {
+            guardandoCategoriaProducto = false;
+        }
+    }
+
+    private IEnumerable<ProductoDto> ProductosFiltrados
+    {
+        get
+        {
+            var activos = productos.Where(p => p.Estado == true);
+
+            if (filtroTipo.HasValue)
+            {
+                activos = activos.Where(p => p.TipoProducto == filtroTipo.Value);
+            }
+
+            if (filtroSubtipo.HasValue)
+            {
+                activos = activos.Where(p => p.Idsubtipo == filtroSubtipo.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(filtroCompraventa))
+            {
+                activos = activos.Where(p =>
+                    string.Equals(p.TipoCompravena, filtroCompraventa, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (string.IsNullOrWhiteSpace(filtro))
+            {
+                return OrdenarProductosClasificados(activos);
+            }
+
+            return OrdenarProductosClasificados(activos.Where(p =>
+                (p.Nombre ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (p.CodigoPrincipal ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                GetCategoriaDescripcion(p.TipoProducto).Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                GetSubcategoriaDescripcion(p.Idsubtipo).Contains(filtro, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private IOrderedEnumerable<ProductoDto> OrdenarProductosClasificados(IEnumerable<ProductoDto> query) =>
+        query
+            .OrderBy(p => GetCategoriaDescripcion(p.TipoProducto), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => GetSubcategoriaDescripcion(p.Idsubtipo), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => p.Nombre ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(p => p.Codigo);
+
+    private IEnumerable<ProductoDto> ProductosPaginados =>
+        ProductosFiltrados
+            .Skip((currentPage - 1) * CurrentPageSize)
+            .Take(CurrentPageSize);
+
+    private int CurrentTotalRecords => ProductosFiltrados.Count();
+    private int CurrentTotalPages => Math.Max(1, (int)Math.Ceiling(CurrentTotalRecords / (double)CurrentPageSize));
+    private int CurrentPageStart => CurrentTotalRecords == 0 ? 0 : ((currentPage - 1) * CurrentPageSize) + 1;
+    private int CurrentPageEnd => CurrentTotalRecords == 0 ? 0 : Math.Min(CurrentTotalRecords, currentPage * CurrentPageSize);
+
+    private void AbrirNuevoProductoModal()
+    {
+        Nuevo();
+        mostrarModalFormularioProducto = true;
+    }
+
+    private void CerrarModalFormularioProducto()
+    {
+        mostrarModalFormularioProducto = false;
+    }
+
+    private void Nuevo()
+    {
+        editando = false;
+        mensaje = null;
+        mensajeEdicion = null;
+        mensajeFormularioError = null;
+        debugError = null;
+        productoEnVista = null;
+        tipoProductoOriginalEdicion = null;
+        subtipoOriginalEdicion = null;
+
+        model = new ProductoUpsertDto
+        {
+            Estado = true,
+            TipoCompravena = "PRODUCTO",
+            TipoProducto = null,
+            Idsubtipo = null,
+            Codigoimpuesto = "",
+            Porcentajeimpuesto = "",
+            ValorUnitario = null,
+            Precio2 = null,
+            Precio3 = null,
+            Observacion = null
+        };
+
+        productEditContext = new EditContext(model);
+        SincronizarCamposPrecioVisibles();
+        formKey = Guid.NewGuid();
+    }
+
+    private void AlternarPanelFiltros() => mostrarPanelFiltros = !mostrarPanelFiltros;
+
+    private void LimpiarFiltros()
+    {
+        filtro = string.Empty;
+        filtroTipo = null;
+        filtroSubtipo = null;
+        filtroCompraventa = string.Empty;
+        pageSize = 10;
+        currentPage = 1;
+    }
+
+    private void AbrirImportacion()
+    {
+        mostrarImportacion = true;
+        mensajeImportacion = null;
+        erroresImportacion = 0;
+    }
+
+    private void CerrarImportacion()
+    {
+        if (importandoProductos)
+            return;
+
+        mostrarImportacion = false;
+        mensajeImportacion = null;
+        erroresImportacion = 0;
+    }
+
+    private async Task DescargarModeloImportacionAsync()
+    {
+        const string contenido =
+            "Codigo;Nombre;Tipo;PrecioBase;Precio2;Precio3;Categoria;Subcategoria;AplicaIVA;TarifaIVA;Observacion\r\n" +
+            "=\"PROD-001\";Producto de ejemplo;PRODUCTO;10.50;;;Tecnologia;;SI;15;Descripcion opcional\r\n" +
+            "=\"SERV-001\";Servicio de ejemplo;SERVICIO;25.00;;;;;NO;;Descripcion opcional";
+
+        await JS.InvokeVoidAsync(
+            "numericaUi.downloadTextFile",
+            "Modelo_importacion_productos.csv",
+            "\uFEFF" + contenido,
+            "text/csv;charset=utf-8");
+    }
+
+    private async Task ExportarProductosCsvAsync()
+    {
+        var productosExportar = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/productos?userId={usuarioLogueadoId}") ?? productos;
+
+        if (productosExportar.Count == 0)
+        {
+            mensaje = "No se encontraron productos para exportar.";
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Codigo;Nombre;Tipo;PrecioBase;Precio2;Precio3;Categoria;Subcategoria;AplicaIVA;TarifaIVA;Observacion");
+        
+        foreach (var p in OrdenarProductosClasificados(productosExportar))
+        {
+            var codigo = p.CodigoPrincipal ?? string.Empty;
+            var nombre = p.Nombre ?? string.Empty;
+            var tipo = p.TipoCompravena ?? string.Empty;
+            var precioBase = p.ValorUnitario?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            var precio2 = p.Precio2?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            var precio3 = p.Precio3?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            
+            var cat = p.TipoProducto.HasValue
+                ? tiposProducto.FirstOrDefault(t => t.Idtipoproducto == p.TipoProducto.Value)?.Descripcion ?? string.Empty
+                : string.Empty;
+                
+            var subcat = p.Idsubtipo.HasValue
+                ? subtiposProducto.FirstOrDefault(s => s.Idsubtipo == p.Idsubtipo.Value)?.Descripcion ?? string.Empty
+                : string.Empty;
+                
+            var aplicaIva = p.Codigoimpuesto == "2" ? "SI" : "NO";
+            
+            var ivaObj = porcentajesIva.FirstOrDefault(i => i.Codigo == p.Porcentajeimpuesto);
+            var tarifaIva = ivaObj != null ? ivaObj.Valor : (p.Porcentajeimpuesto ?? string.Empty);
+            
+            var observacion = p.Observacion ?? string.Empty;
+
+            codigo = EscapeCsvField(codigo, forceExcelText: true);
+            nombre = EscapeCsvField(nombre);
+            observacion = EscapeCsvField(observacion);
+            cat = EscapeCsvField(cat);
+            subcat = EscapeCsvField(subcat);
+            
+            sb.AppendLine($"{codigo};{nombre};{tipo};{precioBase};{precio2};{precio3};{cat};{subcat};{aplicaIva};{tarifaIva};{observacion}");
+        }
+
+        await JS.InvokeVoidAsync(
+            "numericaUi.downloadTextFile",
+            $"Productos_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+            "\uFEFF" + sb.ToString(),
+            "text/csv;charset=utf-8"
+        );
+    }
+
+    private static string EscapeCsvField(string field, bool forceExcelText = false)
+    {
+        if (string.IsNullOrEmpty(field)) return forceExcelText ? "=\"\"" : string.Empty;
+        if (forceExcelText)
+        {
+            var cleanField = field.Replace("\"", "\"\"");
+            return $"=\"{cleanField}\"";
+        }
+        if (field.Contains(";") || field.Contains("\"") || field.Contains("\n") || field.Contains("\r"))
+        {
+            return "\"" + field.Replace("\"", "\"\"") + "\"";
+        }
+        return field;
+    }
+
+
+    private async Task ImportarProductosAsync(InputFileChangeEventArgs e)
+    {
+        if (isDemoMode)
+        {
+            mensajeImportacion = "La importación está bloqueada en modo demo.";
+            erroresImportacion = 1;
+            return;
+        }
+
+        var archivo = e.File;
+        if (archivo is null)
+            return;
+
+        if (!string.Equals(Path.GetExtension(archivo.Name), ".csv", StringComparison.OrdinalIgnoreCase))
+        {
+            mensajeImportacion = "Selecciona el modelo guardado en formato CSV.";
+            erroresImportacion = 1;
+            return;
+        }
+
+        const long maxSize = 4 * 1024 * 1024;
+        if (archivo.Size > maxSize)
+        {
+            mensajeImportacion = "El archivo supera el máximo permitido de 4 MB.";
+            erroresImportacion = 1;
+            return;
+        }
+
+        importandoProductos = true;
+        erroresImportacion = 0;
+        mensajeImportacion = "Procesando archivo...";
+        StateHasChanged();
+
+        try
+        {
+            using var stream = archivo.OpenReadStream(maxSize);
+            using var reader = new StreamReader(stream, Encoding.UTF8, true);
+            var contenido = await reader.ReadToEndAsync();
+            var lineas = contenido.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+            if (lineas.Length < 2)
+            {
+                mensajeImportacion = "El archivo no contiene productos para importar.";
+                erroresImportacion = 1;
+                importandoProductos = false;
+                return;
+            }
+
+            categoriasFaltantes.Clear();
+            subcategoriasFaltantes.Clear();
+            filasImportacionPendientes = new List<List<string>>();
+
+            for (var index = 1; index < lineas.Length; index++)
+            {
+                var campos = SepararCsv(lineas[index]);
+                if (campos.All(string.IsNullOrWhiteSpace))
+                    continue;
+
+                filasImportacionPendientes.Add(campos);
+
+                var categoria = Campo(campos, 6);
+                var subcategoria = Campo(campos, 7);
+
+                if (!string.IsNullOrWhiteSpace(categoria))
+                {
+                    var catExiste = tiposProducto.Any(x => string.Equals(x.Descripcion, categoria, StringComparison.OrdinalIgnoreCase));
+                    if (!catExiste && !categoriasFaltantes.Contains(categoria))
+                    {
+                        categoriasFaltantes.Add(categoria);
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(subcategoria))
+                {
+                    var catPadre = categoria;
+                    var isMissing = true;
+                    var catExistente = tiposProducto.FirstOrDefault(x => string.Equals(x.Descripcion, catPadre, StringComparison.OrdinalIgnoreCase));
+                    
+                    if (catExistente != null)
+                    {
+                        var subExistente = subtiposProducto.Any(x =>
+                            x.Idtipoproducto == catExistente.Idtipoproducto &&
+                            string.Equals(x.Descripcion, subcategoria, StringComparison.OrdinalIgnoreCase));
+                        if (subExistente) isMissing = false;
+                    }
+                    
+                    if (isMissing)
+                    {
+                        var combo = (Categoria: catPadre, Subcategoria: subcategoria);
+                        if (!subcategoriasFaltantes.Any(c => string.Equals(c.Categoria, combo.Categoria, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Subcategoria, combo.Subcategoria, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            subcategoriasFaltantes.Add(combo);
+                        }
+                    }
+                }
+            }
+
+            if (categoriasFaltantes.Any() || subcategoriasFaltantes.Any())
+            {
+                mostrarConfirmacionCategorias = true;
+                importandoProductos = false;
+                mensajeImportacion = "Se encontraron categorías o subcategorías nuevas en el archivo.";
+            }
+            else
+            {
+                await ProcesarImportacionFilasAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            erroresImportacion = 1;
+            mensajeImportacion = $"No se pudo importar el archivo: {ex.Message}";
+            importandoProductos = false;
+        }
+    }
+
+    private async Task ProcesarImportacionFilasAsync()
+    {
+        if (filasImportacionPendientes == null || !filasImportacionPendientes.Any())
+        {
+            importandoProductos = false;
+            return;
+        }
+
+        try
+        {
+            var dtoList = new List<ProductoUpsertDto>();
+            var errores = new List<string>();
+            var filaOffset = 2; // Fila real en Excel
+
+            for (int index = 0; index < filasImportacionPendientes.Count; index++)
+            {
+                var campos = filasImportacionPendientes[index];
+                var fila = index + filaOffset;
+
+                if (campos.Count < 4)
+                {
+                    errores.Add($"Fila {fila}: faltan columnas obligatorias.");
+                    continue;
+                }
+
+                var codigo = Campo(campos, 0);
+                var nombre = Campo(campos, 1);
+                var tipo = Campo(campos, 2).ToUpperInvariant();
+
+                if (string.IsNullOrWhiteSpace(codigo) || string.IsNullOrWhiteSpace(nombre) ||
+                    (tipo != "PRODUCTO" && tipo != "SERVICIO") ||
+                    !TryParseDecimal(campos[3], out var precioBase))
+                {
+                    errores.Add($"Fila {fila}: revisa Código, Nombre, Tipo y PrecioBase.");
+                    continue;
+                }
+
+                var categoria = Campo(campos, 6);
+                var subcategoria = Campo(campos, 7);
+                
+                var categoriaId = string.IsNullOrWhiteSpace(categoria)
+                    ? (int?)null
+                    : tiposProducto.FirstOrDefault(x => string.Equals(x.Descripcion, categoria, StringComparison.OrdinalIgnoreCase))?.Idtipoproducto;
+
+                if (!string.IsNullOrWhiteSpace(categoria) && !categoriaId.HasValue)
+                {
+                    errores.Add($"Fila {fila}: la categoría '{categoria}' no existe.");
+                    continue;
+                }
+
+                var subcategoriaId = string.IsNullOrWhiteSpace(subcategoria)
+                    ? (int?)null
+                    : subtiposProducto.FirstOrDefault(x =>
+                        (!categoriaId.HasValue || x.Idtipoproducto == categoriaId.Value) &&
+                        string.Equals(x.Descripcion, subcategoria, StringComparison.OrdinalIgnoreCase))?.Idsubtipo;
+
+                if (!string.IsNullOrWhiteSpace(subcategoria) && !subcategoriaId.HasValue)
+                {
+                    errores.Add($"Fila {fila}: la subcategoría '{subcategoria}' no existe.");
+                    continue;
+                }
+
+                var aplicaIva = Campo(campos, 8).Equals("SI", StringComparison.OrdinalIgnoreCase);
+                var tarifaIvaTexto = Campo(campos, 9);
+                string? codigoIva = null;
+                
+                if (aplicaIva)
+                {
+                    codigoIva = ResolverCodigoIva(tarifaIvaTexto);
+                    if (string.IsNullOrWhiteSpace(codigoIva))
+                    {
+                        errores.Add($"Fila {fila}: la tarifa IVA '{tarifaIvaTexto}' no existe o no es válida.");
+                        continue;
+                    }
+                }
+
+                var dto = new ProductoUpsertDto
+                {
+                    CodigoPrincipal = codigo,
+                    Nombre = nombre,
+                    TipoCompravena = tipo,
+                    ValorUnitario = precioBase,
+                    Precio2 = ParseDecimalOpcional(Campo(campos, 4)),
+                    Precio3 = ParseDecimalOpcional(Campo(campos, 5)),
+                    TipoProducto = categoriaId,
+                    Idsubtipo = subcategoriaId,
+                    Codigoimpuesto = aplicaIva ? "2" : null,
+                    Porcentajeimpuesto = codigoIva,
+                    Observacion = Campo(campos, 10),
+                    Estado = true
+                };
+                dtoList.Add(dto);
+            }
+
+            var creados = 0;
+            if (dtoList.Any())
+            {
+                var respuesta = await Http.PostAsJsonAsync($"api/productos/bulk?userId={usuarioLogueadoId}", dtoList);
+                if (respuesta.IsSuccessStatusCode)
+                {
+                    var result = await respuesta.Content.ReadFromJsonAsync<BulkImportResult>();
+                    if (result != null)
+                    {
+                        creados = result.Creados;
+                        errores.AddRange(result.Errores);
+                    }
+                }
+                else
+                {
+                    errores.Add($"Error en la carga masiva: {await respuesta.Content.ReadAsStringAsync()}");
+                }
+            }
+
+            erroresImportacion = errores.Count;
+            mensajeImportacion = errores.Count == 0
+                ? $"Importación completada: {creados} productos creados."
+                : $"Se crearon {creados} productos. {errores.Count} filas presentaron errores. {string.Join(" ", errores.Take(3))}";
+
+            if (errores.Count > 0)
+            {
+                if (creados == 0)
+                {
+                    await JS.ShowAlertAsync("No se importaron productos", "No se importaron productos por campos obligatorios incompletos o incorrectos en el archivo Excel.", "warning");
+                }
+                else
+                {
+                    await JS.ShowAlertAsync("Importación con observaciones", $"Se crearon {creados} productos, pero algunas filas no se importaron por campos obligatorios incompletos o incorrectos.", "warning");
+                }
+            }
+
+            if (creados > 0)
+            {
+                await CargarTodo();
+                EmisionControlService.NotifyChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            erroresImportacion = 1;
+            mensajeImportacion = $"Error al procesar la importación: {ex.Message}";
+        }
+        finally
+        {
+            importandoProductos = false;
+            filasImportacionPendientes = null;
+        }
+    }
+
+    private async Task ConfirmarCrearCategoriasFaltantesAsync()
+    {
+        mostrarConfirmacionCategorias = false;
+        importandoProductos = true;
+        mensajeImportacion = "Creando categorías y subcategorías nuevas...";
+        StateHasChanged();
+
+        try
+        {
+            // 1. Crear Categorías faltantes
+            foreach (var catName in categoriasFaltantes)
+            {
+                var cat = new Productotipo
+                {
+                    Descripcion = catName,
+                    Estado = true
+                };
+                await CategoryService.SaveTipoAsync(cat, usuarioLogueadoId);
+            }
+
+            // Recargar lookups
+            await CargarTodo();
+
+            // 2. Crear Subcategorías faltantes
+            foreach (var subInfo in subcategoriasFaltantes)
+            {
+                var catPadre = tiposProducto.FirstOrDefault(x => string.Equals(x.Descripcion, subInfo.Categoria, StringComparison.OrdinalIgnoreCase));
+                var catId = catPadre?.Idtipoproducto ?? 0;
+                
+                if (catId == 0)
+                {
+                    catId = tiposProducto.FirstOrDefault()?.Idtipoproducto ?? 0;
+                }
+
+                if (catId > 0)
+                {
+                    var sub = new Productosubtipo
+                    {
+                        Descripcion = subInfo.Subcategoria,
+                        Idtipoproducto = catId,
+                        Estado = "A"
+                    };
+                    await CategoryService.SaveSubtipoAsync(sub, usuarioLogueadoId);
+                }
+            }
+
+            // Recargar lookups de nuevo
+            await CargarTodo();
+
+            // 3. Proceder con la importación final
+            await ProcesarImportacionFilasAsync();
+        }
+        catch (Exception ex)
+        {
+            erroresImportacion = 1;
+            mensajeImportacion = $"Error al crear categorías/subcategorías: {ex.Message}";
+            importandoProductos = false;
+        }
+    }
+
+    private void CancelarCrearCategoriasFaltantes()
+    {
+        mostrarConfirmacionCategorias = false;
+        filasImportacionPendientes = null;
+        erroresImportacion = 1;
+        mensajeImportacion = "Carga masiva cancelada: El archivo contiene categorías o subcategorías no registradas.";
+    }
+
+    private string? ResolverCodigoIva(string? valorIva)
+    {
+        if (string.IsNullOrWhiteSpace(valorIva))
+            return null;
+
+        var input = valorIva.Trim().Replace("%", "").Replace(",", ".").ToLowerInvariant();
+
+        // 1. Buscar por coincidencia exacta con el Código (ej: "4" o "2")
+        var porCodigo = porcentajesIva.FirstOrDefault(i => string.Equals(i.Codigo, input, StringComparison.OrdinalIgnoreCase));
+        if (porCodigo != null)
+            return porCodigo.Codigo;
+
+        // 2. Buscar por valor numérico (ej: "15" o "12")
+        if (double.TryParse(input, NumberStyles.Any, CultureInfo.InvariantCulture, out var numero))
+        {
+            if (numero > 0 && numero < 1.0)
+            {
+                numero = Math.Round(numero * 100, 2);
+            }
+            var numStr = numero.ToString("0.##", CultureInfo.InvariantCulture);
+            
+            var porValor = porcentajesIva.FirstOrDefault(i => 
+                string.Equals(i.Valor, numStr, StringComparison.OrdinalIgnoreCase) ||
+                (double.TryParse(i.Valor, NumberStyles.Any, CultureInfo.InvariantCulture, out var ivaValNum) && Math.Abs(ivaValNum - numero) < 0.01));
+            
+            if (porValor != null)
+                return porValor.Codigo;
+        }
+
+        // 3. Buscar dentro de la descripción (ej: "iva 15%" contiene "15")
+        var porDescripcion = porcentajesIva.FirstOrDefault(i => i.Descripcion.Contains(input, StringComparison.OrdinalIgnoreCase));
+        if (porDescripcion != null)
+            return porDescripcion.Codigo;
+
+        return null;
+    }
+
+    private static List<string> SepararCsv(string linea)
+    {
+        var resultado = new List<string>();
+        var actual = new StringBuilder();
+        var entreComillas = false;
+
+        for (var i = 0; i < linea.Length; i++)
+        {
+            var caracter = linea[i];
+            if (caracter == '"')
+            {
+                if (entreComillas && i + 1 < linea.Length && linea[i + 1] == '"')
+                {
+                    actual.Append('"');
+                    i++;
+                }
+                else
+                {
+                    entreComillas = !entreComillas;
+                }
+            }
+            else if (caracter == ';' && !entreComillas)
+            {
+                resultado.Add(actual.ToString());
+                actual.Clear();
+            }
+            else
+            {
+                actual.Append(caracter);
+            }
+        }
+
+        resultado.Add(actual.ToString());
+        return resultado;
+    }
+
+    private static string CleanImportedField(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith("=\"") && trimmed.EndsWith("\""))
+        {
+            trimmed = trimmed.Substring(2, trimmed.Length - 3);
+        }
+        else if (trimmed.StartsWith("=") && !trimmed.Contains(";"))
+        {
+            trimmed = trimmed.Substring(1);
+            if (trimmed.StartsWith("\"") && trimmed.EndsWith("\""))
+            {
+                trimmed = trimmed.Substring(1, trimmed.Length - 2);
+            }
+        }
+        else if (trimmed.StartsWith("\"") && trimmed.EndsWith("\""))
+        {
+            trimmed = trimmed.Substring(1, trimmed.Length - 2);
+        }
+        return trimmed.Trim();
+    }
+
+    private static string Campo(IReadOnlyList<string> campos, int indice) =>
+        indice < campos.Count ? CleanImportedField(campos[indice]) : string.Empty;
+
+    private static bool TryParseDecimal(string valor, out decimal resultado) =>
+        decimal.TryParse(valor.Trim().Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out resultado);
+
+    private static decimal? ParseDecimalOpcional(string valor) =>
+        string.IsNullOrWhiteSpace(valor) ? null : TryParseDecimal(valor, out var resultado) ? resultado : null;
+
+    private async Task Editar(int codigo)
+    {
+        if (isSaving)
+            return;
+
+        if (isDemoMode)
+        {
+            var itemDemo = productos.FirstOrDefault(p => p.Codigo == codigo);
+            if (itemDemo is null)
+                return;
+
+            model = new ProductoUpsertDto
+            {
+                Codigo = itemDemo.Codigo,
+                Nombre = itemDemo.Nombre,
+                CodigoPrincipal = itemDemo.CodigoPrincipal,
+                ValorUnitario = itemDemo.ValorUnitario,
+                Precio2 = itemDemo.Precio2,
+                Precio3 = itemDemo.Precio3,
+                TipoCompravena = itemDemo.TipoCompravena,
+                TipoProducto = itemDemo.TipoProducto,
+                Idsubtipo = itemDemo.Idsubtipo,
+                Codigoimpuesto = itemDemo.Codigoimpuesto,
+                Porcentajeimpuesto = itemDemo.Porcentajeimpuesto,
+                Estado = itemDemo.Estado,
+                Observacion = itemDemo.Observacion
+            };
+
+            editando = true;
+            tipoProductoOriginalEdicion = itemDemo.TipoProducto;
+            subtipoOriginalEdicion = itemDemo.Idsubtipo;
+            productEditContext = new EditContext(model);
+            SincronizarCamposPrecioVisibles();
+            mensaje = null;
+            mensajeEdicion = $"El registro demo {(string.IsNullOrWhiteSpace(itemDemo.Nombre) ? itemDemo.Codigo.ToString() : itemDemo.Nombre)} se cargó en el formulario.";
+            formKey = Guid.NewGuid();
+            mostrarModalFormularioProducto = true;
+            return;
+        }
+
+        try
+        {
+            mensaje = null;
+            mensajeEdicion = null;
+            mensajeFormularioError = null;
+            debugError = null;
+            productoEnVista = null;
+
+            var item = await Http.GetFromJsonAsync<ProductoDto>($"api/productos/{codigo}?userId={usuarioLogueadoId}");
+            if (item != null)
+            {
+                var nombreProducto = string.IsNullOrWhiteSpace(item.Nombre)
+                    ? $"registro #{item.Codigo}"
+                    : item.Nombre;
+
+                model = new ProductoUpsertDto
+                {
+                    Codigo = item.Codigo,
+                    Nombre = item.Nombre,
+                    CodigoPrincipal = item.CodigoPrincipal,
+                    ValorUnitario = item.ValorUnitario,
+                    Precio2 = item.Precio2,
+                    Precio3 = item.Precio3,
+                    TipoCompravena = item.TipoCompravena,
+                    TipoProducto = item.TipoProducto,
+                    Idsubtipo = item.Idsubtipo,
+                    Codigoimpuesto = item.Codigoimpuesto,
+                    Porcentajeimpuesto = item.Porcentajeimpuesto,
+                    Estado = item.Estado,
+                    Observacion = item.Observacion
+                };
+
+                editando = true;
+                tipoProductoOriginalEdicion = item.TipoProducto;
+                subtipoOriginalEdicion = item.Idsubtipo;
+                productEditContext = new EditContext(model);
+                SincronizarCamposPrecioVisibles();
+                var mensajeCarga = $"Los datos de {nombreProducto} se llevaron al formulario para su edición.";
+                mensajeEdicion = mensajeCarga;
+                formKey = Guid.NewGuid();
+                mostrarModalFormularioProducto = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private async Task Guardar()
+    {
+        if (isSaving)
+            return;
+
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: guardar productos está bloqueado.";
+            mensajeEdicion = null;
+            mensajeFormularioError = null;
+            debugError = null;
+            return;
+        }
+
+        mensaje = null;
+        mensajeEdicion = null;
+        mensajeFormularioError = null;
+        debugError = null;
+
+        model.Nombre = model.Nombre?.Trim();
+        model.CodigoPrincipal = model.CodigoPrincipal?.Trim();
+        model.TipoCompravena = model.TipoCompravena?.Trim().ToUpperInvariant();
+        model.Codigoimpuesto = model.Codigoimpuesto?.Trim();
+        model.Porcentajeimpuesto = model.Porcentajeimpuesto?.Trim();
+        model.Observacion = model.Observacion?.Trim();
+        NormalizarPreciosFormulario();
+
+        if (!productEditContext.Validate())
+        {
+            ManejarFormularioInvalido(productEditContext);
+            return;
+        }
+
+        if (model.TipoProducto.HasValue && model.Idsubtipo.HasValue)
+        {
+            var subtipoOk = subtiposProducto.Any(s =>
+                s.Idsubtipo == model.Idsubtipo.Value &&
+                s.Idtipoproducto == model.TipoProducto.Value);
+
+            var subtipoSinCambios = editando &&
+                model.TipoProducto == tipoProductoOriginalEdicion &&
+                model.Idsubtipo == subtipoOriginalEdicion;
+
+            if (!subtipoOk && !subtipoSinCambios)
+            {
+                mensajeFormularioError = "La subcategoría no pertenece a la categoría elegida.";
+                return;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(model.CodigoPrincipal))
+        {
+            var existeCodigoPrincipal = productos.Any(p =>
+                p.Codigo != model.Codigo &&
+                string.Equals(p.CodigoPrincipal?.Trim(), model.CodigoPrincipal, StringComparison.OrdinalIgnoreCase));
+
+            if (existeCodigoPrincipal)
+            {
+                mensajeFormularioError = "Ya existe un producto con ese código.";
+                return;
+            }
+        }
+
+        var estabaEditando = editando;
+        isSaving = true;
+
+        try
+        {
+            var resp = editando
+                ? await Http.PutAsJsonAsync($"api/productos/{model.Codigo}?userId={usuarioLogueadoId}", model)
+                : await Http.PostAsJsonAsync($"api/productos?userId={usuarioLogueadoId}", model);
+
+            if (resp.IsSuccessStatusCode)
+            {
+                await CargarTodo();
+                EmisionControlService.NotifyChanged();
+                mostrarModalFormularioProducto = false;
+                Nuevo();
+                mensaje = estabaEditando
+                    ? "Producto actualizado correctamente."
+                    : "Producto creado correctamente.";
+            }
+            else
+            {
+                debugError = await resp.Content.ReadAsStringAsync();
+                mensaje = "No se pudo guardar el registro.";
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+            mensaje = "Error al guardar el registro.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void ManejarFormularioInvalido(EditContext _)
+    {
+        mensaje = null;
+        mensajeEdicion = null;
+        debugError = null;
+        mensajeFormularioError = "Revisa los campos obligatorios antes de confirmar el producto.";
+    }
+
+    private void OnIvaChanged(ChangeEventArgs e)
+    {
+        var marcado = false;
+
+        if (e.Value is bool b)
+        {
+            marcado = b;
+        }
+        else if (e.Value is string s && bool.TryParse(s, out var parsed))
+        {
+            marcado = parsed;
+        }
+
+        if (marcado)
+        {
+            model.Codigoimpuesto = "2";
+        }
+        else
+        {
+            model.Codigoimpuesto = "";
+            model.Porcentajeimpuesto = "";
+        }
+    }
+
+    private void AgregarCampoPrecioAdicional()
+    {
+        if (camposPrecioVisibles < 3)
+        {
+            camposPrecioVisibles++;
+        }
+    }
+
+    private void EliminarCampoPrecioAdicional(int numeroCampo)
+    {
+        if (numeroCampo == 2)
+        {
+            model.Precio2 = model.Precio3;
+            model.Precio3 = null;
+            SincronizarCamposPrecioVisibles();
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Precio2));
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Precio3));
+            return;
+        }
+
+        if (numeroCampo == 3)
+        {
+            model.Precio3 = null;
+            SincronizarCamposPrecioVisibles();
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Precio3));
+        }
+    }
+
+    private void SincronizarCamposPrecioVisibles()
+    {
+        CompactarPreciosIntermedios();
+        camposPrecioVisibles = 1;
+
+        if (model.Precio2.HasValue || model.Precio3.HasValue)
+        {
+            camposPrecioVisibles = 2;
+        }
+
+        if (model.Precio3.HasValue)
+        {
+            camposPrecioVisibles = 3;
+        }
+    }
+
+    private void NormalizarCampoPrecio(int numeroCampo)
+    {
+        if (numeroCampo == 1)
+        {
+            model.ValorUnitario = NormalizarMonto(model.ValorUnitario);
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.ValorUnitario));
+        }
+        else if (numeroCampo == 2)
+        {
+            model.Precio2 = NormalizarMonto(model.Precio2);
+            CompactarPreciosIntermedios();
+            SincronizarCamposPrecioVisibles();
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Precio2));
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Precio3));
+        }
+        else if (numeroCampo == 3)
+        {
+            model.Precio3 = NormalizarMonto(model.Precio3);
+            CompactarPreciosIntermedios();
+            SincronizarCamposPrecioVisibles();
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Precio2));
+            productEditContext.NotifyFieldChanged(FieldIdentifier.Create(() => model.Precio3));
+        }
+    }
+
+    private void NormalizarPreciosFormulario()
+    {
+        model.ValorUnitario = NormalizarMonto(model.ValorUnitario);
+        model.Precio2 = NormalizarMonto(model.Precio2);
+        model.Precio3 = NormalizarMonto(model.Precio3);
+        CompactarPreciosIntermedios();
+        SincronizarCamposPrecioVisibles();
+    }
+
+    private void CompactarPreciosIntermedios()
+    {
+        if (!model.Precio2.HasValue && model.Precio3.HasValue)
+        {
+            model.Precio2 = model.Precio3;
+            model.Precio3 = null;
+        }
+    }
+
+    private static decimal? NormalizarMonto(decimal? valor)
+    {
+        if (!valor.HasValue)
+        {
+            return null;
+        }
+
+        var montoNormalizado = decimal.Round(valor.Value, 2, MidpointRounding.AwayFromZero);
+        montoNormalizado = decimal.Clamp(montoNormalizado, 0m, PrecioMaximoPermitido);
+        return montoNormalizado;
+    }
+
+    private async Task ConfirmarEliminar(ProductoDto p)
+    {
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: desactivar productos está bloqueado.";
+            debugError = null;
+            return;
+        }
+
+        var nombreProducto = string.IsNullOrWhiteSpace(p.Nombre)
+            ? $"el registro #{p.Codigo}"
+            : p.Nombre;
+
+        if (!await JS.ConfirmDeleteAsync("Dar de baja producto", $"Se dara de baja {nombreProducto}.", "Si, dar de baja"))
+        {
+            return;
+        }
+
+        try
+        {
+            var del = await Http.DeleteAsync($"api/productos/{p.Codigo}?userId={usuarioLogueadoId}");
+
+            if (del.IsSuccessStatusCode)
+            {
+                await CargarTodo();
+                mensaje = "Registro desactivado con exito.";
+                EmisionControlService.NotifyChanged();
+                await JS.ShowToastAsync("Registro dado de baja");
+            }
+            else
+            {
+                debugError = await del.Content.ReadAsStringAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private void VerProducto(ProductoDto producto)
+    {
+        productoEnVista = producto;
+    }
+
+    private void CerrarVistaProducto()
+    {
+        productoEnVista = null;
+    }
+
+    private void ConfirmarEliminarLegacy(ProductoDto p)
+    {
+        productoAEliminar = p;
+        mostrarConfirmacion = true;
+    }
+
+    private void CancelarEliminar()
+    {
+        mostrarConfirmacion = false;
+        productoAEliminar = null;
+    }
+
+    private async Task EliminarConfirmado()
+    {
+        if (productoAEliminar is null)
+        {
+            return;
+        }
+
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: desactivar productos está bloqueado.";
+            CancelarEliminar();
+            return;
+        }
+
+        try
+        {
+            var del = await Http.DeleteAsync($"api/productos/{productoAEliminar.Codigo}?userId={usuarioLogueadoId}");
+
+            if (del.IsSuccessStatusCode)
+            {
+                await CargarTodo();
+                EmisionControlService.NotifyChanged();
+                CancelarEliminar();
+                mensaje = "Registro desactivado con éxito.";
+            }
+            else
+            {
+                debugError = await del.Content.ReadAsStringAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private bool EsRutaDemoProductos() =>
+        NavManager.ToBaseRelativePath(NavManager.Uri).StartsWith("demo/productos", StringComparison.OrdinalIgnoreCase);
+
+    private void CargarDemoProductos()
+    {
+        usuarioLogueadoId = 0;
+        cargando = false;
+        mensaje = "Estás viendo un catálogo demostrativo.";
+        mensajeEdicion = null;
+        mensajeFormularioError = null;
+        debugError = null;
+
+        tiposProducto =
+        [
+            new TipoDto { Idtipoproducto = 1, Descripcion = "Tecnología" },
+            new TipoDto { Idtipoproducto = 2, Descripcion = "Servicios" }
+        ];
+
+        subtiposProducto =
+        [
+            new SubtipoDto { Idsubtipo = 1, Idtipoproducto = 1, Descripcion = "Software" },
+            new SubtipoDto { Idsubtipo = 2, Idtipoproducto = 1, Descripcion = "Accesorios" },
+            new SubtipoDto { Idsubtipo = 3, Idtipoproducto = 2, Descripcion = "Implementación" },
+            new SubtipoDto { Idsubtipo = 4, Idtipoproducto = 2, Descripcion = "Capacitación" }
+        ];
+
+        codigosImpuesto =
+        [
+            new ImpuestoDto { Codigo = "0", Descripcion = "Sin impuesto" },
+            new ImpuestoDto { Codigo = "2", Descripcion = "IVA" }
+        ];
+
+        porcentajesIva =
+        [
+            new IvaDto { Codigo = "0", Descripcion = "0%", Valor = "0" },
+            new IvaDto { Codigo = "15", Descripcion = "15%", Valor = "15" }
+        ];
+
+        productos =
+        [
+            new ProductoDto
+            {
+                Codigo = 1,
+                Nombre = "Licencia sistema POS",
+                CodigoPrincipal = "DEMO-001",
+                ValorUnitario = 120m,
+                Precio2 = 110m,
+                Precio3 = 105m,
+                TipoCompravena = "PRODUCTO",
+                TipoProducto = 1,
+                Idsubtipo = 1,
+                Codigoimpuesto = "2",
+                Porcentajeimpuesto = "15",
+                Estado = true,
+                Observacion = "Licencia anual con actualizaciones incluidas."
+            },
+            new ProductoDto
+            {
+                Codigo = 2,
+                Nombre = "Servicio de parametrización",
+                CodigoPrincipal = "DEMO-002",
+                ValorUnitario = 45m,
+                TipoCompravena = "SERVICIO",
+                TipoProducto = 2,
+                Idsubtipo = 3,
+                Codigoimpuesto = "2",
+                Porcentajeimpuesto = "15",
+                Estado = true,
+                Observacion = "Configuración inicial del ambiente."
+            },
+            new ProductoDto
+            {
+                Codigo = 3,
+                Nombre = "Capacitación inicial",
+                CodigoPrincipal = "DEMO-003",
+                ValorUnitario = 80m,
+                TipoCompravena = "SERVICIO",
+                TipoProducto = 2,
+                Idsubtipo = 4,
+                Codigoimpuesto = "2",
+                Porcentajeimpuesto = "15",
+                Estado = true,
+                Observacion = "Sesión guiada para usuarios finales."
+            },
+            new ProductoDto
+            {
+                Codigo = 4,
+                Nombre = "Lector de código de barras",
+                CodigoPrincipal = "DEMO-004",
+                ValorUnitario = 69.90m,
+                TipoCompravena = "PRODUCTO",
+                TipoProducto = 1,
+                Idsubtipo = 2,
+                Codigoimpuesto = "2",
+                Porcentajeimpuesto = "15",
+                Estado = true,
+                Observacion = "Accesorio sugerido para punto de venta."
+            }
+        ];
+
+        Nuevo();
+        model.Nombre = "Licencia sistema POS";
+        model.CodigoPrincipal = "DEMO-001";
+        model.ValorUnitario = 120m;
+        model.Precio2 = 110m;
+        model.Precio3 = 105m;
+        model.TipoCompravena = "PRODUCTO";
+        model.TipoProducto = 1;
+        model.Idsubtipo = 1;
+        model.Codigoimpuesto = "2";
+        model.Porcentajeimpuesto = "15";
+        model.Observacion = "Licencia anual con actualizaciones incluidas.";
+
+        tiposProducto.Add(new TipoDto { Idtipoproducto = 3, Descripcion = "Punto de venta" });
+        subtiposProducto = new List<SubtipoDto>
+        {
+            new() { Idsubtipo = 1, Idtipoproducto = 1, Descripcion = "Software" },
+            new() { Idsubtipo = 2, Idtipoproducto = 1, Descripcion = "Licencias SaaS" },
+            new() { Idsubtipo = 3, Idtipoproducto = 2, Descripcion = "Implementación" },
+            new() { Idsubtipo = 4, Idtipoproducto = 2, Descripcion = "Capacitación" },
+            new() { Idsubtipo = 5, Idtipoproducto = 3, Descripcion = "Perifericos" },
+            new() { Idsubtipo = 6, Idtipoproducto = 3, Descripcion = "Consumibles" }
+        };
+        productos = new List<ProductoDto>(productos)
+        {
+            new()
+            {
+                Codigo = 5,
+                Nombre = "Rollo termico 80 mm",
+                CodigoPrincipal = "DEMO-005",
+                ValorUnitario = 2.85m,
+                TipoCompravena = "PRODUCTO",
+                TipoProducto = 3,
+                Idsubtipo = 6,
+                Codigoimpuesto = "2",
+                Porcentajeimpuesto = "15",
+                Estado = true,
+                Observacion = "Consumible frecuente para impresoras termicas."
+            }
+        };
+        productos[0].Idsubtipo = 2;
+        productos[3].TipoProducto = 3;
+        productos[3].Idsubtipo = 5;
+        model.Idsubtipo = 2;
+        mensaje = "Estás viendo un catálogo demostrativo con el flujo reciente de creación de categorías y subcategorías desde producto.";
+        SincronizarCamposPrecioVisibles();
+        AjustarPaginaActual();
+    }
+
+    private string GetCategoriaDescripcion(int? tipoId) =>
+        tipoId.HasValue
+            ? tiposProducto.FirstOrDefault(t => t.Idtipoproducto == tipoId.Value)?.Descripcion ?? "Sin categoría"
+            : "Sin categoría";
+
+    private string GetSubcategoriaDescripcion(int? subtipoId) =>
+        subtipoId.HasValue
+            ? subtiposProducto.FirstOrDefault(s => s.Idsubtipo == subtipoId.Value)?.Descripcion ?? "Sin subcategoría"
+            : "Sin subcategoría";
+
+    private string GetTarifaDescripcion(string? codigo) =>
+        string.IsNullOrWhiteSpace(codigo)
+            ? "Sin tarifa"
+            : porcentajesIva.FirstOrDefault(i => i.Codigo == codigo)?.Descripcion ?? codigo;
+
+    private string GetImpuestoDescripcion(string? codigo) =>
+        string.IsNullOrWhiteSpace(codigo)
+            ? "Sin impuesto"
+            : codigosImpuesto.FirstOrDefault(i => i.Codigo == codigo)?.Descripcion ?? codigo;
+
+    private static string GetEstadoProductoDescripcion(bool? estado) => estado == true ? "Activo" : "Inactivo";
+
+    private void AjustarPaginaActual()
+    {
+        currentPage = Math.Min(Math.Max(1, currentPage), CurrentTotalPages);
+    }
+
+    private void PaginaAnterior()
+    {
+        if (currentPage > 1)
+        {
+            currentPage--;
+        }
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (currentPage < CurrentTotalPages)
+        {
+            currentPage++;
+        }
+    }
+
+    private static string FormatCurrency(decimal? value) => value?.ToString("C2") ?? "-";
+}

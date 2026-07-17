@@ -1,0 +1,280 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using Microsoft.JSInterop
+@using Simetric.Services
+@using Simetric.Extensions
+@using Simetric.Data
+@using Microsoft.EntityFrameworkCore
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<div class="bo-page">
+    <aside class="bo-layout-sidebar">
+        <BackOfficeNavMenu />
+    </aside>
+
+    <main class="bo-layout-main">
+        <header class="bo-header">
+            <!-- Header Left: Page Titles & Welcome Message -->
+            <div class="bo-header-left">
+                <button type="button" class="bo-menu-toggle" aria-label="Abrir menu">
+                    <i class="ri-menu-line"></i>
+                </button>
+                <div class="bo-title-group">
+                    <h1 class="bo-title">@GetPageTitle()</h1>
+                    <span class="bo-subtitle">@GetPageSubtitle()</span>
+                </div>
+            </div>
+
+            <!-- Header Right: Quick actions -->
+            <div class="bo-header-right">
+                <!-- Real notifications bell component -->
+                <SolicitudNotifications />
+
+                <!-- User profile dropdown widget -->
+                <AuthorizeView>
+                    <Authorized>
+                        <div class="session-profile-menu">
+                            <button type="button"
+                                    class="session-profile-trigger"
+                                    aria-haspopup="menu"
+                                    aria-expanded="@_mostrarMenuSesion"
+                                    @onclick="ToggleSessionMenu">
+                                <div class="session-meta">
+                                    <span class="session-label">Sesión activa</span>
+                                    <span class="user-name">@GetDisplayName(context.User)</span>
+                                </div>
+                                <img src="@GetUserAvatar(context.User)" class="user-avatar" alt="Avatar del usuario" />
+                                <i class="bi bi-gear session-profile-chevron"></i>
+                            </button>
+
+                            @if (_mostrarMenuSesion)
+                            {
+                                <div class="session-profile-dropdown" role="menu">
+                                    <button type="button" role="menuitem" @onclick='() => NavManager.NavigateTo("/backoffice/perfil")'>
+                                        <i class="bi bi-person-circle"></i>
+                                        <span>Mi perfil</span>
+                                    </button>
+                                    <button type="button" role="menuitem" class="is-danger" @onclick="CerrarSesion">
+                                        <i class="bi bi-box-arrow-right"></i>
+                                        <span>Salir</span>
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    </Authorized>
+                </AuthorizeView>
+            </div>
+        </header>
+
+        <section class="bo-content">
+            @Body
+        </section>
+    </main>
+</div>
+
+@code {
+    private string currentDateRange = "15/06/2026 - 15/06/2026";
+    private ClaimsPrincipal? user;
+    private string userDisplayName = "Usuario Backoffice";
+    private string userRoleLabel = "Administrador";
+    private string userInitials = "BO";
+    private string avatarUrl = "";
+    private bool _mostrarMenuSesion;
+    private bool _cerrandoSesion;
+    private const string DefaultAvatarUrl = "/images/avatars/Avatar-Boy.jpg";
+
+    protected override async Task OnInitializedAsync()
+    {
+        NavManager.LocationChanged += OnLocationChanged;
+        var now = DateTime.Now;
+        currentDateRange = $"{now:dd/MM/yyyy} - {now:dd/MM/yyyy}";
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        user = authState.User;
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            var name = user.Identity.Name ?? "Usuario";
+            var surname = user.FindFirst(ClaimTypes.Surname)?.Value ?? "";
+            userDisplayName = $"{name} {surname}".Trim();
+
+            var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(ClaimTypes.Role)?.Value;
+            var tipoCliente = user.FindFirst("TipoCliente")?.Value;
+            var idUsuarioStr = user.FindFirst("IdUsuario")?.Value;
+            if (int.TryParse(idUsuarioStr, out var idUsuario))
+            {
+                using var context = await DbFactory.CreateDbContextAsync();
+                var dbUser = await context.Usuarios.FindAsync(idUsuario);
+                if (dbUser != null)
+                {
+                    role = dbUser.IdTipoUsuario?.ToString() ?? role;
+                    tipoCliente = dbUser.TipoCliente?.ToString() ?? tipoCliente;
+                }
+            }
+            bool esV = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) && 
+                       string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
+            bool esContador = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
+                              string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase);
+            userRoleLabel = esV ? "Vendedor" : esContador ? "Contador" : role == "7" ? "Administrador" : "Usuario";
+
+            if (!string.IsNullOrWhiteSpace(userDisplayName))
+            {
+                var parts = userDisplayName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 1)
+                {
+                    userInitials = $"{parts[0][0]}{parts[parts.Length - 1][0]}".ToUpper();
+                }
+                else if (parts.Length > 0)
+                {
+                    userInitials = $"{parts[0][0]}".ToUpper();
+                }
+            }
+
+            avatarUrl = user.FindFirst("AvatarUrl")?.Value ?? "";
+            await GuardarSellerRedirectAsync();
+        }
+    }
+
+    private string GetPageTitle()
+    {
+        var relative = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].Trim('/');
+        return relative.ToLower() switch
+        {
+            "backoffice" => "Dashboard",
+            "backoffice/clientes" => "Clientes",
+            "backoffice/ventas" => "Ventas",
+            "backoffice/facturacion" => "Facturación",
+            "backoffice/suscripciones" => "Suscripciones",
+            "backoffice/cobros" => "Cobros",
+            "backoffice/renovaciones" => "Renovaciones",
+            "backoffice/reportes" => "Reportes",
+            "backoffice/configuracion" => "Configuración",
+            _ => "BackOffice"
+        };
+    }
+
+    private string GetPageSubtitle()
+    {
+        var relative = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].Trim('/');
+        if (relative.Equals("backoffice", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Bienvenido de nuevo, {userDisplayName}";
+        }
+        return "Panel de administración y control";
+    }
+
+    private void ToggleSessionMenu() => _mostrarMenuSesion = !_mostrarMenuSesion;
+
+    private async Task CerrarSesion()
+    {
+        if (_cerrandoSesion) return;
+        _cerrandoSesion = true;
+        EmisorOnboardingService.SetRequiredStep(InitialSetupStep.None);
+
+        try
+        {
+            await JS.InvokeVoidAsync("backOfficeLogoutAndRedirect");
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+    }
+
+    private static string GetDisplayName(ClaimsPrincipal user)
+    {
+        var nombres = user.Identity?.Name?.Trim();
+        var apellidos = user.FindFirst(ClaimTypes.Surname)?.Value?.Trim();
+        var nombreCompleto = string.Join(" ", new[] { nombres, apellidos }
+                                .Where(x => !string.IsNullOrWhiteSpace(x)));
+        return string.IsNullOrWhiteSpace(nombreCompleto) ? "Usuario" : nombreCompleto;
+    }
+
+    private static string GetUserAvatar(ClaimsPrincipal user)
+        => ResolveAvatarUrl(user.FindFirst("AvatarUrl")?.Value);
+
+    private static string ResolveAvatarUrl(string? avatarUrl)
+    {
+        if (string.IsNullOrWhiteSpace(avatarUrl) ||
+            avatarUrl.EndsWith("default.png", StringComparison.OrdinalIgnoreCase))
+            return DefaultAvatarUrl;
+
+        if (avatarUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("/", StringComparison.Ordinal))
+            return avatarUrl;
+
+        return avatarUrl.StartsWith("images/", StringComparison.OrdinalIgnoreCase)
+            ? $"/{avatarUrl}" : avatarUrl;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await GuardarSellerRedirectAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task GuardarSellerRedirectAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var u = authState.User;
+        if (u.Identity?.IsAuthenticated == true)
+        {
+            var role = u.FindFirst("IdTipoUsuario")?.Value ?? u.FindFirst(ClaimTypes.Role)?.Value;
+            var tipoCliente = u.FindFirst("TipoCliente")?.Value;
+            var idUsuarioStr = u.FindFirst("IdUsuario")?.Value;
+            if (int.TryParse(idUsuarioStr, out var idUsuario))
+            {
+                using var context = await DbFactory.CreateDbContextAsync();
+                var dbUser = await context.Usuarios.FindAsync(idUsuario);
+                if (dbUser != null)
+                {
+                    role = dbUser.IdTipoUsuario?.ToString() ?? role;
+                    tipoCliente = dbUser.TipoCliente?.ToString() ?? tipoCliente;
+                }
+            }
+            bool esV = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) && 
+                       string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
+            bool esContador = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
+                              string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase);
+                       
+            if (esV)
+            {
+                var relativePath = NavManager.ToBaseRelativePath(NavManager.Uri).ToLowerInvariant();
+                // Strip query parameters
+                var pathNoQuery = relativePath.Split('?', '#')[0];
+                bool isAllowed = pathNoQuery.StartsWith("backoffice/ventas") ||
+                                 pathNoQuery.StartsWith("backoffice/vendedores") ||
+                                 pathNoQuery.StartsWith("backoffice/perfil");
+                if (!isAllowed)
+                {
+                    NavManager.NavigateTo("/backoffice/ventas");
+                }
+            }
+            else if (esContador)
+            {
+                var relativePath = NavManager.ToBaseRelativePath(NavManager.Uri).ToLowerInvariant();
+                var pathNoQuery = relativePath.Split('?', '#')[0];
+                bool isAllowed = pathNoQuery.StartsWith("backoffice/cobros") ||
+                                 pathNoQuery.StartsWith("backoffice/perfil");
+                if (!isAllowed)
+                {
+                    NavManager.NavigateTo("/backoffice/cobros");
+                }
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        NavManager.LocationChanged -= OnLocationChanged;
+    }
+}

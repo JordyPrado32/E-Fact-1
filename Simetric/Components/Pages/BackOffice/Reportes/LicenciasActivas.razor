@@ -1,0 +1,315 @@
+@page "/backoffice/reportes/licencias-activas"
+@namespace Simetric.Components.Pages.BackOffice
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.DTOs
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+
+<PageTitle>Licencias Activas - BackOffice</PageTitle>
+
+<link href="css/reportes-compartido.css" rel="stylesheet" />
+
+<div class="reports-container">
+    <div class="report-header-card no-print animate__animated animate__fadeIn">
+        <div class="report-header-top">
+            <h2 class="report-page-title">
+                <i class="bi bi-shield-check"></i> Reporte Licencias Activas
+            </h2>
+            <button type="button" class="btn-export" @onclick="DescargarReportePdf">
+                <i class="bi bi-file-earmark-pdf-fill"></i> Descargar PDF Directo
+            </button>
+        </div>
+        <div class="report-header-filters">
+            <div class="filter-group">
+                <span class="filter-label">Desde:</span>
+                <input type="date" @bind="fechaInicio" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Hasta:</span>
+                <input type="date" @bind="fechaFin" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este Mes</button>
+                <button type="button" class="btn-preset @(presetActivo == "trimestre" ? "active" : "")" @onclick='() => AplicarPreset("trimestre")'>Últimos 90 Días</button>
+                <button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este Año</button>
+                <button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sliding Viewport Container -->
+    <div class="reports-viewport printable-report" id="report-view-area">
+        <div class="report-slide report-slide-active">
+            <div class="visual-header">
+                <h3 class="visual-title">Reporte de Licencias Activas</h3>
+                <p class="visual-subtitle">Listado de suscripciones vigentes contratadas por los clientes.</p>
+            </div>
+
+            @if (loading)
+            {
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando datos...</span>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpis-grid">
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-green"><i class="bi bi-shield-check"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Licencias Activas</span>
+                            <strong class="kpi-card-value">@licenciasActivasList.Count</strong>
+                            <span class="kpi-card-trend trend-up">Suscripciones vigentes</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-blue"><i class="bi bi-cash-coin"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Vitalicias</span>
+                            <strong class="kpi-card-value">@licenciasVitalicias</strong>
+                            <span class="kpi-card-trend trend-neutral">Sin fecha de corte</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-award-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Plan Popular</span>
+                            <strong class="kpi-card-value">@planMasPopular</strong>
+                            <span class="kpi-card-trend trend-neutral">Suscripción común</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-orange"><i class="bi bi-calendar-check-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Vencen en 30 días</span>
+                            <strong class="kpi-card-value">@licenciasPorVencer</strong>
+                            <span class="kpi-card-trend trend-neutral">Próximos cobros</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-visual-card">
+                    <div class="visual-header">
+                        <h4 class="visual-title">Distribución por Planes de Suscripción</h4>
+                        <p class="visual-subtitle">Cantidad de licencias activas distribuidas por el tipo de plan/servicio actual.</p>
+                    </div>
+                    <div class="chart-container">
+                        @if (licenciasActivasChartData.Any())
+                        {
+                            <svg class="svg-chart" viewBox="0 0 800 300" preserveAspectRatio="none">
+                                <!-- Grid Lines -->
+                                @for (int i = 0; i <= 5; i++)
+                                {
+                                    var y = 30 + i * 44;
+                                    <line class="chart-grid-line" x1="50" y1="@y" x2="750" y2="@y" />
+                                    var val = Math.Round((double)maxLicenciasActivasChart * (5 - i) / 5.0);
+                                    <g><text class="chart-axis-text" x="15" y="@(y + 4)">@val</text></g>
+                                }
+
+                                <!-- X Axis Labels -->
+                                @for (int i = 0; i < licenciasActivasChartData.Count; i++)
+                                {
+                                    var x = 80 + i * (620.0 / Math.Max(1, licenciasActivasChartData.Count - 1));
+                                    <g><text class="chart-axis-text" x="@x" y="275" text-anchor="middle">@licenciasActivasChartData[i].Etiqueta</text></g>
+                                    <line class="chart-axis-line" x1="@x" y1="250" x2="@x" y2="255" />
+                                }
+
+                                <!-- Bars -->
+                                @for (int i = 0; i < licenciasActivasChartData.Count; i++)
+                                {
+                                    var item = licenciasActivasChartData[i];
+                                    var x = 60 + i * (620.0 / Math.Max(1, licenciasActivasChartData.Count - 1));
+                                    var barHeight = maxLicenciasActivasChart > 0 ? (double)(item.Valor / (decimal)maxLicenciasActivasChart) * 220.0 : 0.0;
+                                    var y = 250 - barHeight;
+                                    <rect class="chart-bar" x="@x" y="@y" width="40" height="@barHeight" rx="6" fill="#0284c7" />
+                                }
+                            </svg>
+                        }
+                    </div>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row">
+                        <h4 class="table-title">Detalle de Licencias Vigentes</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead>
+                            <tr>
+                                <th>Cliente ID</th>
+                                <th>Plan Contratado</th>
+                                <th>Ciclo</th>
+                                <th>Fecha Inicio</th>
+                                <th>Fecha Vencimiento</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (licenciasActivasPaginadas.Any())
+                            {
+                                @foreach (var l in licenciasActivasPaginadas)
+                                {
+                                    <tr>
+                                        <td><strong>Cliente # @l.IdUsuario</strong></td>
+                                        <td>@l.PlanActual</td>
+                                        <td>@l.CicloActual</td>
+                                        <td>@l.FechaInicio?.ToString("dd/MM/yyyy")</td>
+                                        <td>@l.FechaFin?.ToString("dd/MM/yyyy")</td>
+                                        <td>
+                                            <span class="status-pill status-pill-success">@l.Estado</span>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">No hay licencias activas registradas.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="pagination-controls">
+                        <span class="page-indicator">Página @(pageLicActivas + 1) de @MaxPaginaLicActivas</span>
+                        <div class="pagination-btn-group">
+                            <button type="button" class="btn-pagination" disabled="@(pageLicActivas == 0)" @onclick="() => CambiarPaginaLicActivas(-1)">
+                                <i class="bi bi-chevron-left"></i> Ant.
+                            </button>
+                            <button type="button" class="btn-pagination" disabled="@(pageLicActivas >= MaxPaginaLicActivas - 1)" @onclick="() => CambiarPaginaLicActivas(1)">
+                                Sig. <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private DateTime fechaInicio = DateTime.Now.AddMonths(-3);
+    private DateTime fechaFin = DateTime.Now;
+    private string presetActivo = "trimestre";
+    private bool loading = true;
+
+    private string planMasPopular = "Ninguno";
+    private int licenciasPorVencer = 0;
+    private int licenciasVitalicias = 0;
+
+    private List<UsuarioServicioSuscripcion> licenciasActivasList = new();
+    private List<ChartItemDto> licenciasActivasChartData = new();
+    private int maxLicenciasActivasChart = 10;
+
+    private int pageLicActivas = 0;
+    private const int PageSize = 10;
+    private int MaxPaginaLicActivas => Math.Max(1, (int)Math.Ceiling(licenciasActivasList.Count / (double)PageSize));
+    private List<UsuarioServicioSuscripcion> licenciasActivasPaginadas => licenciasActivasList.Skip(pageLicActivas * PageSize).Take(PageSize).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AplicarPreset("trimestre");
+    }
+
+    private async Task OnDatesChanged()
+    {
+        presetActivo = "";
+        await CargarDatosReportesAsync();
+    }
+
+    private void AplicarPreset(string preset)
+    {
+        presetActivo = preset;
+        var hoy = DateTime.Now;
+        if (preset == "mes")
+        {
+            fechaInicio = new DateTime(hoy.Year, hoy.Month, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "trimestre")
+        {
+            fechaInicio = hoy.AddDays(-90);
+            fechaFin = hoy;
+        }
+        else if (preset == "anio")
+        {
+            fechaInicio = new DateTime(hoy.Year, 1, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "todo")
+        {
+            fechaInicio = new DateTime(2020, 1, 1);
+            fechaFin = hoy;
+        }
+        _ = CargarDatosReportesAsync();
+    }
+
+    private async Task CargarDatosReportesAsync()
+    {
+        loading = true;
+        StateHasChanged();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            var activeUserIds = await context.Usuarios
+                .Where(u => u.IdTipoUsuario == 1)
+                .Select(u => u.IdUsuario)
+                .ToListAsync();
+
+            licenciasActivasList = await context.UsuarioServicioSuscripciones
+                .AsNoTracking()
+                .Where(s => activeUserIds.Contains(s.IdUsuario) && (s.Estado == "ACTIVA" || s.Estado == "VIGENTE"))
+                .OrderByDescending(s => s.FechaInicio)
+                .ToListAsync();
+
+            if (licenciasActivasList.Any())
+            {
+                planMasPopular = licenciasActivasList.GroupBy(l => l.PlanActual).OrderByDescending(g => g.Count()).First().Key ?? "Ninguno";
+                licenciasPorVencer = licenciasActivasList.Count(s => s.FechaFin.HasValue && s.FechaFin.Value <= DateTime.Now.AddDays(30));
+                licenciasVitalicias = licenciasActivasList.Count(s => s.EsVitalicia);
+
+                licenciasActivasChartData = licenciasActivasList
+                    .GroupBy(l => l.PlanActual ?? "General")
+                    .Select(g => new ChartItemDto { Etiqueta = g.Key, Valor = (decimal)g.Count() })
+                    .ToList();
+                maxLicenciasActivasChart = licenciasActivasChartData.Any() ? (int)licenciasActivasChartData.Max(x => x.Valor) : 10;
+            }
+            else
+            {
+                planMasPopular = "Ninguno";
+                licenciasPorVencer = 0;
+                licenciasVitalicias = 0;
+                licenciasActivasChartData = new List<ChartItemDto>();
+                maxLicenciasActivasChart = 10;
+            }
+        }
+        catch (Exception)
+        {
+            // Fail silent
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CambiarPaginaLicActivas(int step)
+    {
+        pageLicActivas += step;
+        if (pageLicActivas < 0) pageLicActivas = 0;
+        if (pageLicActivas >= MaxPaginaLicActivas) pageLicActivas = MaxPaginaLicActivas - 1;
+    }
+
+    private async Task DescargarReportePdf()
+    {
+        var filename = $"Reporte_Licencias_Activas_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
+        await JS.InvokeVoidAsync("window.downloadPdfReport", "report-view-area", filename);
+    }
+}

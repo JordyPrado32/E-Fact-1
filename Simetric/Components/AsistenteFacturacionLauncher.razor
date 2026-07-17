@@ -1,0 +1,1927 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using System.Text.Json
+@using Simetric.Modules.AsistenteIAFacturacion.DTOs
+@using Simetric.Modules.AsistenteIAFacturacion.Services
+@inject IAsistenteFacturacionService AsistenteFacturacionService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+@implements IAsyncDisposable
+
+<div class="ia-fact-launcher" @ref="launcherContainer">
+    @if (ShowOnboardingBubble)
+    {
+        <section class="ia-fact-bot-bubble" role="status" aria-live="polite">
+            <div class="ia-fact-bot-copy">
+                <strong>@OnboardingBubbleTitle</strong>
+                <span>@OnboardingBubbleMessage</span>
+            </div>
+            <div class="ia-fact-bot-actions">
+                @if (!string.IsNullOrWhiteSpace(OnboardingBubbleActionRoute))
+                {
+                    <button type="button" class="ia-fact-bot-action" @onclick="() => NavManager.NavigateTo(OnboardingBubbleActionRoute!)">
+                        @OnboardingBubbleActionLabel
+                    </button>
+                }
+                <button type="button" class="ia-fact-bot-dismiss" @onclick="OnboardingBubbleDismiss">
+                    Ocultar por ahora
+                </button>
+            </div>
+        </section>
+    }
+
+    @if (panelAbierto)
+    {
+        <section class="ia-fact-panel" data-tour="dashboard.ai-panel">
+            <header class="ia-fact-header">
+                <div class="ia-fact-brand-wrap">
+                    <div class="ia-fact-brand">
+                        <img src="/images/LogoPrincipal.svg" alt="e-fact" />
+                        <div>
+                            <strong>Asistente IA</strong>
+                            <span>Facturas y notas de crédito</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="ia-fact-header-actions">
+                    <button type="button" class="ia-fact-audio-toggle" @onclick="ToggleVoiceOutputAsync" title="Activar o silenciar voz">
+                        <i class="bi @(vozSalidaActiva ? "bi-volume-up-fill" : "bi-volume-mute-fill")"></i>
+                    </button>
+                    <button type="button" class="ia-fact-close" @onclick="TogglePanelAsync" aria-label="Cerrar asistente">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            </header>
+
+            <div class="ia-fact-messages" @ref="mensajesContainer">
+                @foreach (var message in mensajes)
+                {
+                    <article class="ia-fact-message @(message.EsUsuario ? "is-user" : "is-bot")">
+                        <div class="ia-fact-bubble">@message.Texto</div>
+                    </article>
+                }
+
+                @if (opcionesSeleccion.Any())
+                {
+                    <section class="ia-fact-selection-box">
+                        <strong>Selecciona una opción</strong>
+                        @foreach (var opcion in opcionesSeleccion)
+                        {
+                            <button type="button" class="ia-fact-selection-option" @onclick="() => SeleccionarOpcionAsync(opcion)">
+                                <span>@(opcion.Indice > 0 ? $"{opcion.Indice}. " : string.Empty)@opcion.Etiqueta</span>
+                                @if (!string.IsNullOrWhiteSpace(opcion.Descripcion))
+                                {
+                                    <small>@opcion.Descripcion</small>
+                                }
+                            </button>
+                        }
+                    </section>
+                }
+
+                @if (respuestaActual?.FacturaDraft is { } draft && (draft.Cliente is not null || draft.Items.Count > 0))
+                {
+                    <section class="ia-fact-draft">
+                        <h4>Borrador actual</h4>
+                        @if (draft.Cliente is not null)
+                        {
+                            <div class="ia-fact-meta"><strong>Cliente:</strong> <span>@draft.Cliente.Nombre</span></div>
+                        }
+                        @foreach (var item in draft.Items)
+                        {
+                            <div class="ia-fact-item">@item.Cantidad x @item.Descripcion <span>$@item.Total.ToString("0.00")</span></div>
+                        }
+                        @if (draft.IvaDetalles.Count > 0)
+                        {
+                            @foreach (var iva in draft.IvaDetalles)
+                            {
+                                <div class="ia-fact-meta">
+                                    <span>IVA @(iva.TarifaPorcentaje.ToString("0"))%</span>
+                                    <span>Base $@iva.BaseImponible.ToString("0.00") / $@iva.ValorIva.ToString("0.00")</span>
+                                </div>
+                            }
+                        }
+                        <div class="ia-fact-meta"><strong>Subtotal:</strong> <span>$@draft.Subtotal.ToString("0.00")</span></div>
+                        <div class="ia-fact-meta"><strong>Descuento:</strong> <span>$@draft.Descuento.ToString("0.00")</span></div>
+                        <div class="ia-fact-meta"><strong>Impuestos:</strong> <span>$@draft.Impuesto.ToString("0.00")</span></div>
+                        <div class="ia-fact-meta"><strong>Forma de pago:</strong> <span>@(string.IsNullOrWhiteSpace(draft.FormaPago) ? "Pendiente" : draft.FormaPago)</span></div>
+                        @if (draft.DiasCredito.GetValueOrDefault() > 0 && draft.FechaVencimiento.HasValue)
+                        {
+                            <div class="ia-fact-meta"><strong>Crédito:</strong> <span>@draft.DiasCredito días | @draft.FechaVencimiento.Value.ToString("dd/MM/yyyy")</span></div>
+                        }
+                        <div class="ia-fact-totals">
+                            <span>Total</span>
+                            <strong>$@draft.Total.ToString("0.00")</strong>
+                        </div>
+                        <div class="ia-fact-quick-actions">
+                            <button type="button" class="ia-fact-chip" @onclick='() => EnviarComandoRapidoAsync("forma de pago efectivo")' disabled="@enviando">Efectivo</button>
+                            <button type="button" class="ia-fact-chip" @onclick='() => EnviarComandoRapidoAsync("forma de pago crédito")' disabled="@enviando">Crédito</button>
+                            <button type="button" class="ia-fact-chip ia-fact-chip-primary" @onclick="EmitirFacturaRapidoAsync" disabled="@(!PuedeEmitirBorrador() || enviando)">Emitir</button>
+                        </div>
+                    </section>
+                }
+            </div>
+
+            <footer class="ia-fact-footer">
+                @if (!string.IsNullOrWhiteSpace(alertaMicrofono))
+                {
+                    <div class="ia-fact-mic-alert" role="alert">
+                        <i class="bi bi-mic-fill"></i>
+                        <span>@alertaMicrofono</span>
+                    </div>
+                }
+                <div class="ia-fact-input-row">
+                    <input @bind="mensajeActual" @bind:event="oninput" placeholder="Escribe o habla tu factura o nota de crédito..." @onkeydown="HandleKeyDown" />
+                    <button type="button" class="ia-fact-send" @onclick="EnviarAsync" disabled="@enviando">Enviar</button>
+                </div>
+                <small>@estadoVoz</small>
+            </footer>
+        </section>
+    }
+
+    <button type="button"
+            class="ia-fact-fab @(panelAbierto ? "is-open" : string.Empty)"
+            @onclick="TogglePanelAsync"
+            title="Asistente de facturación"
+            aria-label="Abrir asistente de facturación">
+        <span class="ia-fact-orbit ia-fact-orbit-one" aria-hidden="true"></span>
+        <span class="ia-fact-orbit ia-fact-orbit-two" aria-hidden="true"></span>
+        <span class="ia-fact-robot" aria-hidden="true">
+            <span class="ia-fact-robot-antenna"></span>
+            <span class="ia-fact-robot-head">
+                <span class="ia-fact-robot-ear ia-fact-robot-ear-left"></span>
+                <span class="ia-fact-robot-ear ia-fact-robot-ear-right"></span>
+                <span class="ia-fact-robot-face">
+                    <span class="ia-fact-robot-eye"></span>
+                    <span class="ia-fact-robot-eye"></span>
+                    <span class="ia-fact-robot-smile"></span>
+                </span>
+            </span>
+            <span class="ia-fact-robot-body">
+                <span class="ia-fact-robot-arm ia-fact-robot-arm-left"></span>
+                <span class="ia-fact-robot-arm ia-fact-robot-arm-right"></span>
+                <span class="ia-fact-robot-core">N</span>
+            </span>
+        </span>
+        <span class="ia-fact-mic-badge" aria-hidden="true"><i class="bi bi-mic-fill"></i></span>
+    </button>
+</div>
+
+@code {
+    [Parameter] public bool ShowOnboardingBubble { get; set; }
+    [Parameter] public string? OnboardingBubbleTitle { get; set; }
+    [Parameter] public string? OnboardingBubbleMessage { get; set; }
+    [Parameter] public string? OnboardingBubbleActionLabel { get; set; }
+    [Parameter] public string? OnboardingBubbleActionRoute { get; set; }
+    [Parameter] public EventCallback OnboardingBubbleDismiss { get; set; }
+
+    private readonly List<UiChatMessage> mensajes = new();
+    private const int MaxMensajesVisibles = 18;
+    private string sessionId = Guid.NewGuid().ToString("N");
+    private string mensajeActual = string.Empty;
+    private bool panelAbierto;
+    private bool enviando;
+    private bool escuchando;
+    private bool vozSalidaActiva = true;
+    private bool manosLibresActivas;
+    private bool vozInteractivaActiva;
+    private string estadoVoz = "Pulsa el botón azul para hablar con el asistente.";
+    private string? alertaMicrofono;
+    private ChatFacturaResponse? respuestaActual;
+    private DotNetObjectReference<AsistenteFacturacionLauncher>? dotNetRef;
+    private ElementReference mensajesContainer;
+    private ElementReference launcherContainer;
+    private bool debeDesplazarAlFinal;
+    private List<SelectionOptionDto> opcionesSeleccion = new();
+    private DateTime ultimoEnvioUtc = DateTime.MinValue;
+    private readonly HashSet<string> vocabularioVoz = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly string[] FrasesBaseVoz =
+    [
+        "factura",
+        "nota de crédito",
+        "nota de credito",
+        "notas de crédito",
+        "notas de credito",
+        "cliente",
+        "producto",
+        "servicio",
+        "subtotal",
+        "descuento",
+        "IVA",
+        "RUC",
+        "cédula",
+        "forma de pago",
+        "emitir factura",
+        "crear nota de crédito",
+        "crear nota de credito",
+        "historial notas de crédito",
+        "historial notas de credito",
+        "crear factura",
+        "agregar producto",
+        "buscar cliente",
+        "cuentas por cobrar",
+        "cartera",
+        "saldo a favor",
+        "registrar abono",
+        "clientes que deben"
+    ];
+
+    protected override void OnParametersSet()
+    {
+        if (ShowOnboardingBubble && panelAbierto)
+        {
+            panelAbierto = false;
+            manosLibresActivas = false;
+            vozInteractivaActiva = false;
+            escuchando = false;
+            estadoVoz = "Completa los pasos pendientes para activar el asistente de facturacion.";
+        }
+    }
+
+    private void AgregarMensaje(bool esUsuario, string texto)
+    {
+        mensajes.Add(new UiChatMessage(esUsuario, texto));
+
+        if (mensajes.Count > MaxMensajesVisibles)
+        {
+            mensajes.RemoveRange(0, mensajes.Count - MaxMensajesVisibles);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                var existing = await JS.InvokeAsync<string?>("localStorage.getItem", "numerica:ia-fact-session");
+                if (!string.IsNullOrWhiteSpace(existing))
+                {
+                    sessionId = existing;
+                }
+                else
+                {
+                    await JS.InvokeVoidAsync("localStorage.setItem", "numerica:ia-fact-session", sessionId);
+                }
+
+                await JS.InvokeVoidAsync(
+                    "numericaUi.makeDraggable",
+                    launcherContainer,
+                    "numerica:ia-fact-position",
+                    ".ia-fact-fab");
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var vocabularioGuardado = await JS.InvokeAsync<string?>("localStorage.getItem", "numerica:ia-fact-vocabulario-voz");
+                if (!string.IsNullOrWhiteSpace(vocabularioGuardado))
+                {
+                    foreach (var termino in JsonSerializer.Deserialize<List<string>>(vocabularioGuardado) ?? new List<string>())
+                    {
+                        RegistrarFraseVoz(termino);
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            dotNetRef = DotNetObjectReference.Create(this);
+            try
+            {
+                await JS.InvokeVoidAsync("numericaUi.registerAsistenteDotNetRef", dotNetRef);
+            }
+            catch
+            {
+            }
+            var bienvenida = "Puedo ayudarte con facturas y también llevarte al flujo de notas de crédito. Escribe lo que necesitas y te guío.";
+            AgregarMensaje(false, bienvenida);
+            debeDesplazarAlFinal = true;
+            StateHasChanged();
+        }
+
+        if (debeDesplazarAlFinal)
+        {
+            debeDesplazarAlFinal = false;
+            try
+            {
+                await JS.InvokeVoidAsync("numericaUi.scrollElementToBottom", mensajesContainer);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private async Task TogglePanelAsync()
+    {
+        if (ShowOnboardingBubble)
+        {
+            panelAbierto = false;
+            manosLibresActivas = false;
+            vozInteractivaActiva = false;
+            escuchando = false;
+            estadoVoz = "Completa los pasos pendientes para activar el asistente de facturacion.";
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("numericaUi.stopSpeaking");
+        }
+        catch
+        {
+        }
+
+        panelAbierto = !panelAbierto;
+
+        if (!panelAbierto)
+        {
+            manosLibresActivas = false;
+            vozInteractivaActiva = false;
+            await JS.InvokeVoidAsync("numericaUi.stopSpeechRecognition");
+            escuchando = false;
+            estadoVoz = "Asistente en pausa.";
+            return;
+        }
+
+        await StartVoiceInputAsync(autoOpen: true);
+    }
+
+    private async Task EnviarAsync()
+    {
+        if (enviando || string.IsNullOrWhiteSpace(mensajeActual))
+            return;
+
+        var texto = mensajeActual.Trim();
+        mensajeActual = string.Empty;
+        ultimoEnvioUtc = DateTime.UtcNow;
+        AgregarMensaje(true, texto);
+        enviando = true;
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+            {
+                AgregarMensaje(false, "No pude resolver tu sesión actual para usar el asistente.");
+                return;
+            }
+
+            respuestaActual = await AsistenteFacturacionService.ProcesarAsync(userId, new ChatFacturaRequest
+            {
+                SessionId = sessionId,
+                Mensaje = texto,
+                Modo = "texto"
+            });
+
+            if (respuestaActual is not null)
+            {
+                opcionesSeleccion = respuestaActual.OpcionesSeleccion ?? new List<SelectionOptionDto>();
+                await AprenderVocabularioAsync(respuestaActual);
+                AgregarMensaje(false, respuestaActual.Respuesta);
+                if (!string.IsNullOrWhiteSpace(respuestaActual.RutaSugerida))
+                {
+                    panelAbierto = false;
+                    NavManager.NavigateTo(respuestaActual.RutaSugerida);
+                }
+                debeDesplazarAlFinal = true;
+                await InvokeAsync(StateHasChanged);
+                _ = SpeakThenResumeListeningAsync(respuestaActual.Respuesta);
+            }
+        }
+        catch (Exception ex)
+        {
+            AgregarMensaje(false, $"El asistente no está disponible ahora mismo. {ex.Message}");
+            await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            enviando = false;
+            if (!vozSalidaActiva || !vozInteractivaActiva)
+                await EnsureHandsFreeListeningAsync(450);
+        }
+    }
+
+    private async Task ToggleVoiceInputAsync()
+    {
+        if (escuchando)
+        {
+            manosLibresActivas = false;
+            vozInteractivaActiva = false;
+            await JS.InvokeVoidAsync("numericaUi.stopSpeechRecognition");
+            escuchando = false;
+            alertaMicrofono = null;
+            estadoVoz = "Micrófono detenido.";
+            return;
+        }
+
+        await StartVoiceInputAsync();
+    }
+
+    private async Task StartVoiceInputAsync(bool autoOpen = false)
+    {
+        try
+        {
+            var disponible = await JS.InvokeAsync<bool>("numericaUi.isSpeechRecognitionAvailable");
+            if (!disponible)
+            {
+                if (!autoOpen)
+                    AgregarMensaje(false, "Tu navegador no soporta reconocimiento de voz. Puedes seguir usando texto.");
+
+                manosLibresActivas = false;
+                vozInteractivaActiva = false;
+                alertaMicrofono = null;
+                estadoVoz = "Voz no disponible en este navegador. Puedes escribir tu mensaje.";
+                return;
+            }
+
+            var estadoPermiso = await JS.InvokeAsync<string>("numericaUi.getMicrophonePermissionState");
+            if (string.Equals(estadoPermiso, "prompt", StringComparison.OrdinalIgnoreCase))
+            {
+                alertaMicrofono = "Debes permitir el acceso al micrófono en el navegador para hablar con el asistente.";
+                estadoVoz = "El navegador está solicitando permiso para usar el micrófono.";
+                await InvokeAsync(StateHasChanged);
+            }
+            else if (string.Equals(estadoPermiso, "denied", StringComparison.OrdinalIgnoreCase))
+            {
+                manosLibresActivas = false;
+                vozInteractivaActiva = false;
+                alertaMicrofono = "El micrófono está bloqueado para este sitio. Habilítalo en el navegador y vuelve a intentar.";
+                estadoVoz = "El permiso del micrófono está denegado.";
+                return;
+            }
+            else
+            {
+                alertaMicrofono = null;
+            }
+
+            if (dotNetRef is null)
+                dotNetRef = DotNetObjectReference.Create(this);
+
+            manosLibresActivas = true;
+            vozInteractivaActiva = true;
+            await JS.InvokeVoidAsync("numericaUi.startSpeechRecognition", dotNetRef, "es-EC", BuildSpeechPhraseHints());
+            escuchando = true;
+            alertaMicrofono = null;
+            estadoVoz = "Escuchando en manos libres... habla cuando quieras.";
+        }
+        catch
+        {
+            manosLibresActivas = false;
+            vozInteractivaActiva = false;
+            escuchando = false;
+            alertaMicrofono = "No pude activar el micrófono. Revisa los permisos del navegador.";
+            estadoVoz = autoOpen
+                ? "No pude activar el micrófono al abrir el asistente. Puedes intentar de nuevo o escribir."
+                : "No pude activar el micrófono.";
+        }
+    }
+
+    private async Task ToggleVoiceOutputAsync()
+    {
+        vozSalidaActiva = !vozSalidaActiva;
+        if (!vozSalidaActiva)
+        {
+            await JS.InvokeVoidAsync("numericaUi.stopSpeaking");
+            estadoVoz = "Respuesta hablada desactivada.";
+        }
+        else
+        {
+            estadoVoz = "Respuesta hablada activada.";
+        }
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+            await EnviarAsync();
+    }
+
+    [JSInvokable]
+    public Task HandleSpeechPartial(string transcript)
+    {
+        if (!string.IsNullOrWhiteSpace(transcript))
+        {
+            mensajeActual = NormalizarTranscriptVoz(transcript);
+            estadoVoz = "Escuchando... transcribiendo en vivo.";
+            debeDesplazarAlFinal = true;
+            StateHasChanged();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public async Task HandleSpeechFinal(string transcript)
+    {
+        escuchando = false;
+        alertaMicrofono = null;
+
+        if (string.IsNullOrWhiteSpace(transcript))
+        {
+            estadoVoz = "No detecté una frase clara. Intenta nuevamente.";
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        mensajeActual = NormalizarTranscriptVoz(transcript);
+        estadoVoz = $"Texto detectado: \"{mensajeActual}\"";
+        debeDesplazarAlFinal = true;
+        await InvokeAsync(StateHasChanged);
+        await EnviarAsync();
+    }
+
+    [JSInvokable]
+    public Task HandleSpeechError(string message)
+    {
+        escuchando = false;
+        var normalized = message?.ToLowerInvariant() ?? string.Empty;
+        var esErrorPermiso = EsErrorPermisoMicrofono(normalized);
+        var esSinVoz = normalized.Contains("no detecté voz", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("no detecte voz", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("no-speech", StringComparison.OrdinalIgnoreCase);
+
+        estadoVoz = esSinVoz
+            ? "No detecté voz clara. Sigo escuchando..."
+            : string.IsNullOrWhiteSpace(message)
+                ? "No pude procesar el audio."
+                : $"Audio: {message}";
+
+        alertaMicrofono = esErrorPermiso
+            ? "Debes permitir el uso del micrófono en el navegador para continuar con la voz."
+            : null;
+
+        StateHasChanged();
+
+        if (!esErrorPermiso)
+            _ = EnsureHandsFreeListeningAsync(esSinVoz ? 650 : 1200);
+
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public void ActivarPreguntasSoporte()
+    {
+        opcionesSeleccion = new List<SelectionOptionDto>
+        {
+            new() { Indice = -999, Etiqueta = "¿Cómo configuro mi firma electrónica .p12?", Descripcion = "Carga y configura tu firma .p12" },
+            new() { Indice = -999, Etiqueta = "¿Cómo puedo realizar una recarga de documentos?", Descripcion = "Comprar documentos y recargar plan" },
+            new() { Indice = -999, Etiqueta = "¿Cómo crear una factura electrónica?", Descripcion = "Paso a paso para emitir comprobantes" }
+        };
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void LimpiarPreguntasSoporte()
+    {
+        if (opcionesSeleccion.Any(o => o.Indice == -999))
+        {
+            opcionesSeleccion.Clear();
+            StateHasChanged();
+        }
+    }
+
+    private async Task SeleccionarOpcionAsync(SelectionOptionDto opcion)
+    {
+        if (opcion.Indice == -999)
+        {
+            mensajeActual = opcion.Etiqueta;
+        }
+        else
+        {
+            mensajeActual = opcion.Indice.ToString();
+        }
+        await EnviarAsync();
+    }
+
+    private async Task EnviarComandoRapidoAsync(string comando)
+    {
+        if (enviando || string.IsNullOrWhiteSpace(comando))
+            return;
+
+        mensajeActual = comando;
+        await EnviarAsync();
+    }
+
+    private Task EmitirFacturaRapidoAsync()
+        => EnviarComandoRapidoAsync(respuestaActual?.RequiereConfirmacion == true
+            ? "confirmo emitir factura"
+            : "emitir factura");
+
+    private bool PuedeEmitirBorrador()
+        => respuestaActual?.FacturaDraft is { } draft
+            && draft.Cliente is not null
+            && draft.Items.Count > 0;
+
+    private string[] BuildSpeechPhraseHints()
+    {
+        var frases = new HashSet<string>(FrasesBaseVoz, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var termino in vocabularioVoz)
+            frases.Add(termino);
+
+        if (respuestaActual?.FacturaDraft?.Cliente is { } cliente)
+        {
+            RegistrarFraseTemporal(frases, cliente.Nombre);
+            RegistrarFraseTemporal(frases, cliente.Identificacion);
+            RegistrarFraseTemporal(frases, cliente.NumeroNotificacion);
+        }
+
+        if (respuestaActual?.FacturaDraft?.Items is not null)
+        {
+            foreach (var item in respuestaActual.FacturaDraft.Items)
+            {
+                RegistrarFraseTemporal(frases, item.Descripcion);
+                RegistrarFraseTemporal(frases, item.CodigoPrincipal);
+            }
+        }
+
+        foreach (var opcion in opcionesSeleccion)
+        {
+            RegistrarFraseTemporal(frases, opcion.Etiqueta);
+        }
+
+        return frases
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Take(80)
+            .ToArray();
+    }
+
+    private async Task AprenderVocabularioAsync(ChatFacturaResponse response)
+    {
+        var cambios = false;
+
+        if (response.FacturaDraft.Cliente is { } cliente)
+        {
+            cambios |= RegistrarFraseVoz(cliente.Nombre);
+            cambios |= RegistrarFraseVoz(cliente.Identificacion);
+            cambios |= RegistrarFraseVoz(cliente.NumeroNotificacion);
+        }
+
+        foreach (var item in response.FacturaDraft.Items)
+        {
+            cambios |= RegistrarFraseVoz(item.Descripcion);
+            cambios |= RegistrarFraseVoz(item.CodigoPrincipal);
+        }
+
+        foreach (var opcion in response.OpcionesSeleccion)
+        {
+            cambios |= RegistrarFraseVoz(opcion.Etiqueta);
+            cambios |= RegistrarFraseVoz(opcion.Descripcion);
+            cambios |= RegistrarFraseVoz(opcion.Cliente?.Nombre);
+            cambios |= RegistrarFraseVoz(opcion.Producto?.Nombre);
+            cambios |= RegistrarFraseVoz(opcion.Producto?.CodigoPrincipal);
+            cambios |= RegistrarFraseVoz(opcion.Producto?.Categoria);
+            cambios |= RegistrarFraseVoz(opcion.Producto?.Subcategoria);
+        }
+
+        if (!cambios)
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync(
+                "localStorage.setItem",
+                "numerica:ia-fact-vocabulario-voz",
+                JsonSerializer.Serialize(vocabularioVoz.OrderBy(x => x).Take(200).ToList()));
+        }
+        catch
+        {
+        }
+    }
+
+    private bool RegistrarFraseVoz(string? valor)
+    {
+        var frase = (valor ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(frase) || frase.Length < 2)
+            return false;
+
+        if (frase.Length > 80)
+            frase = frase[..80];
+
+        return vocabularioVoz.Add(frase);
+    }
+
+    private static void RegistrarFraseTemporal(HashSet<string> frases, string? valor)
+    {
+        var frase = (valor ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(frase))
+            frases.Add(frase);
+    }
+
+    private string NormalizarTranscriptVoz(string transcript)
+    {
+        var texto = transcript.Trim();
+        if (string.IsNullOrWhiteSpace(texto))
+            return string.Empty;
+
+        var reemplazos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [" iva "] = " IVA ",
+            [" iba "] = " IVA ",
+            [" ruc "] = " RUC ",
+            [" rook "] = " RUC ",
+            [" cédula "] = " cédula ",
+            [" cedula "] = " cédula ",
+            [" factura "] = " factura ",
+            [" fractura "] = " factura ",
+            [" producto "] = " producto ",
+            [" productos "] = " productos ",
+            [" cliente "] = " cliente ",
+            [" clientes "] = " clientes ",
+            [" código "] = " código ",
+            [" codigo "] = " código ",
+            [" categoría "] = " categoría ",
+            [" categoria "] = " categoría "
+        };
+
+        texto = $" {texto} ";
+        foreach (var reemplazo in reemplazos)
+        {
+            texto = texto.Replace(reemplazo.Key, reemplazo.Value, StringComparison.OrdinalIgnoreCase);
+        }
+
+        texto = string.Join(" ", texto.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return texto.Trim();
+    }
+
+    [JSInvokable]
+    public Task HandleSpeechEnd()
+    {
+        escuchando = false;
+        alertaMicrofono = null;
+        if (DateTime.UtcNow - ultimoEnvioUtc < TimeSpan.FromMilliseconds(1500))
+            return Task.CompletedTask;
+
+        if (string.IsNullOrWhiteSpace(mensajeActual))
+            estadoVoz = manosLibresActivas
+                ? "Micrófono listo. Sigo atento por si quieres hablar."
+                : "Micrófono listo. Puedes volver a intentar.";
+        StateHasChanged();
+        _ = EnsureHandsFreeListeningAsync(1100);
+        return Task.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("numericaUi.stopSpeechRecognition");
+            await JS.InvokeVoidAsync("numericaUi.stopSpeaking");
+            await JS.InvokeVoidAsync("numericaUi.releaseDraggable", launcherContainer);
+        }
+        catch
+        {
+        }
+
+        dotNetRef?.Dispose();
+    }
+
+    private async Task SpeakIfEnabledAsync(string? text)
+    {
+        if (!vozSalidaActiva || !vozInteractivaActiva || string.IsNullOrWhiteSpace(text))
+            return;
+
+        try
+        {
+            var disponible = await JS.InvokeAsync<bool>("numericaUi.isSpeechSynthesisAvailable");
+            if (!disponible)
+                return;
+
+            await JS.InvokeAsync<object?>("numericaUi.speakText", text, "es-EC");
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task SpeakThenResumeListeningAsync(string? text)
+    {
+        try
+        {
+            await SpeakIfEnabledAsync(text);
+        }
+        finally
+        {
+            if (vozInteractivaActiva)
+                await EnsureHandsFreeListeningAsync(900);
+        }
+    }
+
+    private async Task EnsureHandsFreeListeningAsync(int delayMs = 0)
+    {
+        if (!panelAbierto || !manosLibresActivas || escuchando || enviando)
+            return;
+
+        try
+        {
+            if (delayMs > 0)
+                await Task.Delay(delayMs);
+
+            if (!panelAbierto || !manosLibresActivas || escuchando || enviando)
+                return;
+
+            var disponible = await JS.InvokeAsync<bool>("numericaUi.isSpeechRecognitionAvailable");
+            if (!disponible)
+                return;
+
+            var estadoPermiso = await JS.InvokeAsync<string>("numericaUi.getMicrophonePermissionState");
+            if (string.Equals(estadoPermiso, "denied", StringComparison.OrdinalIgnoreCase))
+            {
+                escuchando = false;
+                manosLibresActivas = false;
+                vozInteractivaActiva = false;
+                alertaMicrofono = "El micrófono está bloqueado para este sitio. Habilítalo en el navegador y vuelve a intentar.";
+                estadoVoz = "El permiso del micrófono está denegado.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            if (dotNetRef is null)
+                dotNetRef = DotNetObjectReference.Create(this);
+
+            await JS.InvokeVoidAsync("numericaUi.startSpeechRecognition", dotNetRef, "es-EC", BuildSpeechPhraseHints());
+            escuchando = true;
+            estadoVoz = "Escuchando en manos libres...";
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool EsErrorPermisoMicrofono(string? normalizedMessage)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedMessage))
+            return false;
+
+        return normalizedMessage.Contains("permiso", StringComparison.OrdinalIgnoreCase)
+            || normalizedMessage.Contains("not-allowed", StringComparison.OrdinalIgnoreCase)
+            || normalizedMessage.Contains("micrófono", StringComparison.OrdinalIgnoreCase)
+            || normalizedMessage.Contains("microfono", StringComparison.OrdinalIgnoreCase)
+            || normalizedMessage.Contains("micrófono", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record UiChatMessage(bool EsUsuario, string Texto);
+}
+
+<style>
+    .ia-fact-launcher {
+        position: fixed;
+        right: calc(1.35rem + env(safe-area-inset-right, 0px));
+        bottom: calc(1.35rem + env(safe-area-inset-bottom, 0px));
+        z-index: 1200;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        pointer-events: none;
+    }
+
+    .ia-fact-launcher > * {
+        pointer-events: auto;
+    }
+
+    .ia-fact-fab {
+        position: relative;
+        isolation: isolate;
+        width: 76px;
+        height: 76px;
+        border: 1px solid rgba(255, 255, 255, 0.62);
+        border-radius: 999px;
+        overflow: visible;
+        background:
+            radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.95), transparent 16%),
+            radial-gradient(circle at 50% 82%, rgba(120, 236, 255, 0.28), transparent 30%),
+            linear-gradient(160deg, #fafdff 0%, #dff2ff 22%, #7ad6ff 52%, #148dd6 76%, #0c548f 100%);
+        color: #fff;
+        box-shadow:
+            0 24px 46px rgba(0, 73, 132, 0.28),
+            0 10px 20px rgba(20, 141, 214, 0.18),
+            inset 0 0 0 5px rgba(255, 255, 255, 0.2),
+            inset 0 -18px 28px rgba(2, 59, 107, 0.22);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        animation: ia-fact-float 3.6s ease-in-out infinite;
+        transition: transform .2s ease, box-shadow .2s ease, filter .2s ease;
+    }
+
+    .ia-fact-fab::before {
+        content: "";
+        position: absolute;
+        inset: -10px;
+        z-index: -2;
+        border: 1px solid rgba(32, 188, 208, 0.26);
+        border-radius: inherit;
+        animation: ia-fact-ripple 2.5s ease-out infinite;
+    }
+
+    .ia-fact-fab::after {
+        content: "";
+        position: absolute;
+        inset: 7px;
+        z-index: -1;
+        border-radius: inherit;
+        background:
+            radial-gradient(circle at 50% 16%, rgba(255, 255, 255, 0.88), transparent 24%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0.1) 35%, rgba(4, 79, 119, 0.12) 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    }
+
+    .ia-fact-fab:hover,
+    .ia-fact-fab:focus-visible {
+        transform: translateY(-4px) scale(1.04);
+        filter: saturate(1.1);
+        box-shadow:
+            0 30px 54px rgba(0, 71, 126, 0.34),
+            0 0 0 7px rgba(25, 181, 198, 0.12),
+            inset 0 0 0 5px rgba(255, 255, 255, 0.24);
+    }
+
+    .ia-fact-fab:focus-visible {
+        outline: 3px solid rgba(0, 107, 181, 0.28);
+        outline-offset: 5px;
+    }
+
+    .ia-fact-fab.is-open {
+        animation-play-state: paused;
+    }
+
+    .ia-fact-bot-bubble {
+        position: absolute;
+        right: calc(100% + 0.95rem);
+        bottom: 8px;
+        z-index: 4;
+        width: min(360px, calc(100vw - 8rem));
+        display: grid;
+        gap: 0.7rem;
+        padding: 1rem;
+        border-radius: 18px;
+        overflow: hidden;
+        color: #ffffff;
+        background:
+            radial-gradient(circle at 100% 0%, rgba(255, 255, 255, 0.24), transparent 34%),
+            radial-gradient(circle at 16% 18%, rgba(122, 214, 255, 0.24), transparent 36%),
+            linear-gradient(145deg, #2a9ad8 0%, #148dd6 44%, #0c6fab 100%);
+        border: 1px solid rgba(209, 240, 255, 0.36);
+        box-shadow:
+            0 18px 42px rgba(0, 73, 132, 0.22),
+            0 0 0 1px rgba(255, 255, 255, 0.04),
+            0 0 30px rgba(122, 214, 255, 0.18);
+        pointer-events: auto;
+    }
+
+    .ia-fact-launcher[data-panel-horizontal="right"] .ia-fact-bot-bubble {
+        right: auto;
+        left: calc(100% + 0.95rem);
+    }
+
+    .ia-fact-launcher[data-panel-vertical="below"] .ia-fact-bot-bubble {
+        top: 0;
+        bottom: auto;
+    }
+
+    .ia-fact-bot-bubble::before {
+        content: "";
+        position: absolute;
+        right: -8px;
+        bottom: 22px;
+        width: 18px;
+        height: 18px;
+        background: linear-gradient(145deg, #148dd6 0%, #0c6fab 100%);
+        border-top: 1px solid rgba(209, 240, 255, 0.34);
+        border-right: 1px solid rgba(209, 240, 255, 0.34);
+        border-bottom-right-radius: 6px;
+        transform: rotate(45deg);
+    }
+
+    .ia-fact-launcher[data-panel-horizontal="right"] .ia-fact-bot-bubble::before {
+        right: auto;
+        left: -8px;
+        border-top: 0;
+        border-right: 0;
+        border-left: 1px solid rgba(209, 240, 255, 0.34);
+        border-bottom: 1px solid rgba(209, 240, 255, 0.34);
+    }
+
+    .ia-fact-launcher[data-panel-vertical="below"] .ia-fact-bot-bubble::before {
+        top: 24px;
+        bottom: auto;
+    }
+
+    .ia-fact-bot-bubble::after {
+        content: "";
+        position: absolute;
+        top: -54%;
+        left: -58%;
+        z-index: 0;
+        width: 34%;
+        height: 195%;
+        border-radius: 24px;
+        background: linear-gradient(90deg, transparent 0%, rgba(198, 244, 255, 0.14) 18%, rgba(244, 253, 255, 0.72) 50%, rgba(198, 244, 255, 0.16) 82%, transparent 100%);
+        filter: blur(0.35px);
+        opacity: 0.76;
+        pointer-events: none;
+        transform: translate3d(-115%, -46%, 0) rotate(-31deg);
+    }
+
+    .ia-fact-bot-copy,
+    .ia-fact-bot-actions {
+        position: relative;
+        z-index: 1;
+    }
+
+    .ia-fact-bot-copy {
+        display: grid;
+        gap: 0.45rem;
+    }
+
+    .ia-fact-bot-copy strong {
+        color: #ffffff;
+        font-size: 0.96rem;
+        font-weight: 850;
+        line-height: 1.15;
+    }
+
+    .ia-fact-bot-copy span {
+        color: rgba(242, 250, 255, 0.94);
+        font-size: 0.86rem;
+        line-height: 1.42;
+    }
+
+    .ia-fact-bot-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+    }
+
+    .ia-fact-bot-action,
+    .ia-fact-bot-dismiss {
+        border-radius: 999px;
+        padding: 0.58rem 0.8rem;
+        font-size: 0.82rem;
+        font-weight: 800;
+    }
+
+    .ia-fact-bot-action {
+        border: none;
+        background: linear-gradient(135deg, #1bb8ff, #0b8edf);
+        color: #ffffff;
+        box-shadow: 0 10px 18px rgba(0, 112, 184, 0.24);
+    }
+
+    .ia-fact-bot-dismiss {
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(232, 244, 255, 0.92);
+    }
+
+    .ia-fact-orbit {
+        position: absolute;
+        inset: -6px;
+        z-index: -1;
+        border-radius: inherit;
+        border: 2px solid transparent;
+        border-top-color: rgba(122, 239, 235, 0.82);
+        border-right-color: rgba(255, 255, 255, 0.52);
+        animation: ia-fact-orbit 4.6s linear infinite;
+    }
+
+    .ia-fact-orbit-two {
+        inset: 4px;
+        border-top-color: transparent;
+        border-right-color: rgba(4, 74, 116, 0.42);
+        border-bottom-color: rgba(132, 247, 240, 0.54);
+        animation-duration: 3.1s;
+        animation-direction: reverse;
+    }
+
+    .ia-fact-robot {
+        position: relative;
+        z-index: 2;
+        width: 52px;
+        height: 58px;
+        display: inline-grid;
+        grid-template-rows: 34px 20px;
+        align-items: center;
+        justify-content: center;
+        animation: ia-fact-robot-nod 4.2s ease-in-out infinite;
+    }
+
+    .ia-fact-robot-antenna {
+        position: absolute;
+        left: 50%;
+        top: -2px;
+        width: 3px;
+        height: 11px;
+        border-radius: 99px;
+        background: linear-gradient(180deg, #edfaff, #7fd8ff);
+        transform: translateX(-50%);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.34);
+    }
+
+    .ia-fact-robot-antenna::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: -7px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #ffffff 0%, #7cf4ed 34%, #22b9ff 100%);
+        box-shadow:
+            0 0 0 4px rgba(124, 244, 237, 0.16),
+            0 0 14px rgba(116, 238, 255, 0.55);
+        transform: translateX(-50%);
+        animation: ia-fact-antenna 1.6s ease-in-out infinite;
+    }
+
+    .ia-fact-robot-head {
+        position: relative;
+        width: 48px;
+        height: 34px;
+        margin-top: 6px;
+        border-radius: 20px 20px 18px 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+            radial-gradient(circle at 28% 18%, rgba(255, 255, 255, 0.96), transparent 18%),
+            linear-gradient(180deg, #ffffff 0%, #e9f4ff 38%, #b7d9fb 72%, #7caee6 100%);
+        border: 1px solid rgba(169, 209, 245, 0.92);
+        box-shadow:
+            0 9px 14px rgba(0, 76, 130, 0.16),
+            inset 0 -4px 8px rgba(53, 133, 205, 0.16);
+    }
+
+    .ia-fact-robot-head::before {
+        content: "";
+        position: absolute;
+        inset: 3px 4px 12px;
+        border-radius: 18px 18px 16px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.9);
+        opacity: 0.9;
+    }
+
+    .ia-fact-robot-ear {
+        position: absolute;
+        top: 11px;
+        width: 8px;
+        height: 15px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, #eaf7ff 0%, #69baf6 48%, #2a84db 100%);
+        box-shadow:
+            inset 0 0 0 1px rgba(255, 255, 255, 0.68),
+            0 2px 5px rgba(0, 76, 130, 0.18);
+    }
+
+    .ia-fact-robot-ear-left {
+        left: -4px;
+    }
+
+    .ia-fact-robot-ear-right {
+        right: -4px;
+    }
+
+    .ia-fact-robot-face {
+        position: relative;
+        width: 31px;
+        height: 18px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        background:
+            radial-gradient(circle at 50% 15%, rgba(124, 245, 255, 0.34), transparent 36%),
+            linear-gradient(160deg, #163155 0%, #081c39 100%);
+        box-shadow:
+            inset 0 2px 6px rgba(125, 218, 255, 0.18),
+            inset 0 -3px 5px rgba(0, 8, 27, 0.4);
+    }
+
+    .ia-fact-robot-eye {
+        width: 5px;
+        height: 7px;
+        border-radius: 50%;
+        background: linear-gradient(180deg, #d7ffff 0%, #6cecff 100%);
+        box-shadow:
+            0 0 8px rgba(173, 252, 255, 0.9),
+            0 0 2px rgba(255, 255, 255, 0.9);
+        animation: ia-fact-blink 4.5s ease-in-out infinite;
+    }
+
+    .ia-fact-robot-smile {
+        position: absolute;
+        left: 50%;
+        bottom: 2px;
+        width: 10px;
+        height: 4px;
+        border-bottom: 2px solid #9df4ff;
+        border-radius: 0 0 10px 10px;
+        transform: translateX(-50%);
+        box-shadow: 0 1px 5px rgba(129, 235, 255, 0.35);
+    }
+
+    .ia-fact-robot-body {
+        position: relative;
+        width: 28px;
+        height: 21px;
+        margin: -1px auto 0;
+        border-radius: 14px 14px 16px 16px;
+        background:
+            radial-gradient(circle at 30% 14%, rgba(255, 255, 255, 0.95), transparent 18%),
+            linear-gradient(180deg, #fefeff 0%, #dcecff 48%, #9fcbfb 100%);
+        border: 1px solid rgba(160, 200, 242, 0.96);
+        box-shadow:
+            0 8px 14px rgba(0, 76, 130, 0.14),
+            inset 0 -4px 7px rgba(55, 134, 208, 0.14);
+    }
+
+    .ia-fact-robot-core {
+        position: absolute;
+        inset: 4px 7px 4px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: #ffffff;
+        background: linear-gradient(180deg, #38b7ff 0%, #0a7fd7 100%);
+        box-shadow:
+            0 0 0 2px rgba(255, 255, 255, 0.72),
+            0 4px 8px rgba(0, 94, 162, 0.22);
+    }
+
+    .ia-fact-robot-arm {
+        position: absolute;
+        top: 3px;
+        width: 12px;
+        height: 4px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, #fafdff 0%, #9bcbff 100%);
+        box-shadow: inset 0 0 0 1px rgba(167, 204, 243, 0.72);
+        transform-origin: center;
+    }
+
+    .ia-fact-robot-arm::after {
+        content: "";
+        position: absolute;
+        top: -1px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: linear-gradient(180deg, #ffffff 0%, #b6dcff 100%);
+        box-shadow: inset 0 0 0 1px rgba(167, 204, 243, 0.72);
+    }
+
+    .ia-fact-robot-arm-left {
+        left: -8px;
+        transform: rotate(32deg);
+        animation: ia-fact-wave-left 3.8s ease-in-out infinite;
+    }
+
+    .ia-fact-robot-arm-left::after {
+        left: -1px;
+    }
+
+    .ia-fact-robot-arm-right {
+        right: -8px;
+        transform: rotate(-22deg);
+    }
+
+    .ia-fact-robot-arm-right::after {
+        right: -1px;
+    }
+
+    .ia-fact-mic-badge {
+        position: absolute;
+        right: -2px;
+        bottom: -2px;
+        z-index: 3;
+        width: 22px;
+        height: 22px;
+        border: 2px solid #f4fcff;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #005eaf, #0bb5ff);
+        color: #ffffff;
+        box-shadow:
+            0 5px 12px rgba(0, 70, 114, 0.24),
+            0 0 0 4px rgba(255, 255, 255, 0.18);
+        font-size: 0.62rem;
+    }
+
+    .ia-fact-panel {
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + .75rem);
+        width: min(350px, calc(100vw - 1rem));
+        height: min(560px, calc(100dvh - 5rem - env(safe-area-inset-bottom, 0px)));
+        max-height: min(560px, calc(100dvh - 5rem - env(safe-area-inset-bottom, 0px)));
+        margin-bottom: 0;
+        border-radius: 22px;
+        overflow: hidden;
+        background: rgba(247, 251, 255, 0.97);
+        border: 1px solid rgba(0, 137, 176, 0.18);
+        box-shadow: 0 30px 70px rgba(15, 44, 74, 0.24);
+        display: flex;
+        flex-direction: column;
+        backdrop-filter: blur(10px);
+    }
+
+    .ia-fact-launcher[data-panel-vertical="below"] .ia-fact-panel {
+        top: calc(100% + .75rem);
+        bottom: auto;
+    }
+
+    .ia-fact-launcher[data-panel-horizontal="right"] .ia-fact-panel {
+        left: 0;
+        right: auto;
+    }
+
+    .ia-fact-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: start;
+        gap: .55rem;
+        padding: .8rem .9rem .85rem;
+        background:
+            radial-gradient(circle at 12% 18%, rgba(132, 244, 255, 0.24), transparent 28%),
+            radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.14), transparent 20%),
+            linear-gradient(135deg, #0a578a 0%, #0b6ea7 52%, #14a3b5 100%);
+        color: #fff;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .ia-fact-brand-wrap {
+        min-width: 0;
+        display: block;
+    }
+
+    .ia-fact-brand {
+        display: flex;
+        align-items: center;
+        gap: .6rem;
+        min-width: 0;
+        padding: .2rem .25rem;
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+    }
+
+    .ia-fact-brand img {
+        width: 38px;
+        height: 38px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, .18), rgba(255, 255, 255, .08));
+        border-radius: 13px;
+        padding: .42rem;
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.2),
+            0 10px 18px rgba(6, 49, 84, 0.18);
+    }
+
+    .ia-fact-brand > div {
+        min-width: 0;
+        display: grid;
+        gap: .12rem;
+    }
+
+    .ia-fact-brand strong {
+        display: block;
+        font-size: 1rem;
+        line-height: 1.02;
+        font-weight: 800;
+        letter-spacing: -.03em;
+        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+    }
+
+    .ia-fact-brand span {
+        display: block;
+        font-size: .72rem;
+        color: rgba(232, 247, 255, 0.9);
+    }
+
+    .ia-fact-brand strong,
+    .ia-fact-brand span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .ia-fact-header-actions {
+        display: flex;
+        align-items: center;
+        gap: .38rem;
+        flex-shrink: 0;
+        padding-top: .1rem;
+    }
+
+    .ia-fact-audio-toggle,
+    .ia-fact-close {
+        border: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform .18s ease, background-color .18s ease, box-shadow .18s ease, opacity .18s ease;
+    }
+
+    .ia-fact-audio-toggle {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
+        color: #fff;
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.12),
+            0 8px 18px rgba(5, 50, 85, 0.16);
+    }
+
+    .ia-fact-close {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #fff;
+        font-size: 1.38rem;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+
+    .ia-fact-audio-toggle:hover,
+    .ia-fact-close:hover {
+        transform: translateY(-1px);
+        background-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .ia-fact-audio-toggle:active,
+    .ia-fact-close:active {
+        transform: translateY(0);
+    }
+
+    .ia-fact-messages {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        padding: .78rem;
+        display: flex;
+        flex-direction: column;
+        gap: .6rem;
+        scrollbar-width: thin;
+        overscroll-behavior: contain;
+        scroll-padding-bottom: 1rem;
+    }
+
+    .ia-fact-message {
+        display: flex;
+    }
+
+    .ia-fact-message.is-user {
+        justify-content: flex-end;
+    }
+
+    .ia-fact-bubble {
+        max-width: min(90%, 280px);
+        border-radius: 16px;
+        padding: .72rem .82rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.28;
+        background: #eaf4fb;
+        color: #163047;
+    }
+
+    .ia-fact-message.is-user .ia-fact-bubble {
+        background: linear-gradient(135deg, #006bb5, #0086d9);
+        color: #fff;
+    }
+
+    .ia-fact-draft {
+        border-radius: 20px;
+        background: #fff;
+        padding: .9rem;
+        border: 1px solid rgba(0, 107, 181, 0.12);
+        box-shadow: 0 10px 24px rgba(18, 66, 112, 0.06);
+        min-width: 0;
+    }
+
+    .ia-fact-selection-box {
+        display: flex;
+        flex-direction: column;
+        gap: .55rem;
+        border-radius: 18px;
+        background: #ffffff;
+        border: 1px solid rgba(0, 107, 181, 0.14);
+        padding: .85rem;
+        min-width: 0;
+    }
+
+    .ia-fact-selection-box strong {
+        color: #0d3d66;
+        font-size: .92rem;
+    }
+
+    .ia-fact-selection-option {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: .2rem;
+        width: 100%;
+        border: 1px solid rgba(0, 107, 181, 0.18);
+        border-radius: 14px;
+        background: #f7fbff;
+        color: #163047;
+        padding: .75rem .85rem;
+        text-align: left;
+        cursor: pointer;
+        transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+
+    .ia-fact-selection-option:hover {
+        transform: translateY(-1px);
+        border-color: rgba(0, 107, 181, 0.32);
+        box-shadow: 0 10px 24px rgba(18, 66, 112, 0.08);
+    }
+
+    .ia-fact-selection-option small {
+        color: #587089;
+    }
+
+    .ia-fact-draft h4 {
+        margin: 0 0 .55rem 0;
+        color: #0d3d66;
+    }
+
+    .ia-fact-item,
+    .ia-fact-meta,
+    .ia-fact-totals {
+        display: flex;
+        justify-content: space-between;
+        gap: .75rem;
+        font-size: .92rem;
+        margin-top: .35rem;
+    }
+
+    .ia-fact-item span,
+    .ia-fact-meta span,
+    .ia-fact-totals span,
+    .ia-fact-totals strong {
+        word-break: break-word;
+    }
+
+    .ia-fact-meta strong,
+    .ia-fact-item,
+    .ia-fact-totals > span {
+        flex-shrink: 0;
+    }
+
+    .ia-fact-meta span,
+    .ia-fact-item span,
+    .ia-fact-totals strong {
+        min-width: 0;
+        text-align: right;
+    }
+
+    .ia-fact-totals {
+        margin-top: .8rem;
+        padding-top: .7rem;
+        border-top: 1px dashed rgba(0, 107, 181, 0.2);
+        font-size: 1rem;
+    }
+
+    .ia-fact-quick-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .45rem;
+        margin-top: .9rem;
+    }
+
+    .ia-fact-chip {
+        border: 1px solid rgba(0, 107, 181, 0.16);
+        background: #f2f8fd;
+        color: #0d3d66;
+        border-radius: 999px;
+        padding: .45rem .8rem;
+        font-size: .82rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .ia-fact-chip:hover:not(:disabled) {
+        transform: translateY(-1px);
+        border-color: rgba(0, 107, 181, 0.3);
+        box-shadow: 0 8px 16px rgba(18, 66, 112, 0.08);
+    }
+
+    .ia-fact-chip:disabled {
+        opacity: .6;
+        cursor: wait;
+    }
+
+    .ia-fact-chip-primary {
+        background: #006bb5;
+        border-color: #006bb5;
+        color: #fff;
+    }
+
+    .ia-fact-footer {
+        padding: .75rem .82rem .82rem;
+        border-top: 1px solid rgba(0, 107, 181, 0.08);
+        background: #fff;
+        flex-shrink: 0;
+    }
+
+    .ia-fact-mic-alert {
+        display: flex;
+        align-items: flex-start;
+        gap: .55rem;
+        margin-bottom: .7rem;
+        padding: .75rem .85rem;
+        border-radius: 16px;
+        background: #fff7ed;
+        color: #9a3412;
+        border: 1px solid rgba(249, 115, 22, 0.24);
+        font-size: .84rem;
+        line-height: 1.35;
+    }
+
+    .ia-fact-mic-alert i {
+        margin-top: .08rem;
+        flex-shrink: 0;
+    }
+
+    .ia-fact-input-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: .55rem;
+        align-items: center;
+    }
+
+    .ia-fact-input-row input {
+        min-width: 0;
+        width: 100%;
+        border: 1px solid rgba(0, 107, 181, 0.2);
+        border-radius: 14px;
+        padding: .7rem .82rem;
+        outline: none;
+        transition: border-color .18s ease, box-shadow .18s ease;
+    }
+
+    .ia-fact-input-row input:focus {
+        border-color: rgba(0, 107, 181, 0.55);
+        box-shadow: 0 0 0 4px rgba(0, 107, 181, 0.12);
+    }
+
+    .ia-fact-send {
+        border: none;
+        cursor: pointer;
+        border-radius: 14px;
+        height: 46px;
+    }
+
+    .ia-fact-send {
+        padding: 0 .95rem;
+        background: #006bb5;
+        color: #fff;
+        font-weight: 600;
+        min-width: 72px;
+    }
+
+    .ia-fact-send:disabled {
+        opacity: .6;
+        cursor: wait;
+    }
+
+    .ia-fact-footer small {
+        display: block;
+        margin-top: .55rem;
+        color: #587089;
+        line-height: 1.35;
+    }
+
+    @@keyframes ia-fact-float {
+        0%, 100% { transform: translateX(0); }
+        50% { transform: translateX(-8px); }
+    }
+
+    @@keyframes ia-fact-ripple {
+        0% { transform: scale(.88); opacity: .7; }
+        75%, 100% { transform: scale(1.22); opacity: 0; }
+    }
+
+    @@keyframes ia-fact-orbit {
+        to { transform: rotate(360deg); }
+    }
+
+    @@keyframes ia-fact-robot-nod {
+        0%, 72%, 100% { transform: rotate(0deg) translateY(0) scale(1); }
+        78% { transform: rotate(-4deg) translateY(-1px) scale(1.01); }
+        86% { transform: rotate(5deg) translateY(0) scale(1.01); }
+    }
+
+    @@keyframes ia-fact-antenna {
+        0%, 100% { opacity: .55; transform: translateX(-50%) scale(.8); }
+        50% { opacity: 1; transform: translateX(-50%) scale(1.15); }
+    }
+
+    @@keyframes ia-fact-blink {
+        0%, 42%, 46%, 100% { transform: scaleY(1); }
+        44% { transform: scaleY(.12); }
+    }
+
+    @@keyframes ia-fact-wave-left {
+        0%, 100% { transform: rotate(32deg); }
+        18% { transform: rotate(44deg); }
+        32% { transform: rotate(18deg); }
+        46% { transform: rotate(44deg); }
+        58% { transform: rotate(30deg); }
+    }
+
+    @@keyframes ia-fact-bubble-shine {
+        0% { transform: translate3d(-115%, -46%, 0) rotate(-31deg); }
+        100% { transform: translate3d(430%, 54%, 0) rotate(-31deg); }
+    }
+
+    @@media (prefers-reduced-motion: no-preference) {
+        .ia-fact-bot-bubble {
+            animation: ia-fact-float 7.5s ease-in-out infinite;
+        }
+
+        .ia-fact-bot-bubble::after {
+            animation: ia-fact-bubble-shine 3.2s linear infinite;
+        }
+    }
+
+    @@media (max-width: 768px) {
+        .ia-fact-launcher {
+            left: .5rem;
+            right: .5rem;
+            bottom: calc(.5rem + env(safe-area-inset-bottom, 0px));
+            align-items: stretch;
+        }
+
+        .ia-fact-panel {
+            position: fixed;
+            left: .5rem;
+            right: .5rem;
+            top: auto;
+            bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+            width: 100%;
+            height: min(58dvh, calc(100dvh - 5rem - env(safe-area-inset-bottom, 0px)));
+            max-height: min(58dvh, calc(100dvh - 5rem - env(safe-area-inset-bottom, 0px)));
+            margin-bottom: 0;
+            border-radius: 20px;
+        }
+
+        .ia-fact-launcher[data-panel-vertical="below"] .ia-fact-panel,
+        .ia-fact-launcher[data-panel-horizontal="right"] .ia-fact-panel {
+            left: .5rem;
+            right: .5rem;
+            top: auto;
+            bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+        }
+
+        .ia-fact-header,
+        .ia-fact-footer,
+        .ia-fact-messages {
+            padding-left: .9rem;
+            padding-right: .9rem;
+        }
+
+        .ia-fact-bubble {
+            max-width: 100%;
+        }
+
+        .ia-fact-item,
+        .ia-fact-meta,
+        .ia-fact-totals {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: .18rem;
+        }
+
+        .ia-fact-input-row {
+            grid-template-columns: 1fr;
+        }
+
+        .ia-fact-send {
+            width: 100%;
+            height: 48px;
+        }
+
+        .ia-fact-fab {
+            align-self: flex-end;
+            width: 66px;
+            height: 66px;
+        }
+
+        .ia-fact-bot-bubble {
+            right: 76px;
+            left: auto;
+            top: auto;
+            bottom: 6px;
+            width: min(280px, calc(100vw - 6.2rem));
+            padding: 0.85rem;
+        }
+
+        .ia-fact-launcher[data-panel-horizontal="right"] .ia-fact-bot-bubble {
+            right: 76px;
+            left: auto;
+        }
+
+        .ia-fact-launcher[data-panel-vertical="below"] .ia-fact-bot-bubble {
+            top: auto;
+            bottom: 6px;
+        }
+
+        .ia-fact-bot-bubble::before {
+            right: -8px;
+            left: auto;
+            top: auto;
+            bottom: 20px;
+            border-left: 0;
+            border-bottom: 0;
+            border-top: 1px solid rgba(209, 240, 255, 0.34);
+            border-right: 1px solid rgba(209, 240, 255, 0.34);
+        }
+
+        .ia-fact-header {
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: start;
+        }
+    }
+
+    @@media (prefers-reduced-motion: reduce) {
+        .ia-fact-fab,
+        .ia-fact-fab::before,
+        .ia-fact-orbit,
+        .ia-fact-robot,
+        .ia-fact-robot-eye,
+        .ia-fact-robot-antenna::before,
+        .ia-fact-robot-arm-left,
+        .ia-fact-bot-bubble,
+        .ia-fact-bot-bubble::after {
+            animation: none;
+        }
+    }
+
+    @@media (max-width: 420px) {
+        .ia-fact-header {
+            padding-top: .82rem;
+            padding-bottom: .82rem;
+        }
+
+        .ia-fact-brand-wrap {
+            gap: .4rem;
+        }
+
+        .ia-fact-brand img {
+            width: 34px;
+            height: 34px;
+        }
+
+        .ia-fact-brand strong {
+            font-size: .94rem;
+        }
+
+        .ia-fact-brand span {
+            font-size: .72rem;
+        }
+
+        .ia-fact-audio-toggle {
+            width: 36px;
+            height: 36px;
+        }
+
+        .ia-fact-close {
+            width: 36px;
+            height: 36px;
+            font-size: 1.26rem;
+        }
+
+        .ia-fact-messages {
+            padding: .78rem;
+        }
+
+        .ia-fact-bubble {
+            padding: .72rem .82rem;
+            border-radius: 16px;
+        }
+    }
+</style>
+
+

@@ -1,0 +1,76 @@
+@page "/e-contax"
+@page "/e-contax/dashboard"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@using Simetric.Services.EContax
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Inicio | E-Contax</PageTitle>
+
+@if (!string.IsNullOrWhiteSpace(errorCarga))
+{
+    <div class="econtax-page">
+        <section class="econtax-state econtax-state-error">
+            <i class="bi bi-exclamation-octagon"></i>
+            <h3>No pudimos abrir E-Contax</h3>
+            <p>@errorCarga</p>
+            <button type="button" class="primary-btn" @onclick="VolverServicios">
+                <i class="bi bi-grid"></i>
+                <span>Volver a servicios</span>
+            </button>
+        </section>
+    </div>
+}
+else
+{
+    <div class="econtax-page econtax-page-empty" aria-hidden="true"></div>
+}
+
+@code {
+    private string? errorCarga;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated != true)
+            {
+                NavManager.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+
+            if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+            {
+                NavManager.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+
+            var isSuperAdmin = string.Equals(
+                user.FindFirst("IdTipoUsuario")?.Value,
+                AppAccessService.AdminRoleId,
+                StringComparison.OrdinalIgnoreCase);
+
+            var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+            if (!access.HasAccess)
+            {
+                NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+                return;
+            }
+
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        }
+        catch (Exception ex)
+        {
+            errorCarga = $"No fue posible cargar los datos de E-Contax: {ex.Message}";
+        }
+    }
+
+    private void VolverServicios() => NavManager.NavigateTo("/portal-servicios", forceLoad: true);
+}

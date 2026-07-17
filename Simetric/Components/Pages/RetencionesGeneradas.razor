@@ -1,0 +1,1377 @@
+@page "/facturacion/retenciones-generadas"
+@page "/demo/retenciones-generadas"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.DTOs
+@using Simetric.Services
+@using Simetric.Models
+@attribute [AllowAnonymous]
+
+@inject RetencionGeneradaService RetencionGeneradaService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject SweetAlertService AlertService
+@inject IJSRuntime JS
+@inject ISimpleExcelExportService SimpleExcelExportService
+
+<PageTitle>Retenciones Generadas</PageTitle>
+
+@{
+    var retencionesFiltradas = RetencionesFiltradas;
+    var retencionesPaginaActual = RetencionesPaginaActual;
+    var totalBaseFiltrada = retencionesFiltradas.Sum(x => x.BaseTotal);
+    var totalRetenidoVisible = retencionesPaginaActual.Sum(x => x.TotalRetenido);
+    var autorizadas = retencionesFiltradas.Count(EstaAutorizada);
+    var noAutorizadas = retencionesFiltradas.Count(x => ObtenerEstadoSriTexto(x) == DocumentoAutorizacionHelper.EstadoNoAutorizado);
+    var pendientes = retencionesFiltradas.Count - autorizadas - noAutorizadas;
+}
+
+<div class="facturas-shell" data-tour="retgen.page">
+    @if (procesandoAccion)
+    {
+        <div class="facturas-inline-overlay">
+            <div class="facturas-inline-overlay-card">
+                <span class="spinner-border spinner-border-sm" role="status"></span>
+                <div>
+                    <strong>@tituloAccionOverlay</strong>
+                    <span>@detalleAccionOverlay</span>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (mostrarResultadoOverlay)
+    {
+        <div class="facturas-inline-overlay" @onclick="CerrarResultadoOverlay">
+            <div class="facturas-inline-overlay-card facturas-inline-overlay-card-result @(resultadoOverlayEsError ? "is-error" : "is-success")" @onclick:stopPropagation>
+                <div class="overlay-result-icon">
+                    <i class="bi @(resultadoOverlayEsError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                </div>
+                <div>
+                    <strong>@tituloResultadoOverlay</strong>
+                    <span>@detalleResultadoOverlay</span>
+                </div>
+                <button type="button" class="overlay-close-btn" @onclick="CerrarResultadoOverlay">Cerrar</button>
+            </div>
+        </div>
+    }
+
+    @if (idDocumentoMenuAbierto.HasValue)
+    {
+        <div class="row-menu-backdrop" @onclick="CerrarMenus"></div>
+    }
+    <section class="facturas-hero" data-tour="retgen.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Retenciones emitidas</span>
+            <h2>Mis retenciones con filtros, reporte y acciones unificadas</h2>
+            <p>
+                Busca por proveedor, comprobante o documento sustento, revisa el estado y exporta la
+                consulta visible con el mismo diseno del resto de documentos.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Retenciones filtradas</span>
+                <strong>@retencionesFiltradas.Count</strong>
+                <small>@ResumenRangoFechas</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Base filtrada</span>
+                <strong>$ @totalBaseFiltrada.ToString("N2")</strong>
+                <small>Base acumulada de los comprobantes visibles en la consulta.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Autorizadas</span>
+                <strong>@autorizadas</strong>
+                <small>Pendientes: @pendientes | No autorizadas: @noAutorizadas</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card" data-tour="retgen.toolbar">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Busqueda y control</span>
+            <h3>Retenciones generadas</h3>
+            <p>Combina texto y rango de fechas para ubicar cualquier comprobante retenido.</p>
+            @if (isDemoMode)
+            {
+                <p class="text-muted mb-0">Modo demo: puedes explorar filtros y detalles, pero XML, PDF y exportaciones están bloqueados.</p>
+            }
+        </div>
+
+        <div class="toolbar-actions toolbar-actions-expanded">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+
+                <input class="search-input"
+                       placeholder="Buscar por numero, sustento, proveedor o identificacion"
+                       @bind="Filtro"
+                       @bind:event="oninput" />
+
+                @if (!string.IsNullOrWhiteSpace(Filtro))
+                {
+                    <button class="search-clear" type="button" @onclick="LimpiarTexto" aria-label="Limpiar busqueda">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                }
+            </div>
+
+            <div class="date-filter-group">
+                <label class="date-filter-box">
+                    <span>Desde</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaDesde" />
+                </label>
+
+                <label class="date-filter-box">
+                    <span>Hasta</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaHasta" />
+                </label>
+            </div>
+
+            <button class="report-btn" type="button" @onclick="DescargarReporteAsync">
+                <i class="bi bi-file-earmark-spreadsheet"></i>
+                <span>Descargar Excel</span>
+            </button>
+
+            <button class="refresh-btn" type="button" @onclick="Recargar">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>Refrescar</span>
+            </button>
+
+            @if (HayFiltrosActivos)
+            {
+                <button class="filter-reset-btn" type="button" @onclick="LimpiarFiltros">
+                    <i class="bi bi-eraser"></i>
+                    <span>Limpiar filtros</span>
+                </button>
+            }
+        </div>
+    </section>
+
+    @if (cargando)
+    {
+        <section class="state-card">
+            <div class="state-icon">
+                <span class="spinner-border"></span>
+            </div>
+            <h3>Cargando retenciones</h3>
+            <p>Estamos organizando tu historial para mostrar el detalle mas reciente.</p>
+        </section>
+    }
+    else if (retencionesFiltradas.Count == 0)
+    {
+        <section class="state-card state-card-empty">
+            <div class="state-icon">
+                <i class="bi bi-inbox"></i>
+            </div>
+            <h3>No hay resultados</h3>
+            <p>
+                @(HayFiltrosActivos
+                    ? "No encontramos retenciones con los filtros aplicados. Ajusta el texto o las fechas."
+                    : "Todavia no existen retenciones generadas para mostrar en este panel.")
+            </p>
+        </section>
+    }
+    else
+    {
+        <section class="table-card retenciones-table-card" data-tour="retgen.table">
+
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado</span>
+                    <h3>Retenciones</h3>
+                    <p>Consulta documento sustento, proveedor, estado, base y valor retenido.</p>
+                </div>
+
+                <div class="table-head-actions">
+                    <label class="page-size-box" for="ret-page-size">
+                        <span>Ver</span>
+
+                        <select id="ret-page-size" class="page-size-select" @bind="RegistrosPorPagina">
+                            @foreach (var opcion in pageSizeOptions)
+                            {
+                                <option value="@opcion">@opcion</option>
+                            }
+                        </select>
+
+                        <span>registros</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="table-wrap list-table-wrap retenciones-table-wrap">
+                <table class="table table-hover align-middle mb-0 facturas-table responsive-list-table retenciones-generated-table">
+                    <colgroup>
+                        <col class="ret-col-number" />
+                        <col class="ret-col-date" />
+                        <col class="ret-col-support" />
+                        <col class="ret-col-provider" />
+                        <col class="ret-col-status" />
+                        <col class="ret-col-base" />
+                        <col class="ret-col-withheld" />
+                        <col class="ret-col-actions" />
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>Numero</th>
+                            <th>Fecha</th>
+                            <th>Documento sustento</th>
+                            <th>Proveedor</th>
+                            <th>Estado</th>
+                            <th class="text-end">Base</th>
+                            <th class="text-end">Retenido</th>
+                            <th class="text-end actions-header-otros">Acciones</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @foreach (var retencionEntry in retencionesPaginaActual.Select((item, index) => new { Item = item, Index = index }))
+                        {
+                            var item = retencionEntry.Item;
+                            var proveedorLineas = ObtenerProveedorLineas(item.Proveedor);
+                            var autorizacionLineas = PartirTextoEnDos(ObtenerNumeroAutorizacionTexto(item));
+                            <tr>
+                                <td data-label="Numero">
+                                    <span class="invoice-pill retention-number-wrap" title="@item.NumeroCompleto">
+                                        @item.NumeroCompleto
+                                    </span>
+                                </td>
+
+                                <td data-label="Fecha">
+                                    <span class="invoice-id">
+                                        @(item.Fecha?.ToString("dd/MM/yyyy") ?? "")
+                                    </span>
+                                </td>
+
+                                <td data-label="Documento sustento">
+                                    <span class="invoice-id retention-doc-wrap" title="@item.DocumentoSustento">
+                                        @item.DocumentoSustento
+                                    </span>
+                                </td>
+
+                                <td data-label="Proveedor">
+                                    <div class="client-cell provider-cell">
+                                        <strong title="@item.Proveedor">@proveedorLineas.Nombres</strong>
+                                        @if (!string.IsNullOrWhiteSpace(proveedorLineas.Apellidos))
+                                        {
+                                            <span class="provider-lastnames" title="@item.Proveedor">@proveedorLineas.Apellidos</span>
+                                        }
+                                        <span class="provider-id">@item.IdentificacionProveedor</span>
+                                    </div>
+                                </td>
+                                 <td data-label="Estado">
+                                     <div class="client-cell">
+                                          <span class="ret-status-line">
+                                              <span class="status-pill @ObtenerEstadoSriClase(item)">
+                                                  @ObtenerEstadoSriTexto(item)
+                                              </span>
+                                              @if (EsNoAutorizada(item))
+                                              {
+                                                  <button class="ret-status-info-btn"
+                                                          type="button"
+                                                          title="@ObtenerErrorSriTexto(item)"
+                                                          @onclick="() => MostrarErrorSriRetencion(item)">
+                                                      <i class="bi bi-info-circle-fill"></i>
+                                                  </button>
+                                              }
+                                          </span>
+                                          <span class="authorization-number authorization-number-wrap-half" title="@ObtenerNumeroAutorizacionTexto(item)">
+                                              <span class="authorization-label">Autorizacion:</span>
+                                              <span class="authorization-line">@autorizacionLineas.Primera</span>
+                                              @if (!string.IsNullOrWhiteSpace(autorizacionLineas.Segunda))
+                                              {
+                                                  <span class="authorization-line">@autorizacionLineas.Segunda</span>
+                                              }
+                                          </span>
+                                          @if (EsPendienteSri(item))
+                                          {
+                                              <button class="ret-sri-retry-btn"
+                                                      type="button"
+                                                      disabled="@procesandoAccion"
+                                                      @onclick="() => ReintentarSriAsync(item.Sec)">
+                                                  <i class="bi bi-send-fill"></i> Reenviar
+                                              </button>
+                                          }
+                                      </div>
+                                  </td>
+
+                                <td class="text-end" data-label="Base">
+                                    <span class="amount-pill">
+                                        <span class="currency-symbol">$</span>
+                                        <span class="currency-value">@item.BaseTotal.ToString("N2")</span>
+                                    </span>
+                                </td>
+
+                                <td class="text-end" data-label="Retenido">
+                                    <span class="amount-pill">
+                                        <span class="currency-symbol">$</span>
+                                        <span class="currency-value">@item.TotalRetenido.ToString("N2")</span>
+                                    </span>
+                                </td>
+                                 <td class="text-end actions-cell" data-label="Acciones">
+                                       <!-- Desktop: Inline summarized compact icon buttons -->
+                                       <div class="actions-desktop-inline gap-1 justify-content-end row-actions-inline-desktop">
+                                           <button class="row-action-btn row-action-view"
+                                                   type="button"
+                                                   title="Ver"
+                                                   @onclick="() => VerRetencionAsync(item.Sec)">
+                                               <i class="bi bi-eye"></i>
+                                           </button>
+
+                                           <button class="row-action-btn row-action-xml"
+                                                   type="button"
+                                                   title="Descargar XML"
+                                                   @onclick="() => AbrirXmlAsync(item.Sec)">
+                                               <i class="bi bi-filetype-xml"></i>
+                                           </button>
+
+                                            <button class="row-action-btn row-action-pdf"
+                                                    type="button"
+                                                    title="Descargar PDF"
+                                                    @onclick="() => AbrirPdfAsync(item.Sec)">
+                                                <i class="bi bi-file-earmark-pdf"></i>
+                                            </button>
+
+                                            <button class="row-action-btn row-action-sri"
+                                                    type="button"
+                                                    title="Enviar al SRI"
+                                                    @onclick="() => ReintentarSriAsync(item.Sec)">
+                                                <i class="bi bi-send-check"></i>
+                                            </button>
+
+                                            <button class="row-action-btn row-action-mail"
+                                                    type="button"
+                                                    title="Reenviar correo"
+                                                    @onclick="() => ReenviarCorreoAsync(item.Sec)">
+                                                <i class="bi bi-envelope-paper"></i>
+                                            </button>
+                                        </div>
+
+                                       <!-- Mobile: Dropdown -->
+                                       <div class="actions-mobile-dropdown row-actions-dropdown">
+                                           <button class="row-actions-trigger" type="button" @onclick="() => ToggleMenu(item.Sec)" @onclick:stopPropagation>
+                                               <i class="bi bi-three-dots"></i>
+                                           </button>
+                                           @if (idDocumentoMenuAbierto == item.Sec)
+                                           {
+                                               <div class="action-dropdown-menu">
+                                                   <button class="action-dropdown-item view-item" type="button" @onclick="async () => { CerrarMenus(); await VerRetencionAsync(item.Sec); }">
+                                                           <i class="bi bi-eye"></i>
+                                                           <span>Ver</span>
+                                                       </button>
+                                                   <button class="action-dropdown-item xml-item" type="button" @onclick="async () => { CerrarMenus(); await AbrirXmlAsync(item.Sec); }">
+                                                        <i class="bi bi-filetype-xml"></i>
+                                                        <span>Descargar XML</span>
+                                                    </button>
+                                                     <button class="action-dropdown-item pdf-item" type="button" @onclick="async () => { CerrarMenus(); await AbrirPdfAsync(item.Sec); }">
+                                                         <i class="bi bi-file-earmark-pdf"></i>
+                                                         <span>Descargar PDF</span>
+                                                     </button>
+                                                    <button class="action-dropdown-item" type="button" @onclick="async () => { CerrarMenus(); await ReintentarSriAsync(item.Sec); }">
+                                                        <i class="bi bi-send-check"></i>
+                                                        <span>Enviar al SRI</span>
+                                                    </button>
+                                                    <button class="action-dropdown-item" type="button" @onclick="async () => { CerrarMenus(); await ReenviarCorreoAsync(item.Sec); }">
+                                                        <i class="bi bi-envelope-paper"></i>
+                                                        <span>Reenviar correo</span>
+                                                    </button>
+                                                </div>
+                                            }
+                                       </div>
+                                  </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-footer">
+                <div class="footer-metrics">
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados visibles</span>
+                        <strong>@retencionesPaginaActual.Count</strong>
+                    </div>
+
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados filtrados</span>
+                        <strong>@retencionesFiltradas.Count</strong>
+                    </div>
+
+                    <div class="footer-metric footer-metric-highlight">
+                        <span class="footer-label">Retenido visible</span>
+                        <strong>$ @totalRetenidoVisible.ToString("N2")</strong>
+                    </div>
+                </div>
+
+                @if (TotalPaginas > 1)
+                {
+                    <nav class="pagination-nav" aria-label="Paginacion de retenciones">
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaAnterior"
+                                disabled="@(PaginaActualSegura == 1)">
+                            <i class="bi bi-chevron-left"></i>
+                            <span>Anterior</span>
+                        </button>
+
+                        @foreach (var pagina in PaginasVisibles)
+                        {
+                            var paginaLocal = pagina;
+                            <button class="pagination-btn @(paginaLocal == PaginaActualSegura ? "is-active" : null)"
+                                    @onclick="() => IrAPagina(paginaLocal)">
+                                @paginaLocal
+                            </button>
+                        }
+
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaSiguiente"
+                                disabled="@(PaginaActualSegura == TotalPaginas)">
+                            <span>Siguiente</span>
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </nav>
+                }
+            </div>
+
+        </section>
+    }
+
+</div>
+
+@if (mostrarModal && retencionSeleccionada != null)
+{
+    <div class="factura-modal-backdrop" @onclick="CerrarModal"></div>
+
+    <div class="modal fade show d-block factura-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable factura-modal-dialog">
+            <div class="modal-content factura-modal-content">
+
+                <div class="modal-header factura-modal-header">
+                    <div>
+                        <span class="modal-kicker">Comprobante generado</span>
+                        <h5 class="modal-title mb-0">
+                            Retención @retencionSeleccionada.NumeroCompleto
+                        </h5>
+                    </div>
+
+                    <button type="button" class="btn-close" @onclick="CerrarModal"></button>
+                </div>
+
+                <div class="modal-body factura-modal-body">
+
+                    <div class="rt-preview-shell">
+
+                        <div class="rt-preview-top">
+                            <div class="rt-company-card">
+                                <h4>@(retencionSeleccionada.Emisor?.RazonSocial ?? "EMISOR")</h4>
+                                <div><strong>RUC:</strong> @(retencionSeleccionada.Emisor?.Ruc ?? "")</div>
+                                <div><strong>Dirección:</strong> @(retencionSeleccionada.Emisor?.DireccionMatriz ?? retencionSeleccionada.Emisor?.Direccion ?? "")</div>
+                                <div><strong>Obligado contabilidad:</strong> @(retencionSeleccionada.Emisor?.LlevaContabilidad ?? "NO")</div>
+                            </div>
+
+                            <div class="rt-doc-card">
+                                <div class="rt-doc-title">COMPROBANTE DE RETENCIÓN</div>
+                                <div><strong>No.:</strong> @retencionSeleccionada.NumeroCompleto</div>
+                                <div><strong>Fecha emisión:</strong> @(retencionSeleccionada.RetencionInfo.Fecha?.ToString("dd/MM/yyyy") ?? "")</div>
+                                <div><strong>Periodo fiscal:</strong> @(retencionSeleccionada.RetencionInfo.PeriodoFiscal ?? "")</div>
+                                <div><strong>Estado SRI:</strong> @ObtenerEstadoSriTexto(retencionSeleccionada.RetencionInfo.Autorizado, retencionSeleccionada.RetencionInfo.Estado)</div>
+                                <div><strong>Numero de autorizacion:</strong> @ObtenerNumeroAutorizacionTexto(retencionSeleccionada.RetencionInfo.Autorizado, retencionSeleccionada.RetencionInfo.Estado, retencionSeleccionada.RetencionInfo.NumAutorizacion)</div>
+                                @if (!DocumentoAutorizacionHelper.EstaAutorizado(retencionSeleccionada.RetencionInfo.Autorizado, retencionSeleccionada.RetencionInfo.Estado) &&
+                                    !string.IsNullOrWhiteSpace(retencionSeleccionada.RetencionInfo.Clave))
+                                {
+                                    <div><strong>Clave de acceso:</strong> @retencionSeleccionada.RetencionInfo.Clave</div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="rt-section-card">
+                            <div class="rt-section-title">Datos del proveedor</div>
+
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <strong>Proveedor:</strong><br />
+                                    @NombreProveedorDetalle
+                                </div>
+
+                                <div class="col-md-3">
+                                    <strong>Identificación:</strong><br />
+                                    @(retencionSeleccionada.Proveedor?.ruc ?? retencionSeleccionada.RetencionInfo.IdCliente ?? "")
+                                </div>
+
+                                <div class="col-md-3">
+                                    <strong>Tipo identificación:</strong><br />
+                                    @(@retencionSeleccionada.TipoIdentificacionProveedor ?? "")
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="rt-section-card">
+                            <div class="rt-section-title">Documento sustento</div>
+
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <strong>Factura sustento:</strong><br />
+                                    @retencionSeleccionada.DocumentoSustentoVisual
+                                </div>
+
+                                <div class="col-md-4">
+                                    <strong>Total sin impuestos:</strong><br />
+                                    $ @((retencionSeleccionada.Compra?.Subtotal ?? 0m).ToString("N2"))
+                                </div>
+
+                                <div class="col-md-4">
+                                    <strong>Total factura:</strong><br />
+                                    $ @((retencionSeleccionada.Compra?.ValorTotal ?? 0m).ToString("N2"))
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="rt-section-card">
+                            <div class="rt-section-title">Detalle de retenciones</div>
+
+                            <div class="table-wrap">
+                                <table class="table table-hover align-middle mb-0 facturas-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Tipo</th>
+                                            <th>Código</th>
+                                            <th>Descripción</th>
+                                            <th class="text-end">Base</th>
+                                            <th class="text-end">% Ret.</th>
+                                            <th class="text-end">Valor retenido</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @if (retencionSeleccionada.Retenciones.Any())
+                                        {
+                                            @foreach (var d in retencionSeleccionada.Retenciones)
+                                            {
+                                                <tr>
+                                                    <td>@d.Tipo</td>
+                                                    <td>@d.CodigoRetencion</td>
+                                                    <td>@d.Descripcion</td>
+                                                    <td class="text-end">@d.BaseImponible.ToString("N2")</td>
+                                                    <td class="text-end">@d.PorcentajeRetener.ToString("N2")</td>
+                                                    <td class="text-end">@d.ValorRetenido.ToString("N2")</td>
+                                                </tr>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <tr>
+                                                <td colspan="6" class="text-center py-4">
+                                                    No se encontraron líneas de retención.
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="rt-totals-row">
+                            <div class="rt-total-card">
+                                <span>Base total</span>
+                                <strong>$ @retencionSeleccionada.BaseTotal.ToString("N2")</strong>
+                            </div>
+
+                            <div class="rt-total-card rt-total-card-main">
+                                <span>Total retenido</span>
+                                <strong>$ @retencionSeleccionada.TotalRetenido.ToString("N2")</strong>
+                            </div>
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div class="modal-footer factura-modal-footer">
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirXmlAsync(retencionSeleccionada.RetencionInfo.Sec)">
+                        Abrir XML
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(retencionSeleccionada.RetencionInfo.Sec)">
+                        Abrir PDF A4
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(retencionSeleccionada.RetencionInfo.Sec, FormatoImpresionDocumento.Termica80mm)">
+                        Termica 80mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(retencionSeleccionada.RetencionInfo.Sec, FormatoImpresionDocumento.Termica50mm)">
+                        Termica 50mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => ReintentarSriAsync(retencionSeleccionada.RetencionInfo.Sec)">
+                        Enviar al SRI
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => ReenviarCorreoAsync(retencionSeleccionada.RetencionInfo.Sec)">
+                        Reenviar correo
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal">
+                        Cerrar
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private int? idDocumentoMenuAbierto;
+
+    private void ToggleMenu(int id)
+    {
+        if (idDocumentoMenuAbierto == id)
+            idDocumentoMenuAbierto = null;
+        else
+            idDocumentoMenuAbierto = id;
+    }
+
+    private void CerrarMenus()
+    {
+        idDocumentoMenuAbierto = null;
+    }
+    private int currentUserId;
+    private bool cargando = true;
+    private bool isDemoMode;
+    private bool procesandoAccion;
+    private bool mostrarResultadoOverlay;
+    private bool resultadoOverlayEsError;
+    private string tituloAccionOverlay = "Procesando retencion";
+    private string detalleAccionOverlay = "Espera un momento.";
+    private string tituloResultadoOverlay = string.Empty;
+    private string detalleResultadoOverlay = string.Empty;
+
+    private List<RetencionGeneradaListDto> retenciones = new();
+
+    private readonly int[] pageSizeOptions = { 5, 10, 20, 50 };
+    private int paginaActual = 1;
+    private int registrosPorPagina = 10;
+
+    private bool mostrarModal;
+    private RetencionGeneradaDetalleViewDto? retencionSeleccionada;
+    private string filtro = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+
+    private int RegistrosPorPagina
+    {
+        get => registrosPorPagina;
+        set
+        {
+            registrosPorPagina = value;
+            paginaActual = 1;
+        }
+    }
+
+    private string Filtro
+    {
+        get => filtro;
+        set
+        {
+            if (filtro == value)
+                return;
+
+            filtro = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaDesde
+    {
+        get => fechaDesde;
+        set
+        {
+            if (fechaDesde == value)
+                return;
+
+            fechaDesde = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaHasta
+    {
+        get => fechaHasta;
+        set
+        {
+            if (fechaHasta == value)
+                return;
+
+            fechaHasta = value;
+            paginaActual = 1;
+        }
+    }
+
+    private bool HayFiltrosActivos =>
+        !string.IsNullOrWhiteSpace(Filtro) || FechaDesde.HasValue || FechaHasta.HasValue;
+
+    private string ResumenRangoFechas
+    {
+        get
+        {
+            if (FechaDesde.HasValue && FechaHasta.HasValue)
+                return $"{FechaDesde.Value:dd/MM/yyyy} al {FechaHasta.Value:dd/MM/yyyy}";
+
+            if (FechaDesde.HasValue)
+                return $"Desde {FechaDesde.Value:dd/MM/yyyy}";
+
+            if (FechaHasta.HasValue)
+                return $"Hasta {FechaHasta.Value:dd/MM/yyyy}";
+
+            return "Todas las fechas";
+        }
+    }
+
+    private string NombreProveedorDetalle =>
+        retencionSeleccionada?.Proveedor != null
+            ? (!string.IsNullOrWhiteSpace(retencionSeleccionada.Proveedor.nombre)
+                ? retencionSeleccionada.Proveedor.nombre!
+                : ((retencionSeleccionada.Proveedor.primerNombre ?? "") + " " +
+                   (retencionSeleccionada.Proveedor.segundoNombre ?? "") + " " +
+                   (retencionSeleccionada.Proveedor.primerApellido ?? "") + " " +
+                   (retencionSeleccionada.Proveedor.segundoApellido ?? "")).Trim())
+            : "";
+
+    private List<RetencionGeneradaListDto> RetencionesFiltradas =>
+        retenciones
+            .Where(CumpleFiltroRetencion)
+            .ToList();
+
+    private List<RetencionGeneradaListDto> RetencionesPaginaActual =>
+        RetencionesFiltradas
+            .Skip((PaginaActualSegura - 1) * registrosPorPagina)
+            .Take(registrosPorPagina)
+            .ToList();
+
+    private int TotalPaginas =>
+        RetencionesFiltradas.Count == 0
+            ? 0
+            : (int)Math.Ceiling(RetencionesFiltradas.Count / (double)registrosPorPagina);
+
+    private int PaginaActualSegura =>
+        TotalPaginas == 0
+            ? 1
+            : Math.Min(paginaActual, TotalPaginas);
+
+    private int RegistroInicialPagina =>
+        RetencionesFiltradas.Count == 0 ? 0 : ((PaginaActualSegura - 1) * registrosPorPagina) + 1;
+
+    private int RegistroFinalPagina =>
+        RetencionesFiltradas.Count == 0 ? 0 : Math.Min(PaginaActualSegura * registrosPorPagina, RetencionesFiltradas.Count);
+
+    private IEnumerable<int> PaginasVisibles
+    {
+        get
+        {
+            if (TotalPaginas == 0)
+                return Array.Empty<int>();
+
+            var inicio = Math.Max(1, PaginaActualSegura - 2);
+            var fin = Math.Min(TotalPaginas, inicio + 4);
+
+            if (fin - inicio < 4)
+                inicio = Math.Max(1, fin - 4);
+
+            return Enumerable.Range(inicio, fin - inicio + 1);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        isDemoMode = EsRutaDemoRetenciones();
+        await Recargar();
+    }
+
+    private async Task Recargar()
+    {
+        cargando = true;
+
+        if (isDemoMode)
+        {
+            retenciones = CrearDemoRetenciones();
+            paginaActual = 1;
+            cargando = false;
+            return;
+        }
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+
+        currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+
+        if (currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/", true);
+            return;
+        }
+
+        retenciones = await RetencionGeneradaService.ListarRetencionesUsuarioAsync(currentUserId);
+        paginaActual = 1;
+
+        cargando = false;
+    }
+
+    private bool CumpleFiltroRetencion(RetencionGeneradaListDto item)
+    {
+        if (!string.IsNullOrWhiteSpace(Filtro))
+        {
+            var filtroActual = Filtro.Trim();
+            var coincideTexto =
+                (item.NumeroRetencion ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.NumeroCompleto ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.DocumentoSustento ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.Proveedor ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.IdentificacionProveedor ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.Estado ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.NumeroAutorizacion ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                ObtenerEstadoSriTexto(item).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.Clave ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase);
+
+            if (!coincideTexto)
+                return false;
+        }
+
+        var fechaReferencia = item.Fecha?.Date;
+
+        if (FechaDesde.HasValue && (!fechaReferencia.HasValue || fechaReferencia.Value < FechaDesde.Value.Date))
+            return false;
+
+        if (FechaHasta.HasValue && (!fechaReferencia.HasValue || fechaReferencia.Value > FechaHasta.Value.Date))
+            return false;
+
+        return true;
+    }
+
+    private async Task VerRetencionAsync(int sec)
+    {
+        if (isDemoMode)
+        {
+            retencionSeleccionada = CrearDemoDetalleRetencion(sec);
+        }
+        else
+        {
+            retencionSeleccionada =
+                await RetencionGeneradaService.GetRetencionDetalleUsuarioAsync(sec, currentUserId);
+        }
+
+        if (retencionSeleccionada != null)
+            mostrarModal = true;
+    }
+
+    private async Task AbrirXmlAsync(int sec)
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync("Abriendo XML demo de retención.");
+            await JS.InvokeVoidAsync("open", ObtenerDemoXmlRetencion(sec), "_blank");
+            return;
+        }
+
+        var xmlUrl = await RetencionGeneradaService.AsegurarXmlRetencionUsuarioAsync(sec, currentUserId);
+        if (string.IsNullOrWhiteSpace(xmlUrl))
+        {
+            await AlertService.ShowWarningAsync("No se pudo ubicar el XML de la retencion.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", xmlUrl, "_blank");
+    }
+
+    private async Task AbrirPdfAsync(int sec, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync($"Abriendo PDF demo {formato.ObtenerEtiqueta()} de retención.");
+            await JS.InvokeVoidAsync("open", ObtenerDemoPdfRetencion(formato), "_blank");
+            return;
+        }
+
+        var pdfUrl = await RetencionGeneradaService.AsegurarPdfRetencionUsuarioAsync(sec, currentUserId, formato);
+        if (string.IsNullOrWhiteSpace(pdfUrl))
+        {
+            await AlertService.ShowWarningAsync($"No se pudo generar o ubicar el PDF {formato.ObtenerEtiqueta()} de la retencion.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", pdfUrl, "_blank");
+    }
+
+    private async Task ReintentarSriAsync(int sec)
+    {
+        if (isDemoMode)
+        {
+            MostrarResultadoOverlay("Modo demo", "La emision al SRI esta bloqueada en la demo.");
+            return;
+        }
+
+        procesandoAccion = true;
+        tituloAccionOverlay = "Enviando retencion al SRI";
+        detalleAccionOverlay = "Estamos firmando el XML, consultando autorizacion y actualizando el estado.";
+
+        try
+        {
+            var resultado = await RetencionGeneradaService.EmitirRetencionSriAsync(sec, currentUserId, intentarEnviarCorreo: true);
+            await Recargar();
+
+            if (mostrarModal)
+                retencionSeleccionada = await RetencionGeneradaService.GetRetencionDetalleUsuarioAsync(sec, currentUserId);
+
+            if (string.Equals(resultado.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
+            {
+                MostrarResultadoOverlay(
+                    "Retencion autorizada",
+                    string.IsNullOrWhiteSpace(resultado.mensaje) ? "La retencion se autorizo correctamente en el SRI." : resultado.mensaje);
+            }
+            else
+            {
+                MostrarResultadoOverlay(
+                    "Retencion pendiente",
+                    string.IsNullOrWhiteSpace(resultado.mensaje) ? "La retencion sigue pendiente o con observaciones del SRI." : resultado.mensaje,
+                    string.Equals(resultado.estado, "ERROR", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task ReenviarCorreoAsync(int sec)
+    {
+        if (isDemoMode)
+        {
+            MostrarResultadoOverlay("Modo demo", "El reenvio de correo esta bloqueado en la demo.");
+            return;
+        }
+
+        procesandoAccion = true;
+        tituloAccionOverlay = "Reenviando retencion por correo";
+        detalleAccionOverlay = "Estamos validando destinatarios y regenerando los adjuntos necesarios.";
+
+        try
+        {
+            var resultado = await RetencionGeneradaService.IntentarEnviarRetencionPorCorreoAsync(sec);
+            await Recargar();
+
+            if (mostrarModal)
+                retencionSeleccionada = await RetencionGeneradaService.GetRetencionDetalleUsuarioAsync(sec, currentUserId);
+
+            var esError = !(resultado.Enviado || resultado.YaEnviado || resultado.PendienteAutorizacion || resultado.SinDestinatarios);
+            MostrarResultadoOverlay(
+                esError ? "No se pudo reenviar" : "Estado del correo actualizado",
+                resultado.Mensaje,
+                esError);
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private void MostrarErrorSriRetencion(RetencionGeneradaListDto retencion)
+    {
+        MostrarResultadoOverlay("Error SRI", ObtenerErrorSriTexto(retencion), true);
+    }
+
+    private async Task DescargarReporteAsync()
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync("Modo demo: la exportación Excel está bloqueada.");
+            return;
+        }
+
+        var retencionesFiltradas = RetencionesFiltradas;
+        if (retencionesFiltradas.Count == 0)
+        {
+            await AlertService.ShowInfoAsync("No hay datos para exportar con los filtros actuales.");
+            return;
+        }
+
+        var archivo = SimpleExcelExportService.Create(
+            $"retenciones_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+            new ExcelSheetData(
+                "Retenciones",
+                new[]
+                {
+                    "Fecha",
+                    "Numero",
+                    "Documento sustento",
+                    "Proveedor",
+                    "Identificacion",
+                    "Estado",
+                    "Numero autorizacion",
+                    "Base",
+                    "Retenido"
+                },
+                retencionesFiltradas
+                    .Select(item => (IReadOnlyList<string>)new[]
+                    {
+                        item.Fecha?.ToString("yyyy-MM-dd") ?? string.Empty,
+                        item.NumeroCompleto ?? string.Empty,
+                        item.DocumentoSustento ?? string.Empty,
+                        item.Proveedor ?? string.Empty,
+                        item.IdentificacionProveedor ?? string.Empty,
+                        ObtenerEstadoSriTexto(item),
+                        ObtenerNumeroAutorizacionTexto(item),
+                        item.BaseTotal.ToString("N2"),
+                        item.TotalRetenido.ToString("N2")
+                    })
+                    .ToList()));
+
+        await using var stream = new MemoryStream(archivo.Content);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+    }
+
+    private void CerrarModal()
+    {
+        mostrarModal = false;
+        retencionSeleccionada = null;
+    }
+
+    private void MostrarResultadoOverlay(string titulo, string detalle, bool esError = false)
+    {
+        tituloResultadoOverlay = titulo;
+        detalleResultadoOverlay = detalle;
+        resultadoOverlayEsError = esError;
+        mostrarResultadoOverlay = true;
+    }
+
+    private void CerrarResultadoOverlay()
+    {
+        mostrarResultadoOverlay = false;
+        resultadoOverlayEsError = false;
+        tituloResultadoOverlay = string.Empty;
+        detalleResultadoOverlay = string.Empty;
+    }
+
+    private bool EsRutaDemoRetenciones() =>
+        NavManager.Uri.Contains("/demo/retenciones-generadas", StringComparison.OrdinalIgnoreCase);
+
+    private static List<RetencionGeneradaListDto> CrearDemoRetenciones() =>
+    [
+        new()
+        {
+            Sec = 801,
+            NumeroRetencion = "311",
+            Serie = "001001",
+            TipoIdentificacionProveedor = "RUC",
+            Fecha = DateTime.Today.AddDays(-2),
+            Proveedor = "Servicios Integrales JM",
+            IdentificacionProveedor = "1792233445001",
+            DocumentoSustento = "001-001-000004581",
+            Clave = "0801202601179223344500120010010000003111234567816",
+            NumeroAutorizacion = "0801202601179223344500120010010000003111234567816",
+            Estado = "AUTORIZADO",
+            BaseTotal = 552.18m,
+            TotalRetenido = 44.18m
+        },
+        new()
+        {
+            Sec = 802,
+            NumeroRetencion = "312",
+            Serie = "001001",
+            TipoIdentificacionProveedor = "RUC",
+            Fecha = DateTime.Today.AddDays(-5),
+            Proveedor = "Textiles del Norte S.A.",
+            IdentificacionProveedor = "0991122334001",
+            DocumentoSustento = "001-001-000001204",
+            Clave = "0501202601099112233400120010010000003121234567811",
+            Estado = "PENDIENTE",
+            BaseTotal = 1180.00m,
+            TotalRetenido = 94.40m
+        },
+        new()
+        {
+            Sec = 803,
+            NumeroRetencion = "313",
+            Serie = "001001",
+            TipoIdentificacionProveedor = "RUC",
+            Fecha = DateTime.Today.AddDays(-8),
+            Proveedor = "Consultoría Delta Cía. Ltda.",
+            IdentificacionProveedor = "1795566778001",
+            DocumentoSustento = "001-001-000000982",
+            Clave = "0201202601179556677800120010010000003131234567814",
+            NumeroAutorizacion = "0201202601179556677800120010010000003131234567814",
+            Estado = "AUTORIZADO",
+            BaseTotal = 860.00m,
+            TotalRetenido = 86.00m
+        }
+    ];
+
+    private static RetencionGeneradaDetalleViewDto? CrearDemoDetalleRetencion(int sec)
+    {
+        return sec switch
+        {
+            801 => new RetencionGeneradaDetalleViewDto
+            {
+                NumeroCompleto = "001-001-000000311",
+                DocumentoSustentoVisual = "001-001-000004581",
+                BaseTotal = 552.18m,
+                TotalRetenido = 44.18m,
+                Emisor = CrearDemoEmisorComun(),
+                Proveedor = new Simetric.Models.Proveedor
+                {
+                    nombre = "Servicios Integrales JM",
+                    ruc = "1792233445001",
+                    direccion = "Av. de los Shyris y Portugal, Quito"
+                },
+                TipoIdentificacionProveedor = "RUC",
+                Compra = new Simetric.Models.ComprasFactura
+                {
+                    NumFactura = "000004581",
+                    Subtotal = 492.18m,
+                    Iva = 60.00m,
+                    ValorTotal = 552.18m
+                },
+                RetencionInfo = new Simetric.Models.RetencionInfo
+                {
+                    Sec = 801,
+                    NumRetencion = "311",
+                    Fecha = DateTime.Today.AddDays(-2),
+                    PeriodoFiscal = DateTime.Today.ToString("MM/yyyy"),
+                    IdCliente = "1792233445001",
+                    NumAutorizacion = "0801202601179223344500120010010000003111234567816",
+                    Autorizado = "AUTORIZADO"
+                },
+                Retenciones =
+                [
+                    new() { Tipo = "IVA", CodigoRetencion = "30", Descripcion = "Retención IVA 30%", BaseImponible = 60.00m, PorcentajeRetener = 30m, ValorRetenido = 18.00m },
+                    new() { Tipo = "RENTA", CodigoRetencion = "332", Descripcion = "Servicios profesionales 10%", BaseImponible = 261.80m, PorcentajeRetener = 10m, ValorRetenido = 26.18m }
+                ]
+            },
+            802 => new RetencionGeneradaDetalleViewDto
+            {
+                NumeroCompleto = "001-001-000000312",
+                DocumentoSustentoVisual = "001-001-000001204",
+                BaseTotal = 1180.00m,
+                TotalRetenido = 94.40m,
+                Emisor = CrearDemoEmisorComun(),
+                Proveedor = new Simetric.Models.Proveedor
+                {
+                    nombre = "Textiles del Norte S.A.",
+                    ruc = "0991122334001",
+                    direccion = "Km 5 vía Daule, Guayaquil"
+                },
+                TipoIdentificacionProveedor = "RUC",
+                Compra = new Simetric.Models.ComprasFactura
+                {
+                    NumFactura = "000001204",
+                    Subtotal = 1000.00m,
+                    Iva = 180.00m,
+                    ValorTotal = 1180.00m
+                },
+                RetencionInfo = new Simetric.Models.RetencionInfo
+                {
+                    Sec = 802,
+                    NumRetencion = "312",
+                    Fecha = DateTime.Today.AddDays(-5),
+                    PeriodoFiscal = DateTime.Today.ToString("MM/yyyy"),
+                    IdCliente = "0991122334001",
+                    Autorizado = "PENDIENTE"
+                },
+                Retenciones =
+                [
+                    new() { Tipo = "IVA", CodigoRetencion = "30", Descripcion = "Retención IVA 30%", BaseImponible = 180.00m, PorcentajeRetener = 30m, ValorRetenido = 54.00m },
+                    new() { Tipo = "RENTA", CodigoRetencion = "343", Descripcion = "Compra de bienes 4%", BaseImponible = 1010.00m, PorcentajeRetener = 4m, ValorRetenido = 40.40m }
+                ]
+            },
+            803 => new RetencionGeneradaDetalleViewDto
+            {
+                NumeroCompleto = "001-001-000000313",
+                DocumentoSustentoVisual = "001-001-000000982",
+                BaseTotal = 860.00m,
+                TotalRetenido = 86.00m,
+                Emisor = CrearDemoEmisorComun(),
+                Proveedor = new Simetric.Models.Proveedor
+                {
+                    nombre = "Consultoría Delta Cía. Ltda.",
+                    ruc = "1795566778001",
+                    direccion = "La Carolina, Quito"
+                },
+                TipoIdentificacionProveedor = "RUC",
+                Compra = new Simetric.Models.ComprasFactura
+                {
+                    NumFactura = "000000982",
+                    Subtotal = 860.00m,
+                    Iva = 0m,
+                    ValorTotal = 860.00m
+                },
+                RetencionInfo = new Simetric.Models.RetencionInfo
+                {
+                    Sec = 803,
+                    NumRetencion = "313",
+                    Fecha = DateTime.Today.AddDays(-8),
+                    PeriodoFiscal = DateTime.Today.ToString("MM/yyyy"),
+                    IdCliente = "1795566778001",
+                    NumAutorizacion = "0201202601179556677800120010010000003131234567814",
+                    Autorizado = "AUTORIZADO"
+                },
+                Retenciones =
+                [
+                    new() { Tipo = "RENTA", CodigoRetencion = "332", Descripcion = "Servicios profesionales 10%", BaseImponible = 860.00m, PorcentajeRetener = 10m, ValorRetenido = 86.00m }
+                ]
+            },
+            _ => null
+        };
+    }
+
+    private static Simetric.Models.Emisor CrearDemoEmisorComun() =>
+        new Simetric.Models.Emisor
+        {
+            RazonSocial = "Numerica e-fact Demo",
+            Ruc = "1799999999001",
+            DireccionMatriz = "Av. Principal 123 y Colón, Quito",
+            Direccion = "Av. Principal 123 y Colón, Quito",
+            LlevaContabilidad = "SI",
+            DirEstablecimiento = "Sucursal Matriz"
+        };
+
+    private static string ObtenerDemoXmlRetencion(int sec) =>
+        sec switch
+        {
+            801 => "/comprobantes/generados/RET_0104202607172600000000120010010000000011234567812.xml",
+            802 => "/comprobantes/generados/RET_2303202607111111111111120010010000000441234567819.xml",
+            803 => "/comprobantes/generados/RET_1703202607175558445100120010010000000341234567816.xml",
+            _ => "/comprobantes/generados/RET_0104202607172600000000120010010000000011234567812.xml"
+        };
+
+    private static string ObtenerDemoPdfRetencion(FormatoImpresionDocumento formato) =>
+        formato switch
+        {
+            FormatoImpresionDocumento.A4 => "/reportes_documentos/reporte_documentos_20260508_164759.pdf",
+            FormatoImpresionDocumento.Termica50mm => "/comprobantes/guias_remision/1724328164001_06_001001000000001_ticket_50mm.pdf",
+            FormatoImpresionDocumento.Termica80mm => "/comprobantes/guias_remision/1724328164001_06_001001000000001_ticket_80mm.pdf",
+            _ => "/reportes_documentos/reporte_documentos_20260508_164759.pdf"
+        };
+
+    private void LimpiarTexto() => Filtro = string.Empty;
+
+    private void LimpiarFiltros()
+    {
+        Filtro = string.Empty;
+        FechaDesde = null;
+        FechaHasta = null;
+    }
+
+    private void PaginaAnterior()
+    {
+        if (PaginaActualSegura > 1)
+            paginaActual = PaginaActualSegura - 1;
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (PaginaActualSegura < TotalPaginas)
+            paginaActual = PaginaActualSegura + 1;
+    }
+
+    private void IrAPagina(int pagina)
+    {
+        paginaActual = Math.Clamp(pagina, 1, Math.Max(TotalPaginas, 1));
+    }
+
+    private static bool EstaAutorizada(RetencionGeneradaListDto retencion) =>
+        DocumentoAutorizacionHelper.EstaAutorizado(retencion.Autorizado, retencion.Estado);
+
+    private static string ObtenerEstadoSriTexto(RetencionGeneradaListDto retencion) =>
+        ObtenerEstadoSriTexto(retencion.Autorizado, retencion.Estado);
+
+    private static string ObtenerEstadoSriTexto(string? autorizado, string? estadoSri) =>
+        DocumentoAutorizacionHelper.ObtenerEstadoVisual(
+            estadoSri,
+            DocumentoAutorizacionHelper.EstaAutorizado(autorizado, estadoSri));
+
+    private static string ObtenerNumeroAutorizacionTexto(RetencionGeneradaListDto retencion) =>
+        ObtenerNumeroAutorizacionTexto(retencion.Autorizado, retencion.Estado, retencion.NumeroAutorizacion);
+
+    private static bool EsNoAutorizada(RetencionGeneradaListDto retencion) =>
+        ObtenerEstadoSriTexto(retencion) == DocumentoAutorizacionHelper.EstadoNoAutorizado;
+
+    private static bool EsPendienteSri(RetencionGeneradaListDto retencion)
+    {
+        var estado = ObtenerEstadoSriTexto(retencion);
+        return estado != DocumentoAutorizacionHelper.EstadoAutorizado &&
+            estado != DocumentoAutorizacionHelper.EstadoNoAutorizado;
+    }
+
+    private static string ObtenerErrorSriTexto(RetencionGeneradaListDto retencion)
+    {
+        var mensaje = (retencion.Mensaje ?? string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(mensaje)
+            ? "El SRI no devolvio un detalle de error para esta retencion."
+            : mensaje;
+    }
+
+    private static string ObtenerNumeroAutorizacionTexto(
+        string? autorizado,
+        string? estadoSri,
+        string? numeroAutorizacion) =>
+        DocumentoAutorizacionHelper.ObtenerNumeroAutorizacionVisual(
+            estadoSri,
+            DocumentoAutorizacionHelper.EstaAutorizado(autorizado, estadoSri),
+            numeroAutorizacion);
+
+    private static (string Nombres, string Apellidos) ObtenerProveedorLineas(string? proveedor)
+    {
+        var texto = NormalizarEspacios(proveedor);
+        if (string.IsNullOrWhiteSpace(texto))
+            return ("Sin proveedor", string.Empty);
+
+        var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (partes.Length <= 2)
+            return (texto, string.Empty);
+
+        var nombres = string.Join(' ', partes.Take(2));
+        var apellidos = string.Join(' ', partes.Skip(2));
+        return (nombres, apellidos);
+    }
+
+    private static (string Primera, string Segunda) PartirTextoEnDos(string? valor)
+    {
+        var texto = NormalizarEspacios(valor);
+        if (string.IsNullOrWhiteSpace(texto))
+            return ("No disponible", string.Empty);
+
+        var mitad = (int)Math.Ceiling(texto.Length / 2m);
+        var espacioCercano = texto.IndexOf(' ', mitad);
+        if (espacioCercano > 0 && espacioCercano - mitad <= 8)
+            mitad = espacioCercano + 1;
+
+        return (
+            texto[..Math.Min(mitad, texto.Length)].Trim(),
+            mitad >= texto.Length ? string.Empty : texto[mitad..].Trim());
+    }
+
+    private static string NormalizarEspacios(string? valor) =>
+        string.Join(' ', (valor ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    private static string ObtenerEstadoSriClase(RetencionGeneradaListDto retencion)
+    {
+        var estado = ObtenerEstadoSriTexto(retencion);
+
+        return estado == DocumentoAutorizacionHelper.EstadoAutorizado
+            ? "status-pill-success"
+            : estado == DocumentoAutorizacionHelper.EstadoNoAutorizado
+                ? "status-pill-danger"
+                : "status-pill-info";
+    }
+
+}

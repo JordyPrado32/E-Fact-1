@@ -1,0 +1,1777 @@
+@page "/e-contax/administracion/roles"
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Globalization
+@using System.Security.Claims
+@using System.Text.Json
+@using Simetric.Models.EContax
+@using Simetric.Services
+@using Simetric.Services.EContax
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject EContaxAdministracionService AdministracionService
+@inject MenuStateService MenuStateService
+@rendermode InteractiveServer
+
+@{
+    var rolesVisibles = RolesFiltrados.ToList();
+    var modulosPadre = GetMenusPadre();
+    var itemsMenu = listaMaestraMenus.Count;
+    var permisosSeleccionados = listaMaestraMenus.Count(item => item.IsSelected);
+}
+
+<PageTitle>Roles y permisos | Numerica E-Contax</PageTitle>
+
+<div class="security-shell">
+    <section class="security-hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Control de accesos</span>
+            <h2>Panel de seguridad</h2>
+        </div>
+
+        <div class="hero-actions">
+            <button type="button" class="secondary-btn secondary-btn-accent" @onclick="CargarDatos">
+                <i class="ri-refresh-line"></i>
+                <span>Refrescar</span>
+            </button>
+
+            <button type="button" class="secondary-btn secondary-btn-accent" @onclick="AbrirModalMenu">
+                <i class="ri-list-settings-line"></i>
+                <span>Nuevo menu</span>
+            </button>
+
+            <button type="button" class="secondary-btn secondary-btn-accent" @onclick="AbrirModalOrdenar">
+                <i class="ri-drag-drop-line"></i>
+                <span>Ordenar menus</span>
+            </button>
+
+            <button type="button" class="primary-btn" @onclick="AbrirModalNuevo">
+                <i class="ri-add-circle-line"></i>
+                <span>Nuevo perfil</span>
+            </button>
+
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Perfiles registrados</span>
+                <strong>@roles.Count</strong>
+                <small>Roles disponibles para asignar matrices de acceso.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Modulos principales</span>
+                <strong>@modulosPadre.Count</strong>
+                <small>Estructura padre del arbol de navegacion.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Items de menu</span>
+                <strong>@itemsMenu</strong>
+                <small>Items configurados dentro del sistema.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Permisos seleccionados</span>
+                <strong>@permisosSeleccionados</strong>
+                <small>@(rolSeleccionado is null ? "Seleccione un perfil para comenzar." : $"Asignacion actual de {rolSeleccionado.NombreRol}.")</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="security-grid">
+        <aside class="roles-panel">
+            <div class="panel-head">
+                <div>
+                    <span class="panel-kicker">Perfiles disponibles</span>
+                    <h3>Roles de acceso</h3>
+                </div>
+                <span class="panel-badge">@rolesVisibles.Count</span>
+            </div>
+
+            @if (isLoading)
+            {
+                <div class="state-card state-card-compact">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando perfiles</h3>
+                    <p>Recuperando los roles configurados en E-Contax.</p>
+                </div>
+            }
+            else if (!string.IsNullOrWhiteSpace(pageErrorMessage))
+            {
+                <div class="state-card state-card-compact state-card-error">
+                    <div class="state-icon">
+                        <i class="ri-error-warning-line"></i>
+                    </div>
+                    <h3>No se pudo cargar</h3>
+                    <p>@pageErrorMessage</p>
+                </div>
+            }
+            else if (!rolesVisibles.Any())
+            {
+                <div class="state-card state-card-compact state-card-empty">
+                    <div class="state-icon">
+                        <i class="ri-shield-user-line"></i>
+                    </div>
+                    <h3>Sin perfiles visibles</h3>
+                    <p>Cree el primer perfil de E-Contax para asignar permisos.</p>
+                </div>
+            }
+            else
+            {
+                <div class="roles-list">
+                    @foreach (var roleEntry in rolesVisibles.Select((role, index) => new { Role = role, Index = index }))
+                    {
+                        var r = roleEntry.Role;
+                        <article class="role-card @(rolSeleccionado?.IdRol == r.IdRol ? "role-card-active" : string.Empty)"
+                                 @key="r.IdRol"
+                                 @onclick="() => SeleccionarRol(r)">
+                            <div class="role-menu-wrap" @onclick:stopPropagation="true">
+                                <button type="button"
+                                        class="role-menu-trigger"
+                                        title="Mas opciones"
+                                        @onclick="() => ToggleRolMenu(r.IdRol)">
+                                    <i class="ri-more-2-fill"></i>
+                                </button>
+
+                                @if (rolMenuAbiertoId == r.IdRol)
+                                {
+                                    <div class="role-menu-dropdown" @onclick:stopPropagation="true">
+                                        @if (r.EstadoRol == 1)
+                                        {
+                                            <button type="button"
+                                                    class="role-menu-item role-menu-item-danger"
+                                                    @onclick="() => EliminarRolDesdeMenu(r)">
+                                                <i class="ri-delete-bin-line"></i>
+                                                <span>Eliminar</span>
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button"
+                                                    class="role-menu-item"
+                                                    @onclick="() => ReactivarRolDesdeMenu(r)">
+                                                <i class="ri-refresh-line"></i>
+                                                <span>Reactivar</span>
+                                            </button>
+                                        }
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="role-copy">
+                                <strong>@r.NombreRol</strong>
+                                <span>@(r.EstadoRol == 1 ? "Perfil activo" : "Perfil inactivo")</span>
+                            </div>
+
+                            <div class="role-actions" @onclick:stopPropagation="true">
+                                <span class="role-status @(r.EstadoRol == 1 ? "role-status-active" : "role-status-muted")">
+                                    @(r.EstadoRol == 1 ? "Activo" : "Inactivo")
+                                </span>
+                                <button type="button"
+                                        class="secondary-btn secondary-btn-quiet role-select-btn"
+                                        title="Seleccionar perfil"
+                                        @onclick="() => SeleccionarRol(r)">
+                                    <i class="ri-check-line"></i>
+                                    <span>Seleccionar</span>
+                                </button>
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        </aside>
+
+        <section class="permissions-panel">
+            @if (rolSeleccionado is null)
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="ri-key-2-line"></i>
+                    </div>
+                    <h3>Seleccione un perfil</h3>
+                    <p>Elija un rol desde la columna izquierda para administrar su matriz de accesos.</p>
+                </div>
+            }
+            else
+            {
+                <div class="panel-head panel-head-spread">
+                    <div>
+                        <span class="panel-kicker">Matriz de permisos</span>
+                        <h3>@rolSeleccionado.NombreRol</h3>
+                        <p>Seleccione modulos completos o items individuales para este perfil.</p>
+                    </div>
+                    <div class="panel-actions">
+                        <button type="button"
+                                class="primary-btn"
+                                @onclick="GuardarAccesos"
+                                disabled="@(guardandoAccesos || rolSeleccionado.EstadoRol != 1)">
+                            @if (guardandoAccesos)
+                            {
+                                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                <span>Guardando...</span>
+                            }
+                            else
+                            {
+                                <i class="ri-save-3-line"></i>
+                                <span>Guardar cambios</span>
+                            }
+                        </button>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(mensajeEstado))
+                {
+                    <div class="status-banner status-banner-success">
+                        <i class="ri-checkbox-circle-line"></i>
+                        <span>@mensajeEstado</span>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(errorEstado))
+                {
+                    <div class="status-banner status-banner-error">
+                        <i class="ri-error-warning-line"></i>
+                        <span>@errorEstado</span>
+                    </div>
+                }
+
+                @if (!modulosPadre.Any())
+                {
+                    <div class="state-card state-card-empty">
+                        <div class="state-icon">
+                            <i class="ri-list-check-3"></i>
+                        </div>
+                        <h3>No hay modulos configurados</h3>
+                        <p>Agregue un item maestro para construir la jerarquia de accesos.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="modules-list">
+                        @foreach (var moduloEntry in modulosPadre.OrderBy(m => m.OrdenMenu ?? 9999).ThenBy(m => m.IdMenu).Select((menu, index) => new { Menu = menu, Index = index }))
+                        {
+                            var padre = moduloEntry.Menu;
+                            var hijos = GetMenusHijo(padre.IdMenu);
+                            var esModuloProtegido = EsMenuProtegido(padre);
+                            <article class="module-card">
+                                <header class="module-head">
+                                    <label class="module-selection">
+                                        <input type="checkbox"
+                                               class="permission-check"
+                                               checked="@padre.IsSelected"
+                                               disabled="@(rolSeleccionado.EstadoRol != 1)"
+                                               @onchange="(e) => ToggleGrupo(padre, e)" />
+                                        <span class="module-copy">
+                                            <span class="module-kicker">Modulo principal</span>
+                                            <span class="module-title">
+                                                <i class="@ResolveIcono(padre.IconoMenu)"></i>
+                                                @padre.NombreMenu
+                                            </span>
+                                            <span class="module-meta">
+                                                <span class="module-badge">@hijos.Count items</span>
+                                                @if (esModuloProtegido)
+                                                {
+                                                    <span class="route-chip route-chip-protected">
+                                                        <i class="ri-lock-line"></i>
+                                                        <span>Estatico</span>
+                                                    </span>
+                                                }
+                                            </span>
+                                        </span>
+                                    </label>
+
+                                    <div class="module-actions">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view" title="Ver detalle" @onclick="() => VerDetalleMenu(padre)">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            @if (!esModuloProtegido)
+                                            {
+                                                <button type="button" class="action-btn action-edit" title="Editar modulo" @onclick="() => EditarMenuMaestro(padre)">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </button>
+                                                <button type="button" class="action-btn action-delete" title="Eliminar modulo" @onclick="() => EliminarMenuMaestro(padre.IdMenu)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            }
+                                            else
+                                            {
+                                                <span class="protected-flag" title="@ObtenerMensajeProteccion(padre)">
+                                                    <i class="ri-shield-keyhole-line"></i>
+                                                    <span>Protegido</span>
+                                                </span>
+                                            }
+                                        </div>
+                                    </div>
+                                </header>
+
+                                @if (hijos.Any())
+                                {
+                                    <div class="module-children">
+                                        @foreach (var hijo in hijos)
+                                        {
+                                            var esItemProtegido = EsMenuProtegido(hijo);
+                                            <div class="child-row">
+                                                <label class="child-main">
+                                                    <input type="checkbox"
+                                                           class="permission-check"
+                                                           disabled="@(rolSeleccionado.EstadoRol != 1)"
+                                                           @bind="hijo.IsSelected" />
+                                                    <span class="child-copy">
+                                                        <strong>
+                                                            <i class="@ResolveIcono(hijo.IconoMenu)"></i>
+                                                            @hijo.NombreMenu
+                                                        </strong>
+                                                    </span>
+                                                </label>
+                                                <div class="child-actions">
+                                                    <div class="action-group">
+                                                        <button type="button" class="action-btn action-view" title="Ver detalle" @onclick="() => VerDetalleMenu(hijo)">
+                                                            <i class="bi bi-eye"></i>
+                                                        </button>
+                                                        @if (!esItemProtegido)
+                                                        {
+                                                            <button type="button" class="action-btn action-edit" title="Editar item" @onclick="() => EditarMenuMaestro(hijo)">
+                                                                <i class="bi bi-pencil-square"></i>
+                                                            </button>
+                                                            <button type="button" class="action-btn action-delete" title="Eliminar item" @onclick="() => EliminarMenuMaestro(hijo.IdMenu)">
+                                                                <i class="bi bi-trash"></i>
+                                                            </button>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="protected-flag" title="@ObtenerMensajeProteccion(hijo)">
+                                                                <i class="ri-shield-keyhole-line"></i>
+                                                                <span>Protegido</span>
+                                                            </span>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="module-empty">
+                                        <i class="ri-information-line"></i>
+                                        <span>Este modulo aun no tiene items hijos.</span>
+                                    </div>
+                                }
+                            </article>
+                        }
+                    </div>
+                }
+            }
+        </section>
+    </section>
+</div>
+
+@if (showModal)
+{
+    <div class="roles-modal-backdrop"></div>
+    <div class="roles-modal" role="dialog" aria-modal="true" aria-labelledby="rolModalTitle">
+        <div class="roles-modal-content">
+            <header class="roles-modal-header @(isReadOnly ? "is-readonly" : "is-editable")">
+                <div>
+                    <span class="modal-kicker">Perfil E-Contax</span>
+                    <h3 id="rolModalTitle">@(isReadOnly ? "Vista de detalle" : (EsNuevoRegistro ? "Nuevo perfil" : "Perfil"))</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarModal" disabled="@isSaving" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </header>
+
+            <div class="roles-modal-body">
+                @if (!string.IsNullOrWhiteSpace(errorMessage))
+                {
+                    <div class="roles-alert">
+                        <i class="ri-error-warning-line"></i>
+                        <span>@errorMessage</span>
+                    </div>
+                }
+
+                <div class="roles-form-grid">
+                    @if (!EsNuevoRegistro)
+                    {
+                        <label class="roles-field roles-field-short">
+                            <span>ID rol</span>
+                            <input class="roles-input" value="@temp.IdRol" readonly />
+                        </label>
+                    }
+
+                    <label class="roles-field @(EsNuevoRegistro ? "roles-field-full" : string.Empty)">
+                        <span>Nombre rol</span>
+                        <input type="text"
+                               value="@temp.NombreRol"
+                               @oninput="OnNombreChanged"
+                               class="@GetInputClass(nameof(temp.NombreRol))"
+                               readonly="@isReadOnly"
+                               maxlength="200" />
+                        @if (errors.ContainsKey(nameof(temp.NombreRol)))
+                        {
+                            <small>@errors[nameof(temp.NombreRol)]</small>
+                        }
+                    </label>
+
+                </div>
+            </div>
+
+            <footer class="roles-modal-footer">
+                <button type="button" class="secondary-btn" @onclick="CerrarModal" disabled="@isSaving">Cerrar</button>
+                @if (!isReadOnly)
+                {
+                    <button type="button" class="primary-btn" @onclick="Guardar" disabled="@isSaving">
+                        @if (isSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm"></span>
+                            <span>Procesando...</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-save"></i>
+                            <span>@(EsNuevoRegistro ? "Crear perfil" : "Guardar cambios")</span>
+                        }
+                    </button>
+                }
+            </footer>
+        </div>
+    </div>
+}
+
+@if (showModalMenu)
+{
+    <div class="roles-modal-backdrop"></div>
+    <div class="roles-modal" role="dialog" aria-modal="true" aria-labelledby="menuModalTitle">
+        <div class="roles-modal-content roles-modal-lg">
+            <header class="roles-modal-header is-editable">
+                <div>
+                    <span class="modal-kicker">Configuracion de menu</span>
+                    <h3 id="menuModalTitle">@(menuModel.IdMenu == 0 ? "Crear nuevo item" : "Editar item de menu")</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarModalMenu" disabled="@isSavingMenu" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </header>
+
+            <div class="roles-modal-body">
+                <div class="roles-form-grid menu-form-grid">
+                    <label class="roles-field roles-field-full">
+                        <span>Tipo de item o ubicacion</span>
+                        <select class="@GetMenuInputClass(MenuPadreField)" @bind="MenuPadreSeleccionado" disabled="@isSavingMenu">
+                            <option value="0">Es un modulo principal</option>
+                            @foreach (var p in GetMenusPadre().Where(m => m.IdMenu != menuModel.IdMenu).OrderBy(m => m.NombreMenu))
+                            {
+                                <option value="@p.IdMenu">Hijo de: @p.NombreMenu</option>
+                            }
+                        </select>
+                        @if (menuErrors.ContainsKey(MenuPadreField))
+                        {
+                            <small>@menuErrors[MenuPadreField]</small>
+                        }
+                    </label>
+
+                    <label class="roles-field">
+                        <span>Nombre visible</span>
+                        <input type="text"
+                               @bind="menuModel.NombreMenu"
+                               @bind:event="oninput"
+                               class="@GetMenuInputClass(MenuNombreField)"
+                               maxlength="200"
+                               disabled="@isSavingMenu"
+                               placeholder="Ej: Facturacion" />
+                        @if (menuErrors.ContainsKey(MenuNombreField))
+                        {
+                            <small>@menuErrors[MenuNombreField]</small>
+                        }
+                    </label>
+
+                    <label class="roles-field">
+                        <span>Icono</span>
+                        <div class="icon-input-wrap">
+                            <span class="icon-preview">
+                                <i class="@ResolveIcono(menuModel.IconoMenu)"></i>
+                            </span>
+                            <input type="text"
+                                   @bind="menuModel.IconoMenu"
+                                   @bind:event="oninput"
+                                   class="@GetMenuInputClass(MenuIconoField)"
+                                   maxlength="50"
+                                   disabled="@isSavingMenu"
+                                   placeholder="ri-home-4-line" />
+                        </div>
+                        @if (menuErrors.ContainsKey(MenuIconoField))
+                        {
+                            <small>@menuErrors[MenuIconoField]</small>
+                        }
+                    </label>
+
+                    <label class="roles-field roles-field-full">
+                        <span>Ruta de navegacion</span>
+                        <input type="text"
+                               @bind="menuModel.UrlMenu"
+                               @bind:event="oninput"
+                               class="@GetMenuInputClass(MenuRutaField)"
+                               maxlength="200"
+                               disabled="@isSavingMenu"
+                               placeholder="/e-contax/..." />
+                        <span class="field-help">En items hijos la ruta es obligatoria; en modulos principales puede quedar vacia.</span>
+                        @if (menuErrors.ContainsKey(MenuRutaField))
+                        {
+                            <small>@menuErrors[MenuRutaField]</small>
+                        }
+                    </label>
+
+                    <div class="form-note">
+                        <i class="ri-information-line"></i>
+                        <span>Use clases de RemixIcon para mantener el mismo estilo del menu lateral.</span>
+                    </div>
+
+                    <div class="roles-field roles-field-full">
+                        <a href="https://remixicon.com/" target="_blank" rel="noreferrer" class="catalog-link">
+                            Ver catalogo de iconos Remixicon
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <footer class="roles-modal-footer">
+                <button type="button" class="secondary-btn" @onclick="CerrarModalMenu" disabled="@isSavingMenu">Cerrar</button>
+                <button type="button" class="primary-btn" @onclick="GuardarMenuMaestro" disabled="@isSavingMenu">
+                    @if (isSavingMenu)
+                    {
+                        <span class="spinner-border spinner-border-sm"></span>
+                        <span>Procesando...</span>
+                    }
+                    else
+                    {
+                        <i class="@(menuModel.IdMenu == 0 ? "ri-add-line" : "ri-save-3-line")"></i>
+                        <span>@(menuModel.IdMenu == 0 ? "Crear item" : "Guardar cambios")</span>
+                    }
+                </button>
+            </footer>
+        </div>
+    </div>
+}
+
+@if (showModalMenuDetail && menuDetalle is not null)
+{
+    <div class="roles-modal-backdrop"></div>
+    <div class="roles-modal" role="dialog" aria-modal="true" aria-labelledby="menuDetailTitle">
+        <div class="roles-modal-content roles-modal-sm">
+            <header class="roles-modal-header is-readonly">
+                <div>
+                    <span class="modal-kicker">Vista de detalle</span>
+                    <h3 id="menuDetailTitle">Detalle del item</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarDetalleMenu" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </header>
+
+            <div class="roles-modal-body">
+                <div class="detail-grid">
+                    <div class="detail-block">
+                        <span>Tipo de item</span>
+                        <strong>@GetTipoMenu(menuDetalle)</strong>
+                    </div>
+
+                    <div class="detail-block detail-block-wide">
+                        <span>Nombre visible</span>
+                        <strong>@menuDetalle.NombreMenu</strong>
+                    </div>
+
+                    <div class="detail-block">
+                        <span>Icono</span>
+                        <strong><i class="@ResolveIcono(menuDetalle.IconoMenu)"></i> @ResolveIcono(menuDetalle.IconoMenu)</strong>
+                    </div>
+
+                    <div class="detail-block">
+                        <span>Padre</span>
+                        <strong>@GetPadreMenu(menuDetalle)</strong>
+                    </div>
+
+                    <div class="detail-block detail-block-wide">
+                        <span>Ruta</span>
+                        <strong>@GetRutaTexto(menuDetalle)</strong>
+                    </div>
+
+                </div>
+            </div>
+
+            <footer class="roles-modal-footer">
+                <button type="button" class="secondary-btn" @onclick="CerrarDetalleMenu">Cerrar</button>
+            </footer>
+        </div>
+    </div>
+}
+
+@if (showModalOrder)
+{
+    <div class="roles-modal-backdrop"></div>
+    <div class="roles-modal" role="dialog" aria-modal="true" aria-labelledby="orderModalTitle">
+        <div class="roles-modal-content roles-modal-lg animate__animated animate__fadeInDown">
+            <header class="roles-modal-header is-editable">
+                <div>
+                    <span class="modal-kicker">Navegación del Portal</span>
+                    <h3 id="orderModalTitle">Ordenar menú de servicios</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarModalOrder" disabled="@isSavingOrder" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </header>
+
+            <div class="roles-modal-body">
+                <p class="order-desc">Arrastra los elementos o utiliza las flechas para ordenar los menús tal como quieres que aparezcan en el panel lateral.</p>
+
+                <div class="order-grid">
+                    <!-- Columna Módulos Principales -->
+                    <div class="order-column">
+                        <div class="column-header">
+                            <h4>Módulos Principales</h4>
+                            <span class="badge-count">@parentMenusParaOrden.Count</span>
+                        </div>
+                        
+                        <div class="order-list">
+                            @foreach (var parent in parentMenusParaOrden.Select((item, index) => new { Item = item, Index = index }))
+                            {
+                                var item = parent.Item;
+                                var idx = parent.Index;
+                                <div class="order-item @(dragItem == item ? "is-dragging" : "")"
+                                     draggable="true"
+                                     @ondragstart="() => HandleDragStart(item)"
+                                     @ondragover:preventDefault
+                                     @ondragover="() => HandleDragOver(item)"
+                                     @ondrop="() => HandleDrop(item, true)"
+                                     @key="@($"parent:{item.IdMenu}")">
+                                    <div class="item-drag-handle">
+                                        <i class="ri-drag-move-fill"></i>
+                                    </div>
+                                    <div class="item-icon">
+                                        <i class="@ResolveIcono(item.IconoMenu)"></i>
+                                    </div>
+                                    <span class="item-name">@item.NombreMenu</span>
+                                    <div class="item-actions">
+                                        <button type="button" class="order-action-btn" title="Subir" 
+                                                disabled="@(idx == 0)"
+                                                @onclick="() => MoverItem(parentMenusParaOrden, item, -1)">
+                                            <i class="ri-arrow-up-line"></i>
+                                        </button>
+                                        <button type="button" class="order-action-btn" title="Bajar" 
+                                                disabled="@(idx == parentMenusParaOrden.Count - 1)"
+                                                @onclick="() => MoverItem(parentMenusParaOrden, item, 1)">
+                                            <i class="ri-arrow-down-line"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Columna Items Hijos -->
+                    <div class="order-column">
+                        <div class="column-header column-header-split">
+                            <h4>Submenús de:</h4>
+                            <select class="roles-input select-parent-order" @bind="SelectedParentIdForChildOrder">
+                                @foreach (var parent in parentMenusParaOrden)
+                                {
+                                    <option value="@parent.IdMenu">@parent.NombreMenu</option>
+                                }
+                            </select>
+                        </div>
+
+                        <div class="order-list">
+                            @if (!childMenusParaOrden.Any())
+                            {
+                                <div class="empty-order-state">
+                                    <i class="ri-information-line"></i>
+                                    <span>Este módulo no tiene submenús.</span>
+                                </div>
+                            }
+                            else
+                            {
+                                @foreach (var child in childMenusParaOrden.Select((item, index) => new { Item = item, Index = index }))
+                                {
+                                    var item = child.Item;
+                                    var idx = child.Index;
+                                    <div class="order-item @(dragItem == item ? "is-dragging" : "")"
+                                         draggable="true"
+                                         @ondragstart="() => HandleDragStart(item)"
+                                         @ondragover:preventDefault
+                                         @ondragover="() => HandleDragOver(item)"
+                                         @ondrop="() => HandleDrop(item, false)"
+                                         @key="@($"child:{item.IdMenu}")">
+                                        <div class="item-drag-handle">
+                                            <i class="ri-drag-move-fill"></i>
+                                        </div>
+                                        <div class="item-icon">
+                                            <i class="@ResolveIcono(item.IconoMenu)"></i>
+                                        </div>
+                                        <span class="item-name">@item.NombreMenu</span>
+                                        <div class="item-actions">
+                                            <button type="button" class="order-action-btn" title="Subir" 
+                                                    disabled="@(idx == 0)"
+                                                    @onclick="() => MoverItem(childMenusParaOrden, item, -1)">
+                                                <i class="ri-arrow-up-line"></i>
+                                            </button>
+                                            <button type="button" class="order-action-btn" title="Bajar" 
+                                                    disabled="@(idx == childMenusParaOrden.Count - 1)"
+                                                    @onclick="() => MoverItem(childMenusParaOrden, item, 1)">
+                                                <i class="ri-arrow-down-line"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <footer class="roles-modal-footer">
+                <button type="button" class="secondary-btn" @onclick="CerrarModalOrder" disabled="@isSavingOrder">Cancelar</button>
+                <button type="button" class="primary-btn" @onclick="GuardarOrdenMenus" disabled="@isSavingOrder">
+                    @if (isSavingOrder)
+                    {
+                        <span class="spinner-border spinner-border-sm"></span>
+                        <span>Guardando orden...</span>
+                    }
+                    else
+                    {
+                        <i class="ri-save-3-line"></i>
+                        <span>Guardar orden</span>
+                    }
+                </button>
+            </footer>
+        </div>
+    </div>
+}
+
+
+@code {
+    private const string MenuPadreField = "IdPadre";
+    private const string MenuNombreField = nameof(EContaxMenu.NombreMenu);
+    private const string MenuIconoField = nameof(EContaxMenu.IconoMenu);
+    private const string MenuRutaField = nameof(EContaxMenu.UrlMenu);
+
+    private List<EContaxRol> roles = new();
+    private List<EContaxMenu> listaMaestraMenus = new();
+    private EContaxRol temp = new();
+    private EContaxRol? rolSeleccionado;
+    private EContaxMenu menuModel = new();
+    private EContaxMenu? menuDetalle;
+    private readonly Dictionary<string, string> errors = new();
+    private readonly Dictionary<string, string> menuErrors = new();
+    private bool isLoading = true;
+    private bool showModal;
+    private bool showModalMenu;
+    private bool showModalMenuDetail;
+    private bool showModalOrder;
+    private bool isReadOnly;
+    private bool isSaving;
+    private bool isSavingMenu;
+    private bool isSavingOrder;
+    private bool guardandoAccesos;
+    private string? pageErrorMessage;
+    private string? errorMessage;
+    private string? mensajeEstado;
+    private string? errorEstado;
+    private int currentUserId;
+    private int? rolMenuAbiertoId;
+
+    private List<EContaxMenu> parentMenusParaOrden = new();
+    private List<EContaxMenu> childMenusParaOrden = new();
+    private int selectedParentIdForChildOrder;
+    private EContaxMenu? dragItem;
+
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (!await ValidarAccesoEContaxAsync(authState.User))
+        {
+            isLoading = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        await CargarDatos();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private bool EsNuevoRegistro => temp.IdRol == 0;
+
+    private int MenuPadreSeleccionado
+    {
+        get => menuModel.IdPadre ?? 0;
+        set => menuModel.IdPadre = value <= 0 ? null : value;
+    }
+
+    private int SelectedParentIdForChildOrder
+    {
+        get => selectedParentIdForChildOrder;
+        set
+        {
+            if (selectedParentIdForChildOrder != value)
+            {
+                ActualizarLocalDeHijos();
+                selectedParentIdForChildOrder = value;
+                CargarHijosParaOrden();
+            }
+        }
+    }
+
+
+    private IEnumerable<EContaxRol> RolesFiltrados
+    {
+        get
+        {
+            var query = roles.AsEnumerable();
+
+            return query
+                .OrderByDescending(item => item.EstadoRol == 1)
+                .ThenBy(item => item.NombreRol ?? string.Empty)
+                .ThenBy(item => item.IdRol);
+        }
+    }
+
+    private async Task CargarDatos()
+    {
+        isLoading = true;
+        pageErrorMessage = null;
+
+        if (currentUserId <= 0)
+        {
+            roles = new List<EContaxRol>();
+            listaMaestraMenus = new List<EContaxMenu>();
+            rolSeleccionado = null;
+            pageErrorMessage = "No se pudo identificar el usuario actual.";
+            isLoading = false;
+            return;
+        }
+
+        var idSeleccionado = rolSeleccionado?.IdRol;
+
+        try
+        {
+            roles = await AdministracionService.GetEContaxRolesAsync(includeInactivos: true);
+            listaMaestraMenus = await AdministracionService.GetEContaxMenusAsync();
+
+            var rolActual = idSeleccionado.HasValue
+                ? roles.FirstOrDefault(item => item.IdRol == idSeleccionado.Value)
+                : null;
+
+            rolActual ??= RolesFiltrados.FirstOrDefault();
+
+            if (rolActual is not null)
+            {
+                await SeleccionarRol(rolActual);
+            }
+            else
+            {
+                rolSeleccionado = null;
+                LimpiarSeleccionMenus();
+            }
+        }
+        catch (Exception ex)
+        {
+            roles = new List<EContaxRol>();
+            listaMaestraMenus = new List<EContaxMenu>();
+            rolSeleccionado = null;
+            pageErrorMessage = $"Error al cargar roles de E-Contax: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private List<EContaxMenu> GetMenusPadre() =>
+        listaMaestraMenus
+            .Where(item => !item.IdPadre.HasValue || item.IdPadre == 0)
+            .OrderBy(item => item.OrdenMenu ?? 9999)
+            .ThenBy(item => item.IdMenu)
+            .ToList();
+
+    private List<EContaxMenu> GetMenusHijo(int idPadre) =>
+        listaMaestraMenus
+            .Where(item => item.IdPadre == idPadre)
+            .OrderBy(item => item.OrdenMenu ?? 9999)
+            .ThenBy(item => item.IdMenu)
+            .ToList();
+
+
+    private static string ResolveIcono(string? icono) =>
+        string.IsNullOrWhiteSpace(icono) ? "ri-checkbox-blank-circle-line" : icono.Trim();
+
+    private static string GetRutaTexto(EContaxMenu menu) =>
+        string.IsNullOrWhiteSpace(menu.UrlMenu) ? "Contenedor sin ruta" : menu.UrlMenu.Trim();
+
+    private string GetTipoMenu(EContaxMenu menu) =>
+        !menu.IdPadre.HasValue || menu.IdPadre == 0 ? "Modulo principal" : "Item hijo";
+
+    private string GetPadreMenu(EContaxMenu menu)
+    {
+        if (!menu.IdPadre.HasValue || menu.IdPadre == 0)
+        {
+            return "Sin padre";
+        }
+
+        return listaMaestraMenus.FirstOrDefault(item => item.IdMenu == menu.IdPadre)?.NombreMenu ?? "No encontrado";
+    }
+
+    private async Task SeleccionarRol(EContaxRol rol)
+    {
+        LimpiarEstadoOperacion();
+        rolSeleccionado = rol;
+        LimpiarSeleccionMenus();
+
+        if (rol.IdRol <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var menusAsignados = await AdministracionService.GetEContaxMenusByRolIdAsync(rol.IdRol);
+            var idsAsignados = menusAsignados.Select(item => item.IdMenu).ToHashSet();
+
+            foreach (var item in listaMaestraMenus)
+            {
+                item.IsSelected = idsAsignados.Contains(item.IdMenu);
+            }
+        }
+        catch (Exception ex)
+        {
+            errorEstado = $"No se pudo cargar la matriz de permisos. {ex.Message}";
+        }
+    }
+
+    private void LimpiarSeleccionMenus()
+    {
+        foreach (var item in listaMaestraMenus)
+        {
+            item.IsSelected = false;
+        }
+    }
+
+    private void ToggleGrupo(EContaxMenu padre, ChangeEventArgs e)
+    {
+        var valor = ParseCheckboxValue(e.Value);
+        padre.IsSelected = valor;
+
+        foreach (var hijo in listaMaestraMenus.Where(item => item.IdPadre == padre.IdMenu))
+        {
+            hijo.IsSelected = valor;
+        }
+    }
+
+    private async Task GuardarAccesos()
+    {
+        if (rolSeleccionado is null)
+        {
+            return;
+        }
+
+        guardandoAccesos = true;
+        LimpiarEstadoOperacion();
+
+        var rolActual = rolSeleccionado;
+        var idsSeleccionados = listaMaestraMenus
+            .Where(item => item.IsSelected)
+            .Select(item => item.IdMenu)
+            .Distinct()
+            .ToList();
+
+        try
+        {
+            if (await AdministracionService.AsignarEContaxMenusARolAsync(rolActual.IdRol, idsSeleccionados))
+            {
+                await SeleccionarRol(rolActual);
+                mensajeEstado = "Roles y permisos actualizados correctamente.";
+                MenuStateService.NotifyMenuChanged();
+            }
+            else
+            {
+                errorEstado = "No se pudieron actualizar los permisos del rol seleccionado.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorEstado = $"Ocurrio un error al guardar los permisos. {ex.Message}";
+        }
+        finally
+        {
+            guardandoAccesos = false;
+        }
+    }
+
+    private void AbrirModalNuevo() => AbrirModal();
+
+    private void ToggleRolMenu(int idRol)
+    {
+        rolMenuAbiertoId = rolMenuAbiertoId == idRol ? null : idRol;
+    }
+
+    private async Task EliminarRolDesdeMenu(EContaxRol item)
+    {
+        rolMenuAbiertoId = null;
+        await ConfirmarEliminar(item);
+    }
+
+    private async Task ReactivarRolDesdeMenu(EContaxRol item)
+    {
+        rolMenuAbiertoId = null;
+        await ReactivarRol(item);
+    }
+
+    private void AbrirModal(EContaxRol? item = null)
+    {
+        isReadOnly = false;
+        isSaving = false;
+        errorMessage = null;
+        errors.Clear();
+
+        temp = item is null
+            ? new EContaxRol { NombreRol = string.Empty, PermisoRol = null, EstadoRol = 1 }
+            : ClonarRol(item);
+
+        showModal = true;
+    }
+
+    private void VerDetalle(EContaxRol item)
+    {
+        AbrirModal(item);
+        isReadOnly = true;
+    }
+
+    private void CerrarModal()
+    {
+        if (isSaving)
+        {
+            return;
+        }
+
+        CerrarModalRolInterno();
+    }
+
+    private void CerrarModalRolInterno()
+    {
+        showModal = false;
+        isReadOnly = false;
+        errorMessage = null;
+        errors.Clear();
+    }
+
+    private void OnNombreChanged(ChangeEventArgs e)
+    {
+        temp.NombreRol = LimitarTexto(e.Value?.ToString(), 200);
+        ValidarNombre();
+    }
+
+    private string GetInputClass(string field) =>
+        errors.ContainsKey(field) ? "roles-input input-error" : "roles-input";
+
+    private string GetMenuInputClass(string field) =>
+        menuErrors.ContainsKey(field) ? "roles-input input-error" : "roles-input";
+
+    private bool ValidarFormulario()
+    {
+        errors.Clear();
+        ValidarNombre();
+        return errors.Count == 0;
+    }
+
+    private void ValidarNombre()
+    {
+        errors.Remove(nameof(temp.NombreRol));
+        var nombre = (temp.NombreRol ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(nombre))
+        {
+            errors[nameof(temp.NombreRol)] = "El nombre del rol es obligatorio.";
+        }
+        else if (nombre.Length is < 3 or > 200)
+        {
+            errors[nameof(temp.NombreRol)] = "El nombre debe tener entre 3 y 200 caracteres.";
+        }
+        else if (roles.Any(item =>
+            item.IdRol != temp.IdRol &&
+            string.Equals((item.NombreRol ?? string.Empty).Trim(), nombre, StringComparison.OrdinalIgnoreCase)))
+        {
+            errors[nameof(temp.NombreRol)] = "Ya existe un rol con ese nombre.";
+        }
+    }
+
+    private async Task Guardar()
+    {
+        if (isSaving)
+        {
+            return;
+        }
+
+        errorMessage = null;
+        mensajeEstado = null;
+        temp.NombreRol = (temp.NombreRol ?? string.Empty).Trim();
+        temp.EstadoRol = temp.EstadoRol == 0 ? 0 : 1;
+
+        if (!ValidarFormulario())
+        {
+            errorMessage = "Corrige los campos marcados antes de guardar.";
+            return;
+        }
+
+        isSaving = true;
+        var idGuardado = temp.IdRol;
+        var nombreGuardado = temp.NombreRol;
+
+        try
+        {
+            var exito = await AdministracionService.GuardarEContaxRolAsync(temp);
+            if (!exito)
+            {
+                errorMessage = "No se pudo guardar. Verifica que el nombre no este duplicado.";
+                return;
+            }
+
+            CerrarModalRolInterno();
+            await CargarDatos();
+
+            var rolGuardado = idGuardado == 0
+                ? roles.FirstOrDefault(item => string.Equals(item.NombreRol, nombreGuardado, StringComparison.OrdinalIgnoreCase))
+                : roles.FirstOrDefault(item => item.IdRol == idGuardado);
+
+            if (rolGuardado is not null)
+            {
+                await SeleccionarRol(rolGuardado);
+            }
+
+            mensajeEstado = idGuardado == 0 ? "Perfil creado correctamente." : "Perfil actualizado correctamente.";
+            MenuStateService.NotifyMenuChanged();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void AbrirModalMenu()
+    {
+        LimpiarEstadoOperacion();
+        menuErrors.Clear();
+        isSavingMenu = false;
+        menuModel = new EContaxMenu
+        {
+            NombreMenu = string.Empty,
+            PerteneceMenu = null,
+            UrlMenu = string.Empty,
+            DescripcionMenu = null,
+            IconoMenu = "ri-checkbox-blank-circle-line",
+            EstadoMenu = 1,
+            IdPadre = null
+        };
+        showModalMenu = true;
+    }
+
+    private void EditarMenuMaestro(EContaxMenu menu)
+    {
+        LimpiarEstadoOperacion();
+
+        if (EsMenuProtegido(menu))
+        {
+            errorEstado = ObtenerMensajeProteccion(menu);
+            return;
+        }
+
+        menuErrors.Clear();
+        isSavingMenu = false;
+        menuModel = ClonarMenu(menu);
+        showModalMenu = true;
+    }
+
+    private void VerDetalleMenu(EContaxMenu menu)
+    {
+        menuDetalle = ClonarMenu(menu);
+        showModalMenuDetail = true;
+    }
+
+    private async Task GuardarMenuMaestro()
+    {
+        if (isSavingMenu)
+        {
+            return;
+        }
+
+        LimpiarEstadoOperacion();
+        menuErrors.Clear();
+
+        if (menuModel.IdMenu != 0 && EsMenuProtegido(menuModel.IdMenu))
+        {
+            errorEstado = ObtenerMensajeProteccion(menuModel.IdMenu);
+            return;
+        }
+
+        if (!ValidarReglasMenu())
+        {
+            return;
+        }
+
+        isSavingMenu = true;
+        var idRolSeleccionado = rolSeleccionado?.IdRol;
+        var esNuevo = menuModel.IdMenu == 0;
+
+        try
+        {
+            var exito = await AdministracionService.GuardarEContaxMenuAsync(menuModel);
+            if (!exito)
+            {
+                errorEstado = "No se pudo guardar el item de menu.";
+                return;
+            }
+
+            CerrarModalMenuInterno();
+            await CargarDatos();
+
+            if (idRolSeleccionado.HasValue)
+            {
+                var rolActualizado = roles.FirstOrDefault(item => item.IdRol == idRolSeleccionado.Value);
+                if (rolActualizado is not null)
+                {
+                    await SeleccionarRol(rolActualizado);
+                }
+            }
+
+            mensajeEstado = esNuevo
+                ? "Item de menu creado correctamente."
+                : "Item de menu actualizado correctamente.";
+            MenuStateService.NotifyMenuChanged();
+        }
+        catch (Exception ex)
+        {
+            errorEstado = $"No se pudo guardar el item de menu. {ex.Message}";
+        }
+        finally
+        {
+            isSavingMenu = false;
+        }
+    }
+
+    private async Task EliminarMenuMaestro(int idMenu)
+    {
+        LimpiarEstadoOperacion();
+
+        if (EsMenuProtegido(idMenu))
+        {
+            errorEstado = ObtenerMensajeProteccion(idMenu, true);
+            return;
+        }
+
+        var menu = listaMaestraMenus.FirstOrDefault(item => item.IdMenu == idMenu);
+        var nombreMenu = string.IsNullOrWhiteSpace(menu?.NombreMenu) ? "este item de menu" : $"el item de menu {menu.NombreMenu}";
+        var confirmado = await ConfirmarAsync("Eliminar item de menu", $"Se desactivara {nombreMenu} y dejara de mostrarse.");
+
+        if (!confirmado)
+        {
+            return;
+        }
+
+        var idRolSeleccionado = rolSeleccionado?.IdRol;
+        if (await AdministracionService.EliminarLogicoEContaxMenuAsync(idMenu))
+        {
+            await CargarDatos();
+
+            if (idRolSeleccionado.HasValue)
+            {
+                var rolActualizado = roles.FirstOrDefault(item => item.IdRol == idRolSeleccionado.Value);
+                if (rolActualizado is not null)
+                {
+                    await SeleccionarRol(rolActualizado);
+                }
+            }
+
+            mensajeEstado = "Item de menu eliminado correctamente.";
+            MenuStateService.NotifyMenuChanged();
+            await MostrarAlertaAsync("Registro eliminado", "El item de menu fue dado de baja correctamente.", "success");
+        }
+        else
+        {
+            errorEstado = "No se pudo eliminar el item de menu.";
+            await MostrarAlertaAsync("No se pudo eliminar", errorEstado, "error");
+        }
+    }
+
+    private void CerrarModalMenu()
+    {
+        if (isSavingMenu)
+        {
+            return;
+        }
+
+        CerrarModalMenuInterno();
+    }
+
+    private void CerrarModalMenuInterno()
+    {
+        showModalMenu = false;
+        menuErrors.Clear();
+    }
+
+    private void CerrarDetalleMenu()
+    {
+        showModalMenuDetail = false;
+        menuDetalle = null;
+    }
+
+    private bool ValidarReglasMenu()
+    {
+        menuErrors.Clear();
+        menuModel.NombreMenu = (menuModel.NombreMenu ?? string.Empty).Trim();
+        menuModel.UrlMenu = string.IsNullOrWhiteSpace(menuModel.UrlMenu) ? string.Empty : menuModel.UrlMenu.Trim();
+        menuModel.DescripcionMenu = null;
+        menuModel.IconoMenu = string.IsNullOrWhiteSpace(menuModel.IconoMenu) ? null : menuModel.IconoMenu.Trim();
+        menuModel.PerteneceMenu = null;
+        menuModel.EstadoMenu = menuModel.EstadoMenu == 0 ? 0 : 1;
+        menuModel.IdPadre = menuModel.IdPadre is null or 0 ? null : menuModel.IdPadre;
+
+        var idPadre = menuModel.IdPadre;
+
+        if (menuModel.NombreMenu.Length is < 3 or > 200)
+        {
+            menuErrors[MenuNombreField] = "El nombre debe tener entre 3 y 200 caracteres.";
+        }
+        else if (listaMaestraMenus.Any(item =>
+            item.IdMenu != menuModel.IdMenu &&
+            NormalizarIdPadre(item.IdPadre) == idPadre &&
+            string.Equals((item.NombreMenu ?? string.Empty).Trim(), menuModel.NombreMenu, StringComparison.OrdinalIgnoreCase)))
+        {
+            menuErrors[MenuNombreField] = "Ya existe un item con ese nombre en el mismo nivel.";
+        }
+
+        if (idPadre == menuModel.IdMenu && menuModel.IdMenu != 0)
+        {
+            menuErrors[MenuPadreField] = "Un item no puede ser padre de si mismo.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(menuModel.IconoMenu))
+        {
+            if (menuModel.IconoMenu.Length > 50)
+            {
+                menuErrors[MenuIconoField] = "El icono no puede superar los 50 caracteres.";
+            }
+            else if (!menuModel.IconoMenu.All(ch => char.IsLetterOrDigit(ch) || ch == '-'))
+            {
+                menuErrors[MenuIconoField] = "El icono solo puede contener letras, numeros y guiones.";
+            }
+        }
+
+        if (idPadre.HasValue && string.IsNullOrWhiteSpace(menuModel.UrlMenu))
+        {
+            menuErrors[MenuRutaField] = "La ruta es obligatoria para los items hijos.";
+        }
+        else if (!string.IsNullOrWhiteSpace(menuModel.UrlMenu))
+        {
+            if (!menuModel.UrlMenu.StartsWith("/", StringComparison.Ordinal))
+            {
+                menuErrors[MenuRutaField] = "La ruta debe iniciar con '/'.";
+            }
+            else if (menuModel.UrlMenu.Contains(' '))
+            {
+                menuErrors[MenuRutaField] = "La ruta no puede contener espacios.";
+            }
+            else if (menuModel.UrlMenu.Length > 200)
+            {
+                menuErrors[MenuRutaField] = "La ruta no puede superar los 200 caracteres.";
+            }
+            else if (listaMaestraMenus.Any(item =>
+                item.IdMenu != menuModel.IdMenu &&
+                !string.IsNullOrWhiteSpace(item.UrlMenu) &&
+                string.Equals(item.UrlMenu.Trim(), menuModel.UrlMenu, StringComparison.OrdinalIgnoreCase)))
+            {
+                menuErrors[MenuRutaField] = "Ya existe otro item con esa ruta.";
+            }
+        }
+
+        if (menuErrors.Any())
+        {
+            errorEstado = "Corrige los campos del menu antes de guardar.";
+        }
+
+        return !menuErrors.Any();
+    }
+
+    private async Task ConfirmarEliminar(EContaxRol item)
+    {
+        var confirmado = await ConfirmarAsync(
+            "Eliminar perfil",
+            $"Se desactivara el perfil {item.NombreRol} y dejara de mostrarse como activo.");
+
+        if (!confirmado)
+        {
+            return;
+        }
+
+        var eliminado = await AdministracionService.DesactivarEContaxRolAsync(item.IdRol);
+        if (!eliminado)
+        {
+            await MostrarAlertaAsync("No se pudo eliminar", "Intenta nuevamente en unos segundos.", "error");
+            return;
+        }
+
+        await CargarDatos();
+        mensajeEstado = "Perfil eliminado correctamente.";
+        MenuStateService.NotifyMenuChanged();
+        await MostrarAlertaAsync("Registro eliminado", "El perfil fue dado de baja correctamente.", "success");
+    }
+
+    private async Task ReactivarRol(EContaxRol item)
+    {
+        var exito = await AdministracionService.ReactivarEContaxRolAsync(item.IdRol);
+        if (!exito)
+        {
+            await MostrarAlertaAsync("No se pudo reactivar", "Intenta nuevamente en unos segundos.", "error");
+            return;
+        }
+
+        await CargarDatos();
+        var rolReactivado = roles.FirstOrDefault(rol => rol.IdRol == item.IdRol);
+        if (rolReactivado is not null)
+        {
+            await SeleccionarRol(rolReactivado);
+        }
+
+        mensajeEstado = "Perfil reactivado correctamente.";
+        MenuStateService.NotifyMenuChanged();
+        await MostrarAlertaAsync("Perfil reactivado", "El perfil vuelve a estar activo.", "success");
+    }
+
+    private async Task<bool> ConfirmarAsync(string titulo, string mensaje)
+    {
+        var resultado = await JS.InvokeAsync<JsonElement>("Swal.fire", new
+        {
+            icon = "warning",
+            title = titulo,
+            text = mensaje,
+            showCancelButton = true,
+            confirmButtonText = "Si, eliminar",
+            cancelButtonText = "Cancelar",
+            reverseButtons = true,
+            focusCancel = true,
+            confirmButtonColor = "#c23b4b",
+            cancelButtonColor = "#7a8da2"
+        });
+
+        return resultado.TryGetProperty("isConfirmed", out var confirmacion) && confirmacion.GetBoolean();
+    }
+
+    private async Task MostrarAlertaAsync(string titulo, string mensaje, string icono)
+    {
+        await JS.InvokeVoidAsync("Swal.fire", new
+        {
+            icon = icono,
+            title = titulo,
+            text = mensaje,
+            confirmButtonText = "Aceptar",
+            timer = icono == "success" ? 1800 : (int?)null,
+            showConfirmButton = icono != "success"
+        });
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        currentUserId = userId;
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static EContaxRol ClonarRol(EContaxRol item) =>
+        new()
+        {
+            IdRol = item.IdRol,
+            NombreRol = item.NombreRol,
+            PermisoRol = item.PermisoRol,
+            EstadoRol = item.EstadoRol
+        };
+
+    private static EContaxMenu ClonarMenu(EContaxMenu item) =>
+        new()
+        {
+            IdMenu = item.IdMenu,
+            NombreMenu = item.NombreMenu,
+            PerteneceMenu = item.PerteneceMenu,
+            UrlMenu = item.UrlMenu,
+            DescripcionMenu = item.DescripcionMenu,
+            IconoMenu = item.IconoMenu,
+            EstadoMenu = item.EstadoMenu,
+            IdPadre = item.IdPadre,
+            IsSelected = item.IsSelected
+        };
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private void LimpiarEstadoOperacion()
+    {
+        mensajeEstado = null;
+        errorEstado = null;
+    }
+
+    private bool EsMenuProtegido(int idMenu) =>
+        EsMenuProtegido(listaMaestraMenus.FirstOrDefault(item => item.IdMenu == idMenu));
+
+    private static bool EsMenuProtegido(EContaxMenu? menu) =>
+        EsModuloPrincipalAdministracionProtegido(menu) || EsSeccionRolesPermisosProtegida(menu);
+
+    private static bool EsModuloPrincipalAdministracionProtegido(EContaxMenu? menu) =>
+        menu is not null &&
+        (!menu.IdPadre.HasValue || menu.IdPadre == 0) &&
+        CoincideNombreMenu(menu.NombreMenu, "Administracion");
+
+    private static bool EsSeccionRolesPermisosProtegida(EContaxMenu? menu) =>
+        menu is not null &&
+        ((!string.IsNullOrWhiteSpace(menu.UrlMenu) &&
+          string.Equals(menu.UrlMenu.Trim(), EContaxRoutes.AdministracionRoles, StringComparison.OrdinalIgnoreCase)) ||
+         CoincideNombreMenu(menu.NombreMenu, "Roles y permisos"));
+
+    private string ObtenerMensajeProteccion(int idMenu, bool eliminacion = false) =>
+        ObtenerMensajeProteccion(listaMaestraMenus.FirstOrDefault(item => item.IdMenu == idMenu), eliminacion);
+
+    private static string ObtenerMensajeProteccion(EContaxMenu? menu, bool eliminacion = false)
+    {
+        if (EsModuloPrincipalAdministracionProtegido(menu))
+        {
+            return eliminacion
+                ? "El modulo principal Administracion es estatico y no se puede eliminar ni desactivar."
+                : "El modulo principal Administracion es estatico y no se puede modificar.";
+        }
+
+        return eliminacion
+            ? "La seccion Roles y permisos es estatica y no se puede eliminar ni desactivar."
+            : "La seccion Roles y permisos es estatica y no se puede modificar.";
+    }
+
+    private static bool CoincideNombreMenu(string? valorActual, string valorEsperado) =>
+        !string.IsNullOrWhiteSpace(valorActual) &&
+        CultureInfo.InvariantCulture.CompareInfo.Compare(
+            valorActual.Trim(),
+            valorEsperado,
+            CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) == 0;
+
+    private static int? NormalizarIdPadre(int? idPadre) =>
+        idPadre is null or 0 ? null : idPadre;
+
+    private static string LimitarTexto(string? valor, int maxLength)
+    {
+        var texto = valor ?? string.Empty;
+        return texto.Length > maxLength ? texto[..maxLength] : texto;
+    }
+
+    private static bool ParseCheckboxValue(object? value) =>
+        value is bool boolValue
+            ? boolValue
+            : value is string text && bool.TryParse(text, out var parsed) && parsed;
+
+    private void AbrirModalOrdenar()
+    {
+        LimpiarEstadoOperacion();
+        dragItem = null;
+        isSavingOrder = false;
+        
+        // Find parents
+        parentMenusParaOrden = listaMaestraMenus
+            .Where(item => !item.IdPadre.HasValue || item.IdPadre == 0)
+            .OrderBy(item => item.OrdenMenu ?? 9999)
+            .ThenBy(item => item.IdMenu)
+            .ToList();
+
+        // Copy current state orders to be modified locally
+        for (int i = 0; i < parentMenusParaOrden.Count; i++)
+        {
+            parentMenusParaOrden[i].OrdenMenu = i + 1;
+        }
+
+        if (parentMenusParaOrden.Any())
+        {
+            selectedParentIdForChildOrder = parentMenusParaOrden.First().IdMenu;
+        }
+        else
+        {
+            selectedParentIdForChildOrder = 0;
+        }
+
+        CargarHijosParaOrden();
+        showModalOrder = true;
+    }
+
+    private void CerrarModalOrder()
+    {
+        if (isSavingOrder) return;
+        showModalOrder = false;
+        dragItem = null;
+    }
+
+    private void CargarHijosParaOrden()
+    {
+        childMenusParaOrden = listaMaestraMenus
+            .Where(item => item.IdPadre == selectedParentIdForChildOrder)
+            .OrderBy(item => item.OrdenMenu ?? 9999)
+            .ThenBy(item => item.IdMenu)
+            .ToList();
+
+        for (int i = 0; i < childMenusParaOrden.Count; i++)
+        {
+            childMenusParaOrden[i].OrdenMenu = i + 1;
+        }
+    }
+
+    private void ActualizarLocalDeHijos()
+    {
+        foreach (var item in childMenusParaOrden)
+        {
+            var masterItem = listaMaestraMenus.FirstOrDefault(m => m.IdMenu == item.IdMenu);
+            if (masterItem != null)
+            {
+                masterItem.OrdenMenu = item.OrdenMenu;
+            }
+        }
+    }
+
+    private void MoverItem(List<EContaxMenu> list, EContaxMenu item, int direccion)
+    {
+        var index = list.IndexOf(item);
+        if (index == -1) return;
+
+        var nuevoIndex = index + direccion;
+        if (nuevoIndex < 0 || nuevoIndex >= list.Count) return;
+
+        list.RemoveAt(index);
+        list.Insert(nuevoIndex, item);
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            list[i].OrdenMenu = i + 1;
+        }
+    }
+
+    private void HandleDragStart(EContaxMenu item)
+    {
+        dragItem = item;
+    }
+
+    private void HandleDragOver(EContaxMenu item)
+    {
+        // Allowed
+    }
+
+    private void HandleDrop(EContaxMenu targetItem, bool isParentList)
+    {
+        if (dragItem == null || dragItem == targetItem) return;
+
+        var list = isParentList ? parentMenusParaOrden : childMenusParaOrden;
+        var indexDrag = list.IndexOf(dragItem);
+        var indexTarget = list.IndexOf(targetItem);
+
+        if (indexDrag != -1 && indexTarget != -1)
+        {
+            list.RemoveAt(indexDrag);
+            list.Insert(indexTarget, dragItem);
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                list[i].OrdenMenu = i + 1;
+            }
+        }
+    }
+
+    private async Task GuardarOrdenMenus()
+    {
+        isSavingOrder = true;
+        LimpiarEstadoOperacion();
+
+        // 1. Sync current child order back
+        ActualizarLocalDeHijos();
+
+        // 2. Sync parent order back
+        foreach (var item in parentMenusParaOrden)
+        {
+            var masterItem = listaMaestraMenus.FirstOrDefault(m => m.IdMenu == item.IdMenu);
+            if (masterItem != null)
+            {
+                masterItem.OrdenMenu = item.OrdenMenu;
+            }
+        }
+
+        // 3. Save to database using service
+        try
+        {
+            var exito = await AdministracionService.ActualizarOrdenMenusAsync(listaMaestraMenus);
+            if (exito)
+            {
+                showModalOrder = false;
+                await CargarDatos();
+                mensajeEstado = "El orden de los menús se ha guardado correctamente.";
+                MenuStateService.NotifyMenuChanged();
+                await MostrarAlertaAsync("Orden guardado", "El orden de los menús se actualizó correctamente.", "success");
+            }
+            else
+            {
+                errorEstado = "No se pudo actualizar el orden de los menús en la base de datos.";
+                await MostrarAlertaAsync("Error", errorEstado, "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            errorEstado = $"Error al guardar el orden: {ex.Message}";
+            await MostrarAlertaAsync("Error", errorEstado, "error");
+        }
+        finally
+        {
+            isSavingOrder = false;
+        }
+    }
+}
+

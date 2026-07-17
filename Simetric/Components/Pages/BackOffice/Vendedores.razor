@@ -1,0 +1,1203 @@
+@page "/backoffice/vendedores"
+@attribute [Authorize]
+@layout Simetric.Components.Layout.BackOfficeLayout
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using QRCoder
+@using Simetric.Components
+@using Simetric.Components.Helpers
+@using Simetric.Models
+@using Simetric.Services
+@using Microsoft.EntityFrameworkCore
+@using System.IO
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+@inject VendedorBackOfficeService VendedorBackOfficeService
+@inject IDbContextFactory<Simetric.Data.AppDbContext> DbFactory
+@inject IWebHostEnvironment WebHostEnvironment
+@inject IEmailService EmailService
+
+<PageTitle>Vendedores | BackOffice</PageTitle>
+
+<style>
+    /* ── Page shell ── */
+    .vp-page { display:grid; gap:1.5rem; }
+
+    /* ── Hero ── */
+    .vp-hero {
+        background:#0d1f3f;
+        border-radius:28px; padding:1.75rem 2rem;
+        display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;
+        box-shadow:0 24px 56px rgba(13,31,63,.26);
+    }
+    .vp-hero-copy { display:grid; gap:.35rem; }
+    .vp-hero-kicker {
+        font-size:.72rem; font-weight:800; letter-spacing:.15em; text-transform:uppercase;
+        color:rgba(255,255,255,.55);
+    }
+    .vp-hero h2 { margin:0; color:#fff; font-size:1.55rem; }
+    .vp-hero-note { color:rgba(255,255,255,.65); font-size:.9rem; max-width:540px; margin:0; }
+
+    /* ── Feedback banner ── */
+    .vp-banner {
+        border-radius:16px; padding:.95rem 1.2rem; font-weight:600; font-size:.93rem;
+        display:flex; align-items:center; gap:.65rem;
+    }
+    .vp-banner.ok { background:linear-gradient(135deg,#d1faed,#a7f3d0); color:#065f46; border:1px solid #6ee7b7; }
+    .vp-banner.err { background:linear-gradient(135deg,#fee2e2,#fecaca); color:#991b1b; border:1px solid #fca5a5; }
+
+    /* ── Vendors grid ── */
+    .vp-grid { display:grid; gap:1.25rem; }
+    .vp-empty {
+        background:#fff; border:2px dashed #d0e3f7; border-radius:24px; padding:3rem;
+        text-align:center; color:#7b93ae;
+    }
+    .vp-empty i { font-size:2.8rem; display:block; margin-bottom:.75rem; color:#b8cde4; }
+
+    /* ── Vendor card ── */
+    .vc {
+        background:#fff;
+        border:1px solid rgba(180,210,240,.7);
+        border-radius:28px;
+        box-shadow:0 12px 40px rgba(14,35,72,.07);
+        overflow:hidden;
+        transition:box-shadow .22s, transform .22s;
+    }
+    .vc:hover { box-shadow:0 20px 56px rgba(14,35,72,.13); transform:translateY(-2px); }
+    .vc.blocked { opacity:.65; border-style:dashed; }
+
+    /* card header strip */
+    .vc-header {
+        display:flex; align-items:center; gap:1rem;
+        padding:1.25rem 1.4rem;
+        background:linear-gradient(135deg,#f5f9ff,#edf3fd);
+        border-bottom:1px solid rgba(200,220,245,.8);
+    }
+    .vc-avatar {
+        width:52px; height:52px; border-radius:16px; flex-shrink:0;
+        background:linear-gradient(135deg,#0b67c2,#1f9cff);
+        display:flex; align-items:center; justify-content:center;
+        font-size:1.35rem; font-weight:800; color:#fff;
+        box-shadow:0 8px 20px rgba(11,103,194,.28);
+        letter-spacing:0;
+    }
+    .vc-avatar img {
+        width:100%; height:100%; object-fit:cover; border-radius:14px;
+    }
+    .vc-meta { flex:1; min-width:0; display:grid; gap:.3rem; }
+    .vc-name { margin:0; font-size:1.05rem; font-weight:700; color:#112a4e; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .vc-badges { display:flex; flex-wrap:wrap; gap:.4rem; }
+    .vc-code {
+        display:inline-flex; align-items:center; padding:.18rem .55rem; border-radius:999px;
+        background:#e0eeff; color:#0b5ebb; font-size:.76rem; font-weight:700;
+    }
+    .vc-status-active {
+        display:inline-flex; align-items:center; gap:.3rem; padding:.18rem .55rem; border-radius:999px;
+        background:#d1fae5; color:#065f46; font-size:.76rem; font-weight:700;
+    }
+    .vc-status-blocked {
+        display:inline-flex; align-items:center; gap:.3rem; padding:.18rem .55rem; border-radius:999px;
+        background:#fee2e2; color:#991b1b; font-size:.76rem; font-weight:700;
+    }
+    .vc-status-system {
+        display:inline-flex; align-items:center; gap:.3rem; padding:.18rem .55rem; border-radius:999px;
+        background:#ede9fe; color:#5b21b6; font-size:.76rem; font-weight:700;
+    }
+    .vc-date { font-size:.78rem; color:#7b93ae; }
+
+    /* header action buttons */
+    .vc-actions { display:flex; gap:.5rem; flex-shrink:0; }
+    .vc-btn {
+        border:none; border-radius:12px; padding:.55rem .85rem;
+        display:inline-flex; align-items:center; gap:.38rem;
+        font-size:.82rem; font-weight:700; cursor:pointer;
+        transition:all .18s;
+    }
+    .vc-btn-edit { background:#e8f2ff; color:#0b67c2; }
+    .vc-btn-edit:hover { background:#0b67c2; color:#fff; }
+    .vc-btn-block { background:#fff0f0; color:#b91c1c; }
+    .vc-btn-block:hover { background:#b91c1c; color:#fff; }
+    .vc-btn-unblock { background:#d1fae5; color:#065f46; }
+    .vc-btn-unblock:hover { background:#059669; color:#fff; }
+    .vc-btn-view { background:#f0f4ff; color:#4338ca; }
+    .vc-btn-view:hover { background:#4338ca; color:#fff; }
+
+    /* card body: share + qr */
+    .vc-body {
+        display:grid; grid-template-columns:minmax(0,1fr) minmax(0,240px);
+        gap:0; align-items:stretch;
+    }
+
+    /* qr panel */
+    .vc-qr {
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        gap:.6rem; padding:1.25rem; background:#f9fbff;
+        border-left:1px solid rgba(200,220,245,.8);
+    }
+    .vc-qr-img {
+        width:170px; height:170px; border-radius:18px; object-fit:contain;
+        background:#fff; padding:.5rem;
+        box-shadow:0 8px 24px rgba(11,103,194,.14); border:1px solid #d0e4ff;
+    }
+    .vc-qr-caption { font-size:.74rem; color:#7b93ae; text-align:center; line-height:1.4; max-width:170px; }
+
+    /* share panel */
+    .vc-share { display:grid; gap:.75rem; padding:1.25rem; align-content:center; }
+    .vc-linkbox {
+        background:linear-gradient(135deg,#0f1c3f,#1a3563); color:rgba(255,255,255,.88);
+        border-radius:16px; padding:.75rem 1rem; word-break:break-all; font-size:.83rem;
+        box-shadow:0 10px 24px rgba(15,28,63,.18); line-height:1.5;
+    }
+    .vc-copy-row { display:flex; flex-wrap:wrap; gap:.5rem; }
+    .vc-copy-btn {
+        border:none; border-radius:12px; padding:.55rem .85rem;
+        display:inline-flex; align-items:center; gap:.38rem;
+        font-size:.82rem; font-weight:700; cursor:pointer; transition:all .18s;
+    }
+    .vc-copy-btn.primary { background:linear-gradient(135deg,#0b67c2,#1f9cff); color:#fff; box-shadow:0 8px 18px rgba(11,103,194,.22); }
+    .vc-copy-btn.primary:hover { transform:translateY(-1px); box-shadow:0 12px 24px rgba(11,103,194,.3); }
+
+    /* ── Shared modal styles ── */
+    .vp-backdrop {
+        position:fixed; inset:0; background:rgba(10,26,47,.54);
+        backdrop-filter:blur(6px); z-index:1040;
+    }
+    .vp-modal {
+        position:fixed; inset:0; display:flex; align-items:center;
+        justify-content:center; padding:1.5rem; z-index:1050;
+    }
+    .vp-modal-content {
+        background:#fff; border-radius:28px; width:min(880px,100%);
+        box-shadow:0 32px 80px rgba(10,26,60,.18);
+        display:flex; flex-direction:column; max-height:90vh; overflow:hidden;
+    }
+    .vp-modal-sm { width:min(460px,100%); }
+    .vp-modal-header {
+        display:flex; align-items:center; justify-content:space-between;
+        padding:1.4rem 1.6rem; border-radius:28px 28px 0 0;
+    }
+    .vp-modal-header.blue { background:#0f1c3f; color:#fff; }
+    .vp-modal-header.blue h3 { color:#fff; margin:0; }
+    .vp-modal-header.blue .vp-modal-kicker {
+        font-size:.72rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase;
+        color:rgba(255,255,255,.55); display:block; margin-bottom:.2rem;
+    }
+    .vp-modal-header.danger { background:linear-gradient(135deg,#7f1d1d,#b91c1c); color:#fff; }
+    .vp-modal-header.danger h3 { color:#fff; margin:0; }
+    .vp-modal-header.danger .vp-modal-kicker {
+        font-size:.72rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase;
+        color:rgba(255,200,200,.7); display:block; margin-bottom:.2rem;
+    }
+    .vp-modal-close {
+        background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2);
+        border-radius:12px; color:#fff; width:36px; height:36px;
+        display:flex; align-items:center; justify-content:center;
+        cursor:pointer; font-size:1rem; transition:background .2s;
+    }
+    .vp-modal-close:hover { background:rgba(255,255,255,.24); }
+    .vp-modal-body { padding:1.6rem; overflow-y:auto; flex:1; }
+    .vp-modal-footer {
+        display:flex; justify-content:flex-end; gap:.75rem;
+        padding:1rem 1.6rem; border-top:1px solid #e7edf5;
+        background:#f7fafd; border-radius:0 0 28px 28px;
+    }
+
+    /* form inside modal */
+    .vp-form-layout { display:grid; grid-template-columns:200px 1fr; gap:1.5rem; align-items:start; }
+    .vp-avatar-panel {
+        display:flex; flex-direction:column; align-items:center; gap:.85rem;
+        background:#f5f9ff; border:1px solid #dce8f7; border-radius:20px; padding:1.1rem;
+    }
+    .vp-avatar-preview-wrap { position:relative; display:inline-block; }
+    .vp-avatar-preview {
+        width:90px; height:90px; border-radius:50%; object-fit:cover;
+        border:3px solid #d0e4ff; box-shadow:0 8px 24px rgba(11,103,194,.14);
+    }
+    .vp-avatar-default {
+        width:90px; height:90px; border-radius:50%; font-size:2.2rem;
+        color:#6b8fbe; border:3px solid #d0e4ff; background:#e8f0fb;
+        display:flex; align-items:center; justify-content:center;
+    }
+    .vp-avatar-trigger {
+        position:absolute; bottom:1px; right:1px; width:26px; height:26px;
+        border-radius:50%; background:#0b67c2; border:2px solid #fff;
+        color:#fff; display:flex; align-items:center; justify-content:center;
+        cursor:pointer; font-size:.72rem;
+    }
+    .vp-avatar-copy { text-align:center; }
+    .vp-avatar-copy strong { display:block; font-size:.88rem; color:#163455; }
+    .vp-avatar-copy span { font-size:.78rem; color:#516173; }
+    .vp-avatar-selector {
+        display:flex; flex-direction:row; flex-wrap:nowrap;
+        gap:.45rem; width:100%; overflow-x:auto; overflow-y:hidden;
+        padding-bottom:.35rem;
+        scrollbar-width:thin;
+        scrollbar-color:#b8d4f7 transparent;
+    }
+    .vp-avatar-selector::-webkit-scrollbar { height:5px; }
+    .vp-avatar-selector::-webkit-scrollbar-track { background:transparent; }
+    .vp-avatar-selector::-webkit-scrollbar-thumb { background:#c3d8f5; border-radius:10px; }
+    .vp-avatar-item {
+        background:none; border:2px solid transparent; border-radius:10px;
+        cursor:pointer; padding:.15rem; transition:border-color .18s, transform .18s;
+        flex-shrink:0; width:52px; height:52px;
+        display:flex; align-items:center; justify-content:center;
+    }
+    .vp-avatar-item img { width:100%; border-radius:9px; object-fit:cover; }
+    .vp-avatar-item:hover { border-color:#93c0ff; transform:scale(1.05); }
+    .vp-avatar-item.selected { border-color:#0b67c2 !important; box-shadow:0 0 0 3px rgba(11,103,194,.18); }
+    .vp-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem 1.2rem; align-self:start; }
+    .vp-field { display:flex; flex-direction:column; gap:.42rem; }
+    .vp-field-wide { grid-column:1/-1; }
+    .vp-label { font-size:.72rem; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:#475a72; }
+    .vp-input {
+        border:1px solid #d6deea; border-radius:14px; padding:.82rem .9rem;
+        font-size:.94rem; color:#163455; background:#fff; outline:none;
+        transition:border-color .18s, box-shadow .18s; width:100%;
+    }
+    .vp-input:focus { border-color:#0b67c2; box-shadow:0 0 0 3px rgba(11,103,194,.12); }
+    .vp-input-accent { border-color:#b8d4f7; }
+    .vp-pw-wrap { position:relative; display:flex; align-items:center; }
+    .vp-pw-wrap .vp-input { padding-right:2.75rem !important; }
+    .vp-pw-toggle {
+        position:absolute; right:.82rem; background:none; border:none; padding:0;
+        color:#64748b; cursor:pointer; font-size:1.18rem; transition:color .2s;
+    }
+    .vp-pw-toggle:hover { color:#1e293b; }
+
+    /* confirm block panel */
+    .vp-confirm-box {
+        display:flex; flex-direction:column; align-items:center;
+        gap:1rem; text-align:center; padding:.5rem 0 .25rem;
+    }
+    .vp-confirm-icon {
+        width:64px; height:64px; border-radius:50%; display:flex; align-items:center;
+        justify-content:center; font-size:1.8rem;
+    }
+    .vp-confirm-icon.lock { background:#fee2e2; color:#b91c1c; }
+    .vp-confirm-icon.unlock { background:#d1fae5; color:#065f46; }
+    .vp-confirm-text { color:#475a72; font-size:.95rem; line-height:1.55; }
+    .vp-confirm-name { font-weight:700; color:#163455; }
+
+    /* shared buttons */
+    .vp-btn-primary {
+        background:linear-gradient(135deg,#0c7adf,#1f9cff); color:#fff; border:none;
+        border-radius:14px; padding:.8rem 1.35rem; font-weight:700; font-size:.93rem;
+        cursor:pointer; display:inline-flex; align-items:center; gap:.5rem;
+        box-shadow:0 10px 26px rgba(12,122,223,.22); transition:transform .18s, box-shadow .18s;
+    }
+    .vp-btn-primary:hover { transform:translateY(-1px); box-shadow:0 14px 32px rgba(12,122,223,.3); }
+    .vp-btn-primary:disabled { opacity:.6; cursor:not-allowed; transform:none; }
+    .vp-btn-danger {
+        background:linear-gradient(135deg,#b91c1c,#ef4444); color:#fff; border:none;
+        border-radius:14px; padding:.8rem 1.35rem; font-weight:700; font-size:.93rem;
+        cursor:pointer; display:inline-flex; align-items:center; gap:.5rem;
+        box-shadow:0 10px 26px rgba(185,28,28,.22); transition:transform .18s;
+    }
+    .vp-btn-danger:hover { transform:translateY(-1px); }
+    .vp-btn-success {
+        background:linear-gradient(135deg,#059669,#10b981); color:#fff; border:none;
+        border-radius:14px; padding:.8rem 1.35rem; font-weight:700; font-size:.93rem;
+        cursor:pointer; display:inline-flex; align-items:center; gap:.5rem;
+        box-shadow:0 10px 26px rgba(5,150,105,.22); transition:transform .18s;
+    }
+    .vp-btn-success:hover { transform:translateY(-1px); }
+    .vp-btn-quiet {
+        background:#fff; color:#475a72; border:1px solid #d6deea;
+        border-radius:14px; padding:.8rem 1.35rem; font-weight:600; font-size:.93rem; cursor:pointer;
+        transition:background .18s;
+    }
+    .vp-btn-quiet:hover { background:#f5f9ff; }
+
+    /* hero button */
+    .vp-new-btn {
+        background:rgba(255,255,255,.18); color:#fff; border:1.5px solid rgba(255,255,255,.35);
+        border-radius:16px; padding:.8rem 1.35rem; font-weight:700; font-size:.93rem;
+        cursor:pointer; display:inline-flex; align-items:center; gap:.5rem;
+        backdrop-filter:blur(6px); transition:all .2s;
+    }
+    .vp-new-btn:hover { background:rgba(255,255,255,.28); border-color:rgba(255,255,255,.55); }
+
+    @@media (max-width:900px) {
+        .vc-body { grid-template-columns:1fr; }
+        .vc-qr { border-left:none; border-top:1px solid rgba(200,220,245,.8); flex-direction:row; justify-content:flex-start; }
+        .vp-form-layout { grid-template-columns:1fr; }
+    }
+    @@media (max-width:620px) {
+        .vc-header { flex-wrap:wrap; }
+        .vc-actions { width:100%; }
+        .vp-form-grid { grid-template-columns:1fr; }
+    }
+</style>
+
+<div class="vp-page">
+    @if (isLoading)
+    {
+        <div class="text-center my-5 py-5">
+            <div class="spinner-border text-primary" role="status" style="width:3rem;height:3rem;">
+                <span class="visually-hidden">Cargando informacion</span>
+            </div>
+            <p class="mt-3 text-muted fw-bold">Cargando informacion</p>
+        </div>
+    }
+    else
+    {
+    <!-- ── Hero ── -->
+    <section class="vp-hero">
+        <div class="vp-hero-copy">
+            <span class="vp-hero-kicker">BackOffice · Comercial</span>
+            <h2>@(esVendedor ? "Mi QR y Enlace" : "Vendedores y Links de Venta")</h2>
+            <p class="vp-hero-note">@(esVendedor ? "Comparte tu enlace o QR para registrar clientes asociados a tu perfil." : "Cada vendedor tiene un enlace y QR únicos que se resuelven en backend sin exponer su nombre en la URL.")</p>
+        </div>
+        @if (!esVendedor)
+        {
+            <button type="button" class="vp-new-btn" @onclick="AbrirModal">
+                <i class="bi bi-person-plus-fill"></i>
+                Nuevo vendedor
+            </button>
+        }
+    </section>
+
+    <!-- ── Feedback banner ── -->
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="vp-banner @(success ? "ok" : "err")">
+            <i class="bi @(success ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+            @message
+        </div>
+    }
+
+    <!-- ── Vendor list ── -->
+    <div class="vp-grid">
+        @if (!vendors.Any())
+        {
+            <div class="vp-empty">
+                <i class="bi bi-people"></i>
+                <strong>@(esVendedor ? "Tu perfil de vendedor aún no está disponible" : "Sin vendedores todavía")</strong>
+                <p style="margin:.5rem 0 0; font-size:.92rem;">@(esVendedor ? "Actualiza la página para volver a generar tu enlace." : "Usa el botón \"Nuevo vendedor\" del encabezado para crear el primer perfil.")</p>
+            </div>
+        }
+        else
+        {
+            @foreach (var vendor in vendors)
+            {
+                var codigoSecreto = VendedorBackOfficeService.ObtenerCodigoSecreto(vendor);
+                var route = VendedorBackOfficeService.ConstruirRutaRegistro(vendor);
+                var absoluteLink = $"{NavManager.BaseUri.TrimEnd('/')}{route}";
+                var isBlocked = vendor.Activo == false;
+                var initials = GetInitials(vendor.Nombre);
+
+                <article class="vc @(isBlocked ? "blocked" : string.Empty)">
+
+                    <!-- card header -->
+                    <div class="vc-header">
+                        <div class="vc-avatar">
+                            @if (!string.IsNullOrWhiteSpace(GetVendorAvatar(vendor)))
+                            {
+                                <img src="@GetVendorAvatar(vendor)" alt="@vendor.Nombre" />
+                            }
+                            else
+                            {
+                                @initials
+                            }
+                        </div>
+
+                        <div class="vc-meta">
+                            <h4 class="vc-name">@vendor.Nombre</h4>
+                            <div class="vc-badges">
+                                <span class="vc-code"><i class="bi bi-hash"></i>@vendor.CodigoReferencia</span>
+                                @if (vendor.EsSistema)
+                                {
+                                    <span class="vc-status-system"><i class="bi bi-shield-fill"></i>Sistema</span>
+                                }
+                                else if (isBlocked)
+                                {
+                                    <span class="vc-status-blocked"><i class="bi bi-lock-fill"></i>Bloqueado</span>
+                                }
+                                else
+                                {
+                                    <span class="vc-status-active"><i class="bi bi-check-circle-fill"></i>Activo</span>
+                                }
+                            </div>
+                            <div class="vc-date">Creado: @vendor.FechaCreacion.ToString("dd/MM/yyyy HH:mm")</div>
+                        </div>
+
+                        @if (!esVendedor && !vendor.EsSistema)
+                        {
+                            <div class="vc-actions">
+                                <button type="button" class="vc-btn vc-btn-edit" @onclick="async () => await AbrirEditar(vendor)" title="Editar perfil">
+                                    <i class="bi bi-pencil-square"></i> Editar
+                                </button>
+                                @if (isBlocked)
+                                {
+                                    <button type="button" class="vc-btn vc-btn-unblock" @onclick="() => AbrirBloqueo(vendor)" title="Desbloquear vendedor">
+                                        <i class="bi bi-unlock-fill"></i> Activar
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="vc-btn vc-btn-block" @onclick="() => AbrirBloqueo(vendor)" title="Bloquear vendedor">
+                                        <i class="bi bi-lock-fill"></i> Bloquear
+                                    </button>
+                                }
+                                <button type="button" class="vc-btn vc-btn-view" @onclick="() => AbrirLinkAsync(absoluteLink)" title="Abrir enlace de registro">
+                                    <i class="bi bi-eye-fill"></i> Ver
+                                </button>
+                            </div>
+                        }
+                    </div>
+
+                    <!-- card body: share + qr -->
+                    <div class="vc-body">
+                        <div class="vc-share">
+                            <div class="vc-linkbox">@absoluteLink</div>
+                            <div class="vc-copy-row">
+                                <button type="button" class="vc-copy-btn primary"
+                                        @onclick="() => CopiarTextoAsync(absoluteLink, ObtenerMensajeCopiado(vendor.Nombre, false))">
+                                    <i class="bi bi-link-45deg"></i> Copiar link
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="vc-qr">
+                            <img src="@ObtenerQrVendedor(absoluteLink)" alt="QR @vendor.Nombre" class="vc-qr-img" />
+                            <div class="vc-qr-caption">Escanear para abrir el enlace de registro de este vendedor</div>
+                        </div>
+                    </div>
+
+                </article>
+            }
+        }
+    </div>
+    }
+</div>
+
+<!-- ═══ Modal: Crear nuevo vendedor ═══ -->
+@if (showModal)
+{
+    <div class="vp-backdrop"></div>
+    <div class="vp-modal" role="dialog" aria-modal="true">
+        <div class="vp-modal-content">
+            <div class="vp-modal-header blue">
+                <div>
+                    <span class="vp-modal-kicker">Nuevo perfil de vendedor</span>
+                    <h3>Registrar vendedor</h3>
+                </div>
+                <button type="button" class="vp-modal-close" @onclick="CerrarModal" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="vp-modal-body">
+                @if (!string.IsNullOrWhiteSpace(errorModal))
+                {
+                    <div class="alert alert-danger rounded-3 border-0 shadow-sm mb-3">@errorModal</div>
+                }
+                <div class="vp-form-layout">
+                    <aside class="vp-avatar-panel">
+                        <div class="vp-avatar-preview-wrap">
+                            @if (!string.IsNullOrWhiteSpace(selectedAvatar))
+                            {
+                                <img src="@selectedAvatar" alt="Avatar" class="vp-avatar-preview" />
+                            }
+                            else
+                            {
+                                <span class="vp-avatar-default"><i class="bi bi-person-fill"></i></span>
+                            }
+                            <button type="button" class="vp-avatar-trigger" @onclick="ToggleAvatarSelector">
+                                <i class="bi bi-camera"></i>
+                            </button>
+                        </div>
+                        <div class="vp-avatar-copy">
+                            <strong>Imagen de perfil</strong>
+                            <span>Seleccione un avatar del catálogo.</span>
+                        </div>
+                        @if (showAvatarSelector && avatarFiles.Any())
+                        {
+                            <div class="vp-avatar-selector">
+                                @foreach (var avatar in avatarFiles)
+                                {
+                                    var url = $"images/avatars/{avatar}";
+                                    <button type="button"
+                                            class="vp-avatar-item @(selectedAvatar == url ? "selected" : string.Empty)"
+                                            @onclick='() => SeleccionarAvatar(url)'>
+                                        <img src="@url" alt="Avatar" />
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </aside>
+
+                    <div class="vp-form-grid">
+                        <div class="vp-field">
+                            <label class="vp-label">Nombres</label>
+                            <input @bind="nuevoNombres" class="vp-input" placeholder="Ej: Andrea" />
+                        </div>
+                        <div class="vp-field">
+                            <label class="vp-label">Apellidos</label>
+                            <input @bind="nuevoApellidos" class="vp-input" placeholder="Ej: Cevallos" />
+                        </div>
+                        <div class="vp-field vp-field-wide">
+                            <label class="vp-label">Email corporativo</label>
+                            <input @bind="nuevoEmail" type="email" class="vp-input" placeholder="Ej: andrea@efact.com" />
+                        </div>
+                        <div class="vp-field vp-field-wide">
+                            <label class="vp-label">Contraseña inicial</label>
+                            <div class="vp-pw-wrap">
+                                <input @bind="nuevaClave" type="@(mostrarClave ? "text" : "password")"
+                                       class="vp-input vp-input-accent" placeholder="Mínimo 8 caracteres" />
+                                <button type="button" class="vp-pw-toggle" @onclick="ToggleMostrarClave">
+                                    <i class="bi @(mostrarClave ? "bi-eye-slash" : "bi-eye")"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="vp-modal-footer">
+                <button type="button" class="vp-btn-quiet" @onclick="CerrarModal">Cancelar</button>
+                <button type="button" class="vp-btn-primary" disabled="@saving" @onclick="CrearAsync">
+                    <i class="bi @(saving ? "bi-hourglass-split" : "bi-save")"></i>
+                    <span>@(saving ? "Guardando..." : "Guardar cambios")</span>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ═══ Modal: Editar vendedor ═══ -->
+@if (showEditModal && vendorEditando != null)
+{
+    <div class="vp-backdrop"></div>
+    <div class="vp-modal" role="dialog" aria-modal="true">
+        <div class="vp-modal-content">
+            <div class="vp-modal-header blue">
+                <div>
+                    <span class="vp-modal-kicker">Modificar perfil de vendedor</span>
+                    <h3>Editar vendedor</h3>
+                </div>
+                <button type="button" class="vp-modal-close" @onclick="CerrarEditar" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="vp-modal-body">
+                @if (!string.IsNullOrWhiteSpace(errorModal))
+                {
+                    <div class="alert alert-danger rounded-3 border-0 shadow-sm mb-3">@errorModal</div>
+                }
+                <div class="vp-form-layout">
+                    <aside class="vp-avatar-panel">
+                        <div class="vp-avatar-preview-wrap">
+                            @if (!string.IsNullOrWhiteSpace(editSelectedAvatar))
+                            {
+                                <img src="@editSelectedAvatar" alt="Avatar" class="vp-avatar-preview" />
+                            }
+                            else
+                            {
+                                <span class="vp-avatar-default"><i class="bi bi-person-fill"></i></span>
+                            }
+                            <button type="button" class="vp-avatar-trigger" @onclick="ToggleEditAvatarSelector">
+                                <i class="bi bi-camera"></i>
+                            </button>
+                        </div>
+                        <div class="vp-avatar-copy">
+                            <strong>Imagen de perfil</strong>
+                            <span>Seleccione un avatar del catálogo.</span>
+                        </div>
+                        @if (showEditAvatarSelector && avatarFiles.Any())
+                        {
+                            <div class="vp-avatar-selector">
+                                @foreach (var avatar in avatarFiles)
+                                {
+                                    var url = $"images/avatars/{avatar}";
+                                    <button type="button"
+                                            class="vp-avatar-item @(editSelectedAvatar == url ? "selected" : string.Empty)"
+                                            @onclick='() => SeleccionarEditAvatar(url)'>
+                                        <img src="@url" alt="Avatar" />
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </aside>
+
+                    <div class="vp-form-grid">
+                        <div class="vp-field">
+                            <label class="vp-label">Nombres</label>
+                            <input @bind="editNombres" class="vp-input" placeholder="Ej: Andrea" />
+                        </div>
+                        <div class="vp-field">
+                            <label class="vp-label">Apellidos</label>
+                            <input @bind="editApellidos" class="vp-input" placeholder="Ej: Cevallos" />
+                        </div>
+                        <div class="vp-field vp-field-wide">
+                            <label class="vp-label">Email corporativo
+                                @if (editUsuarioId == 0)
+                                {
+                                    <span style="font-weight:400;color:#94a3b8;text-transform:none;font-size:.78rem;letter-spacing:0;">(opcional — ingresa para vincular cuenta)</span>
+                                }
+                            </label>
+                            <input @bind="editEmail" type="email" class="vp-input" placeholder="@(editUsuarioId > 0 ? "correo@empresa.com" : "Opcional: correo del vendedor")" />
+                        </div>
+                        <div class="vp-field vp-field-wide">
+                            <label class="vp-label">Contraseña
+                                <span style="font-weight:400;color:#94a3b8;text-transform:none;font-size:.78rem;letter-spacing:0;">
+                                    @(editUsuarioId > 0 ? "(dejar vacío para no cambiar)" : "(requerida si vinculas un correo)")
+                                </span>
+                            </label>
+                            <div class="vp-pw-wrap">
+                                <input @bind="editNuevaClave"
+                                       type="@(mostrarClaveEdit ? "text" : "password")"
+                                       class="vp-input vp-input-accent"
+                                       placeholder="Mínimo 8 caracteres" />
+                                <button type="button" class="vp-pw-toggle" @onclick="ToggleMostrarClaveEdit">
+                                    <i class="bi @(mostrarClaveEdit ? "bi-eye-slash" : "bi-eye")"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="vp-modal-footer">
+                <button type="button" class="vp-btn-quiet" @onclick="CerrarEditar">Cancelar</button>
+                <button type="button" class="vp-btn-primary" disabled="@saving" @onclick="GuardarEdicion">
+                    <i class="bi @(saving ? "bi-hourglass-split" : "bi-save")"></i>
+                    <span>@(saving ? "Guardando..." : "Guardar cambios")</span>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ═══ Modal: Bloquear / Activar vendedor ═══ -->
+@if (showBloqueoModal && vendorBloqueo != null)
+{
+    var isBloquear = vendorBloqueo.Activo;
+    <div class="vp-backdrop"></div>
+    <div class="vp-modal" role="dialog" aria-modal="true">
+        <div class="vp-modal-content vp-modal-sm">
+            <div class="vp-modal-header @(isBloquear ? "danger" : "blue")">
+                <div>
+                    <span class="vp-modal-kicker">@(isBloquear ? "Bloquear acceso" : "Restaurar acceso")</span>
+                    <h3>@(isBloquear ? "Bloquear vendedor" : "Activar vendedor")</h3>
+                </div>
+                <button type="button" class="vp-modal-close" @onclick="CerrarBloqueo" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="vp-modal-body">
+                <div class="vp-confirm-box">
+                    <div class="vp-confirm-icon @(isBloquear ? "lock" : "unlock")">
+                        <i class="bi @(isBloquear ? "bi-lock-fill" : "bi-unlock-fill")"></i>
+                    </div>
+                    <div class="vp-confirm-text">
+                        @if (isBloquear)
+                        {
+                            <span>¿Desea bloquear a <span class="vp-confirm-name">@vendorBloqueo.Nombre</span>?<br/>
+                            Su enlace de ventas dejará de funcionar hasta que lo actives nuevamente.</span>
+                        }
+                        else
+                        {
+                            <span>¿Desea restaurar el acceso de <span class="vp-confirm-name">@vendorBloqueo.Nombre</span>?<br/>
+                            Su enlace de ventas volverá a estar activo de inmediato.</span>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="vp-modal-footer">
+                <button type="button" class="vp-btn-quiet" @onclick="CerrarBloqueo">Cancelar</button>
+                @if (isBloquear)
+                {
+                    <button type="button" class="vp-btn-danger" disabled="@saving" @onclick="ConfirmarBloqueo">
+                        <i class="bi bi-lock-fill"></i>
+                        <span>@(saving ? "Procesando..." : "Sí, bloquear")</span>
+                    </button>
+                }
+                else
+                {
+                    <button type="button" class="vp-btn-success" disabled="@saving" @onclick="ConfirmarBloqueo">
+                        <i class="bi bi-unlock-fill"></i>
+                        <span>@(saving ? "Procesando..." : "Sí, activar")</span>
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<VendedorBackOffice> vendors = new();
+
+    // crear
+    private bool showModal;
+    private bool showAvatarSelector;
+    private bool mostrarClave;
+    private bool saving;
+    private string? errorModal;
+    private string? selectedAvatar;
+    private string? nuevoNombres;
+    private string? nuevoApellidos;
+    private string? nuevoEmail;
+    private string? nuevaClave;
+    private List<string> avatarFiles = new();
+
+    // editar
+    private bool showEditModal;
+    private VendedorBackOffice? vendorEditando;
+    private int editUsuarioId;
+    private string? editNombre;
+    private string? editNombres;
+    private string? editApellidos;
+    private string? editEmail;
+    private string? editNuevaClave;
+    private bool mostrarClaveEdit;
+    private string? editSelectedAvatar;
+    private bool showEditAvatarSelector;
+
+    // bloquear
+    private bool showBloqueoModal;
+    private VendedorBackOffice? vendorBloqueo;
+
+    // feedback
+    private bool success;
+    private string? message;
+    private bool esVendedor;
+    private bool isLoading = true;
+    private readonly Dictionary<string, string> qrCache = new(StringComparer.Ordinal);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await VendedorBackOfficeService.EnsureSchemaAsync();
+        await VendedorBackOfficeService.ObtenerSistemaAsync();
+        await CargarAsync();
+        CargarAvatares();
+    }
+
+    private void CargarAvatares()
+    {
+        try
+        {
+            var path = Path.Combine(WebHostEnvironment.WebRootPath, "images", "avatars");
+            if (!Directory.Exists(path)) return;
+            avatarFiles = Directory.GetFiles(path)
+                .Select(Path.GetFileName)
+                .Where(f => !string.IsNullOrWhiteSpace(f) &&
+                            (f!.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(f => string.Equals(f, "default.png", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToList()!;
+        }
+        catch { }
+    }
+
+    // ── Modal Crear ──
+    private void AbrirModal()
+    {
+        nuevoNombres = string.Empty; nuevoApellidos = string.Empty;
+        nuevoEmail = string.Empty; nuevaClave = string.Empty;
+        selectedAvatar = null; mostrarClave = false;
+        showAvatarSelector = false; errorModal = null; showModal = true;
+    }
+    private void CerrarModal() { showModal = false; showAvatarSelector = false; errorModal = null; mostrarClave = false; }
+    private void ToggleAvatarSelector() => showAvatarSelector = !showAvatarSelector;
+    private void SeleccionarAvatar(string url) { selectedAvatar = url; showAvatarSelector = false; }
+    private void ToggleMostrarClave() => mostrarClave = !mostrarClave;
+
+    // ── Modal Editar ──
+    private async Task AbrirEditar(VendedorBackOffice v)
+    {
+        vendorEditando = v;
+        editNombre = v.Nombre;
+        editNombres = string.Empty;
+        editApellidos = string.Empty;
+        editEmail = string.Empty;
+        editNuevaClave = string.Empty;
+        mostrarClaveEdit = false;
+        editSelectedAvatar = null;
+        showEditAvatarSelector = false;
+        errorModal = null;
+        editUsuarioId = 0;
+
+        await using var ctx = await DbFactory.CreateDbContextAsync();
+
+        // 1) Intentar por CodigoReferencia: usr_{id}
+        if (v.CodigoReferencia?.StartsWith("usr_", StringComparison.OrdinalIgnoreCase) == true &&
+            int.TryParse(v.CodigoReferencia[4..], out var uid) && uid > 0)
+        {
+            var u = await ctx.Usuarios.FindAsync(uid);
+            if (u != null)
+            {
+                editUsuarioId = uid;
+                editNombres   = u.Nombres  ?? string.Empty;
+                editApellidos = u.Apellidos ?? string.Empty;
+                editEmail     = u.Email     ?? string.Empty;
+                editSelectedAvatar = u.AvatarUrl;
+                showEditModal = true;
+                return;
+            }
+        }
+
+        // 2) Fallback: buscar por nombre en Usuarios (para vendedores sin CodigoReferencia usr_)
+        {
+            var parts = v.Nombre.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            editNombres   = parts.Length > 0 ? parts[0] : v.Nombre;
+            editApellidos = parts.Length > 1 ? parts[1] : string.Empty;
+        }
+
+        showEditModal = true;
+    }
+
+    private void CerrarEditar()
+    {
+        showEditModal = false; vendorEditando = null; errorModal = null;
+        mostrarClaveEdit = false; showEditAvatarSelector = false;
+    }
+    private void ToggleEditAvatarSelector() => showEditAvatarSelector = !showEditAvatarSelector;
+    private void SeleccionarEditAvatar(string url) { editSelectedAvatar = url; showEditAvatarSelector = false; }
+    private void ToggleMostrarClaveEdit() => mostrarClaveEdit = !mostrarClaveEdit;
+
+    private async Task GuardarEdicion()
+    {
+        if (vendorEditando == null) return;
+
+        var nombresVal    = (editNombres    ?? string.Empty).Trim();
+        var apellidosVal  = (editApellidos  ?? string.Empty).Trim();
+        var emailVal      = (editEmail      ?? string.Empty).Trim();
+        var passVal       = (editNuevaClave ?? string.Empty).Trim();
+        var nombreCompleto = $"{nombresVal} {apellidosVal}".Trim();
+
+        if (nombresVal.Length < 1) { errorModal = "El nombre es obligatorio."; return; }
+
+        // Email requerido solo cuando no hay Usuario vinculado aún
+        bool tieneEmail = !string.IsNullOrWhiteSpace(emailVal);
+        if (tieneEmail && !EsCorreoValido(emailVal)) { errorModal = "El correo ingresado no es válido."; return; }
+
+        // Si hay email pero no Usuario vinculado → necesita contraseña para crear la cuenta
+        if (tieneEmail && editUsuarioId == 0 && string.IsNullOrWhiteSpace(passVal))
+        {
+            errorModal = "Para vincular un correo nuevo debes ingresar una contraseña (mínimo 8 caracteres).";
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(passVal) && passVal.Length < 8)
+        {
+            errorModal = "La contraseña debe tener al menos 8 caracteres.";
+            return;
+        }
+
+        saving = true; errorModal = null; message = null; success = false;
+        try
+        {
+            await using var ctx = await DbFactory.CreateDbContextAsync();
+            string? correoBienvenidaPendiente = null;
+            string? nombreBienvenidaPendiente = null;
+            int? idUsuarioBienvenidaPendiente = null;
+            string? codigoAccesoPendiente = null;
+
+            // ── A) Actualizar nombre del VendedorBackOffice ──
+            var vend = await ctx.VendedoresBackOffice.FindAsync(vendorEditando.IdVendedor);
+            if (vend != null) vend.Nombre = nombreCompleto;
+
+            // ── B) Usuario vinculado existente ──
+            if (editUsuarioId > 0)
+            {
+                if (tieneEmail)
+                {
+                    var emailTaken = await ctx.Usuarios.AnyAsync(u => u.Email == emailVal && u.IdUsuario != editUsuarioId);
+                    if (emailTaken) { errorModal = "Ya existe otro usuario con ese correo."; saving = false; return; }
+                }
+
+                var usr = await ctx.Usuarios.FindAsync(editUsuarioId);
+                if (usr != null)
+                {
+                    var emailAnterior = usr.Email?.Trim() ?? string.Empty;
+                    var correoCambio = tieneEmail &&
+                        !string.Equals(emailAnterior, emailVal, StringComparison.OrdinalIgnoreCase);
+                    var claveCambio = !string.IsNullOrWhiteSpace(passVal);
+
+                    usr.Nombres   = nombresVal;
+                    usr.Apellidos = apellidosVal;
+                    if (tieneEmail) usr.Email = emailVal;
+                    usr.AvatarUrl = editSelectedAvatar;
+                    if (claveCambio)
+                    {
+                        usr.PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(passVal);
+                        usr.ClaveTemporal = false;
+                    }
+
+                    if (correoCambio || claveCambio)
+                    {
+                        correoBienvenidaPendiente = tieneEmail ? emailVal : emailAnterior;
+                        nombreBienvenidaPendiente = nombreCompleto;
+                        idUsuarioBienvenidaPendiente = usr.IdUsuario;
+                        codigoAccesoPendiente = claveCambio ? passVal : null;
+                    }
+                }
+            }
+            // ── C) Crear Usuario nuevo y vincularlo ──
+            else if (tieneEmail && !string.IsNullOrWhiteSpace(passVal))
+            {
+                var emailTaken = await ctx.Usuarios.AnyAsync(u => u.Email == emailVal);
+                if (emailTaken) { errorModal = "Ya existe un usuario con ese correo."; saving = false; return; }
+
+                var newUser = new Usuario
+                {
+                    Nombres          = nombresVal,
+                    Apellidos        = apellidosVal,
+                    Email            = emailVal,
+                    PasswordHash     = Simetric.Components.Helpers.SecurityHelper.HashPassword(passVal),
+                    IdTipoUsuario    = 7,
+                    TipoCliente      = 2,
+                    Estado           = true,
+                    NombreEmpresa    = "Backoffice",
+                    DireccionEmpresa = "Backoffice",
+                    ClaveTemporal    = false,
+                    AvatarUrl        = editSelectedAvatar,
+                    FechaCreacion    = DateTime.Now
+                };
+                ctx.Usuarios.Add(newUser);
+                await ctx.SaveChangesAsync(); // necesitamos el IdUsuario generado
+
+                // Actualizar CodigoReferencia del vendedor para vincularlo
+                if (vend != null) vend.CodigoReferencia = $"usr_{newUser.IdUsuario}";
+                correoBienvenidaPendiente = emailVal;
+                nombreBienvenidaPendiente = nombreCompleto;
+                idUsuarioBienvenidaPendiente = newUser.IdUsuario;
+                codigoAccesoPendiente = passVal;
+            }
+
+            await ctx.SaveChangesAsync();
+            if (!string.IsNullOrWhiteSpace(correoBienvenidaPendiente) &&
+                idUsuarioBienvenidaPendiente.HasValue &&
+                !string.IsNullOrWhiteSpace(codigoAccesoPendiente))
+            {
+                var (correoEnviado, errorCorreo) = await EnviarCorreoBienvenidaVendedorAsync(correoBienvenidaPendiente, nombreBienvenidaPendiente ?? nombreCompleto, idUsuarioBienvenidaPendiente.Value, codigoAccesoPendiente);
+                success = correoEnviado;
+                message = correoEnviado
+                    ? $"Perfil de \"{nombreCompleto}\" actualizado correctamente y correo enviado a {correoBienvenidaPendiente}."
+                    : $"Perfil de \"{nombreCompleto}\" actualizado, pero no se pudo enviar el correo a {correoBienvenidaPendiente}: {errorCorreo}";
+            }
+
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                success = true;
+                message = $"Perfil de \"{nombreCompleto}\" actualizado correctamente.";
+            }
+            CerrarEditar();
+            await CargarAsync();
+        }
+        catch (Exception ex) { errorModal = $"Error al guardar: {ex.Message}"; }
+        finally { saving = false; }
+    }
+
+
+    // ── Modal Bloquear ──
+    private void AbrirBloqueo(VendedorBackOffice v) { vendorBloqueo = v; showBloqueoModal = true; }
+    private void CerrarBloqueo() { showBloqueoModal = false; vendorBloqueo = null; }
+
+    private async Task ConfirmarBloqueo()
+    {
+        if (vendorBloqueo == null) return;
+        saving = true;
+        try
+        {
+            await using var ctx = await DbFactory.CreateDbContextAsync();
+            var v = await ctx.VendedoresBackOffice.FindAsync(vendorBloqueo.IdVendedor);
+            if (v != null)
+            {
+                v.Activo = !v.Activo;
+                await ctx.SaveChangesAsync();
+                success = true;
+                message = v.Activo
+                    ? $"\"{v.Nombre}\" fue activado correctamente."
+                    : $"\"{v.Nombre}\" fue bloqueado. Su enlace dejará de funcionar.";
+            }
+            CerrarBloqueo();
+            await CargarAsync();
+        }
+        catch (Exception ex) { message = $"Error: {ex.Message}"; success = false; CerrarBloqueo(); }
+        finally { saving = false; }
+    }
+
+    private async Task CargarAsync()
+    {
+        isLoading = true;
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+        var tipoCliente = user.FindFirst("TipoCliente")?.Value;
+        var nombreCompleto = user.Identity?.Name ?? "Vendedor";
+
+        var idUsuario = int.TryParse(user.FindFirst("IdUsuario")?.Value, out var id) ? id : 0;
+        if (idUsuario > 0)
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var dbUser = await context.Usuarios.FindAsync(idUsuario);
+            if (dbUser != null)
+            {
+                role = dbUser.IdTipoUsuario?.ToString() ?? role;
+                tipoCliente = dbUser.TipoCliente?.ToString() ?? tipoCliente;
+                nombreCompleto = $"{dbUser.Nombres} {dbUser.Apellidos}".Trim();
+                if (string.IsNullOrWhiteSpace(nombreCompleto))
+                    nombreCompleto = dbUser.Email ?? "Vendedor";
+            }
+        }
+
+        esVendedor = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
+
+        var allVendors = await VendedorBackOfficeService.ListarAsync();
+
+        if (esVendedor)
+        {
+            var sellerProfile = await VendedorBackOfficeService.ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);
+            vendors = sellerProfile is null ? new List<VendedorBackOffice>() : new List<VendedorBackOffice> { sellerProfile };
+        }
+        else
+        {
+            vendors = allVendors;
+        }
+
+        isLoading = false;
+    }
+
+    private async Task CrearAsync()
+    {
+        saving = true; errorModal = null; message = null; success = false;
+
+        var nombresVal = (nuevoNombres ?? string.Empty).Trim();
+        var apellidosVal = (nuevoApellidos ?? string.Empty).Trim();
+        var emailVal = (nuevoEmail ?? string.Empty).Trim();
+        var passVal = (nuevaClave ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(nombresVal)) { errorModal = "El nombre es obligatorio."; saving = false; return; }
+        if (string.IsNullOrWhiteSpace(emailVal) || !EsCorreoValido(emailVal)) { errorModal = "Ingresa un correo válido."; saving = false; return; }
+        if (string.IsNullOrWhiteSpace(passVal) || passVal.Length < 8) { errorModal = "La contraseña debe tener al menos 8 caracteres."; saving = false; return; }
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            if (await context.Usuarios.AnyAsync(u => u.Email == emailVal)) { errorModal = "Ya existe un usuario con ese correo."; saving = false; return; }
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var currentUser = authState.User;
+            var currentUserId = int.TryParse(currentUser.FindFirst("IdUsuario")?.Value, out var id) ? id : 0;
+            var nameVal = $"{nombresVal} {apellidosVal}".Trim();
+
+            var dbUser = new Usuario
+            {
+                Nombres = nombresVal, Apellidos = apellidosVal, Email = emailVal,
+                PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(passVal),
+                IdTipoUsuario = 7, TipoCliente = 2, Estado = true,
+                NombreEmpresa = "Backoffice", DireccionEmpresa = "Backoffice",
+                ClaveTemporal = false, AvatarUrl = selectedAvatar, FechaCreacion = DateTime.Now
+            };
+            context.Usuarios.Add(dbUser);
+            await context.SaveChangesAsync();
+
+            context.VendedoresBackOffice.Add(new VendedorBackOffice
+            {
+                Nombre = nameVal, CodigoReferencia = $"usr_{dbUser.IdUsuario}",
+                Activo = true, EsSistema = false,
+                IdUsuarioCreacion = currentUserId > 0 ? currentUserId : null,
+                FechaCreacion = DateTime.Now
+            });
+            await context.SaveChangesAsync();
+
+            var (correoEnviado, errorCorreo) = await EnviarCorreoBienvenidaVendedorAsync(emailVal, nameVal, dbUser.IdUsuario, passVal);
+            success = correoEnviado;
+            message = correoEnviado
+                ? $"Vendedor \"{nameVal}\" creado correctamente y correo enviado a {emailVal}."
+                : $"Vendedor \"{nameVal}\" creado correctamente, pero no se pudo enviar el correo a {emailVal}: {errorCorreo}";
+            CerrarModal();
+            await CargarAsync();
+        }
+        catch (Exception ex) { errorModal = $"Error al crear: {ex.Message}"; }
+        finally { saving = false; }
+    }
+
+    private async Task<(bool Enviado, string? Error)> EnviarCorreoBienvenidaVendedorAsync(string email, string nombreVendedor, int idUsuario, string codigoAcceso)
+    {
+        try
+        {
+            var loginUrl = NavManager.ToAbsoluteUri("/login").ToString();
+            await EmailService.EnviarBienvenidaVendedorBackOfficeAsync(
+                email,
+                nombreVendedor,
+                loginUrl,
+                email,
+                codigoAcceso,
+                null,
+                null);
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    private static string ActivarCodigoAccesoTemporal(Usuario usuario)
+    {
+        var codigoAcceso = RecoveryCodeHelper.GenerarCodigoNumerico();
+        usuario.ClaveTemporal = false;
+        usuario.TokenRecuperacion = Simetric.Components.Helpers.SecurityHelper.HashPassword(codigoAcceso);
+        usuario.FechaExpiracionToken = null;
+        return codigoAcceso;
+    }
+
+    private static string GetInitials(string nombre)
+    {
+        var parts = nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{char.ToUpper(parts[0][0])}{char.ToUpper(parts[1][0])}"
+            : nombre.Length > 0 ? char.ToUpper(nombre[0]).ToString() : "?";
+    }
+
+    private string GetVendorAvatar(VendedorBackOffice vendor)
+    {
+        try
+        {
+            if (vendor.IdUsuarioCreacion == null) return string.Empty;
+            // Try to find the avatar from the linked user via CodigoReferencia
+            if (vendor.CodigoReferencia?.StartsWith("usr_", StringComparison.OrdinalIgnoreCase) == true &&
+                int.TryParse(vendor.CodigoReferencia[4..], out var uid))
+            {
+                // We'll leave this as a sync placeholder; real lookup done async in CargarAsync
+            }
+        }
+        catch { }
+        return string.Empty;
+    }
+
+    private static bool EsCorreoValido(string correo)
+    {
+        try { _ = new System.Net.Mail.MailAddress(correo); return true; }
+        catch { return false; }
+    }
+
+    private string ObtenerQrVendedor(string contenido)
+    {
+        if (qrCache.TryGetValue(contenido, out var qr)) return qr;
+        using QRCodeGenerator qrGenerator = new();
+        using QRCodeData qrCodeData = qrGenerator.CreateQrCode(contenido, QRCodeGenerator.ECCLevel.Q);
+        using PngByteQRCode qrCode = new(qrCodeData);
+        qr = $"data:image/png;base64,{Convert.ToBase64String(qrCode.GetGraphic(20))}";
+        qrCache[contenido] = qr;
+        return qr;
+    }
+
+    private async Task CopiarTextoAsync(string valor, string mensaje)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", valor);
+        await JS.ShowToastAsync(mensaje);
+    }
+
+    private static string ObtenerMensajeCopiado(string nombreVendedor, bool esCodigo) =>
+        esCodigo ? $"Código secreto de {nombreVendedor} copiado." : $"Link de {nombreVendedor} copiado.";
+
+    private Task AbrirLinkAsync(string url) =>
+        JS.InvokeVoidAsync("open", url, "_blank").AsTask();
+}
+

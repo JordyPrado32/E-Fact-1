@@ -1,0 +1,964 @@
+@page "/firma"
+
+@using System.Net.Http.Json
+@using Microsoft.AspNetCore.Hosting
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.Services
+@using System.IO
+@using System.Security.Claims
+@using System.Text.Json
+
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment HostEnvironment
+@inject NavigationManager NavManager
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject EmisionControlService EmisionControlService
+
+@rendermode InteractiveServer
+
+@{
+    var filteredEmisores = EmisoresFiltrados.ToList();
+    var totalConFirma = emisores.Count(TieneFirmaConfigurada);
+    var totalPendientes = Math.Max(emisores.Count(e => e.Estado == true) - totalConFirma, 0);
+}
+
+<PageTitle>Firma electronica | Numerica e-fact</PageTitle>
+
+<div class="entity-shell" data-tour="firma.page">
+    @if (MostrarVolverInicioOnboarding)
+    {
+        <div class="breadcrumb-container">
+            <button type="button" class="breadcrumb-home-btn" @onclick='() => NavManager.NavigateTo("/dashboard")'>
+                <i class="bi bi-house-door"></i>
+                <span>Volver al inicio</span>
+            </button>
+        </div>
+    }
+
+    <section class="entity-hero" data-tour="firma.hero" style="display:none;">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Configuración de seguridad</span>
+            <h2>Firma electrónica</h2>
+            <p>
+                Carga y administra tu certificado de firma electrónica (.p12) para autorizar
+                legalmente los comprobantes electrónicos ante el SRI.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Firmas configuradas</span>
+                <strong>@totalConFirma</strong>
+                <small>Certificados activos y listos para firmar.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Firmas pendientes</span>
+                <strong>@totalPendientes</strong>
+                <small>Emisores activos que requieren configuración de firma.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Emisores totales</span>
+                <strong>@emisores.Count</strong>
+                <small>Empresas registradas en tu cuenta.</small>
+            </article>
+        </div>
+    </section>
+    <section class="quick-action-bar" aria-label="Acciones rapidas de firma">
+        <button type="button" class="quick-action-card quick-action-primary" @onclick="IrAEmisor">
+            <span class="quick-action-icon"><i class="bi bi-building"></i></span>
+            <span>
+                <strong>Datos del emisor</strong>
+                <small>Volver al registro fiscal</small>
+            </span>
+        </button>
+
+        <button type="button" class="quick-action-card" @onclick="IrAComprarFirma">
+            <span class="quick-action-icon quick-action-icon-green"><i class="bi bi-cart-check"></i></span>
+            <span>
+                <strong>Comprar firma</strong>
+                <small>Continuar en e-Sign</small>
+            </span>
+        </button>
+
+        <div class="quick-action-search">
+            <i class="bi bi-search"></i>
+            <input placeholder="Buscar por razon social o RUC..." @bind="filtro" @bind:event="oninput" />
+        </div>
+    </section>
+
+
+
+    <section class="entity-grid">
+        <section class="table-card" data-tour="firma.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>Firmas por emisor</h3>
+                </div>
+                <div class="table-head-actions">
+                    <span class="table-badge">@totalConFirma configuradas</span>
+                    <button type="button" class="primary-btn" @onclick="AbrirModalFirma" disabled="@(!emisores.Any())">
+                        <i class="bi bi-plus-lg"></i>
+                        <span>Agregar firma</span>
+                    </button>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-info-circle"></i>
+                    <span>@mensaje</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(debugError))
+            {
+                <div class="status-banner status-banner-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@debugError</span>
+                </div>
+            }
+
+            @if (cargando)
+            {
+                <div class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando firmas</h3>
+                    <p>Preparando los emisores disponibles para configurar certificado y clave.</p>
+                </div>
+            }
+            else if (!filteredEmisores.Any())
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-shield-x"></i>
+                    </div>
+                    <h3>No hay emisores para configurar</h3>
+                    <p>Primero registra un emisor activo y luego vuelve para cargar su firma electronica.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table entity-table entity-table-firmas mb-0">
+                        <thead>
+                            <tr>
+                                <th>Emisor</th>
+                                <th>RUC</th>
+                                <th>Firma</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var e in filteredEmisores)
+                            {
+                                var firmaConfigurada = TieneFirmaConfigurada(e);
+                                <tr class="@(firmaModel.Codigo == e.Codigo ? "is-selected" : string.Empty)">
+                                    <td>
+                                        <div class="cell-main cell-main-stacked">
+                                            <strong>@GetNombreEmisor(e)</strong>
+                                            <span>@(string.IsNullOrWhiteSpace(e.NomComercial) ? "Sin nombre comercial" : e.NomComercial)</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="code-pill">@(string.IsNullOrWhiteSpace(e.Ruc) ? "Sin RUC" : e.Ruc)</span>
+                                    </td>
+                                    <td>
+                                        <span class="signature-status @(firmaConfigurada ? "is-ready" : "is-pending")">
+                                            @(firmaConfigurada ? "Configurada" : "Pendiente")
+                                        </span>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="action-group">
+                                            <button type="button"
+                                                    class="action-btn action-edit"
+                                                    title="Gestionar firma"
+                                                    @onclick="() => AbrirModalFirma(e)">
+                                                <i class="bi bi-shield-check"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="editor-card entity-editor-card" data-tour="firma.editor" style="display:none;">
+            <div class="editor-head">
+                <div>
+                    <span class="panel-kicker">Configuracion de firma</span>
+                    <h3>@(FirmaDisponible ? GetTituloEditor() : "Firma electronica")</h3>
+                    <p>Actualiza el archivo .p12 y la clave que se usaran para emitir comprobantes.</p>
+                </div>
+                <span class="editor-badge @(FirmaConfiguradaActual ? "editor-badge-ready" : "editor-badge-new")">
+                    @(FirmaConfiguradaActual ? "Configurada" : "Pendiente")
+                </span>
+            </div>
+
+            @if (!FirmaDisponible)
+            {
+                <div class="editor-body">
+                    <div class="signature-empty-state">
+                        <i class="bi bi-building-check"></i>
+                        <div>
+                            <strong>Primero guarda los datos del emisor</strong>
+                            <p>Cuando exista un emisor activo, aqui podras configurar o actualizar su firma.</p>
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="editor-body entity-form-legacy">
+                    <div class="signature-emisor-summary">
+                        <div>
+                            <span>Emisor seleccionado</span>
+                            <strong>@GetTituloEditor()</strong>
+                        </div>
+                        <small>@(string.IsNullOrWhiteSpace(firmaModel.Ruc) ? "RUC no disponible" : $"RUC {firmaModel.Ruc}")</small>
+                    </div>
+
+                    @if (esAsociado)
+                    {
+                        <div class="status-banner status-banner-info status-banner-inline">
+                            <i class="bi bi-lock"></i>
+                            <span>Los usuarios asociados pueden consultar la firma, pero no modificarla.</span>
+                        </div>
+                    }
+
+                    <div class="signature-editor-body">
+                        <div>
+                            <label class="form-label small fw-bold">Archivo de firma</label>
+                            <div class="signature-choice-grid">
+                                <label class="signature-choice signature-choice-upload">
+                                    <i class="bi bi-upload"></i>
+                                    <span>
+                                        <strong>Subir firma</strong>
+                                        <small>Archivo .p12 de hasta 5 MB</small>
+                                    </span>
+                                    <InputFile accept=".p12" OnChange="SubirPathCertificado" disabled="@esAsociado" />
+                                </label>
+
+                                <button type="button" class="signature-choice signature-choice-buy" @onclick="IrAComprarFirma">
+                                    <i class="bi bi-cart-check"></i>
+                                    <span>
+                                        <strong>Comprar firma</strong>
+                                        <small>Continuar en e-Sign</small>
+                                    </span>
+                                </button>
+                            </div>
+
+                            @if (!string.IsNullOrWhiteSpace(NombrePathCertificadoActual))
+                            {
+                                <div class="signature-current">
+                                    <i class="bi bi-check-circle-fill"></i>
+                                    <span>@NombrePathCertificadoActual</span>
+                                    @if (!esAsociado)
+                                    {
+                                        <button type="button" title="Quitar certificado" @onclick="QuitarPathCertificado">
+                                            <i class="bi bi-x-lg"></i>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        <div>
+                            <label class="form-label small fw-bold">Clave del certificado</label>
+                            <div class="cert-password-shell">
+                                <input type="@tipoPassword"
+                                       class="form-control form-control-sm cert-password-input"
+                                       placeholder="Ingresa la clave del archivo .p12"
+                                       @bind="firmaModel.ClaveCertificado"
+                                       disabled="@esAsociado" />
+                                <button class="cert-password-eye" type="button" @onclick="TogglePasswordVisibility" title="Mostrar u ocultar clave">
+                                    <i class="bi @(mostrarPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                                </button>
+                            </div>
+
+                            @if (TieneClaveCertificadoActual)
+                            {
+                                <div class="signature-current">
+                                    <i class="bi bi-check-circle-fill"></i>
+                                    <span>Clave configurada</span>
+                                    @if (!esAsociado)
+                                    {
+                                        <button type="button" title="Quitar clave" @onclick="QuitarClaveCertificado">
+                                            <i class="bi bi-x-lg"></i>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="signature-editor-actions">
+                    <button type="button"
+                            class="secondary-btn"
+                            @onclick="CargarTodo"
+                            disabled="@guardandoFirma">
+                        <i class="bi bi-arrow-clockwise"></i>
+                        Refrescar
+                    </button>
+
+                    <button type="button"
+                            class="primary-btn"
+                            @onclick="GuardarFirma"
+                            disabled="@(esAsociado || guardandoFirma)">
+                        <i class="bi bi-shield-check"></i>
+                        @(guardandoFirma ? "Guardando firma..." : "Guardar firma")
+                    </button>
+                </div>
+            }
+        </section>
+    </section>
+</div>
+
+@if (mostrarModalFirma)
+{
+    <div class="modal fade show d-block" style="background: rgba(0,0,0,0.5); z-index: 1050;" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 18px;">
+                <div class="modal-header text-white" style="background-color: var(--n-blue); border-radius: 18px 18px 0 0;">
+                    <h5 class="modal-title fw-bold">
+                        <i class="bi bi-shield-check me-2"></i>@(FirmaDisponible ? GetTituloEditor() : "Firma electronica")
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarModalFirma"></button>
+                </div>
+                <div class="modal-body p-4" style="max-height: calc(100vh - 180px); overflow-y:auto;">
+                    <section class="editor-card entity-editor-card">
+                        @if (!FirmaDisponible)
+                        {
+                            <div class="editor-body">
+                                <div class="signature-empty-state">
+                                    <i class="bi bi-building-check"></i>
+                                    <div>
+                                        <strong>Primero guarda los datos del emisor</strong>
+                                        <p>Cuando exista un emisor activo, aqui podras configurar o actualizar su firma.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="editor-body entity-form-legacy">
+                                <div class="signature-emisor-summary">
+                                    <div>
+                                        <span>Emisor seleccionado</span>
+                                        <strong>@GetTituloEditor()</strong>
+                                    </div>
+                                    <small>@(string.IsNullOrWhiteSpace(firmaModel.Ruc) ? "RUC no disponible" : $"RUC {firmaModel.Ruc}")</small>
+                                </div>
+
+                                @if (esAsociado)
+                                {
+                                    <div class="status-banner status-banner-info status-banner-inline">
+                                        <i class="bi bi-lock"></i>
+                                        <span>Los usuarios asociados pueden consultar la firma, pero no modificarla.</span>
+                                    </div>
+                                }
+
+                                <div class="signature-editor-body">
+                                    <div>
+                                        <label class="form-label small fw-bold">Archivo de firma</label>
+                                        <div class="signature-choice-grid">
+                                            <label class="signature-choice signature-choice-upload">
+                                                <i class="bi bi-upload"></i>
+                                                <span>
+                                                    <strong>Subir firma</strong>
+                                                    <small>Archivo .p12 de hasta 5 MB</small>
+                                                </span>
+                                                <InputFile accept=".p12" OnChange="SubirPathCertificado" disabled="@esAsociado" />
+                                            </label>
+
+                                            <button type="button" class="signature-choice signature-choice-buy" @onclick="IrAComprarFirma">
+                                                <i class="bi bi-cart-check"></i>
+                                                <span>
+                                                    <strong>Comprar firma</strong>
+                                                    <small>Continuar en e-Sign</small>
+                                                </span>
+                                            </button>
+                                        </div>
+
+                                        @if (!string.IsNullOrWhiteSpace(NombrePathCertificadoActual))
+                                        {
+                                            <div class="signature-current">
+                                                <i class="bi bi-check-circle-fill"></i>
+                                                <span>@NombrePathCertificadoActual</span>
+                                                @if (!esAsociado)
+                                                {
+                                                    <button type="button" title="Quitar certificado" @onclick="QuitarPathCertificado">
+                                                        <i class="bi bi-x-lg"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small fw-bold">Clave del certificado</label>
+                                        <div class="cert-password-shell">
+                                            <input type="@tipoPassword"
+                                                   class="form-control form-control-sm cert-password-input"
+                                                   placeholder="Ingresa la clave del archivo .p12"
+                                                   @bind="firmaModel.ClaveCertificado"
+                                                   disabled="@esAsociado" />
+                                            <button class="cert-password-eye" type="button" @onclick="TogglePasswordVisibility" title="Mostrar u ocultar clave">
+                                                <i class="bi @(mostrarPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                                            </button>
+                                        </div>
+
+                                        @if (TieneClaveCertificadoActual)
+                                        {
+                                            <div class="signature-current">
+                                                <i class="bi bi-check-circle-fill"></i>
+                                                <span>Clave configurada</span>
+                                                @if (!esAsociado)
+                                                {
+                                                    <button type="button" title="Quitar clave" @onclick="QuitarClaveCertificado">
+                                                        <i class="bi bi-x-lg"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="signature-editor-actions">
+                                <button type="button" class="secondary-btn" @onclick="CargarTodo" disabled="@guardandoFirma">
+                                    <i class="bi bi-arrow-clockwise"></i>
+                                    Refrescar
+                                </button>
+
+                                <button type="button" class="primary-btn" @onclick="GuardarFirma" disabled="@(esAsociado || guardandoFirma)">
+                                    <i class="bi bi-shield-check"></i>
+                                    @(guardandoFirma ? "Guardando firma..." : "Guardar firma")
+                                </button>
+                            </div>
+                        }
+                    </section>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private const long MaxCertificadoSize = 5 * 1024 * 1024;
+
+    private readonly List<EmisorDto> emisores = new();
+    private EmisorUpsertDto firmaModel = new();
+    private bool cargando = true;
+    private bool guardandoFirma;
+    private bool esAsociado;
+    private bool mostrarModalFirma;
+    private bool mostrarPassword;
+    private string filtro = string.Empty;
+    private string? mensaje;
+    private string? debugError;
+    private EmisionEstado? emisionEstado;
+    private string? nombrePathCertificadoSeleccionado;
+    private bool emisorSeleccionadoTieneClaveCertificado;
+    private bool MostrarVolverInicioOnboarding =>
+        EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false;
+
+    private string tipoPassword => mostrarPassword ? "text" : "password";
+    private bool FirmaDisponible => firmaModel.Codigo > 0;
+    private string? NombrePathCertificadoActual => nombrePathCertificadoSeleccionado ?? ObtenerNombreArchivo(firmaModel.PathCertificado);
+    private bool TieneClaveCertificadoActual =>
+        !string.IsNullOrWhiteSpace(firmaModel.ClaveCertificado) ||
+        emisorSeleccionadoTieneClaveCertificado;
+    private bool FirmaConfiguradaActual =>
+        !string.IsNullOrWhiteSpace(NombrePathCertificadoActual) &&
+        TieneClaveCertificadoActual;
+
+    private IEnumerable<EmisorDto> EmisoresFiltrados =>
+        string.IsNullOrWhiteSpace(filtro)
+            ? emisores
+            : emisores.Where(e =>
+                (e.RazonSocial ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (e.NomComercial ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (e.Ruc ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        esAsociado =
+            (bool.TryParse(user.FindFirst("EstadoAsociado")?.Value, out var estadoAsociado) && estadoAsociado) ||
+            !string.IsNullOrWhiteSpace(user.FindFirst("IdJefe")?.Value);
+
+        await CargarTodo();
+    }
+
+    private async Task CargarTodo()
+    {
+        cargando = true;
+        debugError = null;
+
+        try
+        {
+            var idUsuario = await ObtenerIdUsuarioLogueado();
+            if (idUsuario is not > 0)
+            {
+                mensaje = "No se pudo obtener la sesion del usuario.";
+                return;
+            }
+
+            var seleccionadoPrevio = firmaModel.Codigo;
+            var data = await Http.GetFromJsonAsync<List<EmisorDto>>($"api/emisores?idUsuario={idUsuario.Value}") ?? new();
+
+            emisores.Clear();
+            emisores.AddRange(data);
+
+            var seleccionado = seleccionadoPrevio > 0
+                ? emisores.FirstOrDefault(e => e.Codigo == seleccionadoPrevio)
+                : null;
+
+            SeleccionarEmisorFirma(seleccionado ?? emisores.FirstOrDefault(e => e.Estado == true) ?? emisores.FirstOrDefault());
+            await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+            emisionEstado = await EmisionControlService.ObtenerEstadoAsync(idUsuario);
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private void SeleccionarEmisorFirma(EmisorDto? emisor)
+    {
+        if (emisor is null)
+        {
+            firmaModel = new EmisorUpsertDto();
+            nombrePathCertificadoSeleccionado = null;
+            emisorSeleccionadoTieneClaveCertificado = false;
+            return;
+        }
+
+        firmaModel = CrearModeloDesdeEmisor(emisor);
+        nombrePathCertificadoSeleccionado = null;
+        emisorSeleccionadoTieneClaveCertificado = emisor.TieneClaveCertificadoConfigurada;
+    }
+
+    private void AbrirModalFirma()
+    {
+        AbrirModalFirma(emisores.FirstOrDefault(e => e.Estado == true) ?? emisores.FirstOrDefault());
+    }
+
+    private void AbrirModalFirma(EmisorDto? emisor)
+    {
+        SeleccionarEmisorFirma(emisor);
+        mostrarModalFirma = true;
+    }
+
+    private void CerrarModalFirma()
+    {
+        mostrarModalFirma = false;
+    }
+
+    private async Task GuardarFirma()
+    {
+        if (!FirmaDisponible || esAsociado || guardandoFirma)
+        {
+            return;
+        }
+
+        var idUsuario = await ObtenerIdUsuarioLogueado();
+        if (idUsuario is not > 0)
+        {
+            mensaje = "No se pudo identificar al usuario para guardar la firma.";
+            return;
+        }
+
+        guardandoFirma = true;
+        mensaje = "Guardando configuracion de firma...";
+        debugError = null;
+
+        try
+        {
+            firmaModel.IdUsuario = idUsuario.Value;
+            firmaModel.PathCertificado = firmaModel.PathCertificado?.Trim();
+            firmaModel.ClaveCertificado = firmaModel.ClaveCertificado?.Trim();
+
+            if (!string.IsNullOrWhiteSpace(firmaModel.ClaveCertificado))
+            {
+                firmaModel.EliminarClaveCertificado = false;
+            }
+
+            var response = await Http.PutAsJsonAsync($"api/emisores/{firmaModel.Codigo}", firmaModel);
+            if (!response.IsSuccessStatusCode)
+            {
+                mensaje = "No se pudo guardar la firma electronica.";
+                debugError = await LeerMensajeErrorHttpAsync(response, "No se pudo guardar la firma electronica.");
+                return;
+            }
+
+            await CargarTodo();
+            EmisionControlService.NotifyChanged();
+            EmisorOnboardingService.NotifyChanged();
+            mostrarModalFirma = false;
+            mensaje = "Firma electronica guardada correctamente.";
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+            mensaje = "Error al guardar la firma.";
+        }
+        finally
+        {
+            guardandoFirma = false;
+        }
+    }
+
+    private void QuitarPathCertificado()
+    {
+        firmaModel.PathCertificado = null;
+        nombrePathCertificadoSeleccionado = null;
+        mensaje = "Archivo de firma quitado del formulario. Guarda para confirmar el cambio.";
+        debugError = null;
+    }
+
+    private void QuitarClaveCertificado()
+    {
+        firmaModel.ClaveCertificado = null;
+        firmaModel.EliminarClaveCertificado = true;
+        emisorSeleccionadoTieneClaveCertificado = false;
+        mensaje = "Clave del certificado quitada del formulario. Guarda para confirmar el cambio.";
+        debugError = null;
+    }
+
+    private Task SubirPathCertificado(InputFileChangeEventArgs e)
+    {
+        if (esAsociado)
+        {
+            mensaje = "Los usuarios asociados no pueden modificar la firma.";
+            debugError = null;
+            return Task.CompletedTask;
+        }
+
+        return SubirArchivoP12(e, "Archivo Firma", "path", relativePath =>
+        {
+            firmaModel.PathCertificado = relativePath;
+            nombrePathCertificadoSeleccionado = e.File?.Name;
+        });
+    }
+
+    private async Task SubirArchivoP12(InputFileChangeEventArgs e, string etiqueta, string subcarpeta, Action<string> asignarRuta)
+    {
+        try
+        {
+            if (e.FileCount > 1)
+            {
+                mensaje = $"Solo puedes subir un archivo .p12 para {etiqueta}.";
+                debugError = null;
+                return;
+            }
+
+            var file = e.File;
+            if (file is null)
+            {
+                mensaje = $"No se selecciono ningun archivo para {etiqueta}.";
+                return;
+            }
+
+            var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
+            if (!string.Equals(extension, ".p12", StringComparison.OrdinalIgnoreCase))
+            {
+                mensaje = $"Solo se permiten archivos .p12 para {etiqueta}.";
+                debugError = null;
+                return;
+            }
+
+            var contentType = (file.ContentType ?? string.Empty).Trim().ToLowerInvariant();
+            var tiposPermitidos = new[]
+            {
+                string.Empty,
+                "application/x-pkcs12",
+                "application/pkcs12",
+                "application/x-pkcs-12",
+                "application/octet-stream"
+            };
+
+            if (!tiposPermitidos.Contains(contentType))
+            {
+                mensaje = $"El archivo seleccionado para {etiqueta} no es un certificado .p12 valido.";
+                debugError = null;
+                return;
+            }
+
+            if (file.Size <= 0)
+            {
+                mensaje = $"El archivo seleccionado para {etiqueta} esta vacio.";
+                debugError = null;
+                return;
+            }
+
+            if (file.Size > MaxCertificadoSize)
+            {
+                mensaje = $"El archivo de {etiqueta} excede el tamano maximo de 5 MB.";
+                debugError = null;
+                return;
+            }
+
+            using var stream = file.OpenReadStream(MaxCertificadoSize);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            var bytes = ms.ToArray();
+            if (bytes.Length == 0)
+            {
+                mensaje = $"No se pudo leer el archivo seleccionado para {etiqueta}.";
+                debugError = null;
+                return;
+            }
+
+            var relativePath = await GuardarArchivoCertificadoAsync(bytes, subcarpeta);
+            asignarRuta(relativePath);
+            mensaje = $"{etiqueta} cargado correctamente. Guarda para confirmar el cambio.";
+            debugError = null;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+            mensaje = $"Error al procesar el archivo de {etiqueta}.";
+        }
+    }
+
+    private async Task<string> GuardarArchivoCertificadoAsync(byte[] bytes, string subcarpeta)
+    {
+        var relativePath = $"certs/{subcarpeta}/{Guid.NewGuid():N}.p12";
+        var physicalPath = Path.Combine(
+            HostEnvironment.ContentRootPath,
+            "App_Data",
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+        var directory = Path.GetDirectoryName(physicalPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        await File.WriteAllBytesAsync(physicalPath, bytes);
+        return relativePath;
+    }
+
+    private async Task<int?> ObtenerIdUsuarioLogueado()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var idClaim = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(idClaim, out var id) ? id : null;
+    }
+
+    private void TogglePasswordVisibility()
+    {
+        mostrarPassword = !mostrarPassword;
+    }
+
+    private void IrAEmisor() => NavManager.NavigateTo("/emisor");
+
+    private void IrAComprarFirma() => NavManager.NavigateTo("/e-sign");
+
+    private string GetTituloEditor() =>
+        string.IsNullOrWhiteSpace(firmaModel.NomComercial)
+            ? FirstFilled(firmaModel.RazonSocial, "Emisor seleccionado")
+            : firmaModel.NomComercial!;
+
+    private static bool TieneFirmaConfigurada(EmisorDto emisor) =>
+        !string.IsNullOrWhiteSpace(emisor.PathCertificado) &&
+        emisor.TieneClaveCertificadoConfigurada;
+
+    private static string GetNombreEmisor(EmisorDto emisor) =>
+        FirstFilled(emisor.RazonSocial, emisor.NomComercial, $"Emisor #{emisor.Codigo}");
+
+    private static string FirstFilled(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static EmisorUpsertDto CrearModeloDesdeEmisor(EmisorDto item) => new()
+    {
+        Codigo = item.Codigo,
+        RazonSocial = item.RazonSocial,
+        Ruc = item.Ruc,
+        NomComercial = item.NomComercial,
+        DirEstablecimiento = item.DirEstablecimiento,
+        LlevaContabilidad = item.LlevaContabilidad?.Trim()?.ToUpperInvariant() ?? string.Empty,
+        LogoImagen = item.LogoImagen,
+        ClaveInterna = item.ClaveInterna,
+        DireccionMatriz = item.DireccionMatriz,
+        Retenciones = string.IsNullOrWhiteSpace(item.Retenciones) ? "NO" : item.Retenciones,
+        PathCertificado = item.PathCertificado,
+        ClaveCertificado = null,
+        Telefono = item.Telefono,
+        Estado = item.Estado ?? true,
+        IdUsuario = item.IdUsuario,
+        CodEstablecimiento = item.CodEstablecimiento,
+        CodPuntoEmision = item.CodPuntoEmision,
+        Email = item.Email
+    };
+
+    private static string? ObtenerNombreArchivo(string? rutaArchivo) =>
+        string.IsNullOrWhiteSpace(rutaArchivo)
+            ? null
+            : Path.GetFileName(rutaArchivo.Replace('\\', '/'));
+
+    private static string FormatearMensajeError(string? rawMessage)
+    {
+        if (string.IsNullOrWhiteSpace(rawMessage))
+        {
+            return "Se produjo un error inesperado.";
+        }
+
+        var limpio = rawMessage
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+
+        if (PareceHtml(limpio))
+        {
+            return "El servidor devolvio un error interno no controlado.";
+        }
+
+        return limpio.Length > 320
+            ? $"{limpio[..317].TrimEnd()}..."
+            : limpio;
+    }
+
+    private async Task<string> LeerMensajeErrorHttpAsync(HttpResponseMessage response, string fallbackMessage)
+    {
+        var rawBody = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(rawBody))
+        {
+            return fallbackMessage;
+        }
+
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        var normalizedBody = rawBody.Trim();
+
+        if (string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase) || PareceHtml(normalizedBody))
+        {
+            return $"{fallbackMessage} El servidor devolvio un error interno.";
+        }
+
+        var messageFromJson = IntentarExtraerMensajeJson(normalizedBody);
+        if (!string.IsNullOrWhiteSpace(messageFromJson))
+        {
+            return FormatearMensajeError(messageFromJson);
+        }
+
+        return FormatearMensajeError(normalizedBody);
+    }
+
+    private static string? IntentarExtraerMensajeJson(string rawBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(rawBody);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                return root.GetString();
+            }
+
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (root.TryGetProperty("message", out var messageElement) && messageElement.ValueKind == JsonValueKind.String)
+            {
+                return messageElement.GetString();
+            }
+
+            if (root.TryGetProperty("title", out var titleElement) && titleElement.ValueKind == JsonValueKind.String)
+            {
+                return titleElement.GetString();
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool PareceHtml(string value)
+    {
+        var sample = value.TrimStart();
+        return sample.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
+               sample.StartsWith("<html", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private class EmisorDto
+    {
+        public int Codigo { get; set; }
+        public string? RazonSocial { get; set; }
+        public string? Ruc { get; set; }
+        public string? NomComercial { get; set; }
+        public string? DirEstablecimiento { get; set; }
+        public string? Email { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("llevacontabilidad")]
+        public string? LlevaContabilidad { get; set; }
+        public string? LogoImagen { get; set; }
+        public string? DireccionMatriz { get; set; }
+        public string? ClaveInterna { get; set; }
+        public string? Retenciones { get; set; }
+        public string? PathCertificado { get; set; }
+        public bool TieneClaveCertificadoConfigurada { get; set; }
+        public string? Telefono { get; set; }
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+    }
+
+    private class EmisorUpsertDto
+    {
+        public int Codigo { get; set; }
+        public string? RazonSocial { get; set; }
+        public string? Ruc { get; set; }
+        public string? NomComercial { get; set; }
+        public string? Email { get; set; }
+        public string? DirEstablecimiento { get; set; }
+        public string? LlevaContabilidad { get; set; }
+        public string? LogoImagen { get; set; }
+        public string? DireccionMatriz { get; set; }
+        public string? ClaveInterna { get; set; }
+        public string? Retenciones { get; set; }
+        public string? PathCertificado { get; set; }
+        public string? ClaveCertificado { get; set; }
+        public bool EliminarClaveCertificado { get; set; }
+        public string? Telefono { get; set; }
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+    }
+}

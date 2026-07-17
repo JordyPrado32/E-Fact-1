@@ -1,0 +1,559 @@
+@page "/e-contax/organizacion"
+
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.DTOs.EContax
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using System.Security.Claims
+@inject AuthenticationStateProvider AuthStateProvider
+@inject EContaxOrganizacionService OrganizacionService
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@rendermode InteractiveServer
+
+@{
+    var puedeAdministrar = PuedeAdministrar;
+    var sucursalesVisibles = SucursalesFiltradas.ToList();
+    var totalSucursales = resumen?.Sucursales.Count ?? 0;
+    var sucursalesActivas = resumen?.Sucursales.Count(x => x.Estado) ?? 0;
+    var nombreEmpresa = resumen?.Empresa.Nombre ?? "Empresa";
+}
+
+<PageTitle>Organizacion | Numerica E-Contax</PageTitle>
+
+<div class="entity-shell organization-shell">
+    <section class="entity-hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Estructura comercial</span>
+            <h2>Organizacion</h2>
+            <p>Administra la empresa, sus sucursales y el alcance de clientes y productos.</p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Clientes empresa</span>
+                <strong>@(resumen?.ClientesActivos ?? 0)</strong>
+                <small>Propios de esta empresa.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Sucursales activas</span>
+                <strong>@sucursalesActivas</strong>
+                <small>Puntos operativos de @nombreEmpresa.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Productos activos</span>
+                <strong>@(resumen?.ProductosActivos ?? 0)</strong>
+                <small>Separados por sucursal.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Configuracion e-contax</span>
+            <h3>Empresa y sucursales</h3>
+            <p>Gestiona la empresa actual y define las sucursales que separan el catalogo de productos.</p>
+        </div>
+
+        <div class="toolbar-actions">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+                <input class="search-input"
+                       placeholder="Buscar sucursal por nombre, codigo o direccion"
+                       value="@filtro"
+                       @oninput="OnFiltroChanged" />
+            </div>
+
+            <div class="toolbar-secondary-actions org-toolbar-secondary">
+                <div class="filter-box">
+                    <label class="filter-label" for="estadoSucursalFiltro">Estado</label>
+                    <select id="estadoSucursalFiltro" class="filter-select" value="@filtroEstado" @onchange="OnEstadoFiltroChanged">
+                        <option value="todos">Todas</option>
+                        <option value="activas">Activas</option>
+                        <option value="inactivas">Inactivas</option>
+                    </select>
+                </div>
+
+                <div class="filter-box org-context-box">
+                    <label class="filter-label">Rol</label>
+                    <strong>@(resumen?.Contexto.Rol ?? "Sin contexto")</strong>
+                </div>
+
+                <button type="button" class="secondary-btn toolbar-secondary-btn" @onclick="Refrescar">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    <span>Refrescar</span>
+                </button>
+
+                <button type="button" class="primary-btn toolbar-secondary-btn" @onclick="NuevaSucursal" disabled="@(!puedeAdministrar)">
+                    <i class="bi bi-plus-lg"></i>
+                    <span>Nueva sucursal</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="entity-grid organization-grid">
+        <section class="table-card">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado operativo</span>
+                    <h3>Sucursales registradas</h3>
+                </div>
+                <span class="table-badge">@sucursalesVisibles.Count de @totalSucursales</span>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-info-circle"></i>
+                    <span>@mensaje</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(error))
+            {
+                <div class="status-banner status-banner-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@error</span>
+                </div>
+            }
+
+            @if (!puedeAdministrar && resumen is not null)
+            {
+                <div class="status-banner status-banner-warning">
+                    <i class="bi bi-lock"></i>
+                    <span>Tu usuario esta en modo sucursal. Solo el jefe de empresa puede crear o editar empresa y sucursales.</span>
+                </div>
+            }
+
+            @if (cargando)
+            {
+                <div class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando organizacion</h3>
+                    <p>Preparando empresa, sucursales y permisos.</p>
+                </div>
+            }
+            else if (resumen is null)
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-building"></i>
+                    </div>
+                    <h3>No se pudo cargar la organizacion</h3>
+                    <p>Revisa el acceso a e-contax o actualiza la pagina.</p>
+                </div>
+            }
+            else if (!sucursalesVisibles.Any())
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-diagram-3"></i>
+                    </div>
+                    <h3>No hay sucursales para mostrar</h3>
+                    <p>Crea la primera sucursal o ajusta el filtro de busqueda.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table entity-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Sucursal</th>
+                                <th>Codigo</th>
+                                <th>Productos</th>
+                                <th>Estado</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var sucursal in sucursalesVisibles)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="cell-main cell-main-stacked">
+                                            <strong>@sucursal.Nombre</strong>
+                                            @if (!string.IsNullOrWhiteSpace(sucursal.Direccion))
+                                            {
+                                                <span class="meta-line">
+                                                    <i class="bi bi-geo-alt"></i>
+                                                    <span>@sucursal.Direccion</span>
+                                                </span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="code-pill">@(sucursal.Codigo ?? "Sin codigo")</span>
+                                    </td>
+                                    <td>
+                                        <span class="count-pill">@sucursal.ProductosActivos</span>
+                                    </td>
+                                    <td>
+                                        <span class="status-pill @(sucursal.Estado ? "is-active" : "is-inactive")">
+                                            @(sucursal.Estado ? "Activa" : "Inactiva")
+                                        </span>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view" title="Ver productos"
+                                                    @onclick="() => VerProductosSucursal(sucursal.IdSucursal)">
+                                                <i class="bi bi-filter"></i>
+                                            </button>
+
+                                            <button type="button" class="action-btn action-edit" title="Editar"
+                                                    @onclick="() => EditarSucursal(sucursal)" disabled="@(!puedeAdministrar)">
+                                                <i class="bi bi-pencil-square"></i>
+                                            </button>
+
+                                            <button type="button" class="action-btn action-toggle" title="Cambiar estado"
+                                                    @onclick="() => CambiarEstadoSucursal(sucursal)" disabled="@(!puedeAdministrar)">
+                                                <i class="bi @(sucursal.Estado ? "bi-pause" : "bi-play")"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="editor-card entity-editor-card">
+            <div class="editor-head">
+                <div>
+                    <span class="panel-kicker">Formulario operativo</span>
+                    <h3>@(editandoSucursal ? "Editar sucursal" : "Registrar sucursal")</h3>
+                    <p>Los clientes pertenecen a esta empresa; cada sucursal mantiene productos propios.</p>
+                </div>
+                <span class="editor-badge @(editandoSucursal ? "editor-badge-edit" : "editor-badge-new")">
+                    @(editandoSucursal ? "Edicion" : "Nuevo")
+                </span>
+            </div>
+
+            <div class="editor-body">
+                <EditForm Model="empresaModel" OnSubmit="GuardarEmpresa">
+                    <div class="form-section">
+                        <div class="form-section-head">
+                            <i class="bi bi-building"></i>
+                            <div>
+                                <strong>Empresa actual</strong>
+                                <span>@(resumen?.Empresa.IdEmpresa > 0 ? $"ID {resumen.Empresa.IdEmpresa}" : "Sin empresa cargada")</span>
+                            </div>
+                        </div>
+
+                        <div class="row g-2">
+                            <div class="col-12">
+                                <label class="form-label small fw-bold">Nombre empresa *</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="empresaModel.Nombre" disabled="@(!puedeAdministrar)" />
+                            </div>
+
+                            <div class="col-12">
+                                <label class="form-label small fw-bold">RUC</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="empresaModel.Ruc" disabled="@(!puedeAdministrar)" />
+                            </div>
+                        </div>
+
+                        <button type="submit" class="primary-btn form-submit" disabled="@(!puedeAdministrar || guardandoEmpresa)">
+                            <i class="bi bi-save"></i>
+                            <span>@(guardandoEmpresa ? "Guardando" : "Guardar empresa")</span>
+                        </button>
+                    </div>
+                </EditForm>
+
+                <EditForm Model="sucursalModel" OnSubmit="GuardarSucursal">
+                    <div class="form-section">
+                        <div class="form-section-head">
+                            <i class="bi bi-diagram-3"></i>
+                            <div>
+                                <strong>Sucursal</strong>
+                                <span>@(editandoSucursal ? "Actualiza la sucursal seleccionada" : "Crea una sucursal para productos")</span>
+                            </div>
+                        </div>
+
+                        <div class="row g-2">
+                            <div class="col-12">
+                                <label class="form-label small fw-bold">Nombre sucursal *</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="sucursalModel.Nombre" placeholder="Ej: Comite del Pueblo" disabled="@(!puedeAdministrar)" />
+                            </div>
+
+                            <div class="col-12 col-md-5">
+                                <label class="form-label small fw-bold">Codigo</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="sucursalModel.Codigo" placeholder="001" disabled="@(!puedeAdministrar)" />
+                            </div>
+
+                            <div class="col-12 col-md-7">
+                                <label class="form-label small fw-bold">Direccion</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="sucursalModel.Direccion" placeholder="Direccion" disabled="@(!puedeAdministrar)" />
+                            </div>
+                        </div>
+
+                        <div class="editor-actions">
+                            <button type="button" class="secondary-btn" @onclick="NuevaSucursal" disabled="@(!puedeAdministrar)">
+                                <i class="bi bi-plus-lg"></i>
+                                <span>Limpiar</span>
+                            </button>
+                            <button type="submit" class="primary-btn" disabled="@(!puedeAdministrar || guardandoSucursal)">
+                                <i class="bi bi-save"></i>
+                                <span>@(guardandoSucursal ? "Guardando" : editandoSucursal ? "Actualizar" : "Crear")</span>
+                            </button>
+                        </div>
+                    </div>
+                </EditForm>
+
+                <div class="scope-list">
+                    <div class="scope-item">
+                        <i class="bi bi-people"></i>
+                        <span>Solo clientes creados en esta empresa, visibles para sus sucursales.</span>
+                    </div>
+                    <div class="scope-item">
+                        <i class="bi bi-box-seam"></i>
+                        <span>Productos separados por sucursal.</span>
+                    </div>
+                    <div class="scope-item">
+                        <i class="bi bi-filter-circle"></i>
+                        <span>El jefe filtra productos desde la columna de acciones.</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </section>
+</div>
+
+@code {
+    private int usuarioId;
+    private bool cargando = true;
+    private bool guardandoEmpresa;
+    private bool guardandoSucursal;
+    private bool editandoSucursal;
+    private string filtro = string.Empty;
+    private string filtroEstado = "todos";
+    private string? mensaje;
+    private string? error;
+    private EContaxOrganizacionResumenDto? resumen;
+    private EContaxEmpresaUpsertDto empresaModel = new();
+    private EContaxSucursalUpsertDto sucursalModel = new();
+
+    private bool PuedeAdministrar => resumen?.Contexto.EsJefeEmpresa == true;
+
+    private IEnumerable<EContaxSucursalResumenDto> SucursalesFiltradas
+    {
+        get
+        {
+            var query = resumen?.Sucursales.AsEnumerable() ?? Enumerable.Empty<EContaxSucursalResumenDto>();
+
+            if (!string.IsNullOrWhiteSpace(filtro))
+            {
+                var termino = filtro.Trim();
+                query = query.Where(s =>
+                    s.Nombre.Contains(termino, StringComparison.OrdinalIgnoreCase) ||
+                    (s.Codigo?.Contains(termino, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (s.Direccion?.Contains(termino, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+
+            query = filtroEstado switch
+            {
+                "activas" => query.Where(s => s.Estado),
+                "inactivas" => query.Where(s => !s.Estado),
+                _ => query
+            };
+
+            return query;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (!await ValidarAccesoEContaxAsync(user))
+        {
+            cargando = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        usuarioId = ObtenerIdUsuario(user);
+        await CargarResumen();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CargarResumen()
+    {
+        cargando = true;
+        error = null;
+
+        try
+        {
+            resumen = await OrganizacionService.GetResumenAsync(usuarioId);
+            empresaModel = new EContaxEmpresaUpsertDto
+            {
+                Nombre = resumen.Empresa.Nombre,
+                Ruc = resumen.Empresa.Ruc
+            };
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task Refrescar()
+    {
+        mensaje = "Datos actualizados.";
+        await CargarResumen();
+    }
+
+    private async Task GuardarEmpresa()
+    {
+        mensaje = null;
+        error = null;
+        guardandoEmpresa = true;
+
+        try
+        {
+            await OrganizacionService.GuardarEmpresaActualAsync(usuarioId, empresaModel);
+            mensaje = "Empresa actualizada correctamente.";
+            await CargarResumen();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            guardandoEmpresa = false;
+        }
+    }
+
+    private async Task GuardarSucursal()
+    {
+        mensaje = null;
+        error = null;
+        guardandoSucursal = true;
+
+        try
+        {
+            await OrganizacionService.GuardarSucursalAsync(usuarioId, sucursalModel);
+            mensaje = editandoSucursal ? "Sucursal actualizada correctamente." : "Sucursal creada correctamente.";
+            NuevaSucursal();
+            await CargarResumen();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            guardandoSucursal = false;
+        }
+    }
+
+    private void NuevaSucursal()
+    {
+        editandoSucursal = false;
+        sucursalModel = new EContaxSucursalUpsertDto();
+    }
+
+    private void EditarSucursal(EContaxSucursalDto sucursal)
+    {
+        if (!PuedeAdministrar)
+            return;
+
+        editandoSucursal = true;
+        sucursalModel = new EContaxSucursalUpsertDto
+        {
+            IdSucursal = sucursal.IdSucursal,
+            Nombre = sucursal.Nombre,
+            Codigo = sucursal.Codigo,
+            Direccion = sucursal.Direccion
+        };
+    }
+
+    private async Task CambiarEstadoSucursal(EContaxSucursalDto sucursal)
+    {
+        mensaje = null;
+        error = null;
+
+        try
+        {
+            await OrganizacionService.CambiarEstadoSucursalAsync(usuarioId, sucursal.IdSucursal, !sucursal.Estado);
+            mensaje = sucursal.Estado ? "Sucursal inactivada correctamente." : "Sucursal activada correctamente.";
+            await CargarResumen();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private void VerProductosSucursal(int sucursalId)
+    {
+        NavManager.NavigateTo($"{EContaxRoutes.Productos}?sucursalId={sucursalId}");
+    }
+
+    private void OnFiltroChanged(ChangeEventArgs args)
+    {
+        filtro = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnEstadoFiltroChanged(ChangeEventArgs args)
+    {
+        filtroEstado = args.Value?.ToString() ?? "todos";
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+}

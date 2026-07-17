@@ -1,0 +1,162 @@
+@page "/e-sign/configuracion/plan"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@using Simetric.Services.ESign
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Mi Plan Disponible | E-Sign</PageTitle>
+
+<div class="esign-page">
+    @if (cargando)
+    {
+        <div class="esign-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px; gap: 1rem; color: #1b5e20;">
+            <span class="spinner-border" role="status" style="width: 3rem; height: 3rem;"></span>
+            <h3 style="font-weight: 700; margin: 0;">Cargando información del Plan</h3>
+        </div>
+    }
+    else
+    {
+        <header class="esign-header-section">
+            <div class="header-content">
+                <span class="header-kicker">Configuración</span>
+                <h1>Mi Plan Disponible</h1>
+                <p>Consulta los detalles de tu suscripción activa para la firma y validación de documentos electrónicos.</p>
+            </div>
+            <button class="btn-back" @onclick="IrAlInicio">
+                <i class="bi bi-arrow-left"></i>
+                <span>Volver al inicio</span>
+            </button>
+        </header>
+
+        <section class="plan-details-container">
+            <div class="plan-main-card">
+                <div class="plan-badge-row">
+                    <span class="plan-status-badge @(tieneSuscripcionActiva ? "status-active" : "status-inactive")">
+                        <i class="bi @(tieneSuscripcionActiva ? "bi-check-circle-fill" : "bi-exclamation-circle-fill")"></i>
+                        @(tieneSuscripcionActiva ? "Suscripción Activa" : "Sin Suscripción Activa")
+                    </span>
+                    <span class="plan-id-badge">Servicio: E-Sign</span>
+                </div>
+
+                <div class="plan-title-section">
+                    <i class="bi bi-key-fill title-icon"></i>
+                    <div>
+                        <h2>Plan de Firma Electrónica</h2>
+                        <p>Certificados digitales autorizados para uso tributario y legal.</p>
+                    </div>
+                </div>
+
+                <div class="plan-meta-grid">
+                    <div class="meta-item">
+                        <span class="meta-label">Fecha de Vencimiento</span>
+                        <strong class="meta-value">
+                            @(fechaExpiracion.HasValue ? fechaExpiracion.Value.ToString("dd 'de' MMMM, yyyy") : "No disponible")
+                        </strong>
+                    </div>
+
+                    <div class="meta-item">
+                        <span class="meta-label">Estado del Acceso</span>
+                        <strong class="meta-value text-success">@estadoAcceso</strong>
+                    </div>
+                </div>
+
+                <div class="plan-actions">
+                    <button type="button" class="esign-btn-primary" @onclick="SolicitarNuevaFirma">
+                        <i class="bi bi-plus-circle"></i>
+                        <span>Solicitar Nueva Firma</span>
+                    </button>
+                    <a href="/solicitud" class="esign-btn-secondary">
+                        <i class="bi bi-folder-check"></i>
+                        <span>Ver Mis Trámites</span>
+                    </a>
+                </div>
+            </div>
+
+            <aside class="plan-features-card">
+                <h3>Beneficios Incluidos</h3>
+                <ul class="features-list">
+                    <li>
+                        <i class="bi bi-check2-circle"></i>
+                        <div>
+                            <strong>Firmado de PDF Ilimitado</strong>
+                            <span>Firma digitalmente todos los contratos y documentos que necesites.</span>
+                        </div>
+                    </li>
+                    <li>
+                        <i class="bi bi-check2-circle"></i>
+                        <div>
+                            <strong>Estándar XAdES / PAdES</strong>
+                            <span>Garantiza plena validez legal ante el SRI, aduanas y juzgados del Ecuador.</span>
+                        </div>
+                    </li>
+                    <li>
+                        <i class="bi bi-check2-circle"></i>
+                        <div>
+                            <strong>Seguridad y Respaldo</strong>
+                            <span>Tus firmas y contraseñas no se almacenan, garantizando confidencialidad.</span>
+                        </div>
+                    </li>
+                    <li>
+                        <i class="bi bi-check2-circle"></i>
+                        <div>
+                            <strong>Soporte Prioritario</strong>
+                            <span>Atención técnica preferencial para resolver bloqueos o dudas del certificado.</span>
+                        </div>
+                    </li>
+                </ul>
+            </aside>
+        </section>
+    }
+</div>
+
+@code {
+    private bool cargando = true;
+    private bool tieneSuscripcionActiva;
+    private DateTime? fechaExpiracion;
+    private string estadoAcceso = "Inactivo";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, ESignRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+
+        tieneSuscripcionActiva = access.HasActiveSubscription;
+        fechaExpiracion = access.SubscriptionEndDate;
+        estadoAcceso = access.StatusText ?? "Activo";
+
+        cargando = false;
+    }
+
+    private void IrAlInicio() => NavManager.NavigateTo("/e-sign");
+    private void SolicitarNuevaFirma() => NavManager.NavigateTo("/solicitud/nueva");
+}

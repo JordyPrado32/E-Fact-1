@@ -1,0 +1,3014 @@
+@page "/facturacion/nota-debito"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Web
+@using Simetric.DTOs
+@using Simetric.Components.Shared
+@using Simetric.Models
+@using Simetric.Services
+@using System.Globalization
+@using System.IO
+@using System.Text
+@using System.Text.Json
+@using System.Xml.Linq
+@using EmisorModel = Simetric.Models.Emisor
+@using NdModel = Simetric.Models.NotaDebito
+@using static Simetric.Services.NotaDebitoService
+
+@inject NotaDebitoService NotaDebitoService
+@inject INotaDebitoPdfService NotaDebitoPdfService
+@inject FacturacionService FacturacionService
+@inject IdentificacionService IdentificacionService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject InitialSequencePromptService InitialSequencePromptService
+@inject IJSRuntime JS
+@inject HttpClient Http
+@inject EmisionControlService EmisionControlService
+<PageTitle>Nota de Debito | Numerica e-fact</PageTitle>
+
+<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern docs-unified-page" data-tour="nd.page">
+    <DocumentoEmisionToast Message="@mensajeRapidoEmision"
+                           IsError="@mensajeRapidoEsError"
+                           PdfUrl="@documentoGeneradoPdfUrl"
+                           OnOpenPdf="AbrirDocumentoGeneradoAsync">
+        <AdditionalActions>
+            @if (!mensajeRapidoEsError && !string.IsNullOrWhiteSpace(documentoGeneradoPdfUrl))
+            {
+                <button type="button" class="documento-emision-accion" @onclick="NuevaNotaDebitoDesdeAvisoAsync">
+                    Nueva nota
+                </button>
+            }
+        </AdditionalActions>
+    </DocumentoEmisionToast>
+
+    <InitialSequenceModal Visible="@mostrarModalSecuenciaInicial"
+                          Title="Configuracion inicial de secuencia"
+                          Description="Antes de emitir tu primera nota de debito en este sistema, indicanos si ya habias generado notas de debito anteriormente."
+                          QuestionLabel="Ya habias generado notas de debito antes?"
+                          SequenceLabel="Ingresa la secuencia donde te quedaste"
+                          SequencePlaceholder="Ej: 000000125"
+                          SequenceHint="Si te quedaste en la 125, la siguiente sera la 126."
+                          HadPreviousDocuments="usuarioYaEmitioAntes"
+                          HadPreviousDocumentsChanged="OnCambioRespuestaSecuencia"
+                          PreviousSequence="@secuenciaAnteriorManual"
+                          PreviousSequenceChanged="OnSecuenciaAnteriorManualChanged"
+                          ErrorMessage="@errorSecuenciaInicial"
+                          OnDismiss="@(() => mostrarModalSecuenciaInicial = false)"
+                          OnConfirm="ConfirmarSecuenciaInicialAsync" />
+
+    <section class="docs-form-hero" data-tour="nd.hero">
+        <div class="docs-form-hero-body">
+            <div class="docs-form-hero-copy invoice-heading-card nc-heading-card">
+                <div class="invoice-heading-head nc-heading-head">
+                    <span class="invoice-heading-icon nc-heading-icon"><i class="bi bi-journal-plus"></i></span>
+                    <span class="docs-form-kicker">Documento de ajuste</span>
+                </div>
+                <h2 class="docs-form-title">Nueva nota de debito</h2>
+                <p class="docs-form-text">
+                    Se emitirán para el cobro de intereses de mora y para recuperar costos y gastos, 
+                    incurridos por el vendedor con posterioridad a la emisión del comprobante de venta
+                </p>
+                <div class="invoice-heading-meter nc-heading-meter"><span></span></div>
+
+                <div class="docs-form-metrics">
+                    <article class="docs-form-metric">
+                        <span>Factura de referencia</span>
+                        <strong>@FacturaReferenciaVisual</strong>
+                    </article>
+
+                    <article class="docs-form-metric">
+                        <span>Serie activa</span>
+                        @if (seriesDocumento.Count > 1)
+                        {
+                            <select class="n-invoice-serie-select"
+                                    value="@serieNdRawActual"
+                                    @onchange="OnSerieDocumentoChangedAsync"
+                                    aria-label="Seleccionar serie de nota de debito">
+                                @foreach (var serie in seriesDocumento)
+                                {
+                                    <option value="@serie.SerieRaw">@serie.SerieVisual</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <strong>@serieNdVisual</strong>
+                        }
+                    </article>
+
+                    <article class="docs-form-metric">
+                        <span>Número de nota</span>
+                        <strong>@secuencialNdVisual</strong>
+                    </article>
+                </div>
+            </div>
+
+            <div class="docs-form-toolbar">
+                <div class="n-invoice-id-strip nc-id-strip" aria-label="Identificadores de la nota de debito">
+                    <div class="n-invoice-id-pill nc-id-pill">
+                        <span>Serie</span>
+                        @if (seriesDocumento.Count > 1)
+                        {
+                            <select class="n-input text-center fw-bold"
+                                    value="@serieNdRawActual"
+                                    @onchange="OnSerieDocumentoChangedAsync"
+                                    aria-label="Seleccionar serie de nota de debito">
+                                @foreach (var serie in seriesDocumento)
+                                {
+                                    <option value="@serie.SerieRaw">@serie.SerieVisual</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <strong>@serieNdVisual</strong>
+                        }
+                    </div>
+                    <div class="n-invoice-id-pill nc-id-pill">
+                        <span>Nota de debito</span>
+                        <strong>@secuencialNdVisual</strong>
+                    </div>
+                </div>
+
+                <button type="button" class="n-btn n-btn-secondary" @onclick="AbrirHistorialNotasDebitoAsync">
+                    <i class="bi bi-clock-history me-2"></i> Historial
+                </button>
+
+                <button type="button" class="n-btn n-btn-secondary" @onclick="LimpiarFormularioAsync">
+                    <i class="bi bi-arrow-clockwise me-2"></i> Limpiar pantalla
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="nc-issue-options" aria-label="Opciones para emitir nota de debito">
+        <div class="nc-issue-options-copy">
+            <span class="nc-section-kicker">Opciones de emision</span>
+            <strong>Tambien puedes emitir la nota de debito de estas formas</strong>
+        </div>
+
+        <div class="nc-issue-options-grid">
+            <button type="button"
+                    class="nc-issue-option @(modoEmision == ModoEmisionNotaDebito.Manual ? "is-active" : string.Empty)"
+                    @onclick="ActivarModoManualAsync">
+                <span class="nc-issue-option-icon"><i class="bi bi-pencil-square"></i></span>
+                <div>
+                    <strong>Manual</strong>
+                    <small>Ingresa cliente, Factura Modificada, motivo y detalle directamente.</small>
+                </div>
+            </button>
+
+            <div class="nc-issue-option nc-issue-option-file @(modoEmision == ModoEmisionNotaDebito.Xml ? "is-active" : string.Empty)"
+                 @onclick="ActivarModoXmlAsync">
+                <span class="nc-issue-option-icon"><i class="bi bi-filetype-xml"></i></span>
+                <div>
+                    <strong>Desde XML</strong>
+                    <small>Carga el XML de la factura para precargar datos y editar valores.</small>
+                    <label class="nc-xml-picker" @onclick:stopPropagation="true">
+                        <span>Seleccionar archivo XML</span>
+                        <InputFile OnChange="OnNotaDebitoXmlSelectedAsync" accept=".xml,text/xml,application/xml" />
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(mensajeXmlNotaDebito))
+        {
+            <div class="nc-mode-message">@mensajeXmlNotaDebito</div>
+        }
+    </section>
+
+    @if (modoEmision == ModoEmisionNotaDebito.Factura)
+    {
+        <section class="n-client-search-strip nc-search-strip" data-tour="nd.lookup">
+            <div class="n-client-search-strip-copy nc-search-strip-copy">
+                <span class="n-client-search-eyebrow nc-search-eyebrow">Buscador de factura</span>
+                <strong>Encuentra la Factura Modificada para emitir la nota de debito</strong>
+            </div>
+
+            <div class="n-client-search-input nc-search-panel position-relative">
+                <div class="n-input-wrapper">
+                    <i class="bi bi-search n-input-icon"></i>
+                    <input class="n-input n-input-with-icon n-input-with-toggle nc-search-input"
+                           value="@numFacturaBuscar"
+                           @oninput="BuscarFacturasAutoAsync"
+                           @onkeydown="OnKeyBuscarFactura"
+                           @onblur="OcultarListaConDelay"
+                           placeholder="Buscar por numero de factura"
+                           maxlength="9"
+                           autocomplete="off" />
+                    <button type="button"
+                            class="n-input-toggle-btn"
+                            @onmousedown="PrepararSeleccionFactura"
+                            @onclick="ToggleListaFacturas"
+                            aria-label="Mostrar facturas encontradas">
+                        <i class="bi @(mostrarListaFacturas ? "bi-chevron-up" : "bi-chevron-down")"></i>
+                    </button>
+                </div>
+
+                @if (mostrarListaFacturas && listaFacturas.Any())
+                {
+                    <ul class="n-suggestions">
+                        @foreach (var f in listaFacturas)
+                        {
+                            <li @onmousedown="PrepararSeleccionFactura"
+                                @onclick="() => SeleccionarFacturaDesdeListaAsync(f)">
+                                <strong>@f.Numfactura</strong><br />
+                                <small>
+                                    Cliente: @f.ClienteNombre
+                                    @if (!string.IsNullOrWhiteSpace(f.Serie))
+                                    {
+                                        <span> | Serie: @FormatearSerie(f.Serie)</span>
+                                    }
+                                </small>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(errorCarga))
+            {
+                <div class="alert alert-danger border-0 rounded-4 mt-3 mb-0">@errorCarga</div>
+            }
+        </section>
+
+    <div class="n-card mb-4 d-none" data-tour="nd.lookup-old">
+        <div class="n-card-header n-header-dark">
+            <div class="d-flex justify-content-between align-items-center w-100">
+                <h5 class="mb-0"><i class="bi bi-receipt me-2"></i> Nota de Debito</h5>
+                <small class="d-none d-sm-flex"><i class="bi bi-arrow-repeat me-1"></i> Carga desde factura</small>
+            </div>
+        </div>
+
+        <div class="n-card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4 position-relative">
+                    <label class="n-label">Numero de Factura</label>
+
+                    <div class="n-input-wrapper">
+                        <i class="bi bi-search n-input-icon"></i>
+                        <input class="n-input n-input-with-icon text-center fw-bold"
+                               value="@numFacturaBuscar"
+                               @oninput="BuscarFacturasAutoAsync"
+                               @onkeydown="OnKeyBuscarFactura"
+                               @onblur="OcultarListaConDelay"
+                               placeholder="Ej: 000000123"
+                               maxlength="9"
+                               autocomplete="off" />
+                    </div>
+
+                    @if (mostrarListaFacturas && listaFacturas.Any())
+                    {
+                        <ul class="n-suggestions">
+                            @foreach (var f in listaFacturas)
+                            {
+                                <li @onmousedown="PrepararSeleccionFactura"
+                                    @onclick="() => SeleccionarFacturaDesdeListaAsync(f)">
+                                    <strong>@f.Numfactura</strong><br />
+                                    <small>
+                                        Cliente: @f.ClienteNombre
+                                        @if (!string.IsNullOrWhiteSpace(f.Serie))
+                                        {
+                                            <span> | Serie: @FormatearSerie(f.Serie)</span>
+                                        }
+                                    </small>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+
+                <div class="col-md-3">
+                    <label class="n-label">Factura de referencia</label>
+                    <input class="n-input text-center fw-bold bg-light border-0"
+                           value="@FacturaReferenciaVisual" readonly />
+                </div>
+
+                <div class="col-md-2">
+                    <label class="n-label">Serie</label>
+                    <input class="n-input text-center fw-bold bg-light border-0"
+                           value="@serieNdVisual" readonly />
+                </div>
+
+                <div class="col-md-3">
+                    <label class="n-label">Número de nota de débito</label>
+                    <input class="n-input text-center fw-bold bg-light border-0"
+                           value="@secuencialNdVisual" readonly />
+                    @if (!string.IsNullOrWhiteSpace(estadoSecuencialNd))
+                    {
+                        <small class="text-muted">@estadoSecuencialNd</small>
+                    }
+                </div>
+            </div>
+
+            <div class="row g-3 mt-2">
+                <div class="col-md-8">
+                    <label class="n-label">Estado</label>
+                    <input class="n-input bg-light border-0" value="@estadoCarga" readonly />
+                </div>
+
+                <div class="col-md-4 d-flex justify-content-end gap-2 flex-wrap">
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(errorCarga))
+            {
+                <div class="alert alert-danger border-0 rounded-3 mt-3 mb-0">@errorCarga</div>
+            }
+        </div>
+    </div>
+    }
+    else
+    {
+        <section class="nc-manual-source-strip">
+            <div>
+                <span class="nc-section-kicker">@ModoEmisionTitulo</span>
+                <strong>@ModoEmisionDescripcion</strong>
+            </div>
+
+            <div class="nc-source-fields">
+                <label class="nc-source-document-field">
+                    <span>Factura Modificada</span>
+                    <input type="text"
+                           class="n-input"
+                           value="@DocumentoModificadoInputVisual"
+                           @oninput="OnDocumentoModificadoInput"
+                           maxlength="17"
+                           inputmode="numeric"
+                           placeholder="001-001-000000001" />
+                </label>
+
+                <label>
+                    <span>Fecha Factura Modificada</span>
+                    <input type="date"
+                           class="n-input"
+                           value="@FechaDocumentoModificadoInput"
+                           @oninput="OnFechaDocumentoModificadoInput" />
+                </label>
+
+                <label>
+                    <span>Número autorización</span>
+                    <input type="text"
+                           class="n-input"
+                           @bind="numeroAutorizacionDocumentoModificado"
+                           @bind:event="oninput"
+                           inputmode="numeric"
+                           maxlength="49"
+                           placeholder="Autorización del comprobante base" />
+                </label>
+            </div>
+        </section>
+    }
+
+    @if (ClienteIngresadoSinRegistro)
+    {
+        <div class="n-client-create-notice n-client-create-notice-inline @(continuarConClienteSinRegistro ? "is-continued" : "")">
+            <span class="n-client-create-icon">
+                <i class="bi bi-person-plus"></i>
+            </span>
+            <div>
+                <strong>Cliente no registrado</strong>
+                <small>@(continuarConClienteSinRegistro
+                    ? "Continuaras con los datos ingresados para esta nota de debito."
+                    : "Puedes registrarlo ahora desde clientes o continuar con los datos de esta nota.")</small>
+            </div>
+            <div class="n-client-create-actions">
+                <button type="button"
+                        class="n-client-create-check"
+                        @onclick="AbrirCrudClientesNotaAsync">
+                    <i class="bi bi-person-plus"></i>
+                    <span>Agregar ahora</span>
+                </button>
+                <button type="button"
+                        class="n-client-continue-check @(continuarConClienteSinRegistro ? "is-active" : "")"
+                        @onclick="ContinuarConClienteSinRegistroNota">
+                    <i class="bi @(continuarConClienteSinRegistro ? "bi-x-circle" : "bi-arrow-right-circle")"></i>
+                    <span>@(continuarConClienteSinRegistro ? "Desmarcar" : "Continuar")</span>
+                </button>
+            </div>
+        </div>
+    }
+
+    <div class="n-card mb-4 nc-section-card" data-tour="nd.client-document">
+        <div class="n-card-header">
+            <h5><i class="bi bi-person-vcard me-2"></i> Información del Cliente</h5>
+            <small class="d-none d-sm-flex"><i class="bi bi-file-earmark-text me-1"></i> Datos del documento</small>
+        </div>
+
+        <div class="n-card-body n-client-card-body">
+            <div class="row g-3 n-client-block n-client-main-grid">
+                <div class="col-lg-3 col-md-6">
+                    <label class="n-label">Tipo Identificación</label>
+                    <div class="n-select-shell">
+                        <select class="n-select" @bind="cliente.Tipoidentificacion" disabled="@(!CamposClienteEditables)">
+                            <option value="">-- Seleccione --</option>
+                            @foreach (var it in identificaciones)
+                            {
+                                <option value="@it.IdeCodigo">@it.IdeDescripcion</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div class="col-lg-3 col-md-6">
+                    <label class="n-label">Número Identificación</label>
+                    <div class="n-input-wrapper position-relative">
+                        <i class="bi bi-person-badge n-input-icon"></i>
+                        <input type="text" class="n-input n-input-with-icon bg-light"
+                               value="@cliente.Numeroidentificacion"
+                               @oninput="OnClienteIdentificacionNotaInputAsync"
+                               @onfocus='() => MostrarSugerenciasClienteNotaAsync("identificacion")'
+                               readonly="@(!CamposClienteEditables)" />
+                        @if (CamposClienteEditables && campoClienteNotaActivo == "identificacion" && sugerenciasClientesNota.Any())
+                        {
+                            <ul class="n-suggestions n-client-field-suggestions">
+                                @foreach (var sugerencia in sugerenciasClientesNota)
+                                {
+                                    <li @onmousedown="() => SeleccionarClienteNotaAsync(sugerencia)"
+                                        @onmousedown:preventDefault>
+                                        <strong>@ObtenerNombreClienteVisual(sugerencia)</strong>
+                                        <small>@sugerencia.Numeroidentificacion</small>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+
+                <div class="col-lg-3 col-md-6">
+                    <label class="n-label">Tipo Cliente</label>
+                    <div class="n-select-shell">
+                        <select class="n-select" @bind="cliente.TipoCliente" disabled="@(!CamposClienteEditables)">
+                            <option value="">-- Seleccione --</option>
+                            @foreach (var tc in tiposCliente)
+                            {
+                                <option value="@tc.TclCodigo">@tc.TclDescripcion</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div class="col-lg-3 col-md-6">
+                    <label class="n-label">Nombre / Razón Social</label>
+                    <div class="n-input-wrapper position-relative">
+                        <i class="bi bi-person-check n-input-icon"></i>
+                        @if (CamposClienteEditables)
+                        {
+                            <input type="text" class="n-input n-input-with-icon bg-light"
+                                   value="@NombreClienteVisual"
+                                   @oninput="OnClienteNombreNotaInputAsync"
+                                   @onfocus='() => MostrarSugerenciasClienteNotaAsync("nombre")' />
+                            @if (campoClienteNotaActivo == "nombre" && sugerenciasClientesNota.Any())
+                            {
+                                <ul class="n-suggestions n-client-field-suggestions">
+                                    @foreach (var sugerencia in sugerenciasClientesNota)
+                                    {
+                                        <li @onmousedown="() => SeleccionarClienteNotaAsync(sugerencia)"
+                                            @onmousedown:preventDefault>
+                                            <strong>@ObtenerNombreClienteVisual(sugerencia)</strong>
+                                            <small>@sugerencia.Numeroidentificacion</small>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        }
+                        else
+                        {
+                            <input type="text" class="n-input n-input-with-icon bg-light"
+                                   value="@NombreClienteVisual" readonly />
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="n-client-block n-client-contact-modern">
+                <div class="n-contact-field">
+                    <label class="n-label">Dirección</label>
+                    <div class="n-input-wrapper">
+                        <i class="bi bi-geo-alt n-input-icon"></i>
+                        <input type="text" class="n-input n-input-with-icon bg-light"
+                               @bind="cliente.Direccion"
+                               @bind:event="oninput"
+                               readonly="@(!CamposClienteEditables)" />
+                    </div>
+                </div>
+
+                <div class="n-contact-field n-contact-phone-field">
+                    <label class="n-label">Telefono <span class="text-muted text-lowercase">(opcional)</span></label>
+                    <div class="n-input-wrapper">
+                        <i class="bi bi-phone n-input-icon"></i>
+                        <input type="text" class="n-input n-input-with-icon bg-light"
+                               @bind="cliente.Celular"
+                               @bind:event="oninput"
+                               readonly="@(!CamposClienteEditables)" />
+                    </div>
+                </div>
+
+                <div class="n-contact-field n-email-main-field nd-email-main-field">
+                    <label class="n-label">Correo electrónico principal</label>
+                    <div class="n-input-wrapper">
+                        <i class="bi bi-envelope n-input-icon"></i>
+                        <input type="email" class="n-input n-input-with-icon bg-light"
+                               @bind="cliente.Correo"
+                               @bind:event="oninput"
+                               readonly="@(!CamposClienteEditables)" />
+                    </div>
+
+                    <div class="n-email-primary-row">
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-envelope n-input-icon"></i>
+                            <input type="email" class="n-input n-input-with-icon bg-light"
+                                   @bind="cliente.Correo"
+                                   @bind:event="oninput"
+                                   readonly="@(!CamposClienteEditables)" />
+                        </div>
+
+                        <button type="button"
+                                class="n-email-add-btn"
+                                title="Agregar correo adicional"
+                                @onclick="AgregarCorreoOpcionalNota"
+                                disabled="@(correosOpcionalesNota.Count >= MaxCorreosOpcionalesNota)">
+                            <i class="bi bi-envelope-plus"></i>
+                            <span>Agregar correo</span>
+                        </button>
+                    </div>
+
+                    @if (correosOpcionalesNota.Any())
+                    {
+                        <div class="n-additional-email-area">
+                            <label class="n-label">Correos adicionales</label>
+                            <div class="n-email-chip-grid">
+                                @for (int i = 0; i < correosOpcionalesNota.Count; i++)
+                                {
+                                    var index = i;
+                                    <div class="n-email-chip-field">
+                                        <input type="email"
+                                               class="n-email-chip-input"
+                                               @bind="correosOpcionalesNota[index].Correo"
+                                               @bind:event="oninput"
+                                               placeholder="correo@ejemplo.com" />
+                                        <button type="button"
+                                                class="n-email-chip-remove"
+                                                title="Quitar correo"
+                                                @onclick="() => EliminarCorreoOpcionalNota(index)">
+                                            <i class="bi bi-x-lg"></i>
+                                        </button>
+                                        @if (correosOpcionalesNota[index].EsPersistidoCliente)
+                                        {
+                                            <span class="n-email-chip-note">Guardado</span>
+                                        }
+                                        else
+                                        {
+                                            <label class="n-email-save-mini" for="@($"guardar-correo-nd-modern-{index}")">
+                                                <input type="checkbox"
+                                                       id="@($"guardar-correo-nd-modern-{index}")"
+                                                       @bind="correosOpcionalesNota[index].GuardarEnCliente" />
+                                                Guardar
+                                            </label>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="row g-3 n-client-block">
+                <div class="col-lg-4 col-md-6 d-none">
+                    <label class="n-label">Emisor</label>
+                    <input class="n-input bg-light border-0"
+                           value="@EmisorVisual" readonly />
+                </div>
+
+                <div class="col-lg-3 col-md-6 d-none">
+                    <label class="n-label">Fecha Factura</label>
+                    <input class="n-input bg-light border-0"
+                           value="@FechaFacturaVisual" readonly />
+                </div>
+
+                <div class="col-lg-3 col-md-6 d-none">
+                    <label class="n-label">Fecha Vencimiento ND</label>
+                    <input type="date"
+                           class="n-input"
+                           value="@GetFechaInputValue(fechaVenceNota)"
+                           @onchange="OnFechaVenceChanged" />
+                </div>
+
+                <div class="col-lg-2 col-md-6 d-none">
+                    <label class="n-label">Estado</label>
+                    <input class="n-input bg-light border-0" value="@estadoCarga" readonly />
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <div class="n-card n-invoice-detail-card mb-4 nc-section-card" data-tour="nd.detail">
+        <div class="n-card-header n-header-dark">
+            <div class="d-flex justify-content-between align-items-center w-100 gap-3 flex-wrap">
+                <h5 class="mb-0"><i class="bi bi-cart4 me-2"></i> Detalle de la Nota de Debito</h5>
+
+            </div>
+        </div>
+
+        <div class="n-card-body">
+            @if (mostrarPanelProductos && modoEmision != ModoEmisionNotaDebito.Xml)
+            {
+                <div class="mb-4">
+                    <div class="n-card border">
+                        <div class="n-card-header">
+                            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                                <h6 class="mb-0">
+                                    <i class="bi bi-box-seam me-2"></i> Productos disponibles
+                                </h6>
+
+                                <input class="n-input"
+                                       style="max-width: 280px;"
+                                       placeholder="Buscar por código o nombre"
+                                       value="@filtroProductos"
+                                       @oninput="OnFiltroProductosChanged" />
+                            </div>
+                        </div>
+
+                        <div class="n-card-body p-0">
+                            @if (cargandoProductos)
+                            {
+                                <div class="p-3 text-muted">Cargando productos...</div>
+                            }
+                            else if (!productosDisponiblesFiltrados.Any())
+                            {
+                                <div class="p-3 text-muted">No hay productos disponibles.</div>
+                            }
+                            else
+                            {
+                                <div class="table-responsive">
+                                    <table class="table table-hover align-middle mb-0">
+                                        <thead class="n-table-header bg-light">
+                                            <tr>
+                                                <th style="width: 90px;">Cod.</th>
+                                                <th>Nombre</th>
+                                                <th style="width: 130px;">Código principal</th>
+                                                <th class="text-end" style="width: 120px;">Precio</th>
+                                                <th class="text-center" style="width: 100px;">IVA</th>
+                                                <th class="text-center" style="width: 110px;"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var p in productosDisponiblesFiltrados)
+                                            {
+                                                <tr>
+                                                    <td class="small fw-bold text-muted">@p.Codigo</td>
+                                                    <td>@p.Nombre</td>
+                                                    <td>@p.CodigoPrincipal</td>
+                                                    <td class="text-end">@((p.ValorUnitario ?? 0m).ToString("N2"))</td>
+                                                    <td class="text-center">@p.Porcentajeimpuesto</td>
+                                                    <td class="text-center">
+                                                        <button type="button"
+                                                                class="btn btn-sm btn-outline-primary"
+                                                                @onclick="() => AgregarProductoADetalle(p)">
+                                                            Usar
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="table-responsive n-table-container nd-detail-table-wrap nd-adjustment-table-wrap">
+                <table class="table table-hover align-middle mb-0 nd-adjustment-table">
+                    <thead class="n-table-header bg-light">
+                        <tr>
+                            <th class="nd-description-col">Descripcion</th>
+                            <th class="text-end nd-price-col">Precio</th>
+                            <th class="text-center nd-iva-col">Tarifa IVA</th>
+                            <th class="text-center nd-ice-tax-col">Impuestos ICE</th>
+                            <th class="text-end nd-ice-value-col">Valor ICE</th>
+                            <th class="text-center nd-delete-col"></th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @if (detallesNd.Any())
+                        {
+                            @for (int i = 0; i < detallesNd.Count; i++)
+                            {
+                                var d = detallesNd[i];
+                                var index = i;
+
+                                <tr @key="d">
+                                    <td>
+                                        <input type="text"
+                                               class="n-input-sm n-detail-concept-input fw-semibold"
+                                               value="@d.Descripcion"
+                                               @onchange="e => OnDescripcionDetalleChanged(d, e.Value?.ToString())"
+                                               maxlength="300"
+                                               placeholder="Motivo de la nota de debito" />
+                                    </td>
+
+                                    <td>
+                                        <input type="number"
+                                               class="n-input-sm text-end"
+                                               min="0.01"
+                                               step="0.01"
+                                               value="@GetPrecioNotaDebitoVisual(d)"
+                                               @oninput="e => OnPrecioChanged(d, e.Value?.ToString())" />
+                                    </td>
+
+                                    <td>
+                                        <select class="form-select form-select-sm text-center fw-semibold border-0 bg-white shadow-sm nc-detail-iva-select"
+                                                value="@d.Iva"
+                                                @onchange="e => OnIvaDetalleChanged(d, e.Value?.ToString())">
+                                            @foreach (var iva in TarifasIvaNotaDebito)
+                                            {
+                                                <option value="@iva">@($"{iva}%")</option>
+                                            }
+                                        </select>
+                                    </td>
+
+                                    <td>
+                                        <select class="form-select form-select-sm text-center fw-semibold border-0 bg-white shadow-sm nd-ice-select"
+                                                value="@GetIceSeleccionadoDetalle(d)"
+                                                @onchange="e => OnIceDetalleChanged(d, e.Value?.ToString())">
+                                            <option value="0">Seleccione</option>
+                                            <option value="1">ICE</option>
+                                        </select>
+                                    </td>
+
+                                    <td>
+                                        <input type="number"
+                                               class="n-input-sm text-end"
+                                               min="0"
+                                               step="0.01"
+                                               value="@FormatearDecimalEditable(d.ValorIce)"
+                                               @oninput="e => OnValorIceChanged(d, e.Value?.ToString())" />
+                                    </td>
+
+                                    <td class="text-center">
+                                        <button type="button"
+                                                class="n-btn-primary p-0 d-flex justify-content-center align-items-center mx-auto nc-detail-delete-btn"
+                                                title="Quitar linea"
+                                                @onclick="() => QuitarDetalle(index)">
+                                            <i class="bi bi-trash3"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                        else
+                        {
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">
+                                    No hay detalles cargados.
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-responsive n-table-container nd-detail-table-wrap nd-detail-table-legacy">
+                <table class="table table-hover align-middle mb-0 nd-detail-table">
+                    <thead class="n-table-header bg-light">
+                        <tr>
+                            <th class="nd-code-col">Cód.</th>
+                            <th class="nd-concept-col">Concepto</th>
+                            <th class="nd-detail-col">Detalle</th>
+                            <th class="text-center nd-qty-col">Cant.</th>
+                            <th class="text-end nd-price-col">Precio</th>
+                            <th class="text-center nd-discount-col">Descuento</th>
+                            <th class="text-end nd-discount-applied-col">Desc. apl.</th>
+                            <th class="text-end nd-base-col">Base Imp.</th>
+                            <th class="text-end nd-iva-col">IVA</th>
+                            <th class="text-end nd-total-col">Total</th>
+                            <th class="text-center nd-delete-col"></th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @if (detallesNd.Any())
+                        {
+                            @for (int i = 0; i < detallesNd.Count; i++)
+                            {
+                                var d = detallesNd[i];
+                                var index = i;
+                                var descuentoFila = GetDescuentoEfectivoDetalle(d);
+
+                                <tr @key="d">
+                                    <td>
+                                        <input type="text"
+                                               class="n-input-sm text-center fw-bold nc-code-input nd-code-input"
+                                               @bind="d.CodPrincipal"
+                                               @bind:event="oninput"
+                                               maxlength="70"
+                                               placeholder="@GetCodigoVisualDetalle(d)" />
+                                    </td>
+
+                                    <td>
+                                        <input type="text"
+                                               class="n-input-sm n-detail-concept-input fw-semibold"
+                                               @bind="d.Descripcion"
+                                               @bind:event="oninput"
+                                               maxlength="300"
+                                               placeholder="Producto o servicio" />
+                                    </td>
+
+                                    <td>
+                                        <textarea class="n-input-sm n-detail-extra-input"
+                                                  rows="2"
+                                                  @bind="d.Detalle"
+                                                  @bind:event="oninput"
+                                                  maxlength="300"
+                                                  placeholder="Detalle adicional o concepto extendido"></textarea>
+                                    </td>
+
+                                    <td>
+                                        <input type="number"
+                                               class="n-input-sm text-center fw-bold"
+                                               min="0.01"
+                                               step="0.01"
+                                               value="@FormatearDecimalEditable(d.Cantidad)"
+                                               @oninput="e => OnCantidadChanged(d, e.Value?.ToString())" />
+                                    </td>
+
+                                    <td>
+                                        <input type="number"
+                                               class="n-input-sm text-end"
+                                               min="0.01"
+                                               step="0.01"
+                                               value="@FormatearDecimalEditable(d.Preciounitario)"
+                                               @oninput="e => OnPrecioChanged(d, e.Value?.ToString())" />
+                                    </td>
+
+                                    <td>
+                                        <div class="n-discount-editor nc-discount-editor">
+                                            <div class="n-discount-mode" role="group" aria-label="Modo de descuento del item">
+                                                <button type="button"
+                                                        class="@(GetModoDescuentoDetalle(d) == ModoDescuento.Porcentaje ? "is-active" : string.Empty)"
+                                                        title="Descuento por porcentaje"
+                                                        @onclick="() => CambiarModoDescuentoDetalle(d, ModoDescuento.Porcentaje)">
+                                                    %
+                                                </button>
+                                                <button type="button"
+                                                        class="@(GetModoDescuentoDetalle(d) == ModoDescuento.Moneda ? "is-active" : string.Empty)"
+                                                        title="Descuento por valor"
+                                                        @onclick="() => CambiarModoDescuentoDetalle(d, ModoDescuento.Moneda)">
+                                                    $
+                                                </button>
+                                            </div>
+                                            <div class="n-discount-input-wrap">
+                                                <input type="number"
+                                                       class="n-input-sm text-end"
+                                                       step="0.01"
+                                                       min="0"
+                                                       max="@(GetModoDescuentoDetalle(d) == ModoDescuento.Porcentaje ? "100" : null)"
+                                                       value="@GetDescuentoDetalleVisual(d)"
+                                                       @oninput="e => OnDescuentoDetalleInput(d, e.Value?.ToString())" />
+                                                <span>@(GetModoDescuentoDetalle(d) == ModoDescuento.Porcentaje ? "%" : "$")</span>
+                                            </div>
+                                        </div>
+                                    </td>
+
+                                    <td class="text-end text-danger small fw-medium">@descuentoFila.ToString("N2")</td>
+                                    <td class="text-end fw-semibold">@GetBaseImponibleDetalle(d).ToString("N2")</td>
+                                    <td>
+                                        <select class="form-select form-select-sm text-center fw-semibold border-0 bg-white shadow-sm nc-detail-iva-select"
+                                                value="@d.Iva"
+                                                @onchange="e => OnIvaDetalleChanged(d, e.Value?.ToString())">
+                                            @foreach (var iva in TarifasIvaNotaDebito)
+                                            {
+                                                <option value="@iva">@($"{iva}%")</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td class="text-end fw-bold nc-detail-total-cell">@GetTotalDetalle(d).ToString("N2")</td>
+
+                                    <td class="text-center">
+                                        <button type="button"
+                                                class="n-btn-primary p-0 d-flex justify-content-center align-items-center mx-auto nc-detail-delete-btn"
+                                                title="Quitar linea"
+                                                @onclick="() => QuitarDetalle(index)">
+                                            <i class="bi bi-trash3"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                        else
+                        {
+                            <tr>
+                                <td colspan="11" class="text-center py-4 text-muted">
+                                    Carga una factura, selecciona XML o agrega una línea manual.
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (modoEmision == ModoEmisionNotaDebito.Manual)
+            {
+                <div class="nc-detail-actions">
+                    <button type="button" class="n-btn n-btn-secondary" @onclick="AgregarLineaNotaDebito">
+                        <i class="bi bi-plus-circle me-2"></i> Agregar línea
+                    </button>
+                </div>
+            }
+            <div class="row mt-4 justify-content-end" data-tour="nd.summary">
+                <div class="col-xl-6 col-lg-7 col-md-9">
+            <div class="n-summary-column nc-summary-column">
+                <div class="n-summary-top-grid nc-summary-top-grid">
+                    <div class="docs-total-card nc-total-card">
+                        <div class="docs-total-card-header">
+                            <span>Resumen</span>
+                            <h6>Totales del comprobante</h6>
+                        </div>
+
+                        <div class="docs-total-fiscal-list nc-total-fiscal-list">
+                            <div class="docs-total-fiscal-row">
+                                <span>SUBTOTAL</span>
+                                <strong>$ @SubtotalGeneral.ToString("N2")</strong>
+                            </div>
+                            <div class="docs-total-fiscal-row docs-total-fiscal-discount">
+                                <span>DESCUENTO</span>
+                                <strong>$ @DescuentoTotal.ToString("N2")</strong>
+                            </div>
+                            <div class="docs-total-fiscal-row">
+                                <span>SUBTOTAL + ICE</span>
+                                <strong>$ @SubtotalMasIce.ToString("N2")</strong>
+                            </div>
+                            <div class="docs-total-fiscal-row">
+                                <span>ICE</span>
+                                <strong>$ @IceTotal.ToString("N2")</strong>
+                            </div>
+                            @foreach (var ivaTarifa in IvasPorTarifa)
+                            {
+                                <div class="docs-total-fiscal-row docs-total-fiscal-tax">
+                                    <span>IVA @ivaTarifa.Tarifa%</span>
+                                    <strong>$ @ivaTarifa.Valor.ToString("N2")</strong>
+                                </div>
+                            }
+                            <div class="docs-total-fiscal-row">
+                                <span>IVA 0%</span>
+                                <strong>$ @Subtotal0.ToString("N2")</strong>
+                            </div>
+                            <div class="docs-total-fiscal-row docs-total-fiscal-total">
+                                <span>TOTAL</span>
+                                <strong>$ @TotalGeneral.ToString("N2")</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="n-detail-actions-row nc-detail-actions-row nd-detail-actions-row">
+                    <button type="button"
+                            class="n-btn n-btn-secondary"
+                            disabled="@(guardando || previsualizandoPdf)"
+                            @onclick="AbrirVistaPreviaPdfTemporalAsync">
+                        <i class="bi bi-file-earmark-pdf me-2"></i>
+                        @(previsualizandoPdf ? "Generando PDF..." : "Previsualizar PDF")
+                    </button>
+
+                    <button type="button" class="n-btn-link" @onclick="LimpiarFormularioAsync">
+                        Cancelar / Limpiar
+                    </button>
+
+                    <button type="button"
+                            class="n-btn-primary"
+                            disabled="@(guardando || BloqueadoPorSaldoDocumentos)"
+                            @onclick="GuardarNotaDebitoAsync">
+                        <i class="bi bi-save me-2"></i>
+                        @(guardando ? "Guardando..." : "Generar Nota de Débito")
+                    </button>
+                </div>
+            </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<DocumentWorkspaceModal Visible="@mostrarHistorialNotasDebito"
+                        Eyebrow="Historial"
+                        Title="Notas de debito generadas"
+                        Description="Consulta tus cargos emitidos y abre XML o PDF sin cambiar de pantalla."
+                        OnClose="CerrarHistorialNotasDebitoAsync">
+    <div class="docs-history-frame">
+        <NotasDebitoGeneradas />
+    </div>
+</DocumentWorkspaceModal>
+
+<DocumentWorkspaceModal Visible="@mostrarCrudClientesNota"
+                        Eyebrow="Clientes"
+                        Title="Registrar cliente"
+                        Description="Completa el formulario y al guardar seleccionaremos automaticamente el cliente creado."
+                        ModalClass="docs-client-workspace-modal"
+                        OnClose="CerrarCrudClientesNotaAsync">
+    <div class="docs-client-crud-frame">
+        <Clientes ClientePrefill="cliente"
+                  OnClienteGuardado="OnClienteGuardadoDesdeCrudNotaAsync" />
+    </div>
+</DocumentWorkspaceModal>
+
+@if (mostrarVistaPreviaPdfTemporal)
+{
+    <div class="n-product-modal-backdrop" style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.44); backdrop-filter: blur(4px); z-index: 2990;" @onclick="CerrarVistaPreviaPdfTemporalAsync"></div>
+    <div class="n-product-modal-shell" style="position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 3000; display: flex; align-items: center; justify-content: center; padding: 2vh 2vw;" role="dialog" aria-modal="true" aria-labelledby="pdfPreviewNdTitulo" @onclick="CerrarVistaPreviaPdfTemporalAsync">
+        <div class="n-modal n-product-modal-content n-pdf-preview-modal" style="width: min(96vw, 1280px); height: min(94vh, 920px); display: flex; flex-direction: column; background: #ffffff; border-radius: 18px; box-shadow: 0 20px 50px rgba(15, 23, 42, 0.15); overflow: hidden; border: 1px solid #dceaf5;" @onclick:stopPropagation>
+            <div class="n-modal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; background: linear-gradient(180deg, #ffffff, #f7fbff); border-bottom: 1px solid rgba(15, 23, 42, 0.08); flex-shrink: 0;">
+                <div style="display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;">
+                    <h5 id="pdfPreviewNdTitulo" style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #0f172a;">@(pdfVistaEsTemporal ? "Vista previa PDF temporal" : "Nota de debito autorizada")</h5>
+                    <span style="font-size: 0.72rem; font-weight: 800; color: #006bb5; background: rgba(0, 107, 181, 0.12); padding: 0.25rem 0.75rem; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em;">@(pdfVistaEsTemporal ? "Temporal" : "Definitivo")</span>
+                    <span style="color: #64748b; font-size: 0.82rem; font-weight: 500;">@(pdfVistaEsTemporal ? "Vista ampliada para revisar el PDF completo antes de emitir." : "PDF regenerado con la autorizacion del SRI.")</span>
+                </div>
+                <button type="button" @onclick="CerrarVistaPreviaPdfTemporalAsync" style="background: transparent; border: 0; color: #64748b; font-size: 1.34rem; cursor: pointer; transition: color 0.18s; padding: 0.2rem;" aria-label="Cerrar vista previa" onmouseover="this.style.color='#006bb5'" onmouseout="this.style.color='#64748b'">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="n-modal-body" style="flex: 1 1 auto; min-height: 0; padding: 0; background: #f4f8fc; position: relative;">
+                @if (!string.IsNullOrWhiteSpace(urlPdfTemporal))
+                {
+                    <iframe src="@urlPdfTemporal" style="width: 100%; height: 100%; min-height: 0; border: 0; background: #ffffff;" title="Vista previa PDF temporal"></iframe>
+                }
+                else
+                {
+                    <div style="height: 100%; display: grid; place-items: center; gap: 0.75rem; padding: 2rem; color: #143451;">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <strong>Generando PDF...</strong>
+                    </div>
+                }
+            </div>
+
+            <div class="n-modal-footer" style="display: flex; align-items: center; justify-content: flex-end; padding: 0.8rem 1.5rem; background: #ffffff; border-top: 1px solid rgba(15, 23, 42, 0.08); flex-shrink: 0;">
+                <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarVistaPreviaPdfTemporalAsync">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private enum ModoDescuento
+    {
+        Porcentaje,
+        Moneda
+    }
+
+    private enum ModoEmisionNotaDebito
+    {
+        Factura,
+        Manual,
+        Xml
+    }
+
+    private bool guardando;
+    private int currentUserId;
+    private EmisionEstado? emisionEstado;
+
+    private string numFacturaBuscar = string.Empty;
+    private string estadoCarga = "Sin cargar";
+    private string? errorCarga;
+    private ModoEmisionNotaDebito modoEmision = ModoEmisionNotaDebito.Factura;
+    private string? mensajeXmlNotaDebito;
+    private const long MaxNotaDebitoXmlSize = 10 * 1024 * 1024;
+
+    private Factura factura = new();
+    private Cliente cliente = new();
+    private EmisorModel? emisor;
+    private Caja? cajaUsuario;
+    private List<DetalleNdDto> detallesNd = new();
+    private List<Cliente> sugerenciasClientesNota = new();
+    private string? campoClienteNotaActivo;
+    private bool clienteDetectadoEnCatalogoNota;
+    private bool continuarConClienteSinRegistro;
+    private bool mostrarCrudClientesNota;
+
+    private List<FacturaBusquedaDto> listaFacturas = new();
+    private bool mostrarListaFacturas;
+    private bool seleccionandoFacturaDesdeLista;
+    private const int MaxCorreosOpcionalesNota = 4;
+    private List<CorreoOpcionalNotaInput> correosOpcionalesNota = new();
+    private List<string> correosPersistidosClienteNota = new();
+
+    private string serieNdVisual = "--";
+    private string secuencialNdVisual = "--";
+    private string secuencialNdAutomatico = string.Empty;
+    private string serieNdRawActual = string.Empty;
+    private string estadoSecuencialNd = string.Empty;
+    private string serieFacturaVisual = "--";
+    private bool mostrarModalSecuenciaInicial;
+    private bool? usuarioYaEmitioAntes;
+    private string secuenciaAnteriorManual = string.Empty;
+    private string? errorSecuenciaInicial;
+    private bool mostrarHistorialNotasDebito;
+    private bool previsualizandoPdf;
+    private bool mostrarVistaPreviaPdfTemporal;
+    private string? urlPdfTemporal;
+    private bool pdfVistaEsTemporal = true;
+    private string? mensajeRapidoEmision;
+    private bool mensajeRapidoEsError;
+    private string? documentoGeneradoPdfUrl;
+
+    private string motivoNota = string.Empty;
+    private DateTime fechaVenceNota = DateTime.Today;
+
+    private bool mostrarPanelProductos;
+    private bool cargandoProductos;
+    private string filtroProductos = string.Empty;
+
+    private List<ProductoDisponibleDto> productosDisponibles = new();
+    private List<ProductoDisponibleDto> productosDisponiblesFiltrados = new();
+    private List<CajaSerieResolucion> seriesDocumento = new();
+    private List<Tipocliente> tiposCliente = new();
+    private List<Identificacion> identificaciones = new();
+    private List<EmisorModel> emisores = new();
+    private Dictionary<string, int> tarifasIvaPorCodigo = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<DetalleNdDto, string> valoresTemporalesPct = new();
+    private readonly Dictionary<DetalleNdDto, string> valoresTemporalesDescuentoMoneda = new();
+    private readonly Dictionary<DetalleNdDto, decimal> porcentajesDescuentoDetalle = new();
+    private readonly Dictionary<DetalleNdDto, ModoDescuento> modosDescuentoDetalle = new();
+    private string numeroAutorizacionDocumentoModificado = string.Empty;
+    private static readonly int[] TarifasIvaNotaDebito = { 0, 13, 15, 5, 8 };
+
+    private class CorreoOpcionalNotaInput
+    {
+        public string Correo { get; set; } = string.Empty;
+        public bool GuardarEnCliente { get; set; }
+        public bool EsPersistidoCliente { get; set; }
+    }
+
+    private bool BloqueadoPorSaldoDocumentos => emisionEstado?.RequiereCompraDocumentos == true;
+    private string MensajeBloqueoDocumentos => emisionEstado?.Mensaje ?? EmisionControlService.MensajeSaldoAgotado;
+    private bool CamposClienteEditables => modoEmision == ModoEmisionNotaDebito.Manual;
+    private bool ClienteIngresadoSinRegistro =>
+        CamposClienteEditables &&
+        cliente.Codcliente <= 0 &&
+        !clienteDetectadoEnCatalogoNota &&
+        !string.IsNullOrWhiteSpace(cliente.Numeroidentificacion) &&
+        cliente.Numeroidentificacion.Trim().Length is 10 or 13;
+    private bool ClienteSinRegistroPendienteDecision => ClienteIngresadoSinRegistro && !continuarConClienteSinRegistro;
+    private bool RequiereFacturaInterna => modoEmision == ModoEmisionNotaDebito.Factura;
+    private string ModoEmisionTitulo => modoEmision == ModoEmisionNotaDebito.Xml ? "Factura cargada desde XML" : "Captura manual";
+    private string ModoEmisionDescripcion => modoEmision == ModoEmisionNotaDebito.Xml
+        ? "Seleccionaste XML; revisa los datos importados antes de guardar la nota de debito."
+        : "Ingresa los datos de la Factura Modificada, cliente y detalle directamente en el formulario.";
+    private string FechaDocumentoModificadoInput => (factura.Fchautorizacion ?? DateTime.Today).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    private string DocumentoModificadoInputVisual => FormatearDocumentoModificadoInput($"{NormalizarSerieRaw(factura.Serie)}{SoloDigitosNd(factura.Numfactura)}");
+
+    private NotaDebitoDetalleViewDto VistaPreviaNotaDebito
+    {
+        get
+        {
+            var serieLimpia = (serieNdRawActual ?? factura.Serie ?? string.Empty).Replace("-", "").Trim();
+            var secuencialLimpio = (secuencialNdVisual ?? string.Empty).Replace("-", "").Trim();
+            if (string.IsNullOrWhiteSpace(secuencialLimpio) || secuencialLimpio == "--")
+                secuencialLimpio = "000000000";
+
+            var nota = new NdModel
+            {
+                Sec = 0,
+                Serie = serieLimpia,
+                NumNotaDebito = secuencialLimpio.PadLeft(9, '0'),
+                FechaVence = fechaVenceNota,
+                Motivo = motivoNota.Trim(),
+                CodDocModificado = factura.Coddocumento?.ToString() ?? "01",
+                NumDocModificado = RequiereFacturaInterna
+                    ? factura.Numfactura
+                    : ConstruirDocumentoModificadoCompleto(factura.Serie, factura.Numfactura),
+                FechaEmiDocModificado = factura.Fechaentrega ?? factura.Fchautorizacion ?? DateTime.Today,
+                NumAutorizacion = null,
+                Subtotal = SubtotalGeneral,
+                Iva = IvaTotal,
+                Descuentos = DescuentoTotal,
+                ValorTotal = TotalGeneral,
+                CodClave = factura.Numautorizacion,
+                Autorizado = string.Empty
+            };
+
+            return new NotaDebitoDetalleViewDto
+            {
+                NotaDebito = nota,
+                Cliente = cliente,
+                Emisor = emisor,
+                TipoIdentificacionCliente = ObtenerTipoIdentificacionNombre(cliente?.Tipoidentificacion),
+                NumeroCompleto = $"{FormatearSerie(serieLimpia)}-{secuencialLimpio.PadLeft(9, '0')}",
+                NumeroDocModificadoVisual = RequiereFacturaInterna
+                    ? ConstruirDocumentoModificadoCompleto(factura.Serie, factura.Numfactura)
+                    : DocumentoModificadoInputVisual,
+                DiasPlazo = factura.Tiempocredito,
+                Detalles = detallesNd.Select(detalle => new NotaDebitoDetalleLineaDto
+                {
+                    CodigoInterno = GetCodigoVisualDetalle(detalle),
+                    Descripcion = detalle.Descripcion ?? string.Empty,
+                    Cantidad = 1m,
+                    PrecioUnitario = detalle.Preciounitario,
+                    Descuento = GetDescuentoEfectivoDetalle(detalle),
+                    Subtotal = GetBaseImponibleDetalle(detalle),
+                    TarifaIva = detalle.Iva,
+                    ValorIce = detalle.ValorIce,
+                    ValorIva = GetIvaDetalle(detalle),
+                    Total = GetTotalDetalle(detalle)
+                }).ToList()
+            };
+        }
+    }
+
+    private void AgregarCorreoOpcionalNota()
+    {
+        if (correosOpcionalesNota.Count >= MaxCorreosOpcionalesNota)
+            return;
+
+        var correoPersistidoPendiente = correosPersistidosClienteNota
+            .FirstOrDefault(correoGuardado =>
+                !correosOpcionalesNota.Any(x =>
+                    string.Equals((x.Correo ?? string.Empty).Trim(), correoGuardado, StringComparison.OrdinalIgnoreCase)));
+
+        if (!string.IsNullOrWhiteSpace(correoPersistidoPendiente))
+        {
+            correosOpcionalesNota.Add(new CorreoOpcionalNotaInput
+            {
+                Correo = correoPersistidoPendiente,
+                GuardarEnCliente = true,
+                EsPersistidoCliente = true
+            });
+            return;
+        }
+
+        correosOpcionalesNota.Add(new CorreoOpcionalNotaInput());
+    }
+
+    private void EliminarCorreoOpcionalNota(int index)
+    {
+        if (index < 0 || index >= correosOpcionalesNota.Count)
+            return;
+
+        correosOpcionalesNota.RemoveAt(index);
+    }
+
+    private async Task OnClienteIdentificacionNotaInputAsync(ChangeEventArgs e)
+    {
+        cliente.Numeroidentificacion = e.Value?.ToString() ?? string.Empty;
+        cliente.Codcliente = 0;
+        clienteDetectadoEnCatalogoNota = false;
+        continuarConClienteSinRegistro = false;
+        campoClienteNotaActivo = "identificacion";
+        await BuscarSugerenciasClienteNotaAsync(cliente.Numeroidentificacion);
+    }
+
+    private async Task OnClienteNombreNotaInputAsync(ChangeEventArgs e)
+    {
+        cliente.Nombrerazonsocial = e.Value?.ToString() ?? string.Empty;
+        cliente.Nombres = string.Empty;
+        cliente.Apellidos = string.Empty;
+        cliente.Codcliente = 0;
+        clienteDetectadoEnCatalogoNota = false;
+        continuarConClienteSinRegistro = false;
+        campoClienteNotaActivo = "nombre";
+        await BuscarSugerenciasClienteNotaAsync(cliente.Nombrerazonsocial);
+    }
+
+    private async Task MostrarSugerenciasClienteNotaAsync(string campo)
+    {
+        if (!CamposClienteEditables)
+            return;
+
+        campoClienteNotaActivo = campo;
+        var filtro = campo == "identificacion"
+            ? cliente.Numeroidentificacion
+            : NombreClienteVisual;
+        await BuscarSugerenciasClienteNotaAsync(filtro);
+    }
+
+    private async Task BuscarSugerenciasClienteNotaAsync(string? filtro)
+    {
+        sugerenciasClientesNota = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, filtro ?? string.Empty);
+        clienteDetectadoEnCatalogoNota = sugerenciasClientesNota.Any(c =>
+            string.Equals((c.Numeroidentificacion ?? string.Empty).Trim(), (cliente.Numeroidentificacion ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SeleccionarClienteNotaAsync(Cliente sugerencia)
+    {
+        cliente = sugerencia;
+        clienteDetectadoEnCatalogoNota = true;
+        continuarConClienteSinRegistro = false;
+        sugerenciasClientesNota.Clear();
+        campoClienteNotaActivo = null;
+        await CargarCorreosOpcionalesClienteNotaAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ContinuarConClienteSinRegistroNota()
+    {
+        continuarConClienteSinRegistro = !continuarConClienteSinRegistro;
+        sugerenciasClientesNota.Clear();
+        campoClienteNotaActivo = null;
+    }
+
+    private Task AbrirCrudClientesNotaAsync()
+    {
+        continuarConClienteSinRegistro = false;
+        mostrarCrudClientesNota = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CerrarCrudClientesNotaAsync()
+    {
+        mostrarCrudClientesNota = false;
+        await SincronizarClienteCreadoDesdeModalNotaAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnClienteGuardadoDesdeCrudNotaAsync(string? identificacionGuardada)
+    {
+        mostrarCrudClientesNota = false;
+        continuarConClienteSinRegistro = false;
+
+        if (!string.IsNullOrWhiteSpace(identificacionGuardada))
+            cliente.Numeroidentificacion = identificacionGuardada.Trim();
+
+        await SincronizarClienteCreadoDesdeModalNotaAsync(identificacionGuardada);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SincronizarClienteCreadoDesdeModalNotaAsync(string? identificacionObjetivo = null)
+    {
+        var identificacion = string.IsNullOrWhiteSpace(identificacionObjetivo)
+            ? cliente.Numeroidentificacion?.Trim()
+            : identificacionObjetivo.Trim();
+
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return;
+
+        var coincidencias = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, identificacion);
+        var clienteCreado = coincidencias.FirstOrDefault(c =>
+            string.Equals(c.Numeroidentificacion?.Trim(), identificacion, StringComparison.Ordinal));
+
+        if (clienteCreado is null)
+        {
+            clienteDetectadoEnCatalogoNota = false;
+            return;
+        }
+
+        await SeleccionarClienteNotaAsync(clienteCreado);
+    }
+
+    private void NormalizarCorreosOpcionalesNota()
+    {
+        foreach (var correo in correosOpcionalesNota)
+            correo.Correo = (correo.Correo ?? string.Empty).Trim();
+    }
+
+    private List<FacturaCorreoDestinoDto> ObtenerCorreosOpcionalesNota()
+    {
+        NormalizarCorreosOpcionalesNota();
+
+        return correosOpcionalesNota
+            .Where(x => !string.IsNullOrWhiteSpace(x.Correo))
+            .Select(x => new FacturaCorreoDestinoDto
+            {
+                Correo = x.Correo,
+                GuardarEnCliente = x.EsPersistidoCliente ? false : x.GuardarEnCliente
+            })
+            .ToList();
+    }
+
+    private async Task CargarCorreosOpcionalesClienteNotaAsync()
+    {
+        correosOpcionalesNota = new();
+        correosPersistidosClienteNota = new();
+
+        if (cliente.Codcliente <= 0)
+            return;
+
+        correosPersistidosClienteNota = (await FacturacionService.GetCorreosAdicionalesClienteAsync(currentUserId, cliente.Codcliente))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxCorreosOpcionalesNota)
+            .ToList();
+
+        foreach (var correo in correosPersistidosClienteNota)
+        {
+            correosOpcionalesNota.Add(new CorreoOpcionalNotaInput
+            {
+                Correo = correo,
+                GuardarEnCliente = true,
+                EsPersistidoCliente = true
+            });
+        }
+    }
+
+    private string? ValidarCorreosNotaDebito()
+    {
+        NormalizarCorreosOpcionalesNota();
+
+        var repetidos = correosOpcionalesNota
+            .Where(x => !string.IsNullOrWhiteSpace(x.Correo))
+            .GroupBy(x => x.Correo, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+
+        if (repetidos != null)
+            return $"El correo '{repetidos.Key}' esta repetido en los destinatarios adicionales.";
+
+        foreach (var item in correosOpcionalesNota.Where(x => !string.IsNullOrWhiteSpace(x.Correo)))
+        {
+            try
+            {
+                _ = new System.Net.Mail.MailAddress(item.Correo);
+            }
+            catch
+            {
+                return $"El correo '{item.Correo}' no tiene un formato valido.";
+            }
+
+            if (string.Equals(item.Correo, cliente.Correo?.Trim(), StringComparison.OrdinalIgnoreCase))
+                return $"El correo '{item.Correo}' ya esta registrado como correo principal del cliente.";
+        }
+
+        return null;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        EmisionControlService.Changed += OnEmisionChanged;
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+        await CargarEstadoEmisionAsync();
+
+        tiposCliente = await FacturacionService.GetTiposClienteAsync();
+        identificaciones = await IdentificacionService.GetAllActiveAsync();
+        emisores = await FacturacionService.GetEmisoresActivosAsync(currentUserId);
+        emisor = emisores.FirstOrDefault();
+
+        cajaUsuario = await FacturacionService.GetCajaUsuarioAsync(currentUserId);
+        seriesDocumento = await FacturacionService.GetSeriesFacturaHabilitadasAsync(currentUserId);
+        serieNdRawActual = await FacturacionService.GetSerieNotaDebitoRawAsync(currentUserId);
+        if (!string.IsNullOrWhiteSpace(serieNdRawActual))
+            serieNdVisual = FormatearSerie(serieNdRawActual);
+
+        if (!detallesNd.Any())
+            detallesNd.Add(CrearDetalleNotaDebitoVacio());
+
+        await RecargarSecuencialNdAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || !string.IsNullOrWhiteSpace(secuencialNdAutomatico))
+            return;
+
+        await RecargarSecuencialNdAsync();
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        EmisionControlService.Changed -= OnEmisionChanged;
+    }
+
+    private void OnEmisionChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await CargarEstadoEmisionAsync();
+            StateHasChanged();
+        });
+    }
+
+    private Task AbrirHistorialNotasDebitoAsync()
+    {
+        mostrarHistorialNotasDebito = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private Task CerrarHistorialNotasDebitoAsync()
+    {
+        mostrarHistorialNotasDebito = false;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task AbrirVistaPreviaPdfTemporalAsync()
+    {
+        if (previsualizandoPdf || emisor?.Codigo is null || emisor.Codigo <= 0)
+            return;
+
+        previsualizandoPdf = true;
+        pdfVistaEsTemporal = true;
+        mostrarVistaPreviaPdfTemporal = true;
+        urlPdfTemporal = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var rutaTemporal = await NotaDebitoPdfService.GenerarPdfNotaDebitoTemporalAsync(VistaPreviaNotaDebito);
+            urlPdfTemporal = $"{rutaTemporal}?v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        }
+        catch (Exception ex)
+        {
+            urlPdfTemporal = null;
+            mostrarVistaPreviaPdfTemporal = false;
+            errorCarga = $"No se pudo generar la vista previa del PDF: {ex.Message}";
+        }
+        finally
+        {
+            previsualizandoPdf = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task CerrarVistaPreviaPdfTemporalAsync()
+    {
+        var rutaTemporal = urlPdfTemporal;
+        var debeEliminar = pdfVistaEsTemporal;
+
+        urlPdfTemporal = null;
+        mostrarVistaPreviaPdfTemporal = false;
+        pdfVistaEsTemporal = true;
+        await InvokeAsync(StateHasChanged);
+
+        if (debeEliminar && !string.IsNullOrWhiteSpace(rutaTemporal))
+        {
+            try
+            {
+                await NotaDebitoPdfService.EliminarPdfNotaDebitoTemporalAsync(rutaTemporal);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private Task AbrirDocumentoGeneradoAsync()
+    {
+        if (string.IsNullOrWhiteSpace(documentoGeneradoPdfUrl))
+            return Task.CompletedTask;
+
+        pdfVistaEsTemporal = false;
+        urlPdfTemporal = documentoGeneradoPdfUrl;
+        mostrarVistaPreviaPdfTemporal = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task NuevaNotaDebitoDesdeAvisoAsync()
+    {
+        mensajeRapidoEmision = null;
+        mensajeRapidoEsError = false;
+        documentoGeneradoPdfUrl = null;
+        await LimpiarFormularioAsync();
+    }
+
+    private static decimal Red2(decimal valor)
+        => Math.Round(valor, 2, MidpointRounding.AwayFromZero);
+
+    private static string FormatearSerie(string? raw)
+    {
+        var limpio = (raw ?? string.Empty).Replace("-", string.Empty).Trim();
+        return limpio.Length >= 6
+            ? $"{limpio[..3]}-{limpio.Substring(3, 3)}"
+            : limpio;
+    }
+
+    private string ObtenerTipoIdentificacionNombre(string? codigo)
+        => identificaciones.FirstOrDefault(x => string.Equals(x.IdeCodigo, codigo, StringComparison.OrdinalIgnoreCase))?.IdeDescripcion
+            ?? codigo
+            ?? string.Empty;
+
+    private static string GetFechaInputValue(DateTime fecha)
+        => fecha.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    private static string FormatearDecimalEditable(decimal valor)
+        => valor.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static string GetPrecioNotaDebitoVisual(DetalleNdDto detalle)
+        => detalle.Preciounitario > 0m ? FormatearDecimalEditable(detalle.Preciounitario) : string.Empty;
+
+    private void OnDescripcionDetalleChanged(DetalleNdDto detalle, string? valor)
+    {
+        detalle.Descripcion = valor ?? string.Empty;
+        detalle.Detalle = detalle.Descripcion;
+
+        if (ReferenceEquals(detallesNd.FirstOrDefault(), detalle))
+            motivoNota = detalle.Descripcion;
+    }
+
+    private static int NormalizarTarifaIvaNotaDebito(int iva)
+        => TarifasIvaNotaDebito.Contains(iva) ? iva : iva > 0 ? 15 : 0;
+
+    private bool TryParseDecimalFlexible(string? valor, out decimal numero)
+    {
+        numero = 0m;
+        if (string.IsNullOrWhiteSpace(valor))
+            return false;
+
+        valor = valor.Trim();
+
+        return decimal.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out numero)
+            || decimal.TryParse(valor, NumberStyles.Any, new CultureInfo("es-EC"), out numero)
+            || decimal.TryParse(valor.Replace(",", "."), NumberStyles.Any, CultureInfo.InvariantCulture, out numero);
+    }
+
+    private decimal GetSubtotalBrutoDetalle(DetalleNdDto d)
+        => Red2(Math.Max(0m, d.Cantidad) * Math.Max(0m, d.Preciounitario));
+
+    private decimal GetDescuentoEfectivoDetalle(DetalleNdDto d)
+        => Red2(Math.Max(0m, d.Descuento));
+
+    private decimal GetPorcentajeDescuentoDetalle(DetalleNdDto d)
+        => porcentajesDescuentoDetalle.TryGetValue(d, out var pct) ? pct : 0m;
+
+    private ModoDescuento GetModoDescuentoDetalle(DetalleNdDto d)
+    {
+        if (modosDescuentoDetalle.TryGetValue(d, out var modo))
+            return modo;
+
+        return d.Descuento > 0m ? ModoDescuento.Moneda : ModoDescuento.Porcentaje;
+    }
+
+    private string GetDescuentoDetalleVisual(DetalleNdDto d)
+    {
+        if (GetModoDescuentoDetalle(d) == ModoDescuento.Moneda)
+        {
+            if (valoresTemporalesDescuentoMoneda.TryGetValue(d, out var moneda))
+                return moneda;
+
+            return d.Descuento.ToString("0.##", CultureInfo.InvariantCulture);
+        }
+
+        if (valoresTemporalesPct.TryGetValue(d, out var pct))
+            return pct;
+
+        return GetPorcentajeDescuentoDetalle(d).ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private void CambiarModoDescuentoDetalle(DetalleNdDto d, ModoDescuento modo)
+    {
+        var modoActual = GetModoDescuentoDetalle(d);
+        if (modoActual == modo)
+            return;
+
+        modosDescuentoDetalle[d] = modo;
+        valoresTemporalesPct.Remove(d);
+        valoresTemporalesDescuentoMoneda.Remove(d);
+
+        var bruto = GetSubtotalBrutoDetalle(d);
+        if (modo == ModoDescuento.Porcentaje)
+        {
+            var pct = bruto > 0m ? Math.Clamp(Red2((d.Descuento / bruto) * 100m), 0m, 100m) : 0m;
+            porcentajesDescuentoDetalle[d] = pct;
+            d.Descuento = Red2(bruto * (pct / 100m));
+        }
+        else
+        {
+            porcentajesDescuentoDetalle[d] = 0m;
+            d.Descuento = Math.Clamp(d.Descuento, 0m, bruto);
+        }
+
+        StateHasChanged();
+    }
+
+    private decimal GetBaseImponibleDetalle(DetalleNdDto d)
+        => Red2(Math.Max(0m, GetSubtotalBrutoDetalle(d) - GetDescuentoEfectivoDetalle(d)));
+
+    private decimal GetIvaDetalle(DetalleNdDto d)
+        => Red2(GetBaseImponibleDetalle(d) * Math.Max(0, d.Iva) / 100m);
+
+    private decimal GetTotalDetalle(DetalleNdDto d)
+        => Red2(GetBaseImponibleDetalle(d) + GetIvaDetalle(d) + Math.Max(0m, d.ValorIce));
+
+    private static string GetIceSeleccionadoDetalle(DetalleNdDto d)
+        => d.ValorIce > 0m ? "1" : "0";
+
+    private static string ObtenerCodigoPorcentajeDetalle(DetalleNdDto detalle)
+    {
+        if (!string.IsNullOrWhiteSpace(detalle.CodigoPorcentajeSri))
+            return detalle.CodigoPorcentajeSri.Trim();
+
+        return detalle.Iva switch
+        {
+            0 => "0",
+            5 => "5",
+            8 => "8",
+            12 => "2",
+            13 => "10",
+            14 => "3",
+            15 => "4",
+            _ => detalle.Iva > 0 ? "2" : "0"
+        };
+    }
+
+    private static int ObtenerTarifaDesdeCodigoPorcentajeSri(string? codigoPorcentaje)
+    {
+        return (codigoPorcentaje ?? string.Empty).Trim() switch
+        {
+            "0" => 0,
+            "2" => 12,
+            "3" => 14,
+            "4" => 15,
+            "5" => 5,
+            "6" => 0,
+            "7" => 0,
+            "8" => 8,
+            "10" => 13,
+            _ => 0
+        };
+    }
+
+    private decimal SubtotalGravado => detallesNd
+        .Where(d => d.Iva > 0)
+        .Sum(GetBaseImponibleDetalle);
+
+    private decimal SubtotalTarifaCero => detallesNd
+        .Where(d => d.Iva == 0)
+        .Sum(GetBaseImponibleDetalle);
+
+    private decimal SubtotalNoObjeto => 0m;
+
+    private decimal SubtotalExentoIva => 0m;
+
+    private decimal Subtotal12 => SubtotalGravado;
+    private decimal Subtotal0 => Red2(SubtotalTarifaCero + SubtotalNoObjeto + SubtotalExentoIva);
+    private decimal DescuentoTotal => detallesNd.Sum(GetDescuentoEfectivoDetalle);
+    private decimal IceTotal => Red2(detallesNd.Sum(d => Math.Max(0m, d.ValorIce)));
+    private decimal IvaTotal => detallesNd.Sum(GetIvaDetalle);
+    private decimal SubtotalGeneral => Red2(SubtotalGravado + SubtotalTarifaCero + SubtotalNoObjeto + SubtotalExentoIva);
+    private decimal SubtotalMasIce => Red2(SubtotalGeneral + IceTotal);
+    private List<(int Tarifa, decimal Valor)> IvasPorTarifa => detallesNd
+        .Where(d => d.Iva > 0)
+        .GroupBy(d => d.Iva)
+        .OrderBy(g => g.Key)
+        .Select(g => (Tarifa: g.Key, Valor: g.Sum(GetIvaDetalle)))
+        .ToList();
+    private decimal TotalGeneral => Red2(SubtotalGeneral + IceTotal + IvaTotal);
+
+    private static string GetCodigoVisualDetalle(DetalleNdDto d) =>
+        !string.IsNullOrWhiteSpace(d.CodPrincipal)
+            ? d.CodPrincipal.Trim()
+            : d.Codproducto > 0
+                ? d.Codproducto.ToString(CultureInfo.InvariantCulture)
+                : "Código";
+
+    private string FacturaReferenciaVisual =>
+        !string.IsNullOrWhiteSpace(factura.Numfactura)
+            ? $"{serieFacturaVisual}-{factura.Numfactura}"
+            : "--";
+
+    private string NombreClienteVisual =>
+        !string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial)
+            ? cliente.Nombrerazonsocial
+            : ((cliente.Nombres ?? string.Empty) + " " + (cliente.Apellidos ?? string.Empty)).Trim();
+
+    private static string ObtenerNombreClienteVisual(Cliente clienteActual)
+    {
+        if (!string.IsNullOrWhiteSpace(clienteActual.Nombrerazonsocial))
+            return clienteActual.Nombrerazonsocial.Trim();
+
+        var nombreCompleto = $"{clienteActual.Nombres ?? string.Empty} {clienteActual.Apellidos ?? string.Empty}".Trim();
+        return string.IsNullOrWhiteSpace(nombreCompleto)
+            ? "Cliente"
+            : nombreCompleto;
+    }
+
+    private string EmisorVisual =>
+        emisor != null
+            ? $"{(emisor.NomComercial ?? emisor.RazonSocial ?? $"Emisor #{emisor.Codigo}")} - {emisor.Ruc ?? "SIN RUC"}"
+            : "--";
+
+    private string FechaFacturaVisual =>
+        factura.Fechaentrega?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+        ?? factura.Fchautorizacion?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+        ?? "--";
+
+    private async Task BuscarFacturasAutoAsync(ChangeEventArgs e)
+    {
+        numFacturaBuscar = e.Value?.ToString()?.Trim() ?? string.Empty;
+        errorCarga = null;
+
+        if (string.IsNullOrWhiteSpace(numFacturaBuscar))
+        {
+            listaFacturas.Clear();
+            mostrarListaFacturas = false;
+            estadoCarga = "Sin cargar";
+            return;
+        }
+
+        try
+        {
+            listaFacturas = await NotaDebitoService.BuscarFacturasAutocompleteAsync(numFacturaBuscar, currentUserId);
+            mostrarListaFacturas = listaFacturas.Any();
+            estadoCarga = listaFacturas.Any()
+                ? $"{listaFacturas.Count} coincidencia(s) encontrada(s)"
+                : "No se encontraron coincidencias";
+        }
+        catch (Exception ex)
+        {
+            listaFacturas.Clear();
+            mostrarListaFacturas = false;
+            estadoCarga = "Error";
+            errorCarga = ex.Message;
+        }
+    }
+
+    private void PrepararSeleccionFactura()
+    {
+        seleccionandoFacturaDesdeLista = true;
+    }
+
+    private void ToggleListaFacturas()
+    {
+        mostrarListaFacturas = !mostrarListaFacturas && listaFacturas.Any();
+    }
+
+    private async Task SeleccionarFacturaDesdeListaAsync(FacturaBusquedaDto item)
+    {
+        numFacturaBuscar = item.Numfactura;
+        mostrarListaFacturas = false;
+        seleccionandoFacturaDesdeLista = false;
+        await BuscarFacturaAsync();
+    }
+
+    private async Task OcultarListaConDelay(FocusEventArgs _)
+    {
+        await Task.Delay(150);
+        if (seleccionandoFacturaDesdeLista)
+        {
+            seleccionandoFacturaDesdeLista = false;
+            return;
+        }
+
+        mostrarListaFacturas = false;
+    }
+
+    private async Task OnKeyBuscarFactura(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            mostrarListaFacturas = false;
+            await BuscarFacturaAsync();
+        }
+    }
+
+    private async Task BuscarFacturaAsync()
+    {
+        errorCarga = null;
+
+        if (string.IsNullOrWhiteSpace(numFacturaBuscar) || numFacturaBuscar.Trim().Length < 3)
+        {
+            estadoCarga = "Escribe al menos 3 digitos";
+            return;
+        }
+
+        try
+        {
+            estadoCarga = "Buscando factura...";
+
+            var url = $"api/facturas/por-numero?numFactura={Uri.EscapeDataString(numFacturaBuscar.Trim())}&idUsuario={currentUserId}";
+            var resp = await Http.GetAsync(url);
+            var raw = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                estadoCarga = "Error";
+                errorCarga = $"API {(int)resp.StatusCode} {resp.ReasonPhrase}: {raw}";
+                return;
+            }
+
+            var dto = JsonSerializer.Deserialize<FacturaViewDto>(
+                raw,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (dto?.Factura == null)
+            {
+                estadoCarga = "No se encontro la factura.";
+                return;
+            }
+
+            factura = dto.Factura;
+            cliente = dto.Cliente ?? new Cliente();
+            emisor = dto.Emisor;
+            serieFacturaVisual = FormatearSerie(factura.Serie);
+            fechaVenceNota = factura.Fechavence ?? DateTime.Today;
+            await CargarCorreosOpcionalesClienteNotaAsync();
+
+            ResetearEstadoDetalles();
+            detallesNd = new List<DetalleNdDto> { CrearDetalleNotaDebitoVacio() };
+
+            if (string.IsNullOrWhiteSpace(motivoNota))
+                motivoNota = $"Ajuste sobre factura {FacturaReferenciaVisual}";
+
+            estadoCarga = "Factura cargada correctamente";
+
+            await RecargarSecuencialNdAsync();
+        }
+        catch (Exception ex)
+        {
+            estadoCarga = "Error";
+            errorCarga = ex.Message;
+        }
+    }
+
+    private async Task AsegurarEmisorActivoAsync()
+    {
+        if (emisor?.Codigo > 0)
+            return;
+
+        if (!emisores.Any())
+            emisores = await FacturacionService.GetEmisoresActivosAsync(currentUserId);
+
+        emisor = emisores.FirstOrDefault();
+    }
+
+    private async Task ActivarModoManualAsync()
+    {
+        var debePrepararFormulario = modoEmision != ModoEmisionNotaDebito.Manual || factura.Codfactura > 0;
+        modoEmision = ModoEmisionNotaDebito.Manual;
+        mensajeXmlNotaDebito = null;
+        errorCarga = null;
+        estadoCarga = "Modo manual activo";
+        listaFacturas.Clear();
+        mostrarListaFacturas = false;
+        mostrarPanelProductos = false;
+
+        await AsegurarEmisorActivoAsync();
+
+        if (debePrepararFormulario)
+        {
+            PrepararFormularioNuevoNotaDebito();
+        }
+
+        await RecargarSecuencialNdAsync();
+        StateHasChanged();
+    }
+
+    private async Task ActivarModoFacturaAsync()
+    {
+        modoEmision = ModoEmisionNotaDebito.Factura;
+        mensajeXmlNotaDebito = null;
+        errorCarga = null;
+        estadoCarga = "Busqueda de factura activa";
+        listaFacturas.Clear();
+        mostrarListaFacturas = false;
+        mostrarPanelProductos = false;
+
+        await AsegurarEmisorActivoAsync();
+        await RecargarSecuencialNdAsync();
+        StateHasChanged();
+    }
+
+    private void PrepararFormularioNuevoNotaDebito()
+    {
+        factura = new Factura
+        {
+            Serie = ObtenerSerieFacturaManualRaw(),
+            Numfactura = string.Empty,
+            Fchautorizacion = DateTime.Today,
+            Coddocumento = 1,
+            Idusuario = currentUserId,
+            Codemisor = emisor?.Codigo
+        };
+
+        cliente = new Cliente
+        {
+            Usuario = currentUserId,
+            Estado = true,
+            Tipoidentificacion = identificaciones.FirstOrDefault()?.IdeCodigo ?? "05",
+            TipoCliente = tiposCliente.FirstOrDefault()?.TclCodigo
+        };
+
+        correosOpcionalesNota = new();
+        correosPersistidosClienteNota = new();
+        sugerenciasClientesNota.Clear();
+        campoClienteNotaActivo = null;
+        clienteDetectadoEnCatalogoNota = false;
+        continuarConClienteSinRegistro = false;
+        ResetearEstadoDetalles();
+        detallesNd = new List<DetalleNdDto> { CrearDetalleNotaDebitoVacio() };
+        serieFacturaVisual = FormatearSerie(factura.Serie);
+        motivoNota = string.Empty;
+        fechaVenceNota = DateTime.Today;
+        numeroAutorizacionDocumentoModificado = string.Empty;
+    }
+
+    private async Task ActivarModoXmlAsync()
+    {
+        modoEmision = ModoEmisionNotaDebito.Xml;
+        mensajeXmlNotaDebito = null;
+        errorCarga = null;
+        estadoCarga = "Modo XML activo";
+        listaFacturas.Clear();
+        mostrarListaFacturas = false;
+        mostrarPanelProductos = false;
+
+        await AsegurarEmisorActivoAsync();
+        PrepararFormularioNuevoNotaDebito();
+        await RecargarSecuencialNdAsync();
+        StateHasChanged();
+    }
+
+    private void OnFechaDocumentoModificadoInput(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
+            factura.Fchautorizacion = fecha;
+    }
+
+    private void OnDocumentoModificadoInput(ChangeEventArgs e)
+    {
+        var digitos = SoloDigitosNd(e.Value?.ToString());
+        if (digitos.Length > 15)
+            digitos = digitos[..15];
+
+        var serieManual = ObtenerSerieFacturaManualRaw();
+        if (modoEmision != ModoEmisionNotaDebito.Factura && serieManual.Length == 6)
+        {
+            factura.Serie = serieManual;
+            factura.Numfactura = digitos.StartsWith(serieManual, StringComparison.Ordinal)
+                ? (digitos.Length > 6 ? digitos[6..] : string.Empty)
+                : digitos;
+            serieFacturaVisual = FormatearSerie(factura.Serie);
+            return;
+        }
+
+        factura.Serie = digitos.Length <= 6 ? digitos : digitos[..6];
+        factura.Numfactura = digitos.Length > 6 ? digitos[6..] : string.Empty;
+        serieFacturaVisual = FormatearSerie(factura.Serie);
+    }
+
+    private void AgregarLineaNotaDebito()
+    {
+        detallesNd.Add(CrearDetalleNotaDebitoVacio());
+        StateHasChanged();
+    }
+
+    private DetalleNdDto CrearDetalleNotaDebitoVacio()
+    {
+        var detalle = new DetalleNdDto
+        {
+            Codproducto = 0,
+            CodPrincipal = string.Empty,
+            CodAuxiliar = string.Empty,
+            Descripcion = string.Empty,
+            Detalle = string.Empty,
+            Cantidad = 1m,
+            Preciounitario = 0m,
+            Descuento = 0m,
+            Subtotal = 0m,
+            Iva = 15,
+            Total = 0m,
+            CodigoImp = 2,
+            CodigoPorcentajeSri = ObtenerCodigoPorcentajeDetalle(new DetalleNdDto { Iva = 15 })
+        };
+
+        modosDescuentoDetalle[detalle] = ModoDescuento.Porcentaje;
+        return detalle;
+    }
+
+    private void ResetearEstadoDetalles()
+    {
+        valoresTemporalesPct.Clear();
+        valoresTemporalesDescuentoMoneda.Clear();
+        porcentajesDescuentoDetalle.Clear();
+        modosDescuentoDetalle.Clear();
+    }
+
+    private async Task OnNotaDebitoXmlSelectedAsync(InputFileChangeEventArgs e)
+    {
+        var archivo = e.File;
+        modoEmision = ModoEmisionNotaDebito.Xml;
+        mensajeXmlNotaDebito = null;
+        errorCarga = null;
+        estadoCarga = "Leyendo XML...";
+        mostrarPanelProductos = false;
+
+        if (archivo is null)
+            return;
+
+        if (archivo.Size > MaxNotaDebitoXmlSize)
+        {
+            await MostrarAlertaAsync("warning", "XML demasiado grande", "Selecciona un archivo XML menor a 10 MB.");
+            return;
+        }
+
+        try
+        {
+            await AsegurarEmisorActivoAsync();
+            PrepararFormularioNuevoNotaDebito();
+
+            await using var stream = archivo.OpenReadStream(MaxNotaDebitoXmlSize);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var contenidoXml = await reader.ReadToEndAsync();
+
+            CargarDatosFacturaDesdeXml(contenidoXml);
+            await RecargarSecuencialNdAsync();
+
+            mensajeXmlNotaDebito = $"XML cargado: {archivo.Name}. Ingresa el motivo y valor antes de guardar.";
+            estadoCarga = "XML cargado";
+        }
+        catch (Exception ex)
+        {
+            estadoCarga = "Error";
+            mensajeXmlNotaDebito = null;
+            await MostrarAlertaAsync("error", "No se pudo leer el XML", ex.Message);
+        }
+        finally
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CargarDatosFacturaDesdeXml(string contenidoXml)
+    {
+        var documento = ObtenerDocumentoComprobanteXml(contenidoXml);
+        var infoTributaria = PrimerElemento(documento, "infoTributaria")
+            ?? throw new InvalidOperationException("El XML no contiene infoTributaria.");
+        var infoFactura = PrimerElemento(documento, "infoFactura")
+            ?? throw new InvalidOperationException("El XML no contiene infoFactura.");
+
+        var estab = ValorXml(infoTributaria, "estab");
+        var ptoEmi = ValorXml(infoTributaria, "ptoEmi");
+        var secuencial = ValorXml(infoTributaria, "secuencial");
+        var autorizacion = ValorXml(infoTributaria, "claveAcceso")
+            ?? ObtenerCampoAdicionalXml(documento, "NumeroAutorizacion")
+            ?? ObtenerCampoAdicionalXml(documento, "numAutorizacion")
+            ?? string.Empty;
+        var fechaFactura = ParseFechaXml(ValorXml(infoFactura, "fechaEmision")) ?? DateTime.Today;
+
+        factura = new Factura
+        {
+            Serie = ObtenerSerieFacturaManualRaw() is { Length: 6 } serieActiva ? serieActiva : $"{estab}{ptoEmi}",
+            Numfactura = secuencial,
+            Fchautorizacion = fechaFactura,
+            Numautorizacion = autorizacion,
+            Coddocumento = 1,
+            Idusuario = currentUserId,
+            Codemisor = emisor?.Codigo
+        };
+        serieFacturaVisual = FormatearSerie(factura.Serie);
+        fechaVenceNota = fechaFactura;
+        numeroAutorizacionDocumentoModificado = autorizacion;
+
+        cliente = new Cliente
+        {
+            Usuario = currentUserId,
+            Estado = true,
+            Tipoidentificacion = ValorXml(infoFactura, "tipoIdentificacionComprador") ?? "05",
+            Numeroidentificacion = ValorXml(infoFactura, "identificacionComprador"),
+            Nombrerazonsocial = ValorXml(infoFactura, "razonSocialComprador"),
+            Direccion = ValorXml(infoFactura, "direccionComprador"),
+            Correo = ObtenerCampoAdicionalXml(documento, "email")
+                ?? ObtenerCampoAdicionalXml(documento, "correo")
+                ?? ObtenerCampoAdicionalXml(documento, "EmailCliente"),
+            Celular = ObtenerCampoAdicionalXml(documento, "telefono")
+                ?? ObtenerCampoAdicionalXml(documento, "celular")
+                ?? ObtenerCampoAdicionalXml(documento, "TelefonoCliente"),
+            TipoCliente = tiposCliente.FirstOrDefault()?.TclCodigo
+        };
+
+        correosOpcionalesNota = new();
+        correosPersistidosClienteNota = new();
+        ResetearEstadoDetalles();
+        detallesNd = new List<DetalleNdDto> { CrearDetalleNotaDebitoVacio() };
+    }
+
+    private DetalleNdDto ConstruirDetalleDesdeXml(XElement detalleXml)
+    {
+        var cantidad = Math.Max(0.01m, ParseDecimalXml(ValorXml(detalleXml, "cantidad")));
+        var precio = Math.Max(0.01m, ParseDecimalXml(ValorXml(detalleXml, "precioUnitario")));
+        var descuento = Math.Max(0m, ParseDecimalXml(ValorXml(detalleXml, "descuento")));
+        var bruto = Red2(cantidad * precio);
+        var impuesto = detalleXml.Descendants().FirstOrDefault(x => x.Name.LocalName == "impuesto");
+        var iva = NormalizarTarifaIvaNotaDebito((int)Math.Round(ParseDecimalXml(ValorXml(impuesto, "tarifa")), MidpointRounding.AwayFromZero));
+        var baseImp = Math.Max(0m, Red2(bruto - descuento));
+
+        return new DetalleNdDto
+        {
+            Codproducto = 0,
+            CodPrincipal = ValorXml(detalleXml, "codigoPrincipal") ?? ValorXml(detalleXml, "codigoInterno") ?? string.Empty,
+            CodAuxiliar = ValorXml(detalleXml, "codigoAuxiliar"),
+            Descripcion = ValorXml(detalleXml, "descripcion") ?? string.Empty,
+            Detalle = ValorXml(detalleXml, "descripcion") ?? string.Empty,
+            Cantidad = cantidad,
+            Preciounitario = precio,
+            Descuento = Math.Min(Red2(descuento), bruto),
+            Subtotal = baseImp,
+            Iva = iva,
+            Total = Red2(baseImp + (baseImp * Math.Max(0, iva) / 100m)),
+            CodigoImp = 2,
+            CodigoPorcentajeSri = ObtenerCodigoPorcentajeDetalle(new DetalleNdDto { Iva = iva })
+        };
+    }
+
+    private static XDocument ObtenerDocumentoComprobanteXml(string contenidoXml)
+    {
+        var documento = XDocument.Parse(contenidoXml, LoadOptions.PreserveWhitespace);
+        var comprobante = documento
+            .Descendants()
+            .FirstOrDefault(x => x.Name.LocalName == "comprobante")
+            ?.Value;
+
+        return string.IsNullOrWhiteSpace(comprobante)
+            ? documento
+            : XDocument.Parse(comprobante, LoadOptions.PreserveWhitespace);
+    }
+
+    private static XElement? PrimerElemento(XContainer contenedor, string nombre)
+        => contenedor.Descendants().FirstOrDefault(x => x.Name.LocalName == nombre);
+
+    private static string? ValorXml(XContainer? contenedor, string nombre)
+        => contenedor?
+            .Descendants()
+            .FirstOrDefault(x => x.Name.LocalName == nombre)
+            ?.Value
+            ?.Trim();
+
+    private static string? ObtenerCampoAdicionalXml(XContainer documento, string nombre)
+        => documento
+            .Descendants()
+            .Where(x => x.Name.LocalName == "campoAdicional")
+            .FirstOrDefault(x => string.Equals(x.Attribute("nombre")?.Value?.Trim(), nombre, StringComparison.OrdinalIgnoreCase))
+            ?.Value
+            ?.Trim();
+
+    private static decimal ParseDecimalXml(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return 0m;
+
+        return decimal.TryParse(valor.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out var numero)
+            ? numero
+            : decimal.TryParse(valor.Trim().Replace(",", "."), NumberStyles.Any, CultureInfo.InvariantCulture, out numero)
+                ? numero
+                : 0m;
+    }
+
+    private static DateTime? ParseFechaXml(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return null;
+
+        var formatos = new[] { "dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy" };
+        return DateTime.TryParseExact(valor.Trim(), formatos, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha)
+            ? fecha
+            : DateTime.TryParse(valor, CultureInfo.InvariantCulture, DateTimeStyles.None, out fecha)
+                ? fecha
+                : null;
+    }
+
+    private async Task ToggleProductosAsync()
+    {
+        if (modoEmision == ModoEmisionNotaDebito.Xml)
+            return;
+
+        mostrarPanelProductos = !mostrarPanelProductos;
+
+        if (mostrarPanelProductos && !productosDisponibles.Any())
+            await CargarProductosAsync();
+    }
+
+    private async Task CargarProductosAsync()
+    {
+        cargandoProductos = true;
+
+        try
+        {
+            var lookups = await Http.GetFromJsonAsync<ProductosLookupResponse>($"api/productos/lookups?userId={currentUserId}");
+            tarifasIvaPorCodigo = (lookups?.Ivas ?? new List<IvaLookupDto>())
+                .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
+                .GroupBy(x => x.Codigo!.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => ParseTarifaIvaCatalogo(g.First().Valor, g.Key),
+                    StringComparer.OrdinalIgnoreCase);
+
+            productosDisponibles = await Http.GetFromJsonAsync<List<ProductoDisponibleDto>>(
+                $"api/productos?userId={currentUserId}") ?? new List<ProductoDisponibleDto>();
+
+            AplicarFiltroProductos();
+        }
+        catch (Exception ex)
+        {
+            await MostrarAlertaAsync("error", "Error al cargar productos", ex.Message);
+        }
+        finally
+        {
+            cargandoProductos = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnFiltroProductosChanged(ChangeEventArgs e)
+    {
+        filtroProductos = e.Value?.ToString() ?? string.Empty;
+        AplicarFiltroProductos();
+    }
+
+    private void AplicarFiltroProductos()
+    {
+        var filtro = filtroProductos.Trim();
+
+        productosDisponiblesFiltrados = productosDisponibles
+            .Where(p =>
+                string.IsNullOrWhiteSpace(filtro) ||
+                (p.Nombre?.Contains(filtro, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (p.CodigoPrincipal?.Contains(filtro, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                p.Codigo.ToString().Contains(filtro, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => p.Nombre)
+            .ToList();
+    }
+
+    private void AgregarProductoADetalle(ProductoDisponibleDto p)
+    {
+        var precio = p.ValorUnitario ?? 0m;
+        var codigoPorcentajeSri = (p.Porcentajeimpuesto ?? string.Empty).Trim();
+        var iva = NormalizarTarifaIvaNotaDebito(ParseTarifaIvaDesdeCodigo(codigoPorcentajeSri));
+        var codigoImp = ParseCodigoImpuesto(p.Codigoimpuesto);
+
+        var nuevo = new DetalleNdDto
+        {
+            Codproducto = p.Codigo,
+            CodPrincipal = p.CodigoPrincipal ?? string.Empty,
+            CodAuxiliar = string.Empty,
+            Descripcion = p.Nombre ?? string.Empty,
+            Detalle = p.Nombre ?? string.Empty,
+            Cantidad = 1m,
+            Preciounitario = precio,
+            Descuento = 0m,
+            Iva = iva,
+            CodigoImp = codigoImp,
+            CodigoPorcentajeSri = string.IsNullOrWhiteSpace(codigoPorcentajeSri) ? ObtenerCodigoPorcentajeDetalle(new DetalleNdDto { Iva = iva }) : codigoPorcentajeSri
+        };
+
+        nuevo.Subtotal = GetBaseImponibleDetalle(nuevo);
+        nuevo.Total = GetTotalDetalle(nuevo);
+
+        detallesNd.Add(nuevo);
+        modosDescuentoDetalle[nuevo] = ModoDescuento.Porcentaje;
+    }
+
+    private int ParseTarifaIvaDesdeCodigo(string? codigo)
+    {
+        if (string.IsNullOrWhiteSpace(codigo))
+            return 0;
+
+        var limpio = codigo.Trim();
+        if (tarifasIvaPorCodigo.TryGetValue(limpio, out var tarifa))
+            return tarifa;
+
+        return ObtenerTarifaDesdeCodigoPorcentajeSri(limpio);
+    }
+
+    private int ParseTarifaIvaCatalogo(string? valor, string? codigo)
+    {
+        if (!string.IsNullOrWhiteSpace(valor))
+        {
+            var limpio = valor.Replace("%", string.Empty).Trim();
+
+            if (decimal.TryParse(limpio, NumberStyles.Any, CultureInfo.InvariantCulture, out var n1) ||
+                decimal.TryParse(limpio, NumberStyles.Any, new CultureInfo("es-EC"), out n1) ||
+                decimal.TryParse(limpio.Replace(",", "."), NumberStyles.Any, CultureInfo.InvariantCulture, out n1))
+            {
+                if (n1 > 0m && n1 <= 1m)
+                    n1 *= 100m;
+
+                return (int)Math.Round(n1, 0, MidpointRounding.AwayFromZero);
+            }
+        }
+
+        return ObtenerTarifaDesdeCodigoPorcentajeSri(codigo);
+    }
+
+    private int ParseCodigoImpuesto(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return 2;
+
+        return int.TryParse(valor, out var codigo) ? codigo : 2;
+    }
+
+    private void OnCantidadChanged(DetalleNdDto detalle, string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var cantidad))
+            return;
+
+        detalle.Cantidad = Math.Max(0m, cantidad);
+        RecalcularDescuentoPorModo(detalle);
+        detalle.Subtotal = GetBaseImponibleDetalle(detalle);
+        detalle.Total = GetTotalDetalle(detalle);
+        StateHasChanged();
+    }
+
+    private void OnPrecioChanged(DetalleNdDto detalle, string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var precio))
+            return;
+
+        detalle.Preciounitario = Math.Max(0m, precio);
+        RecalcularDescuentoPorModo(detalle);
+        detalle.Subtotal = GetBaseImponibleDetalle(detalle);
+        detalle.Total = GetTotalDetalle(detalle);
+        StateHasChanged();
+    }
+
+    private void OnDescuentoChanged(DetalleNdDto detalle, string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var descuento))
+            return;
+
+        var maximo = GetSubtotalBrutoDetalle(detalle);
+        detalle.Descuento = Math.Min(Math.Max(0m, descuento), maximo);
+        detalle.Subtotal = GetBaseImponibleDetalle(detalle);
+        detalle.Total = GetTotalDetalle(detalle);
+        StateHasChanged();
+    }
+
+    private void OnDescuentoDetalleInput(DetalleNdDto detalle, string? valor)
+    {
+        if (GetModoDescuentoDetalle(detalle) == ModoDescuento.Moneda)
+        {
+            valoresTemporalesDescuentoMoneda[detalle] = valor ?? "0";
+
+            if (TryParseDecimalFlexible(valor, out var monto))
+            {
+                detalle.Descuento = Math.Clamp(Red2(monto), 0m, GetSubtotalBrutoDetalle(detalle));
+                porcentajesDescuentoDetalle[detalle] = 0m;
+                valoresTemporalesDescuentoMoneda[detalle] = detalle.Descuento.ToString("0.##", CultureInfo.InvariantCulture);
+            }
+            else
+            {
+                detalle.Descuento = 0m;
+            }
+
+            detalle.Subtotal = GetBaseImponibleDetalle(detalle);
+            detalle.Total = GetTotalDetalle(detalle);
+            StateHasChanged();
+            return;
+        }
+
+        valoresTemporalesPct[detalle] = valor ?? "0";
+        valoresTemporalesDescuentoMoneda.Remove(detalle);
+        modosDescuentoDetalle[detalle] = ModoDescuento.Porcentaje;
+
+        if (!TryParseDecimalFlexible(valor, out var pct))
+        {
+            porcentajesDescuentoDetalle[detalle] = 0m;
+            detalle.Descuento = 0m;
+            StateHasChanged();
+            return;
+        }
+
+        pct = Math.Clamp(pct, 0m, 100m);
+        porcentajesDescuentoDetalle[detalle] = pct;
+        detalle.Descuento = Red2(GetSubtotalBrutoDetalle(detalle) * (pct / 100m));
+        detalle.Subtotal = GetBaseImponibleDetalle(detalle);
+        detalle.Total = GetTotalDetalle(detalle);
+        StateHasChanged();
+    }
+
+    private void RecalcularDescuentoPorModo(DetalleNdDto detalle)
+    {
+        var bruto = GetSubtotalBrutoDetalle(detalle);
+        if (GetModoDescuentoDetalle(detalle) == ModoDescuento.Porcentaje)
+        {
+            detalle.Descuento = Red2(bruto * (GetPorcentajeDescuentoDetalle(detalle) / 100m));
+            return;
+        }
+
+        detalle.Descuento = Math.Clamp(detalle.Descuento, 0m, bruto);
+        valoresTemporalesDescuentoMoneda[detalle] = detalle.Descuento.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private void OnIvaDetalleChanged(DetalleNdDto detalle, string? valor)
+    {
+        if (int.TryParse(valor, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iva))
+            detalle.Iva = NormalizarTarifaIvaNotaDebito(iva);
+
+        detalle.CodigoPorcentajeSri = ObtenerCodigoPorcentajeDetalle(detalle);
+        detalle.Subtotal = GetBaseImponibleDetalle(detalle);
+        detalle.Total = GetTotalDetalle(detalle);
+        StateHasChanged();
+    }
+
+    private void OnIceDetalleChanged(DetalleNdDto detalle, string? valor)
+    {
+        if (valor != "1")
+            detalle.ValorIce = 0m;
+
+        detalle.Total = GetTotalDetalle(detalle);
+        StateHasChanged();
+    }
+
+    private void OnValorIceChanged(DetalleNdDto detalle, string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var ice))
+            ice = 0m;
+
+        detalle.ValorIce = Red2(Math.Max(0m, ice));
+        detalle.Total = GetTotalDetalle(detalle);
+        StateHasChanged();
+    }
+
+    private void OnFechaVenceChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var fecha))
+            fechaVenceNota = fecha.Date;
+    }
+
+    private async Task QuitarDetalle(int index)
+    {
+        if (index < 0 || index >= detallesNd.Count)
+            return;
+
+        var detalle = detallesNd[index];
+        valoresTemporalesPct.Remove(detalle);
+        valoresTemporalesDescuentoMoneda.Remove(detalle);
+        porcentajesDescuentoDetalle.Remove(detalle);
+        modosDescuentoDetalle.Remove(detalle);
+        detallesNd.RemoveAt(index);
+        if (!detallesNd.Any())
+            detallesNd.Add(CrearDetalleNotaDebitoVacio());
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task GuardarNotaDebitoAsync()
+    {
+        if (BloqueadoPorSaldoDocumentos)
+        {
+            await MostrarAlertaAsync("warning", "Documentos agotados", MensajeBloqueoDocumentos);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(factura?.Numfactura))
+        {
+            await MostrarAlertaAsync("warning", "Factura requerida", "Ingresa o carga el numero de la Factura Modificada.");
+            return;
+        }
+
+        if (RequiereFacturaInterna && factura.Codfactura <= 0)
+        {
+            await MostrarAlertaAsync("warning", "Factura requerida", "Primero busca y carga una factura valida.");
+            return;
+        }
+
+        if (!RequiereFacturaInterna)
+        {
+            var serieDocModificado = NormalizarSerieRaw(factura.Serie);
+            var numeroDocModificado = SoloDigitosNd(factura.Numfactura);
+            if (serieDocModificado.Length != 6 || string.IsNullOrWhiteSpace(numeroDocModificado))
+            {
+                await MostrarAlertaAsync("warning", "Factura Modificada requerida", "Ingresa la Factura Modificada con formato 001-001-000000001.");
+                return;
+            }
+
+            if (!factura.Fchautorizacion.HasValue)
+            {
+                await MostrarAlertaAsync("warning", "Fecha requerida", "Ingresa la fecha de la Factura Modificada.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(cliente.Numeroidentificacion) || string.IsNullOrWhiteSpace(NombreClienteVisual))
+            {
+                await MostrarAlertaAsync("warning", "Cliente requerido", "Completa la identificacion y nombre del cliente.");
+                return;
+            }
+
+            if (ClienteSinRegistroPendienteDecision)
+            {
+                await MostrarAlertaAsync("warning", "Cliente no registrado", "Elige Agregar ahora o Continuar para usar estos datos en la nota de debito.");
+                return;
+            }
+        }
+
+        if (emisor is null)
+        {
+            await MostrarAlertaAsync("warning", "Emisor no disponible", "No hay emisor cargado para la factura.");
+            return;
+        }
+
+        var serieNdRaw = (cajaUsuario?.SerieDebitos ?? string.Empty).Replace("-", string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(serieNdRaw))
+        {
+            await MostrarAlertaAsync("warning", "Serie no configurada", "Configura SerieDebitos en tu caja antes de emitir una nota de debito.");
+            return;
+        }
+
+        var secNdRaw = (secuencialNdVisual ?? string.Empty).Replace("-", string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(secNdRaw) || secNdRaw == "--")
+        {
+            await MostrarAlertaAsync("warning", "Numero no disponible", "Presiona 'Recalcular numero' para obtener el siguiente numero.");
+            return;
+        }
+
+        if (!detallesNd.Any())
+        {
+            await MostrarAlertaAsync("warning", "Sin detalle", "Debes tener al menos una linea en la nota de debito.");
+            return;
+        }
+
+        motivoNota = detallesNd.FirstOrDefault(d => !string.IsNullOrWhiteSpace(d.Descripcion))?.Descripcion.Trim()
+            ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(motivoNota))
+        {
+            await MostrarAlertaAsync("warning", "Motivo requerido", "Debes ingresar un motivo para la nota de debito.");
+            return;
+        }
+
+        foreach (var detalle in detallesNd)
+            detalle.Cantidad = 1m;
+
+        var validacionCorreos = ValidarCorreosNotaDebito();
+        if (!string.IsNullOrWhiteSpace(validacionCorreos))
+        {
+            await MostrarAlertaAsync("warning", "Correos invalidos", validacionCorreos);
+            return;
+        }
+
+        var lineaInvalida = detallesNd.FirstOrDefault(d =>
+            d.Preciounitario <= 0m ||
+                d.Descuento < 0m ||
+                d.Descuento > GetSubtotalBrutoDetalle(d) ||
+                string.IsNullOrWhiteSpace(d.Descripcion));
+
+        if (lineaInvalida != null)
+        {
+            await MostrarAlertaAsync("warning", "Detalle invalido", $"Revisa la linea '{lineaInvalida.Descripcion}'.");
+            return;
+        }
+
+        guardando = true;
+        mensajeRapidoEmision = null;
+        mensajeRapidoEsError = false;
+        documentoGeneradoPdfUrl = null;
+
+        try
+        {
+            if (!RequiereFacturaInterna)
+            {
+                factura.Serie = NormalizarSerieRaw(factura.Serie);
+                factura.Numfactura = NormalizarSecuencial(factura.Numfactura);
+                serieFacturaVisual = FormatearSerie(factura.Serie);
+                cliente.Codcliente = await NotaDebitoService.ResolverClienteParaNotaDebitoAsync(currentUserId, cliente);
+                factura.Codclientes = cliente.Codcliente;
+            }
+
+            foreach (var detalle in detallesNd)
+            {
+                detalle.ValorIce = Red2(Math.Max(0m, detalle.ValorIce));
+                detalle.Subtotal = GetBaseImponibleDetalle(detalle);
+                detalle.Total = GetTotalDetalle(detalle);
+                detalle.Descuento = GetDescuentoEfectivoDetalle(detalle);
+                detalle.CodPrincipal = string.IsNullOrWhiteSpace(detalle.CodPrincipal) ? GetCodigoVisualDetalle(detalle) : detalle.CodPrincipal.Trim();
+                detalle.CodAuxiliar = string.IsNullOrWhiteSpace(detalle.CodAuxiliar) ? detalle.CodPrincipal : detalle.CodAuxiliar.Trim();
+                detalle.Descripcion = (detalle.Descripcion ?? string.Empty).Trim();
+                detalle.Detalle = (detalle.Detalle ?? string.Empty).Trim();
+                detalle.Iva = NormalizarTarifaIvaNotaDebito(detalle.Iva);
+                detalle.CodigoPorcentajeSri = ObtenerCodigoPorcentajeDetalle(detalle);
+            }
+
+            var notaDebito = new NdModel
+            {
+                Usuario = currentUserId,
+                CodClientes = factura.Codclientes ?? (cliente.Codcliente > 0 ? cliente.Codcliente : (int?)null),
+                CodEmisor = emisor.Codigo,
+                CodDocumento = "05",
+                Serie = serieNdRaw,
+                NumNotaDebito = secNdRaw.PadLeft(9, '0'),
+                FechaVence = fechaVenceNota,
+                Motivo = motivoNota.Trim(),
+                IdDocModificado = factura.Codfactura > 0 ? factura.Codfactura : (int?)null,
+                CodDocModificado = factura.Coddocumento?.ToString() ?? "01",
+                NumDocModificado = RequiereFacturaInterna
+                    ? factura.Numfactura
+                    : ConstruirDocumentoModificadoCompleto(factura.Serie, factura.Numfactura),
+                FechaEmiDocModificado = factura.Fechaentrega ?? factura.Fchautorizacion ?? DateTime.Today,
+                NumAutorizacion = string.IsNullOrWhiteSpace(numeroAutorizacionDocumentoModificado)
+                    ? factura.Numautorizacion
+                    : numeroAutorizacionDocumentoModificado.Trim(),
+                Subtotal = SubtotalGeneral,
+                Subtotal12 = Subtotal12,
+                Subtotal0 = SubtotalTarifaCero,
+                Iva = IvaTotal,
+                NoImp = SubtotalNoObjeto,
+                ExIva = SubtotalExentoIva,
+                Descuentos = DescuentoTotal,
+                ValorTotal = TotalGeneral,
+                IdEmpresa = cajaUsuario?.IdEmpresa ?? emisor.IdEmpresa,
+                IdSucursal = cajaUsuario?.IdSucursal ?? emisor.IdSucursal,
+                Ambiente = 2,
+                Estado = "A"
+            };
+
+            var correosNota = ObtenerCorreosOpcionalesNota();
+            var id = await NotaDebitoService.CrearAsync(notaDebito, detallesNd, correosNota);
+            await InitialSequencePromptService.UpdateLastSequenceAsync(
+                currentUserId,
+                "nota-debito",
+                notaDebito.NumNotaDebito,
+                serieNdRawActual);
+            var respuestaSri = await NotaDebitoService.EmitirNotaDebitoSriAsync(
+                id,
+                currentUserId,
+                intentarEnviarCorreo: true,
+                correosExtra: correosNota.Select(x => x.Correo));
+            var pdfAutorizadoUrl = await NotaDebitoService.AsegurarPdfNotaDebitoUsuarioAsync(id, currentUserId);
+            var autorizadaSri = string.Equals(
+                respuestaSri.estado,
+                DocumentoAutorizacionHelper.EstadoAutorizado,
+                StringComparison.OrdinalIgnoreCase) ||
+                !string.IsNullOrWhiteSpace(respuestaSri.autorizacion);
+
+            documentoGeneradoPdfUrl = autorizadaSri && !string.IsNullOrWhiteSpace(pdfAutorizadoUrl)
+                ? $"{pdfAutorizadoUrl}?v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
+                : null;
+            mensajeRapidoEmision = autorizadaSri
+                ? $"La nota de debito {FormatearSerie(notaDebito.Serie)}-{notaDebito.NumNotaDebito} fue autorizada por el SRI."
+                : $"La nota de debito quedo guardada, pero el SRI respondio {respuestaSri.estado}: {respuestaSri.mensaje}";
+            mensajeRapidoEsError = !autorizadaSri;
+
+            await CargarEstadoEmisionAsync();
+            EmisionControlService.NotifyChanged();
+            await LimpiarFormularioAsync();
+        }
+        catch (Exception ex)
+        {
+            await MostrarAlertaAsync("error", "Error al guardar", ex.Message);
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task RecargarSecuencialNdAsync()
+    {
+        estadoSecuencialNd = "Calculando...";
+        secuencialNdVisual = "--";
+
+        try
+        {
+            if (currentUserId <= 0)
+            {
+                estadoSecuencialNd = "Usuario no valido.";
+                return;
+            }
+
+            var serieNd = serieNdRawActual;
+            if (string.IsNullOrWhiteSpace(serieNd))
+                serieNd = await FacturacionService.GetSerieNotaDebitoRawAsync(currentUserId);
+            if (string.IsNullOrWhiteSpace(serieNd))
+            {
+                estadoSecuencialNd = "Caja sin SerieDebitos.";
+                return;
+            }
+
+            serieNdRawActual = serieNd;
+            serieNdVisual = FormatearSerie(serieNd);
+
+            var url = $"api/facturas/nd/next-secuencial?idUsuario={currentUserId}&serie={Uri.EscapeDataString(serieNd)}";
+            var resp = await Http.GetAsync(url);
+            var txt = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                estadoSecuencialNd = $"API {(int)resp.StatusCode}: {txt}";
+                return;
+            }
+
+            using var doc = JsonDocument.Parse(txt);
+            secuencialNdAutomatico = doc.RootElement.GetProperty("proximo").GetString() ?? "--";
+            estadoSecuencialNd = string.Empty;
+            await AplicarConfiguracionSecuenciaInicialAsync();
+        }
+        catch (Exception ex)
+        {
+            estadoSecuencialNd = ex.Message;
+        }
+    }
+
+    private async Task OnSerieDocumentoChangedAsync(ChangeEventArgs e)
+    {
+        var serieRaw = e.Value?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(serieRaw) ||
+            string.Equals(serieNdRawActual, serieRaw, StringComparison.Ordinal))
+            return;
+
+        await FacturacionService.SavePreferredSeriesForAllDocumentsAsync(currentUserId, serieRaw);
+        serieNdRawActual = serieRaw;
+        serieNdVisual = FormatearSerie(serieRaw);
+
+        if (cajaUsuario != null)
+            cajaUsuario.SerieDebitos = serieNdVisual;
+
+        await RecargarSecuencialNdAsync();
+        AplicarSerieFacturaManualDesdeEncabezado();
+    }
+
+    private string ObtenerSerieFacturaManualRaw()
+    {
+        var serie = NormalizarSerieRaw(serieNdRawActual);
+        if (serie.Length == 6)
+            return serie;
+
+        return NormalizarSerieRaw(seriesDocumento.FirstOrDefault()?.SerieRaw);
+    }
+
+    private void AplicarSerieFacturaManualDesdeEncabezado()
+    {
+        if (modoEmision == ModoEmisionNotaDebito.Factura || factura.Codfactura > 0)
+            return;
+
+        var serie = ObtenerSerieFacturaManualRaw();
+        if (serie.Length != 6)
+            return;
+
+        factura.Serie = serie;
+        serieFacturaVisual = FormatearSerie(serie);
+    }
+
+    private async Task AplicarConfiguracionSecuenciaInicialAsync()
+    {
+        var estado = await InitialSequencePromptService.GetStateAsync(currentUserId, "nota-debito", serieNdRawActual);
+
+        if (!estado.Initialized)
+        {
+            mostrarModalSecuenciaInicial = true;
+            secuencialNdVisual = "--";
+            return;
+        }
+
+        mostrarModalSecuenciaInicial = false;
+        secuencialNdVisual = InitialSequencePromptService.ResolveNextSequence(secuencialNdAutomatico, estado);
+    }
+
+    private void OnCambioRespuestaSecuencia(bool? value)
+    {
+        usuarioYaEmitioAntes = value;
+        errorSecuenciaInicial = null;
+
+        if (value != true)
+            secuenciaAnteriorManual = string.Empty;
+    }
+
+    private void OnSecuenciaAnteriorManualChanged(string value)
+    {
+        secuenciaAnteriorManual = value ?? string.Empty;
+        errorSecuenciaInicial = null;
+    }
+
+    private async Task ConfirmarSecuenciaInicialAsync()
+    {
+        errorSecuenciaInicial = null;
+
+        if (usuarioYaEmitioAntes == null)
+        {
+            errorSecuenciaInicial = "Debes indicar si ya habias generado notas de debito antes.";
+            return;
+        }
+
+        var secuenciaNormalizada = string.Empty;
+
+        if (usuarioYaEmitioAntes == true &&
+            !InitialSequencePromptService.TryNormalizeSequence(secuenciaAnteriorManual, out secuenciaNormalizada))
+        {
+            errorSecuenciaInicial = "Ingresa una secuencia valida de hasta 9 digitos.";
+            return;
+        }
+
+        var estado = new InitialSequencePromptState
+        {
+            Initialized = true,
+            HadPreviousDocuments = usuarioYaEmitioAntes.Value,
+            PreviousSequence = usuarioYaEmitioAntes.Value ? secuenciaNormalizada : string.Empty
+        };
+
+        await InitialSequencePromptService.SaveStateAsync(currentUserId, "nota-debito", serieNdRawActual, estado);
+
+        secuenciaAnteriorManual = secuenciaNormalizada;
+        mostrarModalSecuenciaInicial = false;
+        secuencialNdVisual = usuarioYaEmitioAntes.Value
+            ? InitialSequencePromptService.ResolveNextSequence(secuencialNdAutomatico, estado)
+            : secuencialNdAutomatico;
+    }
+
+    private async Task LimpiarFormularioAsync()
+    {
+        factura = new Factura();
+        cliente = new Cliente();
+        emisor = emisores.FirstOrDefault();
+        detallesNd = new List<DetalleNdDto> { CrearDetalleNotaDebitoVacio() };
+
+        numFacturaBuscar = string.Empty;
+        modoEmision = ModoEmisionNotaDebito.Factura;
+        mensajeXmlNotaDebito = null;
+        estadoCarga = "Sin cargar";
+        errorCarga = null;
+        serieFacturaVisual = "--";
+        motivoNota = string.Empty;
+        fechaVenceNota = DateTime.Today;
+        numeroAutorizacionDocumentoModificado = string.Empty;
+
+        listaFacturas.Clear();
+        mostrarListaFacturas = false;
+        seleccionandoFacturaDesdeLista = false;
+
+        mostrarPanelProductos = false;
+        cargandoProductos = false;
+        filtroProductos = string.Empty;
+        tarifasIvaPorCodigo = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        productosDisponibles = new List<ProductoDisponibleDto>();
+        productosDisponiblesFiltrados = new List<ProductoDisponibleDto>();
+        correosOpcionalesNota = new();
+        correosPersistidosClienteNota = new();
+        sugerenciasClientesNota.Clear();
+        campoClienteNotaActivo = null;
+        clienteDetectadoEnCatalogoNota = false;
+        continuarConClienteSinRegistro = false;
+        ResetearEstadoDetalles();
+
+        await RecargarSecuencialNdAsync();
+        StateHasChanged();
+    }
+
+    private static string NormalizarSerieRaw(string? valor)
+    {
+        var limpio = SoloDigitosNd(valor);
+        return limpio.Length >= 6 ? limpio[..6] : limpio;
+    }
+
+    private static string NormalizarSecuencial(string? valor)
+    {
+        var limpio = SoloDigitosNd(valor);
+        return string.IsNullOrWhiteSpace(limpio) ? (valor ?? string.Empty).Trim() : limpio.PadLeft(9, '0');
+    }
+
+    private static string ConstruirDocumentoModificadoCompleto(string? serie, string? secuencial)
+    {
+        var serieLimpia = NormalizarSerieRaw(serie);
+        var secuencialLimpio = NormalizarSecuencial(secuencial);
+        return serieLimpia.Length == 6 ? $"{serieLimpia}{secuencialLimpio}" : secuencialLimpio;
+    }
+
+    private static string SoloDigitosNd(string? valor)
+        => new((valor ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private static string FormatearDocumentoModificadoInput(string? valor)
+    {
+        var limpio = SoloDigitosNd(valor);
+        if (limpio.Length > 15)
+            limpio = limpio[..15];
+
+        if (limpio.Length <= 3)
+            return limpio;
+
+        if (limpio.Length <= 6)
+            return $"{limpio[..3]}-{limpio[3..]}";
+
+        return $"{limpio[..3]}-{limpio.Substring(3, 3)}-{limpio[6..]}";
+    }
+
+    private async Task MostrarAlertaAsync(string icon, string title, string text)
+    {
+        await JS.InvokeVoidAsync("Swal.fire", new
+        {
+            icon,
+            title,
+            text,
+            confirmButtonColor = "#006bb5",
+            backdrop = true
+        });
+    }
+
+    private async Task CargarEstadoEmisionAsync()
+    {
+        emisionEstado = await EmisionControlService.ObtenerEstadoAsync(currentUserId);
+    }
+
+    private class ProductoDisponibleDto
+    {
+        public int Codigo { get; set; }
+        public string? Nombre { get; set; }
+        public string? CodigoPrincipal { get; set; }
+        public decimal? ValorUnitario { get; set; }
+        public string? Codigoimpuesto { get; set; }
+        public string? Porcentajeimpuesto { get; set; }
+    }
+
+    private class ProductosLookupResponse
+    {
+        public List<IvaLookupDto>? Ivas { get; set; }
+    }
+
+    private class IvaLookupDto
+    {
+        public string? Codigo { get; set; }
+        public string? Valor { get; set; }
+    }
+}

@@ -1,0 +1,4331 @@
+@page "/cuentas-por-cobrar"
+@page "/demo/cuentas-por-cobrar"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Authorization
+@using Simetric.Services
+@using Simetric.ViewModels
+@using Simetric.Models
+@using System.Globalization
+@attribute [AllowAnonymous]
+@inject AbonoService AbonoService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+@inject TutorialRegistryService TutorialRegistry
+@inject TutorialStateService TutorialStateService
+@inject IJSRuntime JS
+
+<PageTitle>Registro de Abonos | Numerica e-fact</PageTitle>
+
+<div class="abono-shell" data-tour="abonos.page">
+    <section class="abono-hero" data-tour="abonos.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Cuentas por cobrar</span>
+            <h2>Registro de abonos</h2>
+            <p>Avance paso a paso: seleccione el cliente, registre el pago, distribuya el valor y confirme el abono.</p>
+        </div>
+    </section>
+
+    <section class="cartera-metrics" aria-label="Resumen de cuentas por cobrar">
+        <article class="cartera-metric cartera-metric-primary">
+            <div class="cartera-metric-head">
+                <span>Saldo total por cobrar</span>
+                <i class="ri-wallet-3-line"></i>
+            </div>
+            <strong>$@SaldoCarteraTotal.ToString("N2")</strong>
+            <small>@TotalFacturasPendientes factura(s) pendientes</small>
+            <div class="cartera-metric-line"></div>
+        </article>
+        <article class="cartera-metric cartera-metric-danger">
+            <div class="cartera-metric-head">
+                <span>Facturas vencidas</span>
+                <i class="ri-alarm-warning-line"></i>
+            </div>
+            <strong>$@SaldoVencido.ToString("N2")</strong>
+            <small>@FacturasVencidas.Count() requieren atención</small>
+            <div class="cartera-metric-line"></div>
+        </article>
+        <article class="cartera-metric cartera-metric-info">
+            <div class="cartera-metric-head">
+                <span>Facturas por vencer</span>
+                <i class="ri-timer-flash-line"></i>
+            </div>
+            <strong>$@SaldoPorVencer.ToString("N2")</strong>
+            <small>@FacturasPorVencer.Count() dentro de 30 días</small>
+            <div class="cartera-metric-line"></div>
+        </article>
+        <article class="cartera-metric cartera-metric-success">
+            <div class="cartera-metric-head">
+                <span>Clientes con saldo</span>
+                <i class="ri-team-line"></i>
+            </div>
+            <strong>@ClientesConSaldo</strong>
+            <small>Cartera activa visible</small>
+            <div class="cartera-metric-line"></div>
+        </article>
+        <article class="cartera-metric cartera-metric-soft">
+            <div class="cartera-metric-head">
+            <span>Días promedio de cobro</span>
+            <strong>@DiasPromedioCobro días</strong>
+                <i class="ri-line-chart-line"></i>
+            </div>
+            <small>Promedio general</small>
+            <div class="cartera-metric-line"></div>
+        </article>
+    </section>
+
+    <section class="cartera-toolbar" aria-label="Filtros de cartera" data-tour="abonos.search">
+        <div class="cartera-toolbar-heading">
+            <div>
+                <span class="section-kicker">Búsqueda y filtros</span>
+                <h3>Encuentra tu cartera rápido</h3>
+            </div>
+            <small>Busca por cliente o factura y usa una sección completa de filtros para refinar tu vista.</small>
+        </div>
+        <div class="cartera-toolbar-main">
+        <div class="cartera-search-box">
+            <i class="ri-search-line"></i>
+            <input placeholder="Buscar por cédula, RUC, nombre o factura..."
+                   value="@filtroBusqueda"
+                   @oninput="OnFiltroInput" />
+        </div>
+        <div class="cartera-toolbar-actions">
+            <button type="button" class="ghost-btn ghost-btn-sm" @onclick="LimpiarBusqueda">
+                <i class="ri-eraser-line"></i>
+                <span>Limpiar</span>
+            </button>
+            <button type="button" class="confirm-btn confirm-btn-sm" @onclick="() => IrAlPaso(1)">
+                <i class="ri-search-line"></i>
+                <span>Buscar</span>
+            </button>
+        </div>
+        </div>
+        <div class="cartera-filter-panel cartera-filter-panel-full" data-tour="abonos.filters">
+            <div class="cartera-filter-head">
+                <div>
+                    <span class="cartera-filter-label">Filtros</span>
+                    <h4>Refina la cartera visible</h4>
+                </div>
+                <button type="button" class="ghost-btn ghost-btn-sm" @onclick="LimpiarFiltrosCartera">
+                    <i class="ri-refresh-line"></i>
+                    <span>Limpiar filtros</span>
+                </button>
+            </div>
+            <div class="cartera-filter-grid">
+                <div class="cartera-filter-block">
+                    <span class="cartera-filter-label">Estado</span>
+                    <div class="cartera-filter-row">
+                        <button type="button" class="cartera-filter-chip @(GetFiltroCarteraClase(FiltroCartera.Todas))" @onclick="() => CambiarFiltroCartera(FiltroCartera.Todas)">
+                            <span>Todas</span>
+                            <strong>@carteraPendiente.Count</strong>
+                        </button>
+                        <button type="button" class="cartera-filter-chip @(GetFiltroCarteraClase(FiltroCartera.Vencidas))" @onclick="() => CambiarFiltroCartera(FiltroCartera.Vencidas)">
+                            <span>Vencidas</span>
+                            <strong>@FacturasVencidas.Count()</strong>
+                        </button>
+                        <button type="button" class="cartera-filter-chip @(GetFiltroCarteraClase(FiltroCartera.PorVencer))" @onclick="() => CambiarFiltroCartera(FiltroCartera.PorVencer)">
+                            <span>Por vencer</span>
+                            <strong>@FacturasPorVencer.Count()</strong>
+                        </button>
+                        <button type="button" class="cartera-filter-chip @(GetFiltroCarteraClase(FiltroCartera.Vigentes))" @onclick="() => CambiarFiltroCartera(FiltroCartera.Vigentes)">
+                            <span>Vigentes</span>
+                            <strong>@FacturasVigentes.Count()</strong>
+                        </button>
+                    </div>
+                </div>
+
+                <label class="cartera-filter-field">
+                    <span>Cliente</span>
+                    <select @bind="clienteFiltroCartera" @bind:after="OnCarteraFiltroChanged">
+                        <option value="TODOS">Todos los clientes</option>
+                        @foreach (var cliente in ClientesFiltroCartera)
+                        {
+                            <option value="@cliente.IdCliente.ToString()">@cliente.NombreCliente</option>
+                        }
+                    </select>
+                </label>
+
+                <label class="cartera-filter-field">
+                    <span>Vencimiento</span>
+                    <select @bind="vencimientoFiltroCartera" @bind:after="OnCarteraFiltroChanged">
+                        <option value="TODOS">Todos</option>
+                        <option value="CON_FECHA">Con fecha límite</option>
+                        <option value="SIN_FECHA">Sin fecha límite</option>
+                        <option value="ESTA_SEMANA">Vence esta semana</option>
+                    </select>
+                </label>
+
+                <label class="cartera-filter-field">
+                    <span>Saldo pendiente</span>
+                    <select @bind="saldoFiltroCartera" @bind:after="OnCarteraFiltroChanged">
+                        <option value="TODOS">Todos</option>
+                        <option value="BAJO">Hasta $50</option>
+                        <option value="MEDIO">$50 a $200</option>
+                        <option value="ALTO">Más de $200</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+    </section>
+
+    <section class="cartera-board" data-tour="abonos.table">
+        <div class="cartera-board-main">
+            <div class="cartera-board-head">
+                <div>
+                    <span class="section-kicker">Cartera pendiente</span>
+                    <h3>Facturas por cobrar</h3>
+                </div>
+                <span class="cliente-badge">@CarteraPendienteVisibleLista.Count registros</span>
+            </div>
+
+            @if (!CarteraPendienteVisibleLista.Any())
+            {
+                <div class="cartera-empty">No hay facturas a crédito con saldo pendiente.</div>
+            }
+            else
+            {
+                <div class="cartera-table-wrap">
+                    <table class="cartera-table">
+                        <thead>
+                            <tr>
+                                <th>Factura</th>
+                                <th>Cliente</th>
+                                <th>Emisión</th>
+                                <th>Vencimiento</th>
+                                <th class="text-end">Total</th>
+                                <th class="text-end">Saldo pendiente</th>
+                                <th>Estado</th>
+                                <th class="text-end">Abono</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var facturaPendiente in CarteraPendientePaginaActual)
+                            {
+                                <tr class="@(FacturaCarteraSeleccionada?.IdFactura == facturaPendiente.IdFactura ? "is-selected" : null)"
+                                    @onclick="() => SeleccionarFacturaCartera(facturaPendiente)">
+                                    <td><strong>@facturaPendiente.NumFactura</strong></td>
+                                    <td>
+                                        <strong>@facturaPendiente.NombreCliente</strong>
+                                        <small>@facturaPendiente.NumeroIdentificacion</small>
+                                    </td>
+                                    <td>@FormatearFechaCartera(facturaPendiente.FechaEmision)</td>
+                                    <td>@FormatearFechaCartera(facturaPendiente.FechaVencimiento)</td>
+                                    <td class="text-end">$@facturaPendiente.TotalFactura.ToString("N2")</td>
+                                    <td class="text-end cartera-balance">$@facturaPendiente.SaldoPendiente.ToString("N2")</td>
+                                    <td><span class="@GetEstadoCarteraClase(facturaPendiente)">@GetEstadoCartera(facturaPendiente)</span></td>
+                                    <td class="text-end">
+                                        <button type="button"
+                                                class="cartera-row-action"
+                                                data-tour="abonos.row-action"
+                                                title="Registrar abono"
+                                                @onclick:stopPropagation="true"
+                                                @onclick="() => RegistrarAbonoDesdeFila(facturaPendiente)">
+                                            <i class="ri-hand-coin-line"></i>
+                                            <span>Registrar</span>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="cartera-pagination">
+                    <span>Mostrando @CarteraInicioRegistro-@CarteraFinRegistro de @CarteraPendienteVisibleLista.Count registros</span>
+                    <div class="pagination-actions">
+                        <button type="button" class="pagination-btn" disabled="@(CarteraPaginaActual <= 1)" @onclick="CarteraPaginaAnterior">Anterior</button>
+                        <strong>@CarteraPaginaActual / @CarteraTotalPaginas</strong>
+                        <button type="button" class="pagination-btn" disabled="@(CarteraPaginaActual >= CarteraTotalPaginas)" @onclick="CarteraPaginaSiguiente">Siguiente</button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="cartera-board-side">
+            <div class="cartera-cta-card">
+                <div class="cartera-chart-head">
+                    <span class="section-kicker">Factura seleccionada</span>
+                    <h4>Resumen rápido</h4>
+                </div>
+                <p>
+                    @(FacturaCarteraSeleccionada is null
+                        ? "Usa el botón Registrar de cada fila en la tabla de cartera pendiente."
+                        : $"Factura #{FacturaCarteraSeleccionada.NumFactura} · {FacturaCarteraSeleccionada.NombreCliente}")
+                </p>
+                @if (FacturaCarteraSeleccionada is not null)
+                {
+                    <div class="cartera-cta-meta">
+                        <span>Saldo pendiente</span>
+                        <strong>$@FacturaCarteraSeleccionada.SaldoPendiente.ToString("N2")</strong>
+                        <small>@FormatearFechaCartera(FacturaCarteraSeleccionada.FechaEmision)</small>
+                    </div>
+                }
+            </div>
+            <div class="cartera-chart-card cartera-chart-ring">
+                <div class="cartera-chart-head">
+                    <span class="section-kicker">Resumen de cartera</span>
+                    <h4>Distribución de saldos</h4>
+                </div>
+                <div class="cartera-chart-canvas-wrap cartera-chart-canvas-wrap-ring">
+                    <canvas id="carteraResumenChart"></canvas>
+                </div>
+                <div class="cartera-legend">
+                    <span><i class="is-danger"></i> Vencidas <strong>$@SaldoVencido.ToString("N2")</strong></span>
+                    <span><i class="is-info"></i> Por vencer <strong>$@SaldoPorVencer.ToString("N2")</strong></span>
+                    <span><i class="is-current"></i> Vigentes <strong>$@SaldoVigente.ToString("N2")</strong></span>
+                </div>
+            </div>
+        </aside>
+    </section>
+
+
+
+    <section class="process-strip" aria-label="Flujo de registro de abono" data-tour="abonos.steps">
+        <button type="button" class="process-step @GetPasoClase(1)" @onclick="() => IrAlPaso(1)">
+            <span class="process-index">1</span>
+            <div>
+                <strong>Identificar cliente</strong>
+                <small>Buscar por cedula, RUC o nombre</small>
+            </div>
+        </button>
+        <button type="button" class="process-step @GetPasoClase(2)" @onclick="() => IrAlPaso(2)" disabled="@(clienteSeleccionado == null)">
+            <span class="process-index">2</span>
+            <div>
+                <strong>Registrar pago</strong>
+                <small>Monto recibido y observacion</small>
+            </div>
+        </button>
+        <button type="button" class="process-step @GetPasoClase(3)" @onclick="() => IrAlPaso(3)" disabled="@(!PuedeIrADistribucion)">
+            <span class="process-index">3</span>
+            <div>
+                <strong>Distribuir</strong>
+                <small>Aplicar el abono por factura</small>
+            </div>
+        </button>
+        <button type="button" class="process-step @GetPasoClase(4)" @onclick="() => IrAlPaso(4)" disabled="@(!PuedeProcesar)">
+            <span class="process-index">4</span>
+            <div>
+                <strong>Confirmar</strong>
+                <small>Registrar el abono final</small>
+            </div>
+        </button>
+    </section>
+
+    @if (isDemoMode)
+    {
+        <div class="notice-banner" style="background: rgba(0,107,181,0.08); color: #0f4c81; border-color: rgba(0,107,181,0.14);">
+            <div class="notice-copy"><i class="ri-eye-line"></i><span>Modo demo: puedes recorrer el flujo y revisar la cartera, pero el registro final del abono está bloqueado.</span></div>
+        </div>
+    }
+
+    @* ── ALERTAS ── *@
+    @if (!string.IsNullOrEmpty(mensajeExito))
+    {
+        <div class="notice-banner notice-success">
+            <div class="notice-copy"><i class="ri-checkbox-circle-line"></i><span>@mensajeExito</span></div>
+            <button type="button" class="notice-close" @onclick="() => mensajeExito = null"><i class="ri-close-line"></i></button>
+        </div>
+    }
+    @if (!string.IsNullOrEmpty(mensajeError))
+    {
+        <div class="notice-banner notice-error">
+            <div class="notice-copy"><i class="ri-error-warning-line"></i><span>@mensajeError</span></div>
+            <button type="button" class="notice-close" @onclick="() => mensajeError = null"><i class="ri-close-line"></i></button>
+        </div>
+    }
+
+    @* ── BANNER SALDO A FAVOR ── *@
+    @if (saldoAFavorCliente > 0 && clienteSeleccionado != null && pasoActual >= 3)
+    {
+        <div class="notice-banner notice-credito">
+            <div class="notice-copy">
+                <i class="ri-wallet-3-line"></i>
+                <span>
+                    Este cliente tiene <strong>$@saldoAFavorCliente.ToString("N2") de saldo a favor</strong>
+                    de pagos anteriores.
+                </span>
+            </div>
+            <div class="credito-actions">
+                @if (facturasPendientes.Any())
+                {
+                    <label class="toggle-label">
+                        <input type="checkbox" @bind="usarSaldoAFavor" class="toggle-checkbox" />
+                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                        <span>Aplicar al pago</span>
+                    </label>
+                }
+                <button type="button" class="ghost-btn ghost-btn-sm" @onclick="() => mostrarDetalleSaldo = !mostrarDetalleSaldo">
+                    <i class="ri-information-line"></i>
+                    <span>@(mostrarDetalleSaldo ? "Ocultar" : "Ver detalle")</span>
+                </button>
+            </div>
+        </div>
+
+        @if (mostrarDetalleSaldo && detalleSaldoAFavor.Any())
+        {
+            <div class="saldo-detalle-card">
+                <h4><i class="ri-history-line"></i> Créditos disponibles</h4>
+                <table class="saldo-table">
+                    <thead>
+                        <tr>
+                            <th>Fecha pago</th>
+                            <th>Valor original</th>
+                            <th>Saldo disponible</th>
+                            <th>Observación</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var s in detalleSaldoAFavor)
+                        {
+                            <tr>
+                                <td data-label="Fecha pago">@s.FechaPago.ToString("dd/MM/yyyy HH:mm")</td>
+                                <td class="text-mono" data-label="Valor original">$@s.ValorOriginal.ToString("N2")</td>
+                                <td class="text-mono text-credito-cell" data-label="Saldo disponible">$@s.SaldoDisponible.ToString("N2")</td>
+                                <td class="text-muted-cell" data-label="Observacion">@(s.Observacion ?? "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+
+    <div data-tour="abonos.form">
+    @if (pasoActual == 1)
+    {
+        <section id="registro-abono-paso-2" class="abono-form-card step-card">
+            <div class="form-card-head">
+                <div>
+                    <span class="section-kicker">Paso 1</span>
+                    <h3>Buscar cliente</h3>
+                    <p class="head-hint">Seleccione el cliente para cargar sus facturas pendientes.</p>
+                </div>
+                @if (clienteSeleccionado != null)
+                {
+                    <span class="cliente-badge">
+                        <i class="ri-user-line"></i>
+                        @clienteSeleccionado.NombreCliente
+                    </span>
+                }
+            </div>
+
+            <div class="step-workspace">
+                <article class="work-subcard step-main-panel">
+                    <div class="subcard-head">
+                        <span class="subcard-icon"><i class="ri-user-search-line"></i></span>
+                        <div>
+                            <strong>Cliente</strong>
+                            <small>Busque por cedula, RUC o razon social.</small>
+                        </div>
+                    </div>
+
+                    <div class="form-field" data-tour="abonos.client-search">
+                        <label class="field-label">Cédula / RUC / Nombre del cliente</label>
+                        <div class="search-wrap">
+                            <div class="search-input-group">
+                                <i class="ri-search-2-line search-icon"></i>
+                                 <input type="text"
+                                        class="field-input search-input"
+                                        value="@filtroBusqueda"
+                                        @oninput="OnFiltroInput"
+                                        placeholder="Escriba nombre, cédula o RUC..."
+                                        autocomplete="off" />
+                                @if (buscando)
+                                {
+                                    <i class="ri-loader-4-line search-spin"></i>
+                                }
+                                @if (!string.IsNullOrEmpty(filtroBusqueda))
+                                {
+                                    <button type="button" class="search-clear" @onclick="LimpiarBusqueda">
+                                        <i class="ri-close-line"></i>
+                                    </button>
+                                }
+                            </div>
+
+                            @if (sugerencias.Any())
+                            {
+                                <ul class="suggestions-list">
+                                    @foreach (var s in sugerencias)
+                                    {
+                                       <li class="suggestion-item" data-tour="abonos.client-option" @onclick="() => SeleccionarCliente(s)">
+                                            <span class="suggestion-nombre">@s.NombreCliente</span>
+                                            <span class="suggestion-meta">@s.NumeroIdentificacion · Factura @s.NumFactura · Saldo $@s.SaldoPendiente.ToString("N2")</span>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                        <small class="field-hint">Al seleccionar el cliente continuara al registro del monto.</small>
+                    </div>
+
+                    @if (clienteSeleccionado != null)
+                    {
+                        <div class="step-actions" data-tour="abonos.client-actions">
+                            <button type="button" class="ghost-btn" @onclick="LimpiarBusqueda">
+                                <i class="ri-refresh-line"></i>
+                                <span>Cambiar cliente</span>
+                            </button>
+                            <button type="button" class="confirm-btn" @onclick="() => IrAlPaso(2)">
+                                <i class="ri-arrow-right-line"></i>
+                                <span>Continuar</span>
+                            </button>
+                        </div>
+                    }
+                </article>
+                <aside class="step-side-panel">
+                    <div class="step-side-card">
+                        <span class="section-kicker">Resumen</span>
+                        <h4>@(clienteSeleccionado != null ? "Cliente listo para continuar" : "Empiece por identificar al cliente")</h4>
+                        <p>
+                            @(clienteSeleccionado != null
+                                ? "Ya puede pasar al registro del pago y luego distribuir el valor sobre sus facturas pendientes."
+                                : "Use cedula, RUC o nombre comercial para encontrar rápidamente al cliente correcto.")
+                        </p>
+                    </div>
+
+                    @if (clienteSeleccionado != null)
+                    {
+                        <div class="step-side-stats">
+                            <article class="mini-stat-card">
+                                <span>Cliente</span>
+                                <strong>@clienteSeleccionado.NombreCliente</strong>
+                            </article>
+                            <article class="mini-stat-card">
+                                <span>Facturas pendientes</span>
+                                <strong>@facturasPendientes.Count</strong>
+                            </article>
+                            <article class="mini-stat-card">
+                                <span>Saldo pendiente</span>
+                                <strong>$@SaldoPendienteTotal.ToString("N2")</strong>
+                            </article>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="step-tip-list">
+                            <div class="step-tip-item">
+                                <i class="ri-search-eye-line"></i>
+                                <span>Ingrese al menos 3 caracteres para activar la búsqueda.</span>
+                            </div>
+                            <div class="step-tip-item">
+                                <i class="ri-user-follow-line"></i>
+                                <span>Seleccione al cliente correcto desde la lista de coincidencias.</span>
+                            </div>
+                            <div class="step-tip-item">
+                                <i class="ri-arrow-right-up-line"></i>
+                                <span>Después podrá registrar el monto y distribuirlo por factura.</span>
+                            </div>
+                        </div>
+                    }
+                </aside>
+            </div>
+        </section>
+    }
+
+    @if (pasoActual == 2)
+    {
+        <section class="abono-form-card step-card">
+        <div class="form-card-head">
+            <div>
+                <span class="section-kicker">Paso 2</span>
+                <h3>Registrar monto recibido</h3>
+                <p class="head-hint">Este valor sera el disponible para distribuir entre facturas.</p>
+            </div>
+            @if (clienteSeleccionado != null)
+            {
+                <span class="cliente-badge">
+                    <i class="ri-user-line"></i>
+                    @clienteSeleccionado.NombreCliente
+                </span>
+            }
+        </div>
+
+        <div class="step-workspace">
+            <article class="work-subcard step-main-panel">
+                <div class="subcard-head">
+                    <span class="subcard-icon"><i class="ri-wallet-3-line"></i></span>
+                    <div>
+                        <strong>Pago recibido</strong>
+                        <small>Luego ingresa el valor disponible para distribuir.</small>
+                    </div>
+                </div>
+
+                <div class="payment-fields payment-fields-inline" data-tour="abonos.payment-fields">
+                    <div class="form-field">
+                        <label class="field-label">Monto total recibido</label>
+                        <div class="amount-input-wrap">
+                            <span class="amount-prefix">$</span>
+                            <input type="number"
+                                   step="0.01"
+                                   min="0"
+                                   class="field-input amount-input"
+                                   value="@GetMontoRecibidoInputValue()"
+                                   @onchange="OnMontoInput"
+                                   placeholder="0.00"
+                                   disabled="@(clienteSeleccionado == null)" />
+                        </div>
+                        @if (usarSaldoAFavor && saldoAFavorCliente > 0)
+                        {
+                            <small class="field-hint field-hint-credito">
+                                <i class="ri-add-circle-line"></i>
+                                Se añadirán hasta $@saldoAFavorCliente.ToString("N2") de saldo a favor
+                            </small>
+                        }
+                        else
+                        {
+                            <small class="field-hint">Ingrese el valor exacto recibido del cliente.</small>
+                        }
+                        <div class="amount-shortcuts">
+                            <button type="button" class="amount-chip" @onclick="() => AsignarMontoRapido(SaldoPendienteTotal * 0.5m)" disabled="@(clienteSeleccionado == null)">50%</button>
+                            <button type="button" class="amount-chip" @onclick="() => AsignarMontoRapido(SaldoPendienteTotal)" disabled="@(clienteSeleccionado == null)">Saldo total</button>
+                            <button type="button" class="amount-chip amount-chip-soft" @onclick="() => AsignarMontoRapido(0m)" disabled="@(clienteSeleccionado == null)">Limpiar</button>
+                        </div>
+                    </div>
+
+                    <div class="form-field">
+                        <label class="field-label">Observación</label>
+                        <input type="text"
+                               class="field-input"
+                               @bind="observacion"
+                               placeholder="Ej. Pago efectivo, transferencia..."
+                               disabled="@(clienteSeleccionado == null)" />
+                    </div>
+                </div>
+
+                <div class="step-actions" data-tour="abonos.payment-actions">
+                    <button type="button" class="ghost-btn" @onclick="() => IrAlPaso(1)">
+                        <i class="ri-arrow-left-line"></i>
+                        <span>Volver al cliente</span>
+                    </button>
+                    <button type="button" class="confirm-btn" @onclick="ContinuarADistribucion" disabled="@(!PuedeIrADistribucion)">
+                        <i class="ri-arrow-right-line"></i>
+                        <span>Continuar a facturas</span>
+                    </button>
+                </div>
+            </article>
+            <aside class="step-side-panel">
+                <div class="step-side-card">
+                    <span class="section-kicker">Preparación</span>
+                    <h4>Monto listo para distribución</h4>
+                    <p>Registre el valor recibido y una observación breve. Ese monto será la base del siguiente paso.</p>
+                </div>
+
+                <div class="step-side-stats">
+                    <article class="mini-stat-card">
+                        <span>Cliente</span>
+                        <strong>@(clienteSeleccionado?.NombreCliente ?? "Sin seleccionar")</strong>
+                    </article>
+                    <article class="mini-stat-card">
+                        <span>Saldo a favor</span>
+                        <strong>$@saldoAFavorCliente.ToString("N2")</strong>
+                    </article>
+                    <article class="mini-stat-card">
+                        <span>Monto disponible</span>
+                        <strong>$@MontoDisponibleTotal.ToString("N2")</strong>
+                    </article>
+                </div>
+
+                @if (saldoAFavorCliente > 0)
+                {
+                    <label class="toggle-label step-toggle-card">
+                        <input type="checkbox" @bind="usarSaldoAFavor" class="toggle-checkbox" />
+                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                        <span>Usar saldo a favor en este abono</span>
+                    </label>
+                }
+            </aside>
+        </div>
+    </section>
+    }
+    </div>
+
+    @* ── PASO 3: DISTRIBUCIÓN POR FACTURA ── *@
+    @if (pasoActual == 3 && facturasPendientes.Any())
+    {
+        <section class="abono-dist-card" data-tour="abonos.distribution">
+            <div class="form-card-head">
+                <div>
+                    <span class="section-kicker">Paso 3</span>
+                    <h3>Distribuir pago en facturas</h3>
+                    <p class="head-hint">Ingrese cuánto desea abonar a cada factura. No es obligatorio cubrir el saldo completo.</p>
+                </div>
+                <div class="distribution-side-summary">
+                    <span>Monto disponible</span>
+                    <strong>$@MontoDisponibleTotal.ToString("N2")</strong>
+                    <small>@facturasPendientes.Count factura(s) pendiente(s)</small>
+                </div>
+            </div>
+
+            <div class="dist-toolbar" data-tour="abonos.distribution-actions">
+                <button type="button" class="ghost-btn" @onclick="() => IrAlPaso(2)">
+                    <i class="ri-arrow-left-line"></i>
+                    <span>Editar monto</span>
+                </button>
+                <div class="dist-actions">
+                    <button type="button" class="secondary-btn" @onclick="DistribuirAutomatico" disabled="@(MontoDisponibleTotal <= 0)">
+                        <i class="ri-magic-line"></i>
+                        <span>Distribuir automático</span>
+                    </button>
+                    <button type="button" class="ghost-btn" @onclick="LimpiarDistribucion">
+                        <i class="ri-eraser-line"></i>
+                        <span>Limpiar</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="distribution-overview">
+                <article class="overview-card overview-card-primary">
+                    <span>Monto disponible</span>
+                    <strong>$@MontoDisponibleTotal.ToString("N2")</strong>
+                    <small>Valor total listo para aplicar.</small>
+                </article>
+                <article class="overview-card overview-card-success">
+                    <span>Total distribuido</span>
+                    <strong>$@TotalDistribuido.ToString("N2")</strong>
+                    <small>@FacturasConAbonoCount factura(s) con abono registrado.</small>
+                </article>
+                <article class="overview-card @(SaldoRestante < 0 ? "overview-card-danger" : SaldoRestante > 0 ? "overview-card-warn" : "overview-card-neutral")">
+                    <span>Saldo sin asignar</span>
+                    <strong>$@SaldoRestante.ToString("N2")</strong>
+                    <small>@GetSaldoRestanteDescripcion()</small>
+                </article>
+                <article class="overview-card overview-card-soft">
+                    <span>Facturas por revisar</span>
+                    <strong>@facturasPendientes.Count</strong>
+                    <small>@FacturasPendientesConSaldoTexto</small>
+                </article>
+            </div>
+
+            <div class="distribution-workbench">
+                <div>
+                    <span class="section-kicker">Aplicación guiada</span>
+                    <h4>Reparta el pago y confirme el resultado antes de registrar.</h4>
+                    <p>Puede distribuirlo automáticamente y luego ajustar cada factura, o capturarlo manualmente desde cero.</p>
+                </div>
+                <div class="distribution-workbench-note">
+                    <i class="ri-lightbulb-flash-line"></i>
+                    <span>Si queda saldo libre, se guardará como crédito para el siguiente movimiento del cliente.</span>
+                </div>
+            </div>
+
+            <div class="invoice-section-head">
+                <div>
+                    <h4>Facturas pendientes a aplicar</h4>
+                    <p>Mostrando @FacturasPendientesPaginaActual.Count() de @facturasPendientes.Count factura(s).</p>
+                </div>
+                <label class="date-filter-box">
+                    <span>Orden</span>
+                    <select class="date-filter-input" @bind="OrdenFacturasPendientesActual">
+                        <option value="@OrdenFacturasPendientes.MasUrgentes">Mas urgentes primero</option>
+                        <option value="@OrdenFacturasPendientes.MasRecientes">Mas recientes primero</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="invoice-list-shell" data-tour="abonos.invoice-list">
+                <div class="invoice-list-head" aria-hidden="true">
+                    <span>Factura</span>
+                    <span>Total</span>
+                    <span>Abonado</span>
+                    <span>Saldo</span>
+                    <span>Abono a aplicar</span>
+                </div>
+
+            <div class="invoice-list">
+                @foreach (var fac in FacturasPendientesPaginaActual)
+                {
+                    var abono = abonosDistribucion.ContainsKey(fac.IdFactura) ? abonosDistribucion[fac.IdFactura] : 0m;
+                    var abonadoConEsteAbono = fac.TotalAbonado + abono;
+                    var porcentaje = fac.TotalFactura > 0 ? (double)(abonadoConEsteAbono / fac.TotalFactura * 100) : 0;
+                    porcentaje = Math.Min(porcentaje, 100);
+                    var excede = abono > fac.SaldoPendiente;
+
+                    <article class="invoice-row @(abono > 0 ? "is-active" : "") @(excede ? "has-error" : "")" data-tour="abonos.invoice-row">
+                        <div class="invoice-col invoice-col-doc">
+                            <div class="invoice-title">
+                                <span class="num-pill">#@fac.NumFactura</span>
+                                <small>@GetResumenFacturaPendiente(fac)</small>
+                            </div>
+
+                            <div class="invoice-doc-progress">
+                                <div class="progress-labels">
+                                    <span class="progress-amt">$@abonadoConEsteAbono.ToString("N2") / $@fac.TotalFactura.ToString("N2")</span>
+                                    <span class="progress-pct @(porcentaje >= 100 ? "pct-full" : porcentaje > 60 ? "pct-mid" : "pct-low")">@porcentaje.ToString("0")%</span>
+                                </div>
+                                <div class="mini-progress">
+                                    <div class="mini-bar @(porcentaje >= 100 ? "bar-full" : porcentaje > 60 ? "bar-mid" : "bar-low")"
+                                         style="width: @porcentaje.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="invoice-col invoice-col-value" data-label="Total factura">
+                            <span class="invoice-col-label">Total</span>
+                            <strong>$@fac.TotalFactura.ToString("N2")</strong>
+                        </div>
+
+                        <div class="invoice-col invoice-col-value" data-label="Ya abonado">
+                            <span class="invoice-col-label">Abonado</span>
+                            <strong class="text-muted-cell">$@fac.TotalAbonado.ToString("N2")</strong>
+                        </div>
+
+                        <div class="invoice-col invoice-col-value invoice-col-balance" data-label="Saldo pendiente">
+                            <span class="invoice-col-label">Saldo</span>
+                            <strong>$@fac.SaldoPendiente.ToString("N2")</strong>
+                        </div>
+
+                        <div class="invoice-col invoice-col-apply">
+                            <label class="field-label">Abono a aplicar</label>
+                            <div class="abono-input-wrap @(excede ? "input-excede" : "")">
+                                <span class="abono-prefix">$</span>
+                                <input type="number"
+                                       step="0.01"
+                                       min="0"
+                                       class="abono-input"
+                                       @key="@($"abono-{fac.IdFactura}-{abono.ToString(System.Globalization.CultureInfo.InvariantCulture)}")"
+                                       value="@GetAbonoInputValue(fac.IdFactura)"
+                                       @oninput="e => OnAbonoChange(fac.IdFactura, e)"
+                                       placeholder="0.00" />
+                                @if (abono > 0)
+                                {
+                                    <button type="button" class="abono-clear" @onclick="() => ClearAbono(fac.IdFactura)" title="Quitar">
+                                        <i class="ri-close-line"></i>
+                                    </button>
+                                }
+                            </div>
+                            @if (excede)
+                            {
+                                <small class="excede-hint">Supera el saldo ($@fac.SaldoPendiente.ToString("N2"))</small>
+                            }
+                            <div class="abono-quick-actions">
+                                <button type="button" class="mini-action-btn" @onclick="() => AplicarDisponibleEnFactura(fac.IdFactura)">Disponible</button>
+                                <button type="button" class="mini-action-btn mini-action-btn-primary" @onclick="() => AplicarMaximoEnFactura(fac.IdFactura)">Maximo</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+            </div>
+            </div>
+
+            <div class="cartera-pagination cartera-pagination-invoice">
+                <span>Mostrando @FacturasInicioRegistro-@FacturasFinRegistro de @facturasPendientes.Count factura(s)</span>
+                <div class="pagination-actions">
+                    <button type="button" class="pagination-btn" disabled="@(FacturasPaginaActual <= 1)" @onclick="FacturasPaginaAnterior">Anterior</button>
+                    <strong>@FacturasPaginaActual / @FacturasTotalPaginas</strong>
+                    <button type="button" class="pagination-btn" disabled="@(FacturasPaginaActual >= FacturasTotalPaginas)" @onclick="FacturasPaginaSiguiente">Siguiente</button>
+                </div>
+            </div>
+
+            <div class="confirm-panel distribution-summary distribution-summary-split">
+                <div class="dist-resumen dist-resumen-compact">
+                    <div class="resumen-item">
+                        <span>Monto recibido</span>
+                        <strong>$@montoRecibido.ToString("N2")</strong>
+                    </div>
+                    @if (usarSaldoAFavor && saldoAFavorCliente > 0)
+                    {
+                        <div class="resumen-sep">+</div>
+                        <div class="resumen-item resumen-credito">
+                            <span>Saldo a favor</span>
+                            <strong>$@saldoAFavorCliente.ToString("N2")</strong>
+                        </div>
+                    }
+                    <div class="resumen-sep">—</div>
+                    <div class="resumen-item">
+                        <span>Total distribuido</span>
+                        <strong>$@TotalDistribuido.ToString("N2")</strong>
+                    </div>
+                    <div class="resumen-sep">=</div>
+                    <div class="resumen-item @(SaldoRestante < 0 ? "resumen-danger" : SaldoRestante > 0 ? "resumen-warn" : "resumen-ok")">
+                        <span>Saldo sin asignar</span>
+                        <strong>$@SaldoRestante.ToString("N2")</strong>
+                    </div>
+                    @if (SaldoRestante > 0)
+                    {
+                        <div class="resumen-note">
+                            <i class="ri-information-line"></i>
+                            <span>Este saldo quedará disponible como crédito para el próximo pago.</span>
+                        </div>
+                    }
+                </div>
+
+                <div class="distribution-summary-actions" data-tour="abonos.review-action">
+                    <button type="button"
+                            class="confirm-btn"
+                            @onclick="() => IrAlPaso(4)"
+                            disabled="@(!PuedeProcesar || cargando)">
+                        <i class="ri-arrow-right-line"></i>
+                        <span>Revisar confirmación</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+    }
+    else if (pasoActual == 3 && clienteSeleccionado != null && !buscando)
+    {
+        <section class="abono-dist-card state-empty">
+            <div class="empty-icon"><i class="ri-inbox-line"></i></div>
+            <h3>Sin facturas pendientes</h3>
+            <p>El cliente seleccionado no tiene facturas a crédito con saldo pendiente.</p>
+        </section>
+    }
+
+    @if (pasoActual == 4)
+    {
+        <section class="abono-dist-card" data-tour="abonos.review">
+            <div class="form-card-head">
+                <div>
+                    <span class="section-kicker">Paso 4</span>
+                    <h3>Confirmar registro de abono</h3>
+                    <p class="head-hint">Revise el resumen antes de abrir la confirmación final.</p>
+                </div>
+                <span class="cliente-badge">
+                    <i class="ri-user-line"></i>
+                    @clienteSeleccionado?.NombreCliente
+                </span>
+            </div>
+
+            <div class="confirm-review">
+                <div class="step-workspace confirm-workspace">
+                    <div class="step-main-panel confirm-main-panel">
+                        <div class="dist-resumen">
+                            <div class="resumen-item">
+                                <span>Monto recibido</span>
+                                <strong>$@montoRecibido.ToString("N2")</strong>
+                            </div>
+                            @if (usarSaldoAFavor && saldoAFavorCliente > 0)
+                            {
+                                <div class="resumen-item resumen-credito">
+                                    <span>Saldo a favor</span>
+                                    <strong>$@saldoAFavorCliente.ToString("N2")</strong>
+                                </div>
+                            }
+                            <div class="resumen-item">
+                                <span>Total distribuido</span>
+                                <strong>$@TotalDistribuido.ToString("N2")</strong>
+                            </div>
+                            <div class="resumen-item @(SaldoRestante < 0 ? "resumen-danger" : SaldoRestante > 0 ? "resumen-warn" : "resumen-ok")">
+                                <span>Saldo sin asignar</span>
+                                <strong>$@SaldoRestante.ToString("N2")</strong>
+                            </div>
+                            <div class="resumen-item">
+                                <span>Facturas afectadas</span>
+                                <strong>@abonosDistribucion.Count</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <aside class="step-side-panel confirm-side-panel">
+                        <div class="step-side-card">
+                            <span class="section-kicker">Detalle final</span>
+                            <h4>Facturas incluidas en el abono</h4>
+                            <p>Revise los valores por factura antes de confirmar el registro definitivo.</p>
+                        </div>
+
+                        <div class="selected-invoices selected-invoices-compact">
+                            @foreach (var item in FacturasConAbono)
+                            {
+                                <article class="selected-invoice-item">
+                                    <span class="num-pill">#@item.Factura.NumFactura</span>
+                                    <strong>$@item.Abono.ToString("N2")</strong>
+                                </article>
+                            }
+                        </div>
+                    </aside>
+                </div>
+
+                <div class="step-actions">
+                    <button type="button" class="ghost-btn" @onclick="() => IrAlPaso(3)">
+                        <i class="ri-arrow-left-line"></i>
+                        <span>Volver a distribución</span>
+                    </button>
+                    <button type="button"
+                            class="confirm-btn"
+                            data-tour="abonos.confirm"
+                            @onclick="AbrirConfirmacionFinal"
+                            disabled="@(!PuedeProcesar || cargando)">
+                        <i class="ri-check-double-line"></i>
+                        <span>Confirmar y registrar</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+    }
+
+
+    <section class="cartera-insights" aria-label="Analitica de cartera">
+        <article class="cartera-chart-card cartera-insight-card">
+            <div class="cartera-chart-head">
+                <span class="section-kicker">Antiguedad de saldos</span>
+                <h4>Grafico estadistico</h4>
+            </div>
+            <div class="cartera-chart-canvas-wrap">
+                <canvas id="carteraAntiguedadChart"></canvas>
+            </div>
+        </article>
+
+        <article class="cartera-chart-card cartera-insight-card">
+            <div class="cartera-chart-head">
+                <span class="section-kicker">Top 5 clientes</span>
+                <h4>Mayor saldo pendiente</h4>
+            </div>
+            <div class="cartera-chart-canvas-wrap cartera-chart-canvas-wrap-tall">
+                <canvas id="carteraTopClientesChart"></canvas>
+            </div>
+            <div class="top-client-list top-client-list-large top-client-list-compact">
+                @foreach (var cliente in TopClientesSaldo)
+                {
+                    <div class="top-client-item">
+                        <div class="top-client-rank">@cliente.Rank</div>
+                        <div class="top-client-meta">
+                            <strong>@cliente.NombreCliente</strong>
+                            <small>@cliente.Identificacion</small>
+                        </div>
+                        <strong class="top-client-value">$@cliente.Saldo.ToString("N2")</strong>
+                    </div>
+                }
+            </div>
+        </article>
+    </section>
+
+    @* ── HISTORIAL DE FACTURAS SALDADAS ── *@
+    @if (clienteSeleccionado != null && pasoActual >= 3)
+    {
+        <section class="abono-dist-card historial-card">
+            <div class="form-card-head">
+                <div>
+                    <span class="section-kicker">Historial del cliente</span>
+                    <h3>Facturas completamente saldadas</h3>
+                    <p class="head-hint">Facturas que ya han sido pagadas en su totalidad.</p>
+                </div>
+                <button type="button" class="ghost-btn" @onclick="ToggleHistorial">
+                    <i class="@(mostrarHistorial ? "ri-eye-off-line" : "ri-eye-line")"></i>
+                    <span>@(mostrarHistorial ? "Ocultar" : "Ver historial")</span>
+                </button>
+            </div>
+
+            @if (mostrarHistorial)
+            {
+                @if (cargandoHistorial)
+                {
+                    <div class="historial-loading">
+                        <i class="ri-loader-4-line spin"></i>
+                        <span>Cargando historial...</span>
+                    </div>
+                }
+                else if (!historialSaldadas.Any())
+                {
+                    <div class="historial-empty">
+                        <i class="ri-file-list-3-line"></i>
+                        <span>No hay facturas completamente saldadas aún.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="historial-summary">
+                        <span class="historial-badge">
+                            <i class="ri-checkbox-circle-fill"></i>
+                            @historialSaldadas.Count factura(s) saldada(s)
+                        </span>
+                        <span class="historial-total">
+                            Total cobrado: <strong>$@historialSaldadas.Sum(x => x.TotalFactura).ToString("N2")</strong>
+                        </span>
+                    </div>
+
+                    <div class="history-list">
+                        @foreach (var h in historialSaldadas)
+                        {
+                            <article class="history-item">
+                                <div class="history-main">
+                                    <span class="num-pill num-pill-saldada">#@h.NumFactura</span>
+                                    <span class="status-pill status-saldada">
+                                        <i class="ri-checkbox-circle-fill"></i> Saldada
+                                    </span>
+                                </div>
+                                <div class="invoice-values history-values">
+                                    <div class="value-box">
+                                        <span>Total factura</span>
+                                        <strong>$@h.TotalFactura.ToString("N2")</strong>
+                                    </div>
+                                    <div class="value-box value-box-success">
+                                        <span>Total cobrado</span>
+                                        <strong>$@h.TotalAbonado.ToString("N2")</strong>
+                                    </div>
+                                    <div class="value-box value-box-muted">
+                                        <span>Fecha saldada</span>
+                                        <strong>@h.FechaSaldada.ToString("dd/MM/yyyy")</strong>
+                                    </div>
+                                </div>
+                                <div class="progress-col history-progress">
+                                    <div class="progress-labels">
+                                        <span class="progress-amt">$@h.TotalAbonado.ToString("N2") / $@h.TotalFactura.ToString("N2")</span>
+                                        <span class="progress-pct pct-full">100%</span>
+                                    </div>
+                                    <div class="mini-progress">
+                                        <div class="mini-bar bar-full" style="width: 100%"></div>
+                                    </div>
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+        </section>
+    }
+
+</div>
+
+@if (_tutorialAbonos is not null)
+{
+    <AppTutorialOverlay Definition="_tutorialAbonos"
+                        Visible="_mostrarTutorialAbonos"
+                        OnClosed="HandleTutorialAbonosClosedAsync" />
+}
+
+@if (mostrarConfirmacionFinal)
+{
+    <div class="abono-modal-backdrop" @onclick="CerrarConfirmacionFinal"></div>
+    <section class="abono-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmarAbonoTitulo">
+        <div class="confirm-modal-head">
+            <span class="section-kicker">Confirmacion final</span>
+            <h3 id="confirmarAbonoTitulo">¿Registrar este abono?</h3>
+            <button type="button" class="notice-close" @onclick="CerrarConfirmacionFinal" disabled="@cargando">
+                <i class="ri-close-line"></i>
+            </button>
+        </div>
+
+        <div class="confirm-modal-body">
+            <p>Se registrara un abono de <strong>$@TotalDistribuido.ToString("N2")</strong> para <strong>@clienteSeleccionado?.NombreCliente</strong>.</p>
+            <div class="modal-summary-grid">
+                <div>
+                    <span>Monto disponible</span>
+                    <strong>$@MontoDisponibleTotal.ToString("N2")</strong>
+                </div>
+                <div>
+                    <span>Distribuido</span>
+                    <strong>$@TotalDistribuido.ToString("N2")</strong>
+                </div>
+                <div>
+                    <span>Saldo sin asignar</span>
+                    <strong>$@SaldoRestante.ToString("N2")</strong>
+                </div>
+            </div>
+            <label class="final-check">
+                <input type="checkbox" @bind="confirmacionFinalAceptada" disabled="@cargando" />
+                <span>Confirmo que revise el cliente, el monto y la distribucion por factura.</span>
+            </label>
+        </div>
+
+        <div class="confirm-modal-actions">
+            <button type="button" class="ghost-btn" @onclick="CerrarConfirmacionFinal" disabled="@cargando">Cancelar</button>
+            <button type="button" class="confirm-btn" @onclick="ProcesarPagoConfirmado" disabled="@(!confirmacionFinalAceptada || cargando)">
+                @if (cargando)
+                {
+                    <i class="ri-loader-4-line spin"></i>
+                    <span>Procesando...</span>
+                }
+                else
+                {
+                    <i class="ri-check-line"></i>
+                    <span>Si, registrar abono</span>
+                }
+            </button>
+        </div>
+    </section>
+}
+
+<style>
+/* ── SHELL ── */
+.abono-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+    padding-bottom: 5.5rem;
+}
+.abono-shell > .process-strip { order: 0; }
+.abono-shell > [data-tour="abonos.form"] { order: 0; }
+.abono-shell > .cartera-insights { order: 0; }
+
+/* ── HERO ── */
+.abono-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 1.15rem;
+    border: 1px solid var(--n-border);
+    border-radius: 24px;
+    background:
+        radial-gradient(circle at top left, rgba(0,107,181,0.14), transparent 34%),
+        linear-gradient(145deg, rgba(255,255,255,0.98), rgba(246,250,254,0.96));
+    box-shadow: var(--n-shell-shadow, 0 8px 32px rgba(15,23,42,0.07));
+}
+.hero-copy { display: flex; flex-direction: column; justify-content: center; }
+.hero-snapshot { display: grid; gap: .7rem; align-content: start; }
+.snapshot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
+.snapshot-card {
+    padding: .82rem .9rem;
+    border-radius: 18px;
+    border: 1px solid #dce8f2;
+    background: #fff;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, .04);
+    display: grid;
+    gap: .15rem;
+    min-width: 0;
+}
+.snapshot-card span {
+    color: #61788e;
+    font-size: .62rem;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.snapshot-card strong { color: #17324a; font-size: 1.15rem; }
+.snapshot-card small { color: #7b8fa1; font-size: .65rem; }
+.snapshot-card-primary { border-top: 3px solid #1687d9; }
+.snapshot-card-danger { border-top: 3px solid #ef5b62; }
+.snapshot-card-info { border-top: 3px solid #f5a623; }
+.snapshot-card-success { border-top: 3px solid #1eaa72; }
+.snapshot-card-soft { border-top: 3px solid #8e7aff; }
+.hero-eyebrow {
+    font-size: 0.72rem; font-weight: 800; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--n-blue, #006bb5);
+}
+.abono-hero h2 {
+    margin: 0.5rem 0 0.7rem;
+    font-size: 1.72rem; line-height: 1.05;
+    letter-spacing: -0.04em; color: var(--n-text, #0f172a);
+}
+.abono-hero p { margin: 0; color: var(--n-text-muted, #64748b); font-size: 0.93rem; line-height: 1.7; }
+
+.cartera-metrics {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: .65rem;
+}
+.cartera-metric {
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+    padding: 1rem 1rem .95rem;
+    border: 1px solid color-mix(in srgb, var(--stat-accent, #14b8a6) 24%, #e7edf4);
+    border-radius: 16px;
+    background:
+        radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--stat-accent, #14b8a6) 18%, transparent), transparent 38%),
+        linear-gradient(145deg, #ffffff 0%, color-mix(in srgb, var(--stat-soft, #ecfeff) 45%, #ffffff) 100%);
+    box-shadow:
+        0 18px 34px rgba(15, 23, 42, .08),
+        inset 0 1px 0 rgba(255, 255, 255, .78);
+    isolation: isolate;
+    display: grid;
+    gap: .24rem;
+    transition: transform .22s ease, box-shadow .22s ease;
+}
+.cartera-metric:hover { transform: translateY(-4px); box-shadow: 0 18px 32px rgba(15, 23, 42, .10); }
+.cartera-metric::after {
+    content: "";
+    position: absolute;
+    right: -18px;
+    bottom: -28px;
+    width: 86px;
+    height: 86px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stat-accent, #14b8a6) 10%, transparent);
+    z-index: -1;
+}
+.cartera-metric-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .7rem;
+}
+.cartera-metric-head i {
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--stat-accent, #14b8a6) 14%, #ffffff);
+    color: var(--stat-accent, #14b8a6) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--stat-accent, #14b8a6) 18%, #ffffff);
+}
+.cartera-metric-line {
+    width: 72px;
+    height: 4px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: .18;
+}
+.cartera-metric span {
+    color: #6b8095;
+    font-size: .73rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+.cartera-metric strong {
+    color: #17324a;
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-top: .4rem;
+}
+.cartera-metric small {
+    color: #7b8fa1;
+    font-size: .64rem;
+}
+.cartera-metric-primary {
+    --stat-accent: #006bb5;
+    --stat-soft: #f4f9ff;
+    border-top: 4px solid var(--stat-accent);
+}
+.cartera-metric-danger {
+    --stat-accent: #ef4444;
+    --stat-soft: #fef2f2;
+    border-top: 4px solid var(--stat-accent);
+}
+.cartera-metric-info {
+    --stat-accent: #f59e0b;
+    --stat-soft: #fffbeb;
+    border-top: 4px solid var(--stat-accent);
+}
+.cartera-metric-success {
+    --stat-accent: #10b981;
+    --stat-soft: #ecfdf5;
+    border-top: 4px solid var(--stat-accent);
+}
+.cartera-metric-soft {
+    --stat-accent: #8b5cf6;
+    --stat-soft: #f5f3ff;
+    border-top: 4px solid var(--stat-accent);
+}
+
+.cartera-toolbar {
+    display: grid;
+    gap: .75rem;
+    padding: 1rem 1.05rem;
+    border: 1px solid #dce8f2;
+    border-radius: 22px;
+    background: linear-gradient(180deg, #ffffff, #f8fbff);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, .05);
+}
+.cartera-toolbar-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+}
+.cartera-toolbar-heading h3 {
+    margin: .12rem 0 0;
+    color: #17324a;
+    font-size: 1rem;
+}
+.cartera-toolbar-heading small {
+    color: #6f8498;
+    font-size: .72rem;
+}
+.cartera-toolbar-main {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+}
+.cartera-search-box {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    padding: .82rem .95rem;
+    border: 1px solid #dce8f2;
+    border-radius: 16px;
+    background: #f9fbfe;
+}
+.cartera-search-box i { color: #7a8ea1; font-size: 1rem; }
+.cartera-search-box input {
+    border: 0;
+    outline: 0;
+    background: transparent;
+    width: 100%;
+    font-size: .9rem;
+    color: #17324a;
+}
+.cartera-filter-panel {
+    display: grid;
+    gap: .55rem;
+    padding: .8rem;
+    border: 1px solid #e3edf5;
+    border-radius: 18px;
+    background: rgba(245, 250, 255, .75);
+}
+.cartera-filter-panel-full {
+    gap: .85rem;
+}
+.cartera-filter-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    flex-wrap: wrap;
+}
+.cartera-filter-head h4 {
+    margin: .18rem 0 0;
+    color: #17324a;
+    font-size: .92rem;
+}
+.cartera-filter-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) repeat(3, minmax(180px, 1fr));
+    gap: .75rem;
+    align-items: start;
+}
+.cartera-filter-block,
+.cartera-filter-field {
+    display: grid;
+    gap: .45rem;
+}
+.cartera-filter-field span {
+    color: #587086;
+    font-size: .72rem;
+    font-weight: 800;
+}
+.cartera-filter-field select {
+    min-height: 42px;
+    padding: 0 .9rem;
+    border: 1px solid #d6e4f0;
+    border-radius: 14px;
+    background: #fff;
+    color: #17324a;
+    font-size: .84rem;
+    outline: 0;
+}
+.cartera-filter-label {
+    color: #6a8093;
+    font-size: .68rem;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.cartera-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .55rem;
+}
+.cartera-filter-chip {
+    min-height: 38px;
+    padding: 0 .85rem;
+    border: 1px solid #d6e4f0;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    background: #f8fbfe;
+    color: #49637a;
+    font-size: .74rem;
+    font-weight: 800;
+}
+.cartera-filter-chip strong {
+    color: #0c6dba;
+    font-size: .71rem;
+}
+.cartera-filter-chip.is-active {
+    border-color: #77bdf1;
+    background: linear-gradient(180deg, #eff8ff, #dff0ff);
+    color: #0c5d99;
+    box-shadow: 0 10px 22px rgba(8, 117, 193, .12);
+}
+.cartera-toolbar-actions { display: flex; align-items: center; gap: .5rem; }
+.confirm-btn-sm, .ghost-btn-sm { min-height: 42px; padding: 0 .95rem; }
+
+.cartera-board {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: .7rem;
+}
+.cartera-insights {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+    gap: .9rem;
+}
+.cartera-board-main,
+.cartera-board-side {
+    border: 1px solid #dce8f2;
+    border-radius: 9px;
+    background: #fff;
+    box-shadow: 0 7px 18px rgba(15, 23, 42, .045);
+}
+.cartera-board-main {
+    min-width: 0;
+    overflow: hidden;
+}
+.cartera-board-head {
+    padding: .9rem 1rem;
+    border-bottom: 1px solid #d8e8f4;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    background: linear-gradient(180deg, #ffffff, #f4f9ff);
+}
+.cartera-board-head h3 {
+    margin: .15rem 0 0;
+    color: #17324a;
+    font-size: .9rem;
+}
+.cartera-table-wrap { overflow-x: auto; }
+.cartera-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.cartera-table th,
+.cartera-table td {
+    padding: .72rem .6rem;
+    border-bottom: 1px solid #e6eef5;
+    color: #29445b;
+    font-size: .68rem;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.cartera-table tbody tr {
+    cursor: pointer;
+    transition: background-color .18s ease, box-shadow .18s ease;
+}
+.cartera-table tbody tr:hover {
+    background: #edf7ff;
+}
+.cartera-table tbody tr.is-selected {
+    background: linear-gradient(90deg, #e6f4ff, #f4faff);
+    box-shadow: inset 4px 0 0 #0c7bd0;
+}
+.cartera-table th {
+    background: linear-gradient(180deg, #eaf4ff, #deeeff);
+    color: #4a6a87;
+    font-size: .58rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.cartera-table td strong,
+.cartera-table td small {
+    display: block;
+}
+.cartera-table td small {
+    margin-top: .12rem;
+    color: #8495a5;
+    font-size: .56rem;
+}
+.cartera-balance { color: #0875c1 !important; font-weight: 800; }
+.cartera-status {
+    min-height: 28px;
+    padding: 0 .65rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    font-size: .58rem;
+    font-weight: 800;
+    border: 1px solid transparent;
+}
+.cartera-status.is-overdue { background: #ffe7ea; color: #bf2238; border-color: #ffc4cb; box-shadow: 0 8px 18px rgba(191,34,56,.12); }
+.cartera-status.is-warning { background: #fff4dd; color: #a96805; border-color: #ffd38b; box-shadow: 0 8px 18px rgba(169,104,5,.12); }
+.cartera-status.is-current { background: #e7fff3; color: #0d8a55; border-color: #b9efd2; box-shadow: 0 8px 18px rgba(13,138,85,.12); }
+.cartera-empty { padding: 1.5rem; color: #708397; text-align: center; }
+.cartera-board-side {
+    padding: .8rem;
+    display: grid;
+    align-content: start;
+    gap: .75rem;
+    position: sticky;
+    top: .9rem;
+}
+.cartera-cta-card {
+    padding: 1rem;
+    border-radius: 18px;
+    border: 1px solid rgba(8, 117, 193, .16);
+    background: linear-gradient(180deg, #ffffff, #eef7ff);
+    box-shadow: 0 12px 24px rgba(8, 117, 193, .08);
+    display: grid;
+    gap: .75rem;
+}
+.cartera-cta-card p {
+    margin: 0;
+    color: #5e7488;
+    font-size: .74rem;
+    line-height: 1.5;
+}
+.cartera-cta-meta {
+    padding: .85rem .9rem;
+    border-radius: 14px;
+    border: 1px solid rgba(8, 117, 193, .14);
+    background: rgba(255, 255, 255, .82);
+    display: grid;
+    gap: .2rem;
+}
+.cartera-cta-meta span,
+.cartera-cta-meta small {
+    color: #6a8094;
+    font-size: .72rem;
+}
+.cartera-cta-meta strong {
+    color: #0b69b5;
+    font-size: 1.05rem;
+    font-weight: 900;
+}
+.cartera-primary-action {
+    min-height: 46px;
+    border: 0;
+    border-radius: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .55rem;
+    background: linear-gradient(135deg, #0077c8, #0097e6);
+    color: #fff;
+    font-size: .82rem;
+    font-weight: 900;
+    box-shadow: 0 14px 24px rgba(0, 119, 200, .22);
+}
+.cartera-primary-action:disabled {
+    opacity: .55;
+    box-shadow: none;
+}
+.cartera-row-action {
+    min-height: 34px;
+    padding: 0 .8rem;
+    border: 1px solid #b9e7cd;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .4rem;
+    background: linear-gradient(180deg, #f6fff9, #e7fff0);
+    color: #0d8a55;
+    font-size: .64rem;
+    font-weight: 900;
+    box-shadow: 0 10px 18px rgba(13, 138, 85, .12);
+}
+.cartera-row-action:hover {
+    border-color: #92dcaf;
+    background: linear-gradient(180deg, #ffffff, #e0fbe9);
+}
+.cartera-chart-card {
+    padding: .65rem;
+    border-radius: 14px;
+    border: 1px solid #e2edf5;
+    background: linear-gradient(180deg, #ffffff, #f8fbff);
+    box-shadow: 0 8px 18px rgba(15, 23, 42, .04);
+    display: grid;
+    gap: .5rem;
+}
+.cartera-chart-canvas-wrap {
+    position: relative;
+    min-height: 140px;
+}
+.cartera-chart-canvas-wrap-ring {
+    min-height: 200px;
+}
+.cartera-chart-canvas-wrap-tall {
+    min-height: 130px;
+}
+.cartera-chart-canvas-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+.cartera-chart-head h4 {
+    margin: .1rem 0 0;
+    color: #17324a;
+    font-size: .92rem;
+}
+.cartera-insight-card {
+    min-width: 0;
+}
+.cartera-legend {
+    display: grid;
+    gap: .45rem;
+}
+.cartera-legend span {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: .4rem;
+    color: #61788e;
+    font-size: .62rem;
+}
+.cartera-legend i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+.cartera-legend i.is-danger { background: #ef5b62; }
+.cartera-legend i.is-info { background: #f5a623; }
+.cartera-legend i.is-current { background: #1eaa72; }
+.cartera-legend strong { color: #29445b; }
+.cartera-segment-bars {
+    display: grid;
+    gap: .55rem;
+}
+.cartera-segment {
+    display: grid;
+    gap: .25rem;
+}
+.cartera-segment div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .7rem;
+    color: #61788e;
+    font-size: .66rem;
+    font-weight: 700;
+}
+.cartera-segment strong {
+    color: #17324a;
+}
+.cartera-segment p {
+    height: 8px;
+    margin: 0;
+    border-radius: 999px;
+    overflow: hidden;
+    background: #edf3f8;
+}
+.cartera-segment p span {
+    display: block;
+    min-width: 3px;
+    height: 100%;
+    border-radius: inherit;
+}
+.top-client-list {
+    display: grid;
+    gap: .7rem;
+}
+.top-client-list-large {
+    gap: .85rem;
+}
+.top-client-list-compact {
+    gap: .55rem;
+}
+.top-client-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: .65rem;
+    align-items: center;
+}
+.top-client-rank {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: #eef4fb;
+    color: #5b738b;
+    font-size: .7rem;
+    font-weight: 900;
+}
+.top-client-meta {
+    min-width: 0;
+    display: grid;
+    gap: .08rem;
+}
+.top-client-meta strong,
+.top-client-value {
+    color: #17324a;
+    font-size: .72rem;
+    font-weight: 800;
+}
+.top-client-meta small {
+    color: #7a8ea1;
+    font-size: .6rem;
+}
+.top-client-value {
+    white-space: nowrap;
+}
+.aging-bars {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: .9rem;
+    align-items: end;
+    min-height: 240px;
+}
+.aging-bar-card {
+    display: grid;
+    gap: .55rem;
+    justify-items: center;
+}
+.aging-bar-track {
+    width: 100%;
+    height: 150px;
+    padding: 0 .35rem;
+    border-radius: 18px 18px 10px 10px;
+    display: flex;
+    align-items: end;
+    background: linear-gradient(180deg, #f8fbff, #eef4f9);
+}
+.aging-bar-track span {
+    display: block;
+    width: 100%;
+    min-height: 10px;
+    border-radius: 14px 14px 8px 8px;
+    box-shadow: 0 12px 24px rgba(15, 23, 42, .12);
+}
+.aging-bar-card strong {
+    color: #17324a;
+    font-size: .8rem;
+    font-weight: 900;
+}
+.aging-bar-card small {
+    color: #64748b;
+    font-size: .72rem;
+    font-weight: 700;
+    text-align: center;
+}
+.cartera-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .7rem .85rem;
+    border-top: 1px solid #edf2f6;
+    color: #60788e;
+    font-size: .72rem;
+    flex-wrap: wrap;
+}
+.cartera-pagination-invoice {
+    margin-top: .15rem;
+    border-top: 0;
+    padding-top: .1rem;
+}
+.distribution-summary-split {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: .75rem;
+}
+.dist-resumen-compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.distribution-summary-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+.distribution-summary-actions .confirm-btn {
+    min-width: 220px;
+}
+
+@@media (max-width: 1100px) {
+.abono-hero {
+        grid-template-columns: 1fr;
+    }
+
+    .cartera-toolbar {
+        grid-template-columns: 1fr;
+    }
+
+    .cartera-toolbar-actions {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .cartera-filter-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cartera-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cartera-board { grid-template-columns: 1fr; }
+    .cartera-board-side { position: static; }
+}
+
+@@media (max-width: 640px) {
+    .cartera-filter-grid { grid-template-columns: 1fr; }
+    .cartera-metrics { grid-template-columns: 1fr; }
+}
+
+.hero-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem;
+    align-self: start;
+}
+.stat-card {
+    display: flex; flex-direction: column; gap: 0.3rem;
+    padding: 0.88rem 0.95rem;
+    border-radius: 20px;
+    border: 1px solid #e4edf5;
+    background: linear-gradient(180deg, #fff, #f8fbff);
+    box-shadow: 0 6px 16px rgba(15,23,42,0.04);
+}
+.stat-label { font-size: 0.74rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--n-text-muted, #64748b); }
+.stat-card strong { font-size: 1.34rem; line-height: 1; letter-spacing: -0.03em; color: var(--n-text, #0f172a); }
+.stat-card-primary { background: linear-gradient(135deg, rgba(0,107,181,0.1), #fff); border-color: rgba(0,107,181,0.18); }
+.stat-card-primary strong { color: var(--n-blue, #006bb5); }
+.stat-card-success { background: linear-gradient(135deg, rgba(23,101,63,0.08), #fff); border-color: rgba(23,101,63,0.15); }
+.stat-card-success strong { color: #17653f; }
+.stat-card-warn { background: linear-gradient(135deg, rgba(202,138,4,0.1), #fff); border-color: rgba(202,138,4,0.2); }
+.stat-card-warn strong { color: #854d0e; }
+.stat-card-danger { background: linear-gradient(135deg, rgba(220,53,69,0.1), #fff); border-color: rgba(220,53,69,0.18); }
+.stat-card-danger strong { color: #b02a37; }
+.stat-card-credito { background: linear-gradient(135deg, rgba(5,150,105,0.1), #fff); border-color: rgba(5,150,105,0.2); }
+.stat-card-credito strong { color: #065f46; }
+
+/* ── PROCESS ── */
+.process-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+    position: sticky;
+    top: 0.75rem;
+    z-index: 8;
+}
+.process-step {
+    border: 0;
+    display: flex;
+    text-align: left;
+    align-items: flex-start;
+    gap: 0.75rem;
+    min-width: 0;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--n-border, #d7e4f0);
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.97), rgba(246,250,254,0.96));
+    color: var(--n-text-muted, #64748b);
+    box-shadow: 0 12px 26px rgba(15,23,42,0.06);
+    cursor: pointer;
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.process-step:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 30px rgba(15,23,42,0.09);
+}
+.process-step:disabled {
+    cursor: not-allowed;
+    opacity: 0.72;
+}
+.process-index {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: #eef4f9;
+    color: #58738c;
+    font-size: 0.86rem;
+    font-weight: 900;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.8);
+}
+.process-step strong,
+.process-step small {
+    display: block;
+}
+.process-step strong {
+    color: var(--n-text, #16324a);
+    font-size: 0.9rem;
+}
+.process-step small {
+    margin-top: 0.08rem;
+    color: var(--n-text-muted, #64748b);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+.process-step.is-active {
+    border-color: rgba(0,107,181,0.44);
+    background: linear-gradient(135deg, rgba(0,107,181,0.16), rgba(255,255,255,0.98));
+    box-shadow: 0 18px 34px rgba(0,107,181,0.16);
+    transform: translateY(-2px);
+}
+.process-step.is-active .process-index,
+.process-step.is-done .process-index {
+    background: var(--n-blue-soft, #eaf4fb);
+    color: var(--n-blue, #006bb5);
+}
+.process-step.is-active strong,
+.process-step.is-active small {
+    color: #0c3f69;
+}
+.process-step.is-active .process-index {
+    background: linear-gradient(135deg, #0b7fda, #22a6f2);
+    color: #ffffff;
+    box-shadow: 0 12px 24px rgba(11,127,218,0.28);
+}
+.process-step.is-done {
+    border-color: rgba(5,150,105,0.24);
+    background: linear-gradient(135deg, rgba(5,150,105,0.08), #ffffff);
+}
+.process-step.is-done .process-index {
+    background: rgba(5,150,105,0.1);
+    color: #05825b;
+}
+
+/* ── NOTICES ── */
+.notice-banner {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; padding: 0.9rem 1rem;
+    border-radius: 18px; border: 1px solid transparent;
+    flex-wrap: wrap;
+}
+.notice-success { background: rgba(23,101,63,0.08); color: #17653f; border-color: rgba(23,101,63,0.14); }
+.notice-error   { background: rgba(220,53,69,0.08); color: #b02a37; border-color: rgba(220,53,69,0.14); }
+.notice-credito { background: rgba(5,150,105,0.08); color: #065f46; border-color: rgba(5,150,105,0.18); }
+.notice-copy { display: inline-flex; align-items: center; gap: 0.55rem; font-weight: 600; font-size: 0.94rem; }
+.notice-close {
+    background: none; border: none; opacity: 0.7; font-size: 1.1rem; cursor: pointer; color: inherit;
+    display: inline-flex; align-items: center; padding: 0.2rem;
+}
+.notice-close:hover { opacity: 1; }
+
+/* ── CREDITO ACTIONS ── */
+.credito-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.toggle-label {
+    display: inline-flex; align-items: center; gap: 0.55rem;
+    cursor: pointer; font-size: 0.87rem; font-weight: 700; color: #065f46;
+    user-select: none;
+}
+.toggle-checkbox { display: none; }
+.toggle-track {
+    width: 38px; height: 22px; border-radius: 999px;
+    background: #d1d5db; transition: background 0.2s;
+    position: relative; display: inline-block; flex-shrink: 0;
+}
+.toggle-checkbox:checked + .toggle-track { background: #059669; }
+.toggle-thumb {
+    position: absolute; top: 3px; left: 3px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    transition: transform 0.2s;
+}
+.toggle-checkbox:checked + .toggle-track .toggle-thumb { transform: translateX(16px); }
+.ghost-btn-sm { padding: 0 0.7rem; min-height: 34px; font-size: 0.82rem; }
+
+/* ── SALDO DETALLE ── */
+.saldo-detalle-card {
+    border-radius: 18px; border: 1px solid rgba(5,150,105,0.2);
+    background: rgba(5,150,105,0.04);
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+}
+.saldo-detalle-card h4 {
+    display: flex; align-items: center; gap: 0.45rem;
+    margin: 0 0 0.75rem; font-size: 0.88rem; font-weight: 800;
+    text-transform: uppercase; letter-spacing: 0.1em; color: #065f46;
+}
+.saldo-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.87rem; }
+.saldo-table th {
+    padding: 0.5rem 0.75rem; text-align: left;
+    font-size: 0.72rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+    color: #065f46; border-bottom: 1px solid rgba(5,150,105,0.2);
+}
+.saldo-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid rgba(5,150,105,0.1); }
+.text-credito-cell { color: #065f46; font-weight: 700; }
+
+/* ── CARDS ── */
+.abono-form-card,
+.abono-dist-card {
+    width: 100%;
+    max-width: none;
+    border-radius: 24px;
+    border: 1px solid var(--n-border, #e2e8f0);
+    background: rgba(255,255,255,0.96);
+    box-shadow: 0 10px 28px rgba(15,23,42,0.05);
+    padding: 1.15rem 1.2rem;
+}
+.step-card {
+    max-width: none;
+}
+.single-step-panel {
+    max-width: 780px;
+}
+.step-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.7fr);
+    gap: 1rem;
+    align-items: start;
+}
+.step-main-panel {
+    min-width: 0;
+}
+.step-side-panel {
+    display: grid;
+    gap: 0.85rem;
+    min-width: 0;
+}
+.step-side-card {
+    display: grid;
+    gap: 0.35rem;
+    padding: 1rem 1.05rem;
+    border: 1px solid #dce9f3;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #ffffff, #f9fcff);
+}
+.step-side-card h4 {
+    margin: 0;
+    color: var(--n-text, #16324a);
+    font-size: 1rem;
+}
+.step-side-card p {
+    margin: 0;
+    color: var(--n-text-muted, #64748b);
+    font-size: 0.85rem;
+    line-height: 1.6;
+}
+.step-side-stats {
+    display: grid;
+    gap: 0.7rem;
+}
+.mini-stat-card {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.85rem 0.95rem;
+    border: 1px solid #e2edf5;
+    border-radius: 16px;
+    background: #ffffff;
+}
+.mini-stat-card span {
+    color: #6b8095;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.mini-stat-card strong {
+    color: var(--n-text, #16324a);
+    font-size: 1rem;
+    line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+}
+.step-tip-list {
+    display: grid;
+    gap: 0.65rem;
+}
+.step-tip-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding: 0.85rem 0.95rem;
+    border: 1px dashed #d4e3ef;
+    border-radius: 16px;
+    background: #fbfdff;
+    color: #5b738b;
+    font-size: 0.84rem;
+    line-height: 1.55;
+}
+.step-tip-item i {
+    color: var(--n-blue, #006bb5);
+    font-size: 1rem;
+    margin-top: 0.05rem;
+}
+.payment-fields-inline {
+    grid-template-columns: minmax(220px, 0.65fr) minmax(260px, 1fr);
+}
+.form-card-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 1rem; margin-bottom: 1.2rem; flex-wrap: wrap;
+}
+.form-card-head h3 { margin: 0.25rem 0 0; font-size: 1.15rem; letter-spacing: -0.02em; }
+.head-hint { margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--n-text-muted, #64748b); }
+.section-kicker {
+    font-size: 0.7rem; font-weight: 800; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--n-blue, #006bb5);
+}
+.cliente-badge {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.4rem 0.85rem; border-radius: 999px;
+    background: rgba(0,107,181,0.08); color: var(--n-blue, #006bb5);
+    font-size: 0.85rem; font-weight: 700; white-space: nowrap;
+}
+
+/* ── FORM GRID ── */
+.payment-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1rem;
+}
+.work-subcard {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+    height: 100%;
+    padding: 1rem;
+    border: 1px solid #dce9f3;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #ffffff, #f9fcff);
+}
+.subcard-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.subcard-icon {
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    background: var(--n-blue-soft, #eaf4fb);
+    color: var(--n-blue, #006bb5);
+    font-size: 1.05rem;
+}
+.subcard-head strong,
+.subcard-head small {
+    display: block;
+}
+.subcard-head strong {
+    color: var(--n-text, #16324a);
+    font-size: 0.98rem;
+}
+.subcard-head small {
+    margin-top: 0.1rem;
+    color: var(--n-text-muted, #64748b);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+.payment-fields {
+    display: grid;
+    gap: 1rem;
+}
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+.form-field-wide { grid-column: 1 / -1; }
+.form-field { display: flex; flex-direction: column; gap: 0.45rem; }
+.field-label { font-size: 0.75rem; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; color: #557089; }
+.field-input {
+    min-height: 46px; border-radius: 14px; border: 1px solid #d4e3ef;
+    background: #fff; padding: 0 0.9rem; font-size: 0.95rem;
+    transition: border-color 0.18s, box-shadow 0.18s;
+}
+.field-input:focus { outline: none; border-color: var(--n-blue, #006bb5); box-shadow: 0 0 0 4px rgba(0,107,181,0.12); }
+.field-input:disabled { background: #f4f8fc; color: #94a3b8; cursor: not-allowed; }
+.field-hint { font-size: 0.8rem; color: var(--n-text-muted, #64748b); }
+.field-hint-credito { color: #065f46; font-weight: 600; display: flex; align-items: center; gap: 0.3rem; }
+.amount-shortcuts {
+    display: flex;
+    gap: .45rem;
+    flex-wrap: wrap;
+}
+.amount-chip {
+    min-height: 32px;
+    padding: 0 .8rem;
+    border: 1px solid #cfe0ee;
+    border-radius: 999px;
+    background: #f8fbff;
+    color: #31526d;
+    font-size: .75rem;
+    font-weight: 800;
+}
+.amount-chip-soft {
+    background: #fff;
+}
+.step-toggle-card {
+    padding: .9rem 1rem;
+    border: 1px solid #dce9f3;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ffffff, #f9fcff);
+    color: #17324a;
+}
+
+/* ── SEARCH ── */
+.search-wrap { position: relative; }
+.search-input-group {
+    display: flex; align-items: center; gap: 0;
+    position: relative;
+}
+.search-icon {
+    position: absolute; left: 0.85rem; font-size: 1rem; color: #94a3b8; pointer-events: none; z-index: 1;
+}
+
+    .search-input {
+        padding-left: 3.5rem !important; /* Respeta el espacio de la lupa a la izquierda */
+        padding-right: 3.5rem !important; /* Respeta el espacio del ícono de cargar/cerrar a la derecha */
+        width: 100%;
+    }
+
+.search-spin, .search-clear {
+    position: absolute; right: 0.85rem;
+    font-size: 1rem; color: #94a3b8;
+}
+.search-spin { animation: spin 0.8s linear infinite; pointer-events: none; }
+.search-clear {
+    background: none; border: none; cursor: pointer; padding: 0.15rem;
+    display: inline-flex; align-items: center;
+    transition: color 0.15s;
+}
+.search-clear:hover { color: #b02a37; }
+@@keyframes spin { to { transform: rotate(360deg); } }
+
+.suggestions-list {
+    position: absolute; z-index: 200; width: 100%; top: calc(100% + 6px);
+    background: #fff; border: 1px solid #d4e3ef; border-radius: 16px;
+    box-shadow: 0 16px 40px rgba(15,23,42,0.12);
+    list-style: none; margin: 0; padding: 0.4rem;
+    max-height: 320px; overflow-y: auto;
+}
+.suggestion-item {
+    display: flex; flex-direction: column; gap: 0.15rem;
+    padding: 0.75rem 0.9rem; border-radius: 12px;
+    cursor: pointer; transition: background 0.15s;
+}
+.suggestion-item:hover { background: #f0f7ff; }
+.suggestion-nombre { font-weight: 700; font-size: 0.9rem; color: var(--n-text, #0f172a); }
+.suggestion-meta { font-size: 0.78rem; color: var(--n-text-muted, #64748b); line-height: 1.45; }
+
+/* ── AMOUNT ── */
+.amount-input-wrap { display: flex; align-items: center; position: relative; }
+.amount-prefix {
+    position: absolute; left: 0.9rem; font-weight: 800; color: #17653f; font-size: 1rem; pointer-events: none;
+}
+.amount-input { padding-left: 1.8rem; width: 100%; font-size: 1.1rem; font-weight: 700; color: #17653f; }
+
+/* ── DISTRIBUTION OVERVIEW ── */
+.distribution-overview {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.1rem;
+    margin-bottom: 1rem;
+}
+.overview-card {
+    display: grid;
+    gap: 0.42rem;
+    min-width: 0;
+    padding: 1.05rem 1.1rem;
+    border-radius: 18px;
+    border: 1px solid #dce9f3;
+    background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+.overview-card span {
+    color: #6b8095;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+.overview-card strong {
+    color: var(--n-text, #16324a);
+    font-size: 1.28rem;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.overview-card small {
+    color: var(--n-text-muted, #64748b);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+.overview-card-primary {
+    border-color: rgba(0,107,181,0.2);
+    background: linear-gradient(135deg, rgba(0,107,181,0.1), #ffffff);
+}
+.overview-card-primary strong { color: var(--n-blue, #006bb5); }
+.overview-card-success {
+    border-color: rgba(5,150,105,0.22);
+    background: linear-gradient(135deg, rgba(5,150,105,0.09), #ffffff);
+}
+.overview-card-success strong { color: #065f46; }
+.overview-card-warn {
+    border-color: rgba(202,138,4,0.22);
+    background: linear-gradient(135deg, rgba(202,138,4,0.1), #ffffff);
+}
+.overview-card-warn strong { color: #9a6700; }
+.overview-card-danger {
+    border-color: rgba(220,53,69,0.24);
+    background: linear-gradient(135deg, rgba(220,53,69,0.08), #ffffff);
+}
+.overview-card-danger strong { color: #b02a37; }
+.overview-card-neutral {
+    border-color: rgba(5,150,105,0.2);
+    background: linear-gradient(135deg, rgba(5,150,105,0.05), #ffffff);
+}
+.overview-card-neutral strong { color: #05825b; }
+.overview-card-soft {
+    border-color: rgba(148,163,184,0.24);
+    background: linear-gradient(180deg, #ffffff, #f6f9fc);
+}
+
+.distribution-workbench {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+    gap: 1.1rem;
+    align-items: stretch;
+    margin-top: 0.4rem;
+    padding: 1.15rem 1.2rem;
+    border-radius: 18px;
+    border: 1px solid #dce9f3;
+    background: linear-gradient(180deg, rgba(240,247,255,0.8), #ffffff);
+}
+.distribution-workbench h4 {
+    margin: 0.2rem 0 0.35rem;
+    color: var(--n-text, #16324a);
+    font-size: 1.02rem;
+}
+.distribution-workbench p {
+    margin: 0;
+    color: var(--n-text-muted, #64748b);
+    font-size: 0.88rem;
+    line-height: 1.6;
+}
+.distribution-workbench-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 1rem 1.1rem;
+    border-radius: 16px;
+    border: 1px solid rgba(0,107,181,0.16);
+    background: rgba(0,107,181,0.05);
+    color: #31526d;
+    font-size: 0.85rem;
+    line-height: 1.55;
+}
+.distribution-workbench-note i {
+    font-size: 1rem;
+    color: var(--n-blue, #006bb5);
+    margin-top: 0.08rem;
+}
+
+.invoice-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-top: 1.15rem;
+    margin-bottom: 0.25rem;
+}
+.invoice-section-head h4 {
+    margin: 0;
+    color: var(--n-text, #16324a);
+    font-size: 1rem;
+}
+.invoice-section-head p {
+    margin: 0.2rem 0 0;
+    color: var(--n-text-muted, #64748b);
+    font-size: 0.84rem;
+    line-height: 1.5;
+}
+/* ── DIST TABLE ── */
+.invoice-list-shell {
+    display: grid;
+    gap: 0.9rem;
+    margin-top: 0.35rem;
+}
+.invoice-list-head {
+    display: grid;
+    grid-template-columns: minmax(280px, 1.7fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(230px, 1fr);
+    gap: 0.75rem;
+    padding: 0 0.9rem;
+    align-items: end;
+}
+.invoice-list-head span {
+    color: #6b8095;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.invoice-list {
+    display: grid;
+    gap: 0.7rem;
+    width: 100%;
+}
+.invoice-row {
+    display: grid;
+    grid-template-columns: minmax(280px, 1.7fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(230px, 1fr);
+    gap: 0.75rem;
+    align-items: center;
+    padding: 1rem 1.05rem;
+    border: 1px solid #dce9f3;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #ffffff, #f9fcff);
+    overflow: hidden;
+}
+.invoice-row.is-active {
+    border-color: rgba(23,101,63,0.24);
+    background: linear-gradient(180deg, rgba(23,101,63,0.05), #ffffff);
+}
+.invoice-row.has-error {
+    border-color: rgba(220,53,69,0.38);
+    background: linear-gradient(180deg, rgba(220,53,69,0.05), #ffffff);
+}
+.invoice-col {
+    display: grid;
+    min-width: 0;
+}
+.invoice-col-label {
+    display: none;
+    color: #6b8095;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.invoice-title {
+    display: grid;
+    gap: 0.35rem;
+}
+.invoice-title small {
+    color: var(--n-text-muted, #64748b);
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+.invoice-col-doc {
+    gap: 0.8rem;
+}
+.invoice-doc-progress {
+    display: grid;
+    gap: 0.35rem;
+    padding-top: 0.1rem;
+}
+.invoice-col-value {
+    gap: 0.18rem;
+    padding: 0.2rem 0.15rem;
+}
+.invoice-col-value strong {
+    color: var(--n-text, #16324a);
+    font-size: 0.98rem;
+    font-variant-numeric: tabular-nums;
+}
+.invoice-col-balance strong {
+    color: var(--n-blue, #006bb5);
+}
+.invoice-col-apply {
+    min-width: 0;
+}
+.invoice-col-apply {
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #e2edf5;
+    border-radius: 14px;
+    background: #ffffff;
+    width: 100%;
+}
+.dist-table-wrap { overflow-x: auto; margin-top: 0.25rem; }
+.dist-table {
+    width: 100%; border-collapse: collapse; border-spacing: 0;
+    font-size: 0.9rem;
+}
+.dist-table thead tr {
+    background: linear-gradient(180deg, #f7fbff, #eef5fb);
+}
+.dist-table thead th {
+    padding: 0.95rem 1rem; color: #31526d;
+    font-size: 0.74rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+    white-space: nowrap;
+    border-bottom: 1px solid #dfeaf4;
+}
+.dist-table tbody tr { transition: background 0.15s; }
+.dist-table tbody tr:hover { background: #f4f9ff; }
+.dist-table tbody td {
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid #edf3f8;
+    vertical-align: middle;
+}
+.row-activa { background: rgba(23,101,63,0.04) !important; }
+.row-excede { background: rgba(220,53,69,0.05) !important; }
+.row-saldada { background: rgba(5,150,105,0.03) !important; }
+.text-mono { font-variant-numeric: tabular-nums; font-size: 0.88rem; }
+.text-muted-cell { color: #94a3b8; }
+.fw-saldo { font-weight: 700; color: #0f172a; }
+.text-danger-cell { color: #b02a37; }
+.text-success-cell { color: #17653f; }
+
+.value-stack {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(84px, 1fr));
+    gap: 0.45rem;
+}
+.value-stack span {
+    display: grid;
+    gap: 0.12rem;
+}
+.value-stack small {
+    color: #6b8095;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.value-stack strong {
+    color: var(--n-text, #16324a);
+    font-size: 0.88rem;
+    font-variant-numeric: tabular-nums;
+}
+.value-stack strong.text-muted-cell { color: #94a3b8; }
+.value-stack strong.text-credito-cell { color: #065f46; }
+.value-stack-total {
+    grid-template-columns: minmax(120px, 1fr);
+}
+
+.num-pill {
+    display: inline-flex; align-items: center;
+    padding: 0.25rem 0.65rem; border-radius: 8px;
+    background: rgba(0,107,181,0.08); color: var(--n-blue, #006bb5);
+    font-size: 0.82rem; font-weight: 700;
+}
+.num-pill-saldada {
+    background: rgba(5,150,105,0.1); color: #065f46;
+}
+
+/* ── PROGRESS ── */
+.progress-cell { min-width: 170px; }
+.progress-col { display: flex; flex-direction: column; gap: 0.3rem; }
+.mini-progress {
+    width: 100%; height: 8px; border-radius: 999px;
+    background: #e9eef4; overflow: hidden;
+}
+.mini-bar { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
+.bar-full  { background: #17a34a; }
+.bar-mid   { background: #f59e0b; }
+.bar-low   { background: var(--n-blue, #006bb5); }
+.progress-labels {
+    display: flex; justify-content: space-between; align-items: center;
+}
+.progress-amt {
+    font-size: 0.73rem; color: #64748b; font-variant-numeric: tabular-nums;
+}
+.progress-pct {
+    font-size: 0.78rem; font-weight: 800; min-width: 34px; text-align: right;
+}
+.pct-full  { color: #17a34a; }
+.pct-mid   { color: #d97706; }
+.pct-low   { color: var(--n-blue, #006bb5); }
+
+/* ── ABONO INPUT ── */
+.abono-input-cell { width: 190px; min-width: 170px; }
+.abono-input-wrap {
+    display: flex; align-items: center; position: relative;
+    border: 1px solid #d4e3ef; border-radius: 12px;
+    background: #fff; transition: border-color 0.18s, box-shadow 0.18s;
+}
+.abono-input-wrap:focus-within { border-color: var(--n-blue, #006bb5); box-shadow: 0 0 0 3px rgba(0,107,181,0.1); }
+.abono-quick-actions {
+    display: flex;
+    gap: .45rem;
+    flex-wrap: wrap;
+}
+.mini-action-btn {
+    min-height: 30px;
+    padding: 0 .7rem;
+    border: 1px solid #dbe7f2;
+    border-radius: 999px;
+    background: #f8fbff;
+    color: #4b6580;
+    font-size: .72rem;
+    font-weight: 800;
+}
+.mini-action-btn-primary {
+    border-color: rgba(0,107,181,0.2);
+    background: rgba(0,107,181,0.08);
+    color: #006bb5;
+}
+.input-excede { border-color: rgba(220,53,69,0.5) !important; box-shadow: 0 0 0 3px rgba(220,53,69,0.1) !important; }
+.abono-prefix { padding-left: 0.65rem; font-weight: 700; color: #17653f; font-size: 0.9rem; }
+.abono-input {
+    flex: 1; border: none; background: transparent;
+    padding: 0.5rem 0.5rem 0.5rem 0.3rem;
+    font-size: 0.9rem; font-weight: 700; color: #17653f;
+    min-width: 0;
+}
+.abono-input:focus { outline: none; }
+.abono-clear {
+    background: none; border: none; padding: 0.35rem 0.5rem;
+    color: #94a3b8; cursor: pointer; font-size: 0.85rem;
+    display: inline-flex; align-items: center; transition: color 0.15s;
+}
+.abono-clear:hover { color: #b02a37; }
+.excede-hint { display: block; margin-top: 0.25rem; font-size: 0.74rem; color: #b02a37; font-weight: 600; }
+
+/* ── CONFIRMATION ── */
+.dist-table tfoot td { padding: 0.85rem 0.9rem; border-top: 2px solid #e2e8f0; }
+.total-hint { display: block; font-size: 0.74rem; font-weight: 400; color: #94a3b8; margin-top: 0.1rem; }
+
+.confirm-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1rem;
+    align-items: center;
+    margin-top: 1rem;
+    padding: 1rem;
+    border: 1px solid #dce9f3;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #f9fcff, #ffffff);
+}
+.confirm-panel h3 {
+    margin: 0.25rem 0 0;
+    font-size: 1.05rem;
+    color: var(--n-text, #16324a);
+    font-weight: 800;
+}
+.dist-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1.25rem; flex-wrap: wrap;
+    margin-top: 1.25rem; padding-top: 1.25rem;
+    border-top: 1px dashed #d4e3ef;
+}
+.dist-resumen {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.7rem;
+    align-items: stretch;
+    grid-column: 1 / -1;
+}
+.resumen-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    padding: 0.78rem 0.9rem;
+    border: 1px solid #e2edf5;
+    border-radius: 14px;
+    background: #ffffff;
+}
+.resumen-item span { font-size: 0.73rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #64748b; }
+.resumen-item strong { font-size: 1.1rem; font-weight: 800; color: #0f172a; }
+.resumen-ok strong   { color: #17a34a; }
+.resumen-warn strong { color: #d97706; }
+.resumen-danger strong { color: #b02a37; }
+.resumen-credito strong { color: #059669; }
+.resumen-sep { display: none; }
+.resumen-note {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.4rem 0.75rem; border-radius: 10px;
+    background: rgba(5,150,105,0.08); color: #065f46;
+    font-size: 0.8rem; font-weight: 600;
+    border: 1px solid rgba(5,150,105,0.15);
+    grid-column: 1 / -1;
+}
+
+/* ── BUTTONS ── */
+.dist-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.dist-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.85rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+.distribution-side-summary {
+    min-width: 220px;
+    padding: 0.85rem 1rem;
+    border-radius: 18px;
+    border: 1px solid rgba(0,107,181,0.18);
+    background: linear-gradient(135deg, rgba(0,107,181,0.08), #ffffff);
+}
+.distribution-side-summary span,
+.distribution-side-summary small {
+    display: block;
+    color: #6b8095;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+.distribution-side-summary strong {
+    display: block;
+    margin: 0.22rem 0;
+    color: var(--n-blue, #006bb5);
+    font-size: 1.45rem;
+    line-height: 1;
+    letter-spacing: -0.03em;
+}
+.distribution-side-summary small {
+    font-size: 0.74rem;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.distribution-summary {
+    grid-template-columns: 1fr;
+}
+.secondary-btn, .ghost-btn, .confirm-btn {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0 1rem; min-height: 44px; border-radius: 14px;
+    font-weight: 700; font-size: 0.88rem; cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.secondary-btn {
+    border: 1px solid var(--n-border, #e2e8f0);
+    background: #fff; color: var(--n-text, #0f172a);
+    box-shadow: 0 4px 12px rgba(15,23,42,0.05);
+}
+.secondary-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(15,23,42,0.09); }
+.ghost-btn {
+    border: 1px solid #e2e8f0; background: transparent; color: #64748b;
+}
+.ghost-btn:hover { background: #f8fafc; }
+.confirm-btn {
+    padding: 0 1.5rem; min-height: 52px; border-radius: 16px; border: none;
+    background: linear-gradient(135deg, var(--n-blue, #006bb5), #2793d4);
+    color: #fff; font-size: 0.95rem; font-weight: 800;
+    box-shadow: 0 12px 26px rgba(0,107,181,0.2);
+}
+.confirm-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 32px rgba(0,107,181,0.28); }
+.confirm-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; box-shadow: none; }
+.secondary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.spin { animation: spin 0.8s linear infinite; }
+
+.step-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+    padding-top: 0.2rem;
+}
+.confirm-review {
+    display: grid;
+    gap: 1rem;
+}
+.confirm-workspace {
+    grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+    align-items: start;
+}
+.confirm-main-panel {
+    display: grid;
+    gap: 1rem;
+}
+.confirm-side-panel {
+    align-self: stretch;
+}
+.selected-invoices {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.6rem;
+}
+.selected-invoices-compact {
+    grid-template-columns: 1fr;
+}
+.selected-invoice-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #e2edf5;
+    border-radius: 14px;
+    background: #ffffff;
+}
+.selected-invoice-item strong {
+    color: #17653f;
+    font-variant-numeric: tabular-nums;
+}
+
+.abono-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1040;
+    background: rgba(10, 26, 47, 0.48);
+    backdrop-filter: blur(5px);
+}
+.abono-confirm-modal {
+    position: fixed;
+    z-index: 1050;
+    top: 50%;
+    left: 50%;
+    width: min(560px, calc(100vw - 2rem));
+    transform: translate(-50%, -50%);
+    border: 1px solid var(--n-border, #d7e4f0);
+    border-radius: 24px;
+    background: #ffffff;
+    box-shadow: 0 32px 70px rgba(15,23,42,0.28);
+    overflow: hidden;
+}
+.confirm-modal-head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.65rem;
+    align-items: start;
+    padding: 1.15rem 1.2rem;
+    border-bottom: 1px solid #edf3f8;
+}
+.confirm-modal-head .section-kicker {
+    grid-column: 1;
+}
+.confirm-modal-head h3 {
+    grid-column: 1;
+    margin: 0;
+    color: var(--n-text, #16324a);
+    font-weight: 800;
+}
+.confirm-modal-head .notice-close {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+}
+.confirm-modal-body {
+    display: grid;
+    gap: 1rem;
+    padding: 1.1rem 1.2rem;
+}
+.confirm-modal-body p {
+    margin: 0;
+    color: var(--n-text-muted, #64748b);
+    line-height: 1.6;
+}
+.confirm-modal-body p strong {
+    color: var(--n-text, #16324a);
+}
+.modal-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+.modal-summary-grid div {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.75rem;
+    border: 1px solid #e2edf5;
+    border-radius: 14px;
+    background: #f9fcff;
+}
+.modal-summary-grid span {
+    color: #6b8095;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.modal-summary-grid strong {
+    color: var(--n-text, #16324a);
+    font-variant-numeric: tabular-nums;
+}
+.final-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.85rem;
+    border-radius: 14px;
+    border: 1px solid rgba(0,107,181,0.16);
+    background: rgba(0,107,181,0.05);
+    color: #35536d;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    cursor: pointer;
+}
+.final-check input {
+    margin-top: 0.2rem;
+}
+.confirm-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 1rem 1.2rem 1.15rem;
+    border-top: 1px solid #edf3f8;
+    flex-wrap: wrap;
+}
+
+/* ── HISTORIAL ── */
+.historial-card { border-color: rgba(5,150,105,0.18); }
+.historial-loading, .historial-empty {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 1.5rem; color: #64748b; font-size: 0.9rem;
+    justify-content: center;
+}
+.historial-summary {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 0.75rem;
+    margin-bottom: 0.75rem; padding: 0.6rem 0.85rem;
+    border-radius: 12px; background: rgba(5,150,105,0.06);
+    border: 1px solid rgba(5,150,105,0.14);
+}
+.historial-badge {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: 0.84rem; font-weight: 700; color: #065f46;
+}
+.historial-total { font-size: 0.84rem; color: #475569; }
+.historial-total strong { color: #065f46; }
+.historial-table thead tr { background: linear-gradient(180deg, #f3fbf7, #e8f6ef); }
+.historial-table thead th { color: #0f6f4e; }
+.history-list {
+    display: grid;
+    gap: 0.75rem;
+}
+.history-item {
+    display: grid;
+    grid-template-columns: minmax(160px, 0.45fr) minmax(0, 1fr) minmax(180px, 0.45fr);
+    gap: 0.85rem;
+    align-items: center;
+    padding: 0.9rem;
+    border: 1px solid rgba(5,150,105,0.16);
+    border-radius: 16px;
+    background: rgba(5,150,105,0.035);
+}
+.history-main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+.history-values {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.history-progress {
+    min-width: 0;
+}
+.status-pill {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    padding: 0.2rem 0.6rem; border-radius: 8px;
+    font-size: 0.78rem; font-weight: 700;
+}
+.status-saldada {
+    background: rgba(5,150,105,0.1); color: #065f46;
+}
+
+/* ── STATE EMPTY ── */
+.state-empty { text-align: center; padding: 2.5rem 1.5rem; }
+.empty-icon { font-size: 2.5rem; color: #cbd5e1; margin-bottom: 0.75rem; }
+.state-empty h3 { margin: 0 0 0.5rem; color: #64748b; }
+.state-empty p { margin: 0; color: #94a3b8; font-size: 0.9rem; }
+
+/* ── RESPONSIVE ── */
+@@media (max-width: 1180px) {
+    .cartera-insights,
+    .process-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .step-workspace,
+    .confirm-workspace,
+    .distribution-workbench {
+        grid-template-columns: 1fr;
+    }
+
+    .cartera-insights {
+        grid-template-columns: 1fr;
+    }
+    .invoice-list-head,
+    .invoice-row,
+    .history-item {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+    }
+    .invoice-list-head {
+        display: none;
+    }
+    .top-client-item {
+        grid-template-columns: 1fr;
+    }
+    .invoice-col {
+        gap: 0.25rem;
+    }
+    .invoice-col-label {
+        display: inline-flex;
+    }
+    .invoice-col-value,
+    .invoice-col-apply {
+        padding: 0.55rem 0.7rem;
+        border: 1px solid #e2edf5;
+        border-radius: 14px;
+        background: #ffffff;
+    }
+    .distribution-summary-split {
+        grid-template-columns: 1fr;
+    }
+    .distribution-summary-actions .confirm-btn {
+        width: 100%;
+        min-width: 0;
+    }
+    .cartera-pagination {
+        align-items: flex-start;
+    }
+}
+@@media (max-width: 960px) {
+    .abono-hero { grid-template-columns: 1fr; }
+    .hero-stats { grid-template-columns: repeat(2, 1fr); }
+    .process-strip { grid-template-columns: 1fr; }
+    .cartera-toolbar-main { flex-direction: column; align-items: stretch; }
+    .cartera-toolbar-heading { flex-direction: column; align-items: flex-start; }
+    .payment-layout { grid-template-columns: 1fr; }
+    .payment-fields-inline { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+    .form-field-wide { grid-column: 1; }
+    .dist-footer { flex-direction: column; align-items: stretch; }
+    .confirm-panel {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+    }
+    .confirm-panel .confirm-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .dist-resumen {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .confirm-btn { width: 100%; justify-content: center; }
+    .dist-toolbar {
+        align-items: stretch;
+    }
+    .dist-toolbar > *,
+    .distribution-side-summary {
+        width: 100%;
+    }
+    .dist-resumen-compact {
+        grid-template-columns: 1fr;
+    }
+}
+@@media (max-width: 640px) {
+    .aging-bars,
+    .hero-stats { grid-template-columns: 1fr 1fr; }
+    .dist-actions { width: 100%; }
+    .secondary-btn, .ghost-btn { flex: 1; justify-content: center; }
+    .invoice-values,
+    .history-values,
+    .dist-resumen,
+    .modal-summary-grid {
+        grid-template-columns: 1fr;
+    }
+    .step-actions,
+    .confirm-modal-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+@@media (max-width: 760px) {
+    .abono-hero,
+    .abono-form-card,
+    .abono-dist-card {
+        border-radius: 20px;
+    }
+
+    .abono-hero,
+    .abono-form-card,
+    .abono-dist-card {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .abono-hero h2 {
+        font-size: 1.42rem;
+    }
+
+    .stat-card strong {
+        font-size: 1.18rem;
+    }
+
+    .dist-table-wrap {
+        overflow-x: visible;
+    }
+
+    .saldo-detalle-card {
+        overflow-x: visible;
+    }
+
+    .saldo-table,
+    .saldo-table tbody,
+    .saldo-table tr,
+    .saldo-table td {
+        display: block;
+        width: 100%;
+    }
+
+    .saldo-table thead {
+        display: none;
+    }
+
+    .saldo-table tr {
+        padding: 0.75rem 0;
+        border-bottom: 1px solid rgba(5,150,105,0.12);
+    }
+
+    .saldo-table tr:last-child {
+        border-bottom: 0;
+    }
+
+    .saldo-table td {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.35rem 0;
+        border-bottom: 0;
+    }
+
+    .saldo-table td::before {
+        content: attr(data-label);
+        color: #0f6f4e;
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .dist-table,
+    .dist-table tbody,
+    .dist-table tr,
+    .dist-table td {
+        display: block;
+        width: 100%;
+    }
+
+    .dist-table thead,
+    .dist-table tfoot {
+        display: none;
+    }
+
+    .dist-table tbody tr {
+        padding: 0.85rem 0;
+        border-bottom: 1px solid #e5eef6;
+    }
+
+    .dist-table tbody tr:last-child {
+        border-bottom: 0;
+    }
+
+    .dist-table tbody td {
+        padding: 0.45rem 0;
+        border-bottom: 0;
+    }
+
+    .dist-table tbody td::before {
+        content: attr(data-label);
+        display: block;
+        margin-bottom: 0.2rem;
+        color: #6b8095;
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+    }
+
+    .value-stack {
+        grid-template-columns: 1fr;
+        gap: 0.38rem;
+    }
+
+    .value-stack span {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.45rem 0.6rem;
+        border: 1px solid #e4edf5;
+        border-radius: 12px;
+        background: #f9fbfe;
+    }
+
+    .progress-cell,
+    .abono-input-cell {
+        min-width: 0;
+        width: 100%;
+    }
+}
+</style>
+
+@code {
+    private const string TutorialAbonosId = "cuentas-por-cobrar-abonos";
+    private enum FiltroCartera
+    {
+        Todas,
+        Vencidas,
+        PorVencer,
+        Vigentes
+    }
+
+    private enum OrdenFacturasPendientes
+    {
+        MasUrgentes,
+        MasRecientes
+    }
+
+    /* ── Estado UI ── */
+    private string filtroBusqueda = "";
+    private decimal montoRecibido;
+    private string observacion = "";
+    private bool buscando = false;
+    private bool cargando = false;
+    private bool cargandoHistorial = false;
+    private bool mostrarHistorial = false;
+    private bool mostrarDetalleSaldo = false;
+    private bool usarSaldoAFavor = false;
+    private int pasoActual = 1;
+    private bool mostrarConfirmacionFinal = false;
+    private bool confirmacionFinalAceptada = false;
+    private string? mensajeExito;
+    private string? mensajeError;
+    private int currentUserId;
+    private bool isDemoMode;
+    private TutorialDefinition? _tutorialAbonos;
+    private bool _mostrarTutorialAbonos;
+    private bool _tutorialAbonosEvaluado;
+    private bool _tutorialLanzadoDesdeCatalogo;
+    private string? _firmaTutorialActual;
+    private FiltroCartera filtroCarteraActual = FiltroCartera.Todas;
+    private string clienteFiltroCartera = "TODOS";
+    private string vencimientoFiltroCartera = "TODOS";
+    private string saldoFiltroCartera = "TODOS";
+    private OrdenFacturasPendientes ordenFacturasPendientesActual = OrdenFacturasPendientes.MasUrgentes;
+
+    /* ── Cliente y facturas ── */
+    private List<FacturaPendienteVM> sugerencias = new();
+    private FacturaPendienteVM? clienteSeleccionado;
+    private FacturaPendienteVM? facturaCarteraSeleccionada;
+    private List<FacturaPendienteVM> facturasPendientes = new();
+    private List<FacturaPendienteVM> carteraPendiente = new();
+    private int _searchVersion;
+    private const int CarteraPageSize = 8;
+    private const int FacturasPageSize = 6;
+    private int carteraPage = 1;
+    private int facturasPage = 1;
+
+    /* ── Saldo a favor ── */
+    private decimal saldoAFavorCliente = 0m;
+    private List<SaldoAFavorVM> detalleSaldoAFavor = new();
+
+    /* ── Historial de saldadas ── */
+    private List<FacturaHistorialVM> historialSaldadas = new();
+
+    /* ── Distribución manual: IdFactura → monto a abonar ── */
+    private Dictionary<int, decimal> abonosDistribucion = new();
+    /* ── Calculados ── */
+    private decimal TotalDistribuido => abonosDistribucion.Values.Sum();
+    /// <summary>
+    /// Monto total disponible para distribuir = lo recibido en caja
+    /// + el saldo a favor del cliente (si se activó el toggle).
+    /// </summary>
+    private decimal MontoDisponibleTotal => montoRecibido + (usarSaldoAFavor ? saldoAFavorCliente : 0);
+    private decimal SaldoRestante => MontoDisponibleTotal - TotalDistribuido;
+    private decimal SaldoPendienteTotal => facturasPendientes.Sum(f => f.SaldoPendiente);
+    private int TotalFacturasPendientes => carteraPendiente.Count;
+    private int ClientesConSaldo => carteraPendiente.Select(f => f.IdCliente).Distinct().Count();
+    private decimal SaldoCarteraTotal => carteraPendiente.Sum(f => f.SaldoPendiente);
+    private FacturaPendienteVM? FacturaCarteraSeleccionada => facturaCarteraSeleccionada;
+    private List<FacturaPendienteVM> ClientesFiltroCartera =>
+        carteraPendiente
+            .GroupBy(f => f.IdCliente)
+            .Select(group => group
+                .OrderBy(x => x.NombreCliente, StringComparer.OrdinalIgnoreCase)
+                .First())
+            .OrderBy(x => x.NombreCliente, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    private List<FacturaPendienteVM> CarteraPendienteFiltradaPorEstado =>
+        filtroCarteraActual switch
+        {
+            FiltroCartera.Vencidas => FacturasVencidas.ToList(),
+            FiltroCartera.PorVencer => FacturasPorVencer.ToList(),
+            FiltroCartera.Vigentes => FacturasVigentes.ToList(),
+            _ => carteraPendiente
+        };
+    private List<FacturaPendienteVM> CarteraPendienteVisibleLista =>
+        CarteraPendienteFiltradaPorEstado
+            .Where(CumpleBusquedaCartera)
+            .Where(CumpleClienteFiltroCartera)
+            .Where(CumpleVencimientoFiltroCartera)
+            .Where(CumpleSaldoFiltroCartera)
+            .ToList();
+    private OrdenFacturasPendientes OrdenFacturasPendientesActual
+    {
+        get => ordenFacturasPendientesActual;
+        set
+        {
+            if (ordenFacturasPendientesActual == value)
+                return;
+
+            ordenFacturasPendientesActual = value;
+            facturasPage = 1;
+        }
+    }
+    private int CarteraTotalPaginas => Math.Max((int)Math.Ceiling(CarteraPendienteVisibleLista.Count / (double)CarteraPageSize), 1);
+    private int CarteraPaginaActual => Math.Clamp(carteraPage, 1, CarteraTotalPaginas);
+    private int CarteraInicioRegistro => CarteraPendienteVisibleLista.Count == 0 ? 0 : ((CarteraPaginaActual - 1) * CarteraPageSize) + 1;
+    private int CarteraFinRegistro => Math.Min(CarteraPaginaActual * CarteraPageSize, CarteraPendienteVisibleLista.Count);
+    private IEnumerable<FacturaPendienteVM> CarteraPendientePaginaActual =>
+        CarteraPendienteVisibleLista.Skip((CarteraPaginaActual - 1) * CarteraPageSize).Take(CarteraPageSize);
+    private int DiasPromedioCobro =>
+        carteraPendiente.Where(f => f.FechaEmision.HasValue).Any()
+            ? (int)Math.Round(carteraPendiente.Where(f => f.FechaEmision.HasValue)
+                .Average(f => (DateTime.Today - f.FechaEmision!.Value.Date).TotalDays))
+            : 0;
+    private IEnumerable<FacturaPendienteVM> FacturasVencidas =>
+        carteraPendiente.Where(f => f.FechaVencimiento.HasValue && f.FechaVencimiento.Value.Date < DateTime.Today);
+    private IEnumerable<FacturaPendienteVM> FacturasPorVencer =>
+        carteraPendiente.Where(f => f.FechaVencimiento.HasValue &&
+                                    f.FechaVencimiento.Value.Date >= DateTime.Today &&
+                                    f.FechaVencimiento.Value.Date <= DateTime.Today.AddDays(30));
+    private IEnumerable<FacturaPendienteVM> FacturasVigentes =>
+        carteraPendiente.Where(f => !f.FechaVencimiento.HasValue || f.FechaVencimiento.Value.Date > DateTime.Today.AddDays(30));
+    private decimal SaldoVencido => FacturasVencidas.Sum(f => f.SaldoPendiente);
+    private decimal SaldoPorVencer => FacturasPorVencer.Sum(f => f.SaldoPendiente);
+    private decimal SaldoVigente => Math.Max(SaldoCarteraTotal - SaldoVencido - SaldoPorVencer, 0m);
+    private List<CarteraSegmento> CarteraSegmentos =>
+    [
+        CrearSegmentoCartera("Vencidas", SaldoVencido, "#ef5b62"),
+        CrearSegmentoCartera("Por vencer", SaldoPorVencer, "#f5a623"),
+        CrearSegmentoCartera("Vigentes", SaldoVigente, "#1eaa72")
+    ];
+    private IReadOnlyList<string> ResumenChartLabels => CarteraSegmentos.Select(x => x.Label).ToList();
+    private IReadOnlyList<decimal> ResumenChartValues => CarteraSegmentos.Select(x => x.Valor).ToList();
+    private IReadOnlyList<string> ResumenChartColors => CarteraSegmentos.Select(x => x.Color).ToList();
+    private IReadOnlyList<string> AntiguedadChartLabels => AntiguedadSaldoBarras.Select(x => x.Label).ToList();
+    private IReadOnlyList<decimal> AntiguedadChartValues => AntiguedadSaldoBarras.Select(x => x.Valor).ToList();
+    private IReadOnlyList<string> AntiguedadChartColors => AntiguedadSaldoBarras.Select(x => x.Color).ToList();
+    private IReadOnlyList<string> TopClientesChartLabels => TopClientesSaldo.Select(x => x.NombreCliente).ToList();
+    private IReadOnlyList<decimal> TopClientesChartValues => TopClientesSaldo.Select(x => x.Saldo).ToList();
+    private IReadOnlyList<string> TopClientesChartColors => TopClientesSaldo.Select(x => x.Color).ToList();
+
+    private string CarteraRingStyle
+    {
+        get
+        {
+            if (SaldoCarteraTotal <= 0)
+                return "background: conic-gradient(#dce8f1 0 100%);";
+
+            var vencido = PorcentajeSegmento(SaldoVencido);
+            var porVencer = vencido + PorcentajeSegmento(SaldoPorVencer);
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"background: conic-gradient(#ef5b62 0 {vencido:F2}%, #f5a623 {vencido:F2}% {porVencer:F2}%, #1eaa72 {porVencer:F2}% 100%);");
+        }
+    }
+
+    private decimal PorcentajeSegmento(decimal valor) =>
+        SaldoCarteraTotal <= 0 ? 0m : Math.Clamp(valor / SaldoCarteraTotal * 100m, 0m, 100m);
+
+    private sealed class TopClienteSaldoVM
+    {
+        public int Rank { get; set; }
+        public string NombreCliente { get; set; } = string.Empty;
+        public string Identificacion { get; set; } = string.Empty;
+        public decimal Saldo { get; set; }
+        public decimal PercentCss { get; set; }
+        public string Color { get; set; } = "#006bb5";
+    }
+
+    private sealed class SaldoBarraVM
+    {
+        public string Label { get; set; } = string.Empty;
+        public decimal Valor { get; set; }
+        public decimal PercentCss { get; set; }
+        public string Color { get; set; } = "#006bb5";
+    }
+
+    private List<TopClienteSaldoVM> TopClientesSaldo
+    {
+        get
+        {
+            var grupos = carteraPendiente
+                .GroupBy(f => new { f.IdCliente, Nombre = f.NombreCliente ?? "Cliente", Id = f.NumeroIdentificacion ?? "-" })
+                .Select(g => new { g.Key.Nombre, g.Key.Id, Saldo = g.Sum(x => x.SaldoPendiente) })
+                .OrderByDescending(x => x.Saldo)
+                .Take(5)
+                .ToList();
+
+            var maxSaldo = grupos.FirstOrDefault()?.Saldo ?? 0m;
+            var palette = new[] { "#006bb5", "#1d4ed8", "#10b981", "#f59e0b", "#ef4444" };
+
+            return grupos.Select((g, index) => new TopClienteSaldoVM
+            {
+                Rank = index + 1,
+                NombreCliente = g.Nombre,
+                Identificacion = g.Id,
+                Saldo = g.Saldo,
+                PercentCss = maxSaldo <= 0 ? 0m : Math.Clamp(g.Saldo / maxSaldo * 100m, 0m, 100m),
+                Color = palette[index % palette.Length]
+            }).ToList();
+        }
+    }
+
+    private List<SaldoBarraVM> AntiguedadSaldoBarras
+    {
+        get
+        {
+            var hoy = DateTime.Today;
+            var barras = new List<SaldoBarraVM>
+            {
+                CrearBarraAntiguedad("0 - 30 dias", carteraPendiente.Where(f => ObtenerDiasAntiguedad(f, hoy) <= 30).Sum(f => f.SaldoPendiente), "#3b82f6"),
+                CrearBarraAntiguedad("31 - 60 dias", carteraPendiente.Where(f => ObtenerDiasAntiguedad(f, hoy) is > 30 and <= 60).Sum(f => f.SaldoPendiente), "#f59e0b"),
+                CrearBarraAntiguedad("61 - 90 dias", carteraPendiente.Where(f => ObtenerDiasAntiguedad(f, hoy) is > 60 and <= 90).Sum(f => f.SaldoPendiente), "#2563eb"),
+                CrearBarraAntiguedad("Mas de 90 dias", carteraPendiente.Where(f => ObtenerDiasAntiguedad(f, hoy) > 90).Sum(f => f.SaldoPendiente), "#ef4444")
+            };
+
+            var maximo = barras.Max(x => x.Valor);
+            foreach (var barra in barras)
+                barra.PercentCss = maximo <= 0 ? 8m : Math.Max(8m, Math.Clamp(barra.Valor / maximo * 100m, 0m, 100m));
+
+            return barras;
+        }
+    }
+
+    private int FacturasTotalPaginas => Math.Max((int)Math.Ceiling(facturasPendientes.Count / (double)FacturasPageSize), 1);
+    private int FacturasPaginaActual => Math.Clamp(facturasPage, 1, FacturasTotalPaginas);
+    private int FacturasInicioRegistro => facturasPendientes.Count == 0 ? 0 : ((FacturasPaginaActual - 1) * FacturasPageSize) + 1;
+    private int FacturasFinRegistro => Math.Min(FacturasPaginaActual * FacturasPageSize, facturasPendientes.Count);
+    private IEnumerable<FacturaPendienteVM> FacturasPendientesOrdenadas =>
+        ordenFacturasPendientesActual == OrdenFacturasPendientes.MasRecientes
+            ? facturasPendientes
+                .OrderByDescending(ObtenerFechaUrgenciaFactura)
+                .ThenByDescending(f => f.IdFactura)
+            : facturasPendientes
+                .OrderBy(ObtenerFechaUrgenciaFactura)
+                .ThenBy(f => f.IdFactura);
+    private IEnumerable<FacturaPendienteVM> FacturasPendientesPaginaActual =>
+        FacturasPendientesOrdenadas.Skip((FacturasPaginaActual - 1) * FacturasPageSize).Take(FacturasPageSize);
+
+    private CarteraSegmento CrearSegmentoCartera(string label, decimal valor, string color)
+    {
+        var porcentaje = PorcentajeSegmento(valor);
+        return new CarteraSegmento
+        {
+            Label = label,
+            Valor = valor,
+            Color = color,
+            PercentCss = porcentaje.ToString("0.##", CultureInfo.InvariantCulture),
+            PercentLabel = $"{porcentaje:0.#}%"
+        };
+    }
+
+    private bool PuedeIrADistribucion => clienteSeleccionado != null && MontoDisponibleTotal > 0;
+    private bool PuedeProcesar =>
+        clienteSeleccionado != null &&
+        MontoDisponibleTotal > 0 &&
+        TotalDistribuido > 0 &&
+        TotalDistribuido <= MontoDisponibleTotal &&
+        !abonosDistribucion.Any(kv => {
+            var fac = facturasPendientes.FirstOrDefault(f => f.IdFactura == kv.Key);
+            return fac != null && kv.Value > fac.SaldoPendiente;
+        });
+    private IEnumerable<(FacturaPendienteVM Factura, decimal Abono)> FacturasConAbono =>
+        facturasPendientes
+            .Select(f => (Factura: f, Abono: abonosDistribucion.TryGetValue(f.IdFactura, out var abono) ? abono : 0m))
+            .Where(x => x.Abono > 0);
+    private int FacturasConAbonoCount => abonosDistribucion.Count(kv => kv.Value > 0);
+    private string FacturasPendientesConSaldoTexto =>
+        FacturasConAbonoCount > 0
+            ? $"{FacturasConAbonoCount} factura(s) ya tienen valor capturado."
+            : "Aún no ha registrado abonos manuales.";
+
+    private string GetPasoClase(int paso)
+    {
+        var clases = new List<string>();
+
+        if (pasoActual == paso)
+            clases.Add("is-active");
+
+        if (paso < pasoActual && PasoCompletado(paso))
+            clases.Add("is-done");
+
+        return string.Join(" ", clases);
+    }
+
+    private bool PasoCompletado(int paso) => paso switch
+    {
+        1 => clienteSeleccionado != null,
+        2 => PuedeIrADistribucion,
+        3 => TotalDistribuido > 0,
+        4 => PuedeProcesar,
+        _ => false
+    };
+
+    private void IrAlPaso(int paso)
+    {
+        if (paso == 1)
+        {
+            pasoActual = 1;
+            mostrarConfirmacionFinal = false;
+            return;
+        }
+
+        if (paso == 2 && clienteSeleccionado != null)
+        {
+            pasoActual = 2;
+            mostrarConfirmacionFinal = false;
+            return;
+        }
+
+        if (paso == 3 && PuedeIrADistribucion)
+        {
+            pasoActual = 3;
+            mostrarConfirmacionFinal = false;
+            return;
+        }
+
+        if (paso == 4 && PuedeProcesar)
+        {
+            pasoActual = 4;
+            mostrarConfirmacionFinal = false;
+        }
+    }
+
+    private void ContinuarADistribucion()
+    {
+        if (!PuedeIrADistribucion)
+        {
+            mensajeError = "Seleccione un cliente e ingrese un monto mayor a cero.";
+            return;
+        }
+
+        mensajeError = null;
+        pasoActual = 3;
+    }
+
+    private void AbrirConfirmacionFinal()
+    {
+        if (!PuedeProcesar)
+        {
+            mensajeError = "Revise la distribucion antes de confirmar el abono.";
+            return;
+        }
+
+        confirmacionFinalAceptada = false;
+        mostrarConfirmacionFinal = true;
+    }
+
+    private void CerrarConfirmacionFinal()
+    {
+        if (cargando)
+            return;
+
+        mostrarConfirmacionFinal = false;
+        confirmacionFinalAceptada = false;
+    }
+
+    private string GetSaldoRestanteDescripcion()
+    {
+        if (SaldoRestante < 0)
+            return "La distribución supera lo disponible.";
+
+        if (SaldoRestante == 0)
+            return "El monto quedó distribuido por completo.";
+
+        return "Este valor se guardará como saldo a favor.";
+    }
+
+    private async Task ProcesarPagoConfirmado()
+    {
+        if (!confirmacionFinalAceptada || !PuedeProcesar)
+            return;
+
+        await ProcesarPago();
+    }
+
+    /* ── Búsqueda predictiva ── */
+    private System.Threading.CancellationTokenSource? _cts;
+
+    [SupplyParameterFromQuery(Name = "tutorial")]
+    public string? TutorialQuery { get; set; }
+
+    [SupplyParameterFromQuery(Name = "forceTutorial")]
+    public bool ForceTutorial { get; set; }
+
+    [SupplyParameterFromQuery(Name = "clienteId")]
+    public int? ClienteIdQuery { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tutorialAbonos = TutorialRegistry.GetById(TutorialAbonosId);
+        isDemoMode = EsRutaDemoAbonos();
+
+        if (isDemoMode)
+        {
+            CargarDemoAbonos();
+            _tutorialAbonosEvaluado = true;
+            return;
+        }
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        if (!int.TryParse(idClaim, out currentUserId) || currentUserId <= 0)
+        {
+            Navigation.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId);
+    }
+
+    protected override void OnParametersSet()
+    {
+        var firmaActual = $"{TutorialQuery}|{ForceTutorial}";
+
+        if (!string.Equals(_firmaTutorialActual, firmaActual, StringComparison.Ordinal))
+        {
+            _firmaTutorialActual = firmaActual;
+            _tutorialAbonosEvaluado = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await RenderCarteraChartsAsync();
+
+        if (isDemoMode)
+            return;
+
+        await IntentarSeleccionarClienteDesdeQueryAsync();
+
+        if (_tutorialAbonosEvaluado || _tutorialAbonos is null || currentUserId <= 0)
+            return;
+
+        var lanzamientoForzado =
+            ForceTutorial &&
+            string.Equals(TutorialQuery, TutorialAbonosId, StringComparison.OrdinalIgnoreCase);
+
+        var debeAutoIniciar = lanzamientoForzado ||
+                              await TutorialStateService.ShouldAutoStartAsync(TutorialAbonosId);
+
+        _tutorialAbonosEvaluado = true;
+
+        if (!debeAutoIniciar)
+            return;
+
+        _tutorialLanzadoDesdeCatalogo = lanzamientoForzado;
+        _mostrarTutorialAbonos = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task IntentarSeleccionarClienteDesdeQueryAsync()
+    {
+        if (!ClienteIdQuery.HasValue || currentUserId <= 0)
+            return;
+
+        if (clienteSeleccionado?.IdCliente == ClienteIdQuery.Value)
+            return;
+
+        var cliente = carteraPendiente.FirstOrDefault(x => x.IdCliente == ClienteIdQuery.Value);
+        if (cliente is null)
+            return;
+
+        clienteFiltroCartera = ClienteIdQuery.Value.ToString(CultureInfo.InvariantCulture);
+        OnCarteraFiltroChanged();
+        await SeleccionarCliente(cliente);
+        await InvokeAsync(StateHasChanged);
+        await JS.InvokeVoidAsync(
+            "eval",
+            "requestAnimationFrame(() => { document.getElementById('registro-abono-paso-2')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });");
+    }
+
+    private async Task RenderCarteraChartsAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("numericaCarteraCharts.render", new
+            {
+                resumen = new
+                {
+                    labels = ResumenChartLabels,
+                    values = ResumenChartValues,
+                    colors = ResumenChartColors
+                },
+                antiguedad = new
+                {
+                    labels = AntiguedadChartLabels,
+                    values = AntiguedadChartValues,
+                    colors = AntiguedadChartColors
+                },
+                topClientes = new
+                {
+                    labels = TopClientesChartLabels,
+                    values = TopClientesChartValues,
+                    colors = TopClientesChartColors
+                }
+            });
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task OnFiltroInput(ChangeEventArgs e)
+    {
+        filtroBusqueda = e.Value?.ToString() ?? "";
+        carteraPage = 1;
+        ValidarFacturaSeleccionadaCartera();
+        sugerencias.Clear();
+        mensajeError = null;
+
+        var filtroNormalizado = filtroBusqueda.Trim();
+        var nombreClienteSeleccionado = clienteSeleccionado?.NombreCliente?.Trim() ?? string.Empty;
+
+        if (clienteSeleccionado != null &&
+            !string.Equals(filtroNormalizado, nombreClienteSeleccionado, StringComparison.OrdinalIgnoreCase))
+        {
+            ResetClienteSeleccionado();
+        }
+
+        _cts?.Cancel();
+        _cts = null;
+
+        if (filtroNormalizado.Length < 2)
+        {
+            buscando = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        if (isDemoMode)
+        {
+            sugerencias = ObtenerClientesDemoBusqueda()
+                .Where(x =>
+                    x.NombreCliente.Contains(filtroNormalizado, StringComparison.OrdinalIgnoreCase) ||
+                    x.NumeroIdentificacion.Contains(filtroNormalizado, StringComparison.OrdinalIgnoreCase) ||
+                    x.NumFactura.Contains(filtroNormalizado, StringComparison.OrdinalIgnoreCase))
+                .Take(8)
+                .ToList();
+            buscando = false;
+            return;
+        }
+
+        _cts = new System.Threading.CancellationTokenSource();
+        var token = _cts.Token;
+        var searchVersion = ++_searchVersion;
+
+        buscando = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            await Task.Delay(180, token);
+            var resultados = await AbonoService.GetFacturasCreditoPendientes(currentUserId, filtroNormalizado);
+            token.ThrowIfCancellationRequested();
+
+            if (searchVersion != _searchVersion)
+                return;
+
+            sugerencias = resultados
+                .Take(8)
+                .ToList();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (searchVersion != _searchVersion)
+                return;
+
+            mensajeError = $"No se pudo completar la búsqueda del cliente. {ex.Message}";
+            sugerencias.Clear();
+        }
+        finally
+        {
+            if (searchVersion == _searchVersion)
+            {
+                buscando = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private void CambiarFiltroCartera(FiltroCartera filtro)
+    {
+        filtroCarteraActual = filtro;
+        OnCarteraFiltroChanged();
+    }
+
+    private string GetFiltroCarteraClase(FiltroCartera filtro) =>
+        filtroCarteraActual == filtro ? "is-active" : string.Empty;
+
+    private void OnCarteraFiltroChanged()
+    {
+        carteraPage = 1;
+        ValidarFacturaSeleccionadaCartera();
+    }
+
+    private void LimpiarFiltrosCartera()
+    {
+        filtroCarteraActual = FiltroCartera.Todas;
+        clienteFiltroCartera = "TODOS";
+        vencimientoFiltroCartera = "TODOS";
+        saldoFiltroCartera = "TODOS";
+        OnCarteraFiltroChanged();
+    }
+
+    private void ValidarFacturaSeleccionadaCartera()
+    {
+        if (facturaCarteraSeleccionada is not null &&
+            !CarteraPendienteVisibleLista.Any(x => x.IdFactura == facturaCarteraSeleccionada.IdFactura))
+        {
+            facturaCarteraSeleccionada = null;
+        }
+    }
+
+    private bool CumpleBusquedaCartera(FacturaPendienteVM factura) =>
+        string.IsNullOrWhiteSpace(filtroBusqueda) ||
+        (factura.NombreCliente?.Contains(filtroBusqueda, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (factura.NumeroIdentificacion?.Contains(filtroBusqueda, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (factura.NumFactura?.Contains(filtroBusqueda, StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private bool CumpleClienteFiltroCartera(FacturaPendienteVM factura) =>
+        clienteFiltroCartera == "TODOS" ||
+        (int.TryParse(clienteFiltroCartera, out var idCliente) && factura.IdCliente == idCliente);
+
+    private bool CumpleVencimientoFiltroCartera(FacturaPendienteVM factura) =>
+        vencimientoFiltroCartera switch
+        {
+            "CON_FECHA" => factura.FechaVencimiento.HasValue,
+            "SIN_FECHA" => !factura.FechaVencimiento.HasValue,
+            "ESTA_SEMANA" => factura.FechaVencimiento.HasValue &&
+                             factura.FechaVencimiento.Value.Date >= DateTime.Today &&
+                             factura.FechaVencimiento.Value.Date <= DateTime.Today.AddDays(7),
+            _ => true
+        };
+
+    private bool CumpleSaldoFiltroCartera(FacturaPendienteVM factura) =>
+        saldoFiltroCartera switch
+        {
+            "BAJO" => factura.SaldoPendiente <= 50m,
+            "MEDIO" => factura.SaldoPendiente > 50m && factura.SaldoPendiente <= 200m,
+            "ALTO" => factura.SaldoPendiente > 200m,
+            _ => true
+        };
+
+    private void SeleccionarFacturaCartera(FacturaPendienteVM factura)
+    {
+        facturaCarteraSeleccionada = factura;
+    }
+
+    private async Task RegistrarAbonoDesdeFila(FacturaPendienteVM factura)
+    {
+        facturaCarteraSeleccionada = factura;
+        await RegistrarAbonoDesdeCartera();
+    }
+
+    private async Task RegistrarAbonoDesdeCartera()
+    {
+        if (facturaCarteraSeleccionada is not null)
+        {
+            await SeleccionarCliente(facturaCarteraSeleccionada);
+            await InvokeAsync(StateHasChanged);
+            await JS.InvokeVoidAsync(
+                "eval",
+                "requestAnimationFrame(() => { document.querySelector('[data-tour=\"abonos.form\"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });");
+        }
+    }
+
+    private async Task SeleccionarCliente(FacturaPendienteVM item)
+    {
+        facturaCarteraSeleccionada = item;
+
+        if (isDemoMode)
+        {
+            AplicarClienteDemo(item.IdCliente);
+            return;
+        }
+
+        _cts?.Cancel();
+        _cts = null;
+        buscando = false;
+        clienteSeleccionado = item;
+        filtroBusqueda = item.NombreCliente ?? "";
+        sugerencias.Clear();
+        mensajeError = null;
+        usarSaldoAFavor = false;
+        mostrarHistorial = false;
+        mostrarDetalleSaldo = false;
+
+        // EF Core no permite operaciones concurrentes en el mismo DbContext:
+        // se deben ejecutar en secuencia, no con Task.WhenAll.
+        facturasPendientes = await AbonoService.GetFacturasCreditoPendientes(currentUserId, item.IdCliente);
+        facturasPage = 1;
+        saldoAFavorCliente = await AbonoService.GetSaldoAFavor(currentUserId, item.IdCliente);
+        detalleSaldoAFavor = await AbonoService.GetDetalleSaldoAFavor(currentUserId, item.IdCliente);
+        abonosDistribucion.Clear();
+        montoRecibido = 0;
+        observacion = "";
+        pasoActual = 2;
+    }
+
+    private static string FormatearFechaCartera(DateTime? fecha) =>
+        fecha.HasValue ? fecha.Value.ToString("dd/MM/yyyy") : "-";
+
+    private static string GetEstadoCartera(FacturaPendienteVM factura)
+    {
+        if (!factura.FechaVencimiento.HasValue)
+            return "Vigente";
+
+        var dias = (factura.FechaVencimiento.Value.Date - DateTime.Today).Days;
+        return dias < 0 ? "Vencida" : dias <= 30 ? "Por vencer" : "Vigente";
+    }
+
+    private static string GetEstadoCarteraClase(FacturaPendienteVM factura) =>
+        GetEstadoCartera(factura) switch
+        {
+            "Vencida" => "cartera-status is-overdue",
+            "Por vencer" => "cartera-status is-warning",
+            _ => "cartera-status is-current"
+        };
+
+    private static string GetResumenFacturaPendiente(FacturaPendienteVM factura)
+    {
+        var estado = GetEstadoCartera(factura);
+        return factura.FechaVencimiento.HasValue
+            ? $"{estado} · vence {factura.FechaVencimiento.Value:dd/MM/yyyy}"
+            : $"Factura pendiente · emitida {FormatearFechaCartera(factura.FechaEmision)}";
+    }
+
+    private static int ObtenerDiasAntiguedad(FacturaPendienteVM factura, DateTime hoy)
+    {
+        var fechaBase = factura.FechaVencimiento ?? factura.FechaEmision ?? hoy;
+        return Math.Max((hoy.Date - fechaBase.Date).Days, 0);
+    }
+
+    private static DateTime ObtenerFechaUrgenciaFactura(FacturaPendienteVM factura) =>
+        factura.FechaVencimiento?.Date
+        ?? factura.FechaEmision?.Date
+        ?? DateTime.MaxValue.Date;
+
+    private static SaldoBarraVM CrearBarraAntiguedad(string label, decimal valor, string color) =>
+        new()
+        {
+            Label = label,
+            Valor = valor,
+            Color = color
+        };
+
+    private void CarteraPaginaAnterior()
+    {
+        if (carteraPage > 1)
+            carteraPage--;
+    }
+
+    private void CarteraPaginaSiguiente()
+    {
+        if (carteraPage < CarteraTotalPaginas)
+            carteraPage++;
+    }
+
+    private void FacturasPaginaAnterior()
+    {
+        if (facturasPage > 1)
+            facturasPage--;
+    }
+
+    private void FacturasPaginaSiguiente()
+    {
+        if (facturasPage < FacturasTotalPaginas)
+            facturasPage++;
+    }
+
+    private void AsignarMontoRapido(decimal monto)
+    {
+        montoRecibido = Math.Max(Math.Round(monto, 2), 0m);
+        if (pasoActual <= 2)
+            abonosDistribucion.Clear();
+    }
+
+    private decimal ObtenerDisponibleFactura(int idFactura)
+    {
+        var aplicadoActual = abonosDistribucion.TryGetValue(idFactura, out var actual) ? actual : 0m;
+        return Math.Max(MontoDisponibleTotal - (TotalDistribuido - aplicadoActual), 0m);
+    }
+
+    private void AplicarDisponibleEnFactura(int idFactura)
+    {
+        var factura = facturasPendientes.FirstOrDefault(f => f.IdFactura == idFactura);
+        if (factura == null)
+            return;
+
+        var aplicar = Math.Min(factura.SaldoPendiente, ObtenerDisponibleFactura(idFactura));
+        if (aplicar > 0)
+            abonosDistribucion[idFactura] = Math.Round(aplicar, 2);
+        else
+            abonosDistribucion.Remove(idFactura);
+    }
+
+    private void AplicarMaximoEnFactura(int idFactura)
+    {
+        var factura = facturasPendientes.FirstOrDefault(f => f.IdFactura == idFactura);
+        if (factura == null)
+            return;
+
+        abonosDistribucion[idFactura] = Math.Round(factura.SaldoPendiente, 2);
+    }
+
+    private void LimpiarBusqueda()
+    {
+        _cts?.Cancel();
+        _cts = null;
+        buscando = false;
+        _searchVersion++;
+        filtroBusqueda = "";
+        carteraPage = 1;
+        sugerencias.Clear();
+        ResetClienteSeleccionado();
+    }
+
+    private void ResetClienteSeleccionado()
+    {
+        facturaCarteraSeleccionada = null;
+        clienteSeleccionado = null;
+        facturasPendientes.Clear();
+        facturasPage = 1;
+        abonosDistribucion.Clear();
+        montoRecibido = 0;
+        observacion = "";
+        saldoAFavorCliente = 0;
+        detalleSaldoAFavor.Clear();
+        historialSaldadas.Clear();
+        mostrarHistorial = false;
+        mostrarDetalleSaldo = false;
+        usarSaldoAFavor = false;
+        pasoActual = 1;
+        mostrarConfirmacionFinal = false;
+        confirmacionFinalAceptada = false;
+    }
+
+    /* ── Monto ── */
+    private void OnMontoInput(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var val))
+        {
+            montoRecibido = val;
+            if (pasoActual <= 2)
+            {
+                abonosDistribucion.Clear();
+            }
+        }
+    }
+
+    /* ── Distribución manual ── */
+    private void OnAbonoChange(int idFactura, ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var val) && val > 0)
+            abonosDistribucion[idFactura] = val;
+        else
+            abonosDistribucion.Remove(idFactura);
+    }
+
+    private string GetMontoRecibidoInputValue() =>
+        montoRecibido > 0
+            ? montoRecibido.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+            : string.Empty;
+
+    private string GetAbonoInputValue(int idFactura) =>
+        abonosDistribucion.TryGetValue(idFactura, out var abono) && abono > 0
+            ? abono.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+            : string.Empty;
+
+    private void ClearAbono(int idFactura) => abonosDistribucion.Remove(idFactura);
+    private void LimpiarDistribucion() => abonosDistribucion.Clear();
+
+    private void DistribuirAutomatico()
+    {
+        abonosDistribucion.Clear();
+        decimal saldo = MontoDisponibleTotal;
+        foreach (var fac in facturasPendientes)
+        {
+            if (saldo <= 0) break;
+            var aplicar = saldo >= fac.SaldoPendiente ? fac.SaldoPendiente : saldo;
+            abonosDistribucion[fac.IdFactura] = aplicar;
+            saldo -= aplicar;
+        }
+    }
+
+    /* ── Historial ── */
+    private async Task ToggleHistorial()
+    {
+        mostrarHistorial = !mostrarHistorial;
+
+        if (isDemoMode)
+            return;
+
+        if (mostrarHistorial && !historialSaldadas.Any() && clienteSeleccionado != null)
+        {
+            cargandoHistorial = true;
+            StateHasChanged();
+            historialSaldadas = await AbonoService.GetHistorialFacturasSaldadas(currentUserId, clienteSeleccionado.IdCliente);
+            cargandoHistorial = false;
+        }
+    }
+
+    /* ── Procesar pago ── */
+    private async Task ProcesarPago()
+    {
+        if (clienteSeleccionado == null || TotalDistribuido <= 0) return;
+
+        if (isDemoMode)
+        {
+            mensajeExito = null;
+            mensajeError = "Modo demo: el registro de abonos está bloqueado para no alterar información real.";
+            mostrarConfirmacionFinal = false;
+            confirmacionFinalAceptada = false;
+            return;
+        }
+
+        cargando = true;
+        mensajeExito = null;
+        mensajeError = null;
+
+        try
+        {
+            bool resultado = await AbonoService.RegistrarPagoManual(
+                currentUserId,
+                clienteSeleccionado.IdCliente,
+                montoRecibido,
+                abonosDistribucion,
+                observacion,
+                usarSaldoAFavor);
+
+            if (resultado)
+            {
+                decimal saldoSobrante = SaldoRestante;
+                string msgSaldo = saldoSobrante > 0
+                    ? $" Se guardaron ${saldoSobrante:N2} como saldo a favor."
+                    : "";
+
+                mensajeExito = $"¡Abono registrado! Se distribuyeron ${TotalDistribuido:N2} entre {abonosDistribucion.Count} factura(s).{msgSaldo}";
+
+                mostrarConfirmacionFinal = false;
+                confirmacionFinalAceptada = false;
+                abonosDistribucion.Clear();
+                montoRecibido = 0;
+                observacion = "";
+                usarSaldoAFavor = false;
+                mostrarHistorial = false;
+                historialSaldadas.Clear();
+
+                // Recargar datos del cliente (secuencial, no Task.WhenAll)
+                
+                clienteSeleccionado = null;
+                filtroBusqueda = "";
+                facturasPendientes.Clear();
+                saldoAFavorCliente = 0;
+                detalleSaldoAFavor.Clear();
+                pasoActual = 1;
+                LimpiarBusqueda();
+                carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId);
+            }
+            else
+            {
+                mensajeError = "No se pudo procesar el abono. Intente de nuevo.";
+            }
+        }
+        catch (Exception ex)
+        {
+            mensajeError = $"Error interno: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task HandleTutorialAbonosClosedAsync(TutorialCloseResult result)
+    {
+        _mostrarTutorialAbonos = false;
+
+        await TutorialStateService.SaveCloseProgressAsync(
+            result.TutorialId,
+            result.LastStepIndex,
+            result.Completed,
+            result.AutoShowDisabled);
+
+        if (_tutorialLanzadoDesdeCatalogo)
+        {
+            _tutorialLanzadoDesdeCatalogo = false;
+            Navigation.NavigateTo("/cuentas-por-cobrar", replace: true);
+        }
+    }
+
+    private bool EsRutaDemoAbonos() =>
+        Navigation.Uri.Contains("/demo/cuentas-por-cobrar", StringComparison.OrdinalIgnoreCase);
+
+    private void CargarDemoAbonos()
+    {
+        currentUserId = 0;
+        carteraPendiente =
+        [
+            .. ObtenerFacturasDemoCliente(1),
+            .. ObtenerFacturasDemoCliente(2),
+            .. ObtenerFacturasDemoCliente(3)
+        ];
+
+        for (var index = 0; index < carteraPendiente.Count; index++)
+        {
+            carteraPendiente[index].FechaEmision = DateTime.Today.AddDays(-(index + 4) * 3);
+            carteraPendiente[index].FechaVencimiento = (index % 3) switch
+            {
+                0 => DateTime.Today.AddDays(-7 - index),
+                1 => DateTime.Today.AddDays(8 + index),
+                _ => DateTime.Today.AddDays(45 + index)
+            };
+        }
+
+        AplicarClienteDemo(1);
+        montoRecibido = 180m;
+        observacion = "Transferencia recibida - demostración";
+        usarSaldoAFavor = true;
+        pasoActual = 3;
+        abonosDistribucion = new Dictionary<int, decimal>
+        {
+            [101] = 120m,
+            [102] = 75m
+        };
+        mostrarHistorial = true;
+    }
+
+    private void AplicarClienteDemo(int clienteId)
+    {
+        var cliente = ObtenerClientesDemoBusqueda().First(x => x.IdCliente == clienteId);
+        clienteSeleccionado = cliente;
+        filtroBusqueda = cliente.NombreCliente ?? string.Empty;
+        sugerencias = ObtenerClientesDemoBusqueda();
+        facturasPendientes = ObtenerFacturasDemoCliente(clienteId);
+        saldoAFavorCliente = clienteId == 1 ? 35m : clienteId == 2 ? 18m : 0m;
+        detalleSaldoAFavor = clienteId == 1
+            ? new List<SaldoAFavorVM>
+            {
+                new() { IdAbonoMultiple = 1, FechaPago = DateTime.Today.AddDays(-12), ValorOriginal = 35m, SaldoDisponible = 35m, Observacion = "Saldo pendiente de abono anterior" }
+            }
+            : new List<SaldoAFavorVM>();
+        historialSaldadas = ObtenerHistorialDemoCliente(clienteId);
+        abonosDistribucion.Clear();
+        mostrarHistorial = false;
+        mostrarDetalleSaldo = false;
+        usarSaldoAFavor = saldoAFavorCliente > 0;
+        mensajeError = null;
+        mensajeExito = null;
+        confirmacionFinalAceptada = false;
+        mostrarConfirmacionFinal = false;
+        pasoActual = 2;
+    }
+
+    private static List<FacturaPendienteVM> ObtenerClientesDemoBusqueda() =>
+    [
+        new() { IdFactura = 101, NumFactura = "001-001-000001410", IdCliente = 1, NombreCliente = "Comercial Andina S.A.", NumeroIdentificacion = "1790012345001", TotalFactura = 420m, TotalAbonado = 120m },
+        new() { IdFactura = 201, NumFactura = "001-001-000001512", IdCliente = 2, NombreCliente = "Ferretería Central", NumeroIdentificacion = "0999988877001", TotalFactura = 260m, TotalAbonado = 40m },
+        new() { IdFactura = 301, NumFactura = "001-001-000001620", IdCliente = 3, NombreCliente = "Distribuidora Nova", NumeroIdentificacion = "1793344556001", TotalFactura = 180m, TotalAbonado = 0m }
+    ];
+
+    private static List<FacturaPendienteVM> ObtenerFacturasDemoCliente(int clienteId)
+    {
+        return clienteId switch
+        {
+            1 =>
+            [
+                new() { IdFactura = 101, NumFactura = "001-001-000001410", IdCliente = 1, NombreCliente = "Comercial Andina S.A.", NumeroIdentificacion = "1790012345001", TotalFactura = 420m, TotalAbonado = 120m },
+                new() { IdFactura = 102, NumFactura = "001-001-000001422", IdCliente = 1, NombreCliente = "Comercial Andina S.A.", NumeroIdentificacion = "1790012345001", TotalFactura = 180m, TotalAbonado = 35m },
+                new() { IdFactura = 103, NumFactura = "001-001-000001438", IdCliente = 1, NombreCliente = "Comercial Andina S.A.", NumeroIdentificacion = "1790012345001", TotalFactura = 96m, TotalAbonado = 0m }
+            ],
+            2 =>
+            [
+                new() { IdFactura = 201, NumFactura = "001-001-000001512", IdCliente = 2, NombreCliente = "Ferretería Central", NumeroIdentificacion = "0999988877001", TotalFactura = 260m, TotalAbonado = 40m },
+                new() { IdFactura = 202, NumFactura = "001-001-000001519", IdCliente = 2, NombreCliente = "Ferretería Central", NumeroIdentificacion = "0999988877001", TotalFactura = 140m, TotalAbonado = 0m }
+            ],
+            _ =>
+            [
+                new() { IdFactura = 301, NumFactura = "001-001-000001620", IdCliente = 3, NombreCliente = "Distribuidora Nova", NumeroIdentificacion = "1793344556001", TotalFactura = 180m, TotalAbonado = 0m },
+                new() { IdFactura = 302, NumFactura = "001-001-000001624", IdCliente = 3, NombreCliente = "Distribuidora Nova", NumeroIdentificacion = "1793344556001", TotalFactura = 210m, TotalAbonado = 25m }
+            ]
+        };
+    }
+
+    private static List<FacturaHistorialVM> ObtenerHistorialDemoCliente(int clienteId)
+    {
+        return clienteId switch
+        {
+            1 =>
+            [
+                new() { IdFactura = 91, NumFactura = "001-001-000001301", TotalFactura = 315m, TotalAbonado = 315m, FechaSaldada = DateTime.Today.AddDays(-18) },
+                new() { IdFactura = 92, NumFactura = "001-001-000001322", TotalFactura = 210m, TotalAbonado = 210m, FechaSaldada = DateTime.Today.AddDays(-11) }
+            ],
+            2 =>
+            [
+                new() { IdFactura = 191, NumFactura = "001-001-000001470", TotalFactura = 98m, TotalAbonado = 98m, FechaSaldada = DateTime.Today.AddDays(-14) }
+            ],
+            _ =>
+            [
+                new() { IdFactura = 291, NumFactura = "001-001-000001580", TotalFactura = 150m, TotalAbonado = 150m, FechaSaldada = DateTime.Today.AddDays(-9) }
+            ]
+        };
+    }
+
+    private sealed class CarteraSegmento
+    {
+        public string Label { get; set; } = string.Empty;
+        public decimal Valor { get; set; }
+        public string Color { get; set; } = "#1687d9";
+        public string PercentCss { get; set; } = "0";
+        public string PercentLabel { get; set; } = "0%";
+    }
+}

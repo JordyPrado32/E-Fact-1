@@ -1,0 +1,182 @@
+﻿@page "/admin/asociados"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+@inject IEmailService EmailService
+
+<PageTitle>Gestión de Asociados | NÚMERICA</PageTitle>
+
+<div class="container-fluid animate__animated animate__fadeIn" data-tour="asociados.page">
+    <div class="d-flex justify-content-between align-items-center mb-4" data-tour="asociados.hero">
+        <div>
+            <h2 class="conthrax-text text-blue">GESTIÓN DE ASOCIADOS</h2>
+            <p class="text-muted">Aprueba o gestiona el acceso de tus colaboradores al sistema.</p>
+        </div>
+        <div class="stats-badge">
+            <span class="badge bg-primary p-2">Total: @(asociados?.Count ?? 0)</span>
+        </div>
+    </div>
+
+    <div class="card-n-premium shadow-sm" data-tour="asociados.table">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Colaborador</th>
+                        <th>Contacto</th>
+                        <th>Fecha Registro</th>
+                        <th>Estado</th>
+                        <th class="text-center">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (asociados == null)
+                    {
+                        <tr>
+                            <td colspan="5" class="text-center p-5">
+                                <div class="spinner-border text-primary" role="status"></div>
+                                <p class="mt-2">Cargando solicitudes...</p>
+                            </td>
+                        </tr>
+                    }
+                    else if (!asociados.Any())
+                    {
+                        <tr>
+                            <td colspan="5" class="text-center p-5">
+                                <i class="bi bi-people text-muted display-4"></i>
+                                <p class="mt-3 text-muted">No tienes solicitudes de asociados pendientes.</p>
+                            </td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var user in asociados)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <div class="avatar-circle me-3">
+                                            @(!string.IsNullOrEmpty(user.Nombres) ? user.Nombres[0] : 'U')@(!string.IsNullOrEmpty(user.Apellidos) ? user.Apellidos[0] : 'A')
+                                        </div>
+                                        <div>
+                                            <div class="fw-bold">@user.Nombres @user.Apellidos</div>
+                                            <small class="text-muted">ID: @user.IdUsuario</small>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div><i class="bi bi-envelope me-2"></i>@user.Email</div>
+                                    <small class="text-muted"><i class="bi bi-phone me-2"></i>@user.Celular</small>
+                                </td>
+                                <td>
+                                    @* SOLUCIÓN AL ERROR DE FECHA: Uso de operador null-conditional si es Nullable *@
+                                    @(user.FechaCreacion?.ToString("dd MMM yyyy") ?? "Sin fecha")
+                                </td>
+                                <td>
+                                    @* USANDO estadoAsociado SEGÚN TU NUEVA NOMENCLATURA *@
+                                    @if (user.estadoAsociado == true)
+                                    {
+                                        <span class="badge bg-success-light text-success">Activo</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-warning-light text-warning">Pendiente</span>
+                                    }
+                                </td>
+                                <td class="text-center">
+                                    <div class="btn-group shadow-sm">
+                                        @if (user.estadoAsociado != true)
+                                        {
+                                            <button class="btn btn-approve" title="Aprobar Acceso"
+                                                    data-tour="asociados.action"
+                                                    @onclick="() => ProcesarSolicitud(user, true)">
+                                                <i class="bi bi-check-circle-fill"></i>
+                                            </button>
+                                        }
+                                        <button class="btn btn-reject" title="Eliminar / Rechazar"
+                                                @onclick="() => ProcesarSolicitud(user, false)">
+                                            <i class="bi bi-trash3-fill"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<Usuario>? asociados;
+    private int idJefeActual;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarAsociados();
+    }
+
+    private async Task CargarAsociados()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        var userClaim = authState.User.FindFirst("IdUsuario");
+
+        if (userClaim != null && int.TryParse(userClaim.Value, out idJefeActual))
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            // Asegúrate que en tu base de datos el campo se llame idJefe (minúscula) como pusiste en tu filtro
+            asociados = await db.Usuarios
+                .Where(u => u.idJefe == idJefeActual && u.IdTipoUsuario == 5)
+                .OrderByDescending(u => u.FechaCreacion)
+                .ToListAsync();
+        }
+    }
+
+    private async Task ProcesarSolicitud(Usuario asociado, bool aprobar)
+    {
+        try
+        {
+            if (!aprobar)
+            {
+                var nombre = $"{asociado.Nombres} {asociado.Apellidos}".Trim();
+                if (!await JS.ConfirmDeleteAsync("Eliminar solicitud", $"Se rechazara y eliminara la solicitud de {nombre}."))
+                {
+                    return;
+                }
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var userDb = await db.Usuarios.FindAsync(asociado.IdUsuario);
+
+            if (userDb != null)
+            {
+                if (aprobar)
+                {
+                    // CAMBIO AQUÍ: Usamos estadoAsociado para que coincida con tu modelo
+                    userDb.Estado = true;
+                    userDb.estadoAsociado = true;
+                    await db.SaveChangesAsync();
+                    
+                    await JS.InvokeVoidAsync("Swal.fire", "¡Aprobado!", $"{userDb.Nombres} ahora tiene acceso.", "success");
+                }
+                else
+                {
+                    db.Usuarios.Remove(userDb);
+                    await db.SaveChangesAsync();
+                    await JS.InvokeVoidAsync("Swal.fire", "Eliminado", "La solicitud ha sido rechazada.", "success");
+                }
+                
+                await CargarAsociados();
+            }
+        }
+        catch (Exception ex)
+        {
+            await JS.InvokeVoidAsync("Swal.fire", "Error", ex.Message, "error");
+        }
+    }
+}

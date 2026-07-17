@@ -1,0 +1,591 @@
+@page "/backoffice/clientes/reporte"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Auth
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.DTOs
+@using System.Text.Json
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>Reporte de Clientes y Licencias - BackOffice</PageTitle>
+
+<div class="report-wrapper">
+    <!-- Top toolbar for actions (Hidden on Print) -->
+    <div class="report-toolbar">
+        <a href="@(RoleQuery == 7 ? "/backoffice/clientes/backoffice" : "/backoffice/clientes")" class="btn-toolbar-back">
+            <i class="bi bi-arrow-left"></i> Volver a @(RoleQuery == 7 ? "Usuarios Backoffice" : "Clientes")
+        </a>
+
+        <div class="toolbar-actions-group">
+            <button type="button" class="btn-toolbar-print" @onclick="DownloadReportPdf">
+                <i class="bi bi-file-earmark-pdf-fill"></i> Descargar Reporte PDF
+            </button>
+        </div>
+    </div>
+
+    <!-- Printable Area -->
+    <div class="printable-report" id="report-active-area">
+        <!-- Logo & Header Block -->
+        <header class="report-print-header">
+            <div class="brand-logo-area">
+                <img src="/images/backoffice/NumericaBackoffice.png" alt="Numerica Backoffice Logo" class="report-logo" />
+            </div>
+            <div class="report-meta-info">
+                <h1>Reporte Estadístico de @(RoleQuery == 7 ? "Personal Interno" : "Clientes")</h1>
+                <p class="subtitle">@(RoleQuery == 7 ? "Estado de Cuentas, Accesos y Operaciones de Soporte" : "Estado de Licencias, Suscripciones y Adquisición de Documentos")</p>
+                <span class="date-stamp">Generado el: @DateTime.Now.ToString("dd/MM/yyyy HH:mm")</span>
+            </div>
+        </header>
+
+        @if (isLoading)
+        {
+            <div class="loading-state">
+                <div class="spinner"></div>
+                <p>Generando reporte consolidado...</p>
+            </div>
+        }
+        else
+        {
+            <!-- KPI Summary Dashboard -->
+            <section class="kpi-grid">
+                <div class="kpi-card">
+                    <span class="kpi-title">Total Usuarios</span>
+                    <strong class="kpi-value">@usuariosList.Count</strong>
+                    <span class="kpi-desc">Clientes y personal del sistema</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-title">Firmas e-Sign Activas</span>
+                    <strong class="kpi-value text-success">@totalESignActivas</strong>
+                    <span class="kpi-desc">Suscripciones vigentes de firma electrónica</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-title">Saldo Total de Documentos</span>
+                    <strong class="kpi-value text-blue">@totalSaldoDocumentosGlobal</strong>
+                    <span class="kpi-desc">Total de folios disponibles para emisión</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-title">Documentos Comprados</span>
+                    <strong class="kpi-value text-warning">@totalDocumentosAdquiridos</strong>
+                    <span class="kpi-desc">Total de folios adquiridos en paquetes</span>
+                </div>
+            </section>
+
+            <!-- Global Charts / Statistics Grid -->
+            <section class="charts-section">
+                <!-- Chart 1: Platform distribution -->
+                <div class="chart-card">
+                    <h3 class="chart-title">Uso de Plataformas</h3>
+                    <p class="chart-subtitle">e-Fact vs e-Sign (firmas electrónicas)</p>
+                    <div class="progress-bar-container">
+                        <div class="progress-segment efact-bg" style="width: @(eFactPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="e-Fact: @eFactCount usuarios"></div>
+                        <div class="progress-segment esign-bg" style="width: @(eSignPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="e-Sign: @eSignCount usuarios"></div>
+                    </div>
+                    <div class="chart-legend">
+                        <div class="legend-item">
+                            <span class="legend-dot efact-bg"></span>
+                            <span>e-Fact (Documentos): <strong>@eFactCount</strong> (@(Math.Round(eFactPct, 1))%)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-dot esign-bg"></span>
+                            <span>e-Sign (Firmas): <strong>@eSignCount</strong> (@(Math.Round(eSignPct, 1))%)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chart 2: Account Status ratio -->
+                <div class="chart-card">
+                    <h3 class="chart-title">Estado de Cuentas</h3>
+                    <p class="chart-subtitle">Proporción de usuarios activos vs bloqueados/inactivos</p>
+                    <div class="progress-bar-container">
+                        <div class="progress-segment active-bg" style="width: @(porcentajeActivos.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Activos: @activosCount usuarios"></div>
+                        <div class="progress-segment blocked-bg" style="width: @((100 - porcentajeActivos).ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Bloqueados: @bloqueadosCount usuarios"></div>
+                    </div>
+                    <div class="chart-legend">
+                        <div class="legend-item">
+                            <span class="legend-dot active-bg"></span>
+                            <span>Activos: <strong>@activosCount</strong> (@(Math.Round(porcentajeActivos, 1))%)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-dot blocked-bg"></span>
+                            <span>Bloqueados: <strong>@bloqueadosCount</strong> (@(Math.Round(100 - porcentajeActivos, 1))%)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chart 3: Global Emission Volume (Facturas vs Notas de Crédito) -->
+                <div class="chart-card">
+                    <h3 class="chart-title">Volumen Total de Emisión</h3>
+                    <p class="chart-subtitle">Facturas vs Notas de Crédito emitidas globalmente</p>
+                    @if (totalEmisionesGlobal > 0)
+                    {
+                        <div class="progress-bar-container">
+                            <div class="progress-segment fact-bg" style="width: @(facturasGlobalPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Facturas: @totalFacturasGlobal"></div>
+                            <div class="progress-segment nc-bg" style="width: @(notasGlobalPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Notas de Crédito: @totalNotasGlobal"></div>
+                        </div>
+                        <div class="chart-legend">
+                            <div class="legend-item">
+                                <span class="legend-dot fact-bg"></span>
+                                <span>Facturas: <strong>@totalFacturasGlobal</strong> (@(Math.Round(facturasGlobalPct, 1))%)</span>
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-dot nc-bg"></span>
+                                <span>Notas de Crédito: <strong>@totalNotasGlobal</strong> (@(Math.Round(notasGlobalPct, 1))%)</span>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="no-activity-badge">Sin emisiones registradas en el sistema</div>
+                    }
+                </div>
+            </section>
+
+            <!-- Users List Section (Graphical Grid) -->
+            <section class="report-section-header">
+                <h3>Detalle Individual de Usuarios</h3>
+                <p>Análisis del estado de suscripciones, almacenamiento y actividad de emisión.</p>
+            </section>
+
+            <div class="users-report-list">
+                @if (!usuariosList.Any())
+                {
+                    <div class="empty-state">
+                        <i class="bi bi-people-fill"></i>
+                        <p>No hay usuarios que coincidan con los filtros aplicados.</p>
+                    </div>
+                }
+                else
+                {
+                    @foreach (var user in usuariosList)
+                    {
+                        var userSubs = GetUserSubscriptions(user.IdUsuario);
+                        var userDocs = GetUserDocumentPurchases(user.HistorialComprasDocumentosJson);
+                        var totalDocs = userDocs.Sum(d => d.Documentos);
+                        bool isIlimitado = userDocs.Any(d => d.EsIlimitado);
+                        var totalInvoices = GetInvoiceCount(user.IdUsuario);
+                        var totalNC = GetNCCount(user.IdUsuario);
+
+                        var totalEmisiones = totalInvoices + totalNC;
+                        double invoicesPct = totalEmisiones > 0 ? (double)totalInvoices / totalEmisiones * 100 : 0;
+                        double ncPct = totalEmisiones > 0 ? (double)totalNC / totalEmisiones * 100 : 0;
+
+                        <div class="user-report-card-wrapper">
+                            <article class="user-report-card">
+                                <!-- Left: User Identity -->
+                                <div class="user-card-identity">
+                                    <div class="user-avatar-initials">
+                                        @GetUserInitials(user.Nombres, user.Apellidos)
+                                    </div>
+                                    <div class="user-details">
+                                        <h4>@user.Nombres @user.Apellidos</h4>
+                                        <span class="email"><i class="bi bi-envelope"></i> @user.Email</span>
+                                        <span class="id-number"><i class="bi bi-card-text"></i> @(user.IdTipoIdentificacionNavigation?.Descripcion ?? "ID"): @user.Identificacion</span>
+                                        <span class="role-badge">@(user.IdTipoUsuarioNavigation?.NombreTipo ?? "Usuario")</span>
+                                    </div>
+                                </div>
+
+                                <!-- Middle Left: Status and Licenses -->
+                                <div class="user-card-licenses">
+                                    <div class="section-label">Estado y Licencias</div>
+                                    <div class="status-indicator">
+                                        @if (user.CuentaBloqueada == true || user.Estado == false)
+                                        {
+                                            <span class="status-pill status-blocked"><i class="bi bi-x-circle-fill"></i> Bloqueado</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="status-pill status-active"><i class="bi bi-check-circle-fill"></i> Activo</span>
+                                        }
+                                    </div>
+
+                                    <div class="report-user-subs-list">
+                                        @{
+                                            bool hasFactSub = false;
+                                        }
+                                        @if (userSubs.Any())
+                                        {
+                                            @foreach (var sub in userSubs)
+                                            {
+                                                var sName = GetServiceName(sub.ServicioId);
+                                                if (sName.Contains("fact", StringComparison.OrdinalIgnoreCase)) hasFactSub = true;
+
+                                                var plan = string.IsNullOrWhiteSpace(sub.PlanActual) ? "Básico" : sub.PlanActual;
+                                                
+                                                <div class="report-sub-item">
+                                                    <div class="report-sub-info">
+                                                        <span class="report-sub-name" title="@sName">@sName (@plan)</span>
+                                                        @if (sub.EsVitalicia)
+                                                        {
+                                                            <span class="report-sub-days text-success">Vitalicia</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            var remainingDays = (sub.FechaFin ?? DateTime.Now).Subtract(DateTime.Now).Days;
+                                                            if (remainingDays > 0)
+                                                            {
+                                                                <span class="report-sub-days">@remainingDays d</span>
+                                                            }
+                                                            else
+                                                            {
+                                                                <span class="report-sub-days text-danger">Exp.</span>
+                                                            }
+                                                        }
+                                                    </div>
+                                                    
+                                                    @if (sub.EsVitalicia)
+                                                    {
+                                                        <div class="report-sub-bar-container">
+                                                            <div class="report-sub-bar vitalicio-bg" style="width: 100%"></div>
+                                                        </div>
+                                                    }
+                                                    else
+                                                    {
+                                                        var totalDays = ((sub.FechaFin ?? DateTime.Now) - (sub.FechaInicio ?? DateTime.Now)).Days;
+                                                        if (totalDays <= 0) totalDays = 30;
+                                                        var remainingDays = ((sub.FechaFin ?? DateTime.Now) - DateTime.Now).Days;
+                                                        double pct = totalDays > 0 ? (double)remainingDays / totalDays * 100 : 0;
+                                                        pct = Math.Clamp(pct, 0, 100);
+                                                        
+                                                        var barColorClass = remainingDays <= 7 ? "danger-bg" :
+                                                                            remainingDays <= 30 ? "warning-bg" :
+                                                                            "success-bg";
+                                                                            
+                                                        <div class="report-sub-bar-container">
+                                                            <div class="report-sub-bar @barColorClass" style="width: @(pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                                        </div>
+                                                    }
+                                                </div>
+                                            }
+                                        }
+
+                                        <!-- If user doesn't have an active e-Fact subscription but has documents, show it as pay-per-use -->
+                                        @if (!hasFactSub && (totalDocs > 0 || user.SaldoDocumentos > 0))
+                                        {
+                                            <div class="report-sub-item">
+                                                <div class="report-sub-info">
+                                                    <span class="report-sub-name">e-Fact (Consumo)</span>
+                                                    <span class="report-sub-days text-info">Activo</span>
+                                                </div>
+                                                <div class="report-sub-bar-container">
+                                                    <div class="report-sub-bar consumption-bg" style="width: 100%"></div>
+                                                </div>
+                                            </div>
+                                        }
+                                        
+                                        @if (!userSubs.Any() && !(totalDocs > 0 || user.SaldoDocumentos > 0))
+                                        {
+                                            <span class="no-subs-badge">Sin suscripciones</span>
+                                        }
+                                    </div>
+                                </div>
+
+                                <!-- Middle Right: Document Pool -->
+                                <div class="user-card-documents">
+                                    <div class="section-label">Documentos Adquiridos</div>
+                                    @if (isIlimitado)
+                                    {
+                                        <div class="docs-count-large">
+                                            <strong>Ilimitado</strong>
+                                            <span>documentos</span>
+                                        </div>
+                                        <div class="docs-progress-container">
+                                            <div class="docs-progress-fill ilimitado-bg" style="width: 100%"></div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="docs-count-large">
+                                            <strong>@totalDocs</strong>
+                                            <span>documentos</span>
+                                        </div>
+                                        <div class="docs-progress-container">
+                                            <div class="docs-progress-fill" style="width: @(Math.Min(100, (totalDocs * 100.0 / 5000.0)).ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                        </div>
+                                    }
+                                    <div class="docs-subtext">@userDocs.Count transacciones aprobadas</div>
+                                </div>
+
+                                <!-- Right: Activity & Emissions Gauge -->
+                                <div class="user-card-activity">
+                                    <div class="section-label">Actividad de Emisión</div>
+                                    <div class="activity-kpis">
+                                        <span class="stat-count text-success">@totalInvoices Facturas</span>
+                                        <span class="stat-count text-danger">@totalNC Notas de Crédito</span>
+                                    </div>
+                                    @if (totalEmisiones > 0)
+                                    {
+                                        <div class="activity-bar">
+                                            <div class="activity-bar-fill fact-bar" style="width: @(invoicesPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Facturas: @(Math.Round(invoicesPct))%"></div>
+                                            <div class="activity-bar-fill nc-bar" style="width: @(ncPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Notas de Crédito: @(Math.Round(ncPct))%"></div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="no-activity-badge">Sin emisiones registradas</div>
+                                    }
+                                </div>
+                            </article>
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "filter")]
+    public string? Filter { get; set; }
+
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "search")]
+    public string? Search { get; set; }
+
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "role")]
+    public int? RoleQuery { get; set; }
+
+    private bool isLoading = true;
+    private List<Usuario> usuariosList = new();
+    private Dictionary<int, List<UsuarioServicioSuscripcion>> suscripcionesDict = new();
+    private Dictionary<int, string> serviciosDict = new();
+    private Dictionary<int, int> facturasCountDict = new();
+    private Dictionary<int, int> notasCountDict = new();
+
+    private int totalESignActivas;
+    private int totalSaldoDocumentosGlobal;
+    private int totalDocumentosAdquiridos;
+    private int activosCount;
+    private int bloqueadosCount;
+    private double porcentajeActivos;
+
+    // Service distributions
+    private int eFactCount;
+    private int eSignCount;
+    private double eFactPct;
+    private double eSignPct;
+
+    // Global emission stats
+    private int totalFacturasGlobal;
+    private int totalNotasGlobal;
+    private int totalEmisionesGlobal;
+    private double facturasGlobalPct;
+    private double notasGlobalPct;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadReportData();
+    }
+
+    private async Task LoadReportData()
+    {
+        isLoading = true;
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+
+            // 1. Query users matching the role limits
+            var query = context.Usuarios
+                .Include(u => u.IdTipoUsuarioNavigation)
+                .Include(u => u.IdTipoIdentificacionNavigation)
+                .AsQueryable();
+
+            if (RoleQuery == 1 || RoleQuery == 7)
+            {
+                query = query.Where(u => u.IdTipoUsuario == RoleQuery.Value);
+            }
+            else
+            {
+                query = query.Where(u => u.IdTipoUsuario == 1 || u.IdTipoUsuario == 7);
+            }
+
+            // Apply filter from query parameter
+            if (!string.IsNullOrEmpty(Filter))
+            {
+                if (Filter == "Clientes")
+                {
+                    query = query.Where(u => u.IdTipoUsuario == 1);
+                }
+                else if (Filter == "BackOffice")
+                {
+                    query = query.Where(u => u.IdTipoUsuario == 7);
+                }
+                else if (Filter == "Bloqueados")
+                {
+                    query = query.Where(u => u.CuentaBloqueada == true || u.Estado == false);
+                }
+            }
+
+            // Apply search from query parameter
+            if (!string.IsNullOrEmpty(Search))
+            {
+                var decodedSearch = Uri.UnescapeDataString(Search);
+                query = query.Where(u =>
+                    (u.Nombres != null && u.Nombres.Contains(decodedSearch)) ||
+                    (u.Apellidos != null && u.Apellidos.Contains(decodedSearch)) ||
+                    (u.Email != null && u.Email.Contains(decodedSearch)) ||
+                    (u.Identificacion != null && u.Identificacion.Contains(decodedSearch))
+                );
+            }
+
+            usuariosList = await query.OrderBy(u => u.Nombres).ToListAsync();
+
+            // 2. Load all subscriptions
+            var allSuscripciones = await context.UsuarioServicioSuscripciones.ToListAsync();
+            suscripcionesDict = allSuscripciones
+                .GroupBy(s => s.IdUsuario)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            // 3. Load all app services for names lookup
+            var servicios = await context.AppServicios.ToListAsync();
+            serviciosDict = servicios.ToDictionary(s => s.ServicioId, s => s.Nombre);
+
+            // 4. Load invoice counts grouped by user
+            var factGroup = await context.Facturas
+                .Where(f => f.Idusuario != null)
+                .GroupBy(f => f.Idusuario)
+                .Select(g => new { Id = g.Key!.Value, Count = g.Count() })
+                .ToListAsync();
+            facturasCountDict = factGroup.ToDictionary(x => x.Id, x => x.Count);
+
+            // 5. Load credit note counts grouped by user
+            var ncGroup = await context.NotaCreditos
+                .Where(nc => nc.Usuario != null)
+                .GroupBy(nc => nc.Usuario)
+                .Select(g => new { Id = g.Key!.Value, Count = g.Count() })
+                .ToListAsync();
+            notasCountDict = ncGroup.ToDictionary(x => x.Id, x => x.Count);
+
+            // 6. Compute overall statistics
+            totalSaldoDocumentosGlobal = usuariosList.Sum(u => u.SaldoDocumentos);
+            
+            totalDocumentosAdquiridos = 0;
+            totalESignActivas = 0;
+            eFactCount = 0;
+            eSignCount = 0;
+
+            foreach (var user in usuariosList)
+            {
+                var docs = GetUserDocumentPurchases(user.HistorialComprasDocumentosJson);
+                var userDocsTotal = docs.Sum(d => d.Documentos);
+                totalDocumentosAdquiridos += userDocsTotal;
+
+                var userSubs = GetUserSubscriptions(user.IdUsuario);
+                bool hasActiveESign = HasService(userSubs, "sign") || HasService(userSubs, "firma");
+                if (hasActiveESign)
+                {
+                    totalESignActivas++;
+                    eSignCount++;
+                }
+
+                // e-Fact user: has document balance or has purchased documents
+                if (user.SaldoDocumentos > 0 || userDocsTotal > 0)
+                {
+                    eFactCount++;
+                }
+            }
+
+            activosCount = usuariosList.Count(u => u.CuentaBloqueada != true && u.Estado == true);
+            bloqueadosCount = usuariosList.Count - activosCount;
+            porcentajeActivos = usuariosList.Count > 0 ? (double)activosCount / usuariosList.Count * 100 : 0;
+
+            int totalActiveServicios = eFactCount + eSignCount;
+            eFactPct = totalActiveServicios > 0 ? (double)eFactCount / totalActiveServicios * 100 : 0;
+            eSignPct = totalActiveServicios > 0 ? (double)eSignCount / totalActiveServicios * 100 : 0;
+
+            // Global emission stats
+            totalFacturasGlobal = facturasCountDict.Values.Sum();
+            totalNotasGlobal = notasCountDict.Values.Sum();
+            totalEmisionesGlobal = totalFacturasGlobal + totalNotasGlobal;
+            facturasGlobalPct = totalEmisionesGlobal > 0 ? (double)totalFacturasGlobal / totalEmisionesGlobal * 100 : 0;
+            notasGlobalPct = totalEmisionesGlobal > 0 ? (double)totalNotasGlobal / totalEmisionesGlobal * 100 : 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading report: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private List<UsuarioServicioSuscripcion> GetUserSubscriptions(int userId)
+    {
+        if (suscripcionesDict.TryGetValue(userId, out var list))
+        {
+            return list.Where(s => s.Estado == "ACTIVO").ToList();
+        }
+        return new List<UsuarioServicioSuscripcion>();
+    }
+
+    private string GetServiceName(int? serviceId)
+    {
+        if (serviceId.HasValue && serviciosDict.TryGetValue(serviceId.Value, out var name))
+        {
+            return name;
+        }
+        return "Servicio General";
+    }
+
+    private List<CompraDocumentosHistorialItem> GetUserDocumentPurchases(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new List<CompraDocumentosHistorialItem>();
+
+        try
+        {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var list = JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(json, options) 
+                       ?? new List<CompraDocumentosHistorialItem>();
+            
+            // Filter to only approved/saldo aplicado purchases
+            return list.Where(item => 
+                item.SaldoAplicado || 
+                (item.Estado ?? "").Contains("aprob", StringComparison.OrdinalIgnoreCase) || 
+                (item.Estado ?? "").Contains("autoriz", StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+        }
+        catch
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private int GetInvoiceCount(int userId)
+    {
+        return facturasCountDict.TryGetValue(userId, out var count) ? count : 0;
+    }
+
+    private int GetNCCount(int userId)
+    {
+        return notasCountDict.TryGetValue(userId, out var count) ? count : 0;
+    }
+
+    private bool HasService(List<UsuarioServicioSuscripcion> subs, string keyword)
+    {
+        return subs.Any(s => GetServiceName(s.ServicioId).Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string GetUserInitials(string? names, string? surnames)
+    {
+        var n = (names ?? "").Trim();
+        var s = (surnames ?? "").Trim();
+        var initials = "";
+        if (n.Length > 0) initials += n[0];
+        if (s.Length > 0) initials += s[0];
+        return initials.ToUpper();
+    }
+
+    private async Task DownloadReportPdf()
+    {
+        var filterText = string.IsNullOrWhiteSpace(Filter) ? "General" : Filter;
+        var searchText = string.IsNullOrWhiteSpace(Search) ? "Todos" : Search.Replace(" ", "_");
+        var filename = $"Reporte_Clientes_{filterText}_{searchText}_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
+        await JS.InvokeVoidAsync("window.downloadPdfReport", "report-active-area", filename);
+    }
+}

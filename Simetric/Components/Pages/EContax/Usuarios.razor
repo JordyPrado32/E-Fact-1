@@ -1,0 +1,1213 @@
+@page "/e-contax/administracion/usuarios"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
+@using Simetric.Auth
+@using Simetric.Components.Helpers
+@using Simetric.Data
+@using Simetric.DTOs.EContax
+@using Simetric.Models
+@using Simetric.Models.EContax
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using System.IO
+@inject UserService UserService
+@inject EContaxAdministracionService AdministracionService
+@inject EContaxOrganizacionService OrganizacionService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
+@inject IEmailService EmailService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject MenuStateService MenuStateService
+@inject NavigationManager NavManager
+@rendermode InteractiveServer
+
+@{
+    var usuariosVisibles = usuariosList.ToList();
+}
+
+<PageTitle>Usuarios | Numerica E-Contax</PageTitle>
+<link rel="stylesheet" href="/css/econtax-usuarios.css?v=20260529-usuarios" />
+
+<div class="users-shell" data-tour="usuarios.page">
+    <section class="users-hero" data-tour="usuarios.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Administracion de accesos</span>
+            <h2>Usuarios E-Contax</h2>
+            <p>
+                Gestione usuarios y asigne roles propios de E-Contax sin mezclar la matriz de permisos de e-fact.
+            </p>
+        </div>
+
+        <div class="hero-actions" data-tour="usuarios.actions">
+            <button type="button" class="secondary-btn" @onclick="AbrirGestorAvatares">
+                <i class="bi bi-images"></i>
+                <span>Galeria de avatares</span>
+            </button>
+
+            <button type="button" class="primary-btn" @onclick="() => AbrirModal()">
+                <i class="bi bi-person-plus-fill"></i>
+                <span>Nuevo usuario</span>
+            </button>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Usuarios registrados</span>
+                <strong>@usuariosList.Count</strong>
+                <small>Base total de perfiles administrativos y operativos.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Con rol E-Contax</span>
+                <strong>@UsuariosConRol</strong>
+                <small>Usuarios con un perfil de menu asignado.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Cuentas bloqueadas</span>
+                <strong>@UsuariosBloqueados</strong>
+                <small>Usuarios que requieren intervencion administrativa.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="table-card" data-tour="usuarios.table">
+        <div class="table-card-head">
+            <div>
+                <span class="table-kicker">Directorio administrativo</span>
+                <h3>Control de usuarios</h3>
+            </div>
+            <span class="table-badge">@usuariosVisibles.Count activos</span>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(mensajeEstado))
+        {
+            <div class="status-banner status-banner-success">
+                <i class="bi bi-check-circle"></i>
+                <span>@mensajeEstado</span>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(errorEstado))
+        {
+            <div class="status-banner status-banner-error">
+                <i class="bi bi-exclamation-triangle"></i>
+                <span>@errorEstado</span>
+            </div>
+        }
+
+        @if (isLoading)
+        {
+            <div class="state-card">
+                <div class="state-icon">
+                    <i class="bi bi-arrow-repeat"></i>
+                </div>
+                <h3>Cargando usuarios</h3>
+                <p>Preparando la informacion de acceso, roles y configuracion de seguridad.</p>
+            </div>
+        }
+        else if (!usuariosVisibles.Any())
+        {
+            <div class="state-card state-card-empty">
+                <div class="state-icon">
+                    <i class="bi bi-people"></i>
+                </div>
+                <h3>No hay usuarios activos</h3>
+                <p>Cree un nuevo usuario para comenzar.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table users-table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Usuario</th>
+                            <th>Rol E-Contax</th>
+                            <th>Empresa / sucursal</th>
+                            <th>Seguridad</th>
+                            <th class="text-end">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var u in usuariosVisibles)
+                        {
+                            var rol = GetRolAsignado(u.IdUsuario);
+                            var contextoUsuario = GetContextoUsuario(u.IdUsuario);
+                            <tr>
+                                <td>
+                                    <div class="user-cell">
+                                        @if (TieneAvatar(u.AvatarUrl))
+                                        {
+                                            <img src="@u.AvatarUrl"
+                                                 alt="Avatar de @u.Nombres @u.Apellidos"
+                                                 class="user-avatar" />
+                                        }
+                                        else
+                                        {
+                                            <span class="user-avatar avatar-default">
+                                                <i class="bi bi-person-fill"></i>
+                                            </span>
+                                        }
+                                        <div class="cell-main">
+                                            <strong>@u.Nombres @u.Apellidos</strong>
+                                            <span>@u.Email</span>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="role-pill @(rol is null ? "system-badge" : string.Empty)">
+                                        @(rol?.NombreRol ?? "Sin rol E-Contax")
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="cell-main">
+                                        <strong>@(contextoUsuario?.NombreEmpresa ?? "Sin empresa")</strong>
+                                        <span>@(contextoUsuario?.NombreSucursal ?? "Sin sucursal")</span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="security-stack">
+                                        <span class="security-pill @(u.CuentaBloqueada == true ? "security-pill-danger" : "security-pill-neutral")">
+                                            <i class="bi @(u.CuentaBloqueada == true ? "bi-lock-fill" : "bi-unlock-fill")"></i>
+                                            @(u.CuentaBloqueada == true ? "Bloqueado" : "Sin bloqueo")
+                                        </span>
+                                    </div>
+                                </td>
+                                <td class="text-end">
+                                    <div class="action-group">
+                                        <button type="button"
+                                                class="action-btn action-view"
+                                                title="Ver detalles"
+                                                @onclick="() => VerDetalle(u)">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                        <button type="button"
+                                                class="action-btn action-edit"
+                                                title="Editar usuario"
+                                                @onclick="() => AbrirModal(u)">
+                                            <i class="bi bi-pencil-square"></i>
+                                        </button>
+                                        <button type="button"
+                                                class="action-btn action-reset"
+                                                title="Resetear clave"
+                                                @onclick="() => ResetearPassword(u)">
+                                            <i class="bi bi-shield-lock"></i>
+                                        </button>
+                                        @if (u.CuentaBloqueada == true)
+                                        {
+                                            <button type="button"
+                                                    class="action-btn action-unlock"
+                                                    title="Desbloquear usuario"
+                                                    @onclick="() => DesbloquearUsuario(u)">
+                                                <i class="bi bi-unlock"></i>
+                                            </button>
+                                        }
+                                        <button type="button"
+                                                class="action-btn action-delete"
+                                                title="Dar de baja"
+                                                @onclick="() => ConfirmarBaja(u.IdUsuario)">
+                                            <i class="bi bi-person-x"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+@if (showModal)
+{
+    <div class="users-modal-backdrop"></div>
+    <div class="users-modal users-modal-lg" role="dialog" aria-modal="true">
+        <div class="users-modal-content">
+            <div class="users-modal-header users-modal-header-primary">
+                <div>
+                    <span class="modal-kicker">Perfil de usuario</span>
+                    <h3>@(tempUser.IdUsuario == 0 ? "Nuevo registro de usuario" : "Modificar usuario")</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarModal" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="users-modal-body">
+                @if (!string.IsNullOrWhiteSpace(errorFormularioUsuario))
+                {
+                    <div class="alert alert-danger rounded-3 border-0 shadow-sm mb-3">
+                        @errorFormularioUsuario
+                    </div>
+                }
+
+                <div class="form-layout">
+                    <aside class="avatar-panel">
+                        <div class="avatar-preview-wrap">
+                            @if (TieneAvatar(tempUser.AvatarUrl))
+                            {
+                                <img src="@tempUser.AvatarUrl"
+                                     alt="Avatar del usuario"
+                                     class="avatar-preview" />
+                            }
+                            else
+                            {
+                                <span class="avatar-preview avatar-default avatar-default-large">
+                                    <i class="bi bi-person-fill"></i>
+                                </span>
+                            }
+                            <button type="button" class="avatar-trigger" @onclick="ToggleAvatarSelector">
+                                <i class="bi bi-camera"></i>
+                            </button>
+                        </div>
+
+                        <div class="avatar-copy">
+                            <strong>Imagen de perfil</strong>
+                            <span>Seleccione un avatar del catalogo disponible.</span>
+                        </div>
+
+                        @if (showAvatarSelector)
+                        {
+                            <div class="avatar-selector">
+                                @foreach (var avatar in avatarFiles)
+                                {
+                                    var avatarUrl = $"images/avatars/{avatar}";
+                                    <button type="button"
+                                            class="avatar-selector-item @(tempUser.AvatarUrl == avatarUrl ? "avatar-selector-item-selected" : string.Empty)"
+                                            @onclick='() => SeleccionarAvatar(avatarUrl)'>
+                                        <img src="@avatarUrl" alt="Avatar disponible" />
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </aside>
+
+                    <div class="form-grid">
+                        <div class="form-field">
+                            <label class="field-label">Nombres</label>
+                            <input @bind="tempUser.Nombres" class="form-control field-input" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Apellidos</label>
+                            <input @bind="tempUser.Apellidos" class="form-control field-input" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Email corporativo</label>
+                            <input @bind="tempUser.Email" type="email" class="form-control field-input" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Fecha de nacimiento</label>
+                            <input type="date"
+                                   class="form-control field-input"
+                                   value="@FormatFechaNacimiento(tempUser.FechaNacimiento)"
+                                   @onchange="OnFechaNacimientoChanged" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Identificacion</label>
+                            <input @bind="tempUser.Identificacion" class="form-control field-input" />
+                        </div>
+
+                        <div class="form-field form-field-wide">
+                            <label class="field-label">Rol asignado</label>
+                            <select @bind="rolSeleccionadoId" class="form-select field-input">
+                                <option value="0">Seleccione un rol</option>
+                                @foreach (var rol in rolesEContax)
+                                {
+                                    <option value="@rol.IdRol">@rol.NombreRol</option>
+                                }
+                            </select>
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Empresa</label>
+                            <select class="form-select field-input"
+                                    value="@empresaSeleccionadaId"
+                                    @onchange="OnEmpresaSeleccionadaChanged">
+                                <option value="0">Seleccione empresa</option>
+                                @foreach (var empresa in empresasEContax)
+                                {
+                                    <option value="@empresa.IdEmpresa">@empresa.Nombre</option>
+                                }
+                            </select>
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Sucursal</label>
+                            <select class="form-select field-input" @bind="sucursalSeleccionadaId">
+                                <option value="0">@(RolSeleccionadoEsJefeEmpresa ? "Sin sucursal fija" : "Seleccione sucursal")</option>
+                                @foreach (var sucursal in SucursalesEmpresaSeleccionada)
+                                {
+                                    <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                                }
+                            </select>
+                        </div>
+
+                        @if (tempUser.IdUsuario == 0)
+                        {
+                            <div class="form-note form-field-wide">
+                                <i class="bi bi-info-circle"></i>
+                                <span>Se enviara un correo de bienvenida al usuario cuando el registro se guarde.</span>
+                            </div>
+
+                            <div class="form-field form-field-wide">
+                                <label class="field-label">Contrasena inicial</label>
+                                <input @bind="nuevaClave"
+                                       type="password"
+                                       class="form-control field-input field-input-accent"
+                                       placeholder="Minimo 8 caracteres" />
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="form-note form-field-wide">
+                                <i class="bi bi-cash-stack"></i>
+                                @if (cargandoCajaUsuario)
+                                {
+                                    <span>Cargando caja y secuencia del usuario...</span>
+                                }
+                                else if (cajaUsuarioEditando == null)
+                                {
+                                    <span>Este usuario no tiene una caja activa asignada.</span>
+                                }
+                                else
+                                {
+                                    <span>Caja @cajaUsuarioEditando.NumeroCaja asignada al usuario.</span>
+                                }
+                            </div>
+
+                            @if (cajaUsuarioEditando != null)
+                            {
+                                <div class="form-field form-field-wide">
+                                    <label class="field-label">Serie de la caja</label>
+                                    <input @bind="serieCajaUsuarioInput"
+                                           class="form-control field-input"
+                                           maxlength="7"
+                                           inputmode="numeric"
+                                           placeholder="001-001" />
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="users-modal-footer">
+                <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal">
+                    Cancelar
+                </button>
+                <button type="button" class="primary-btn" @onclick="Guardar">
+                    <i class="bi bi-save"></i>
+                    <span>Guardar cambios</span>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showDetailModal && usuarioSeleccionado != null)
+{
+    <div class="users-modal-backdrop"></div>
+    <div class="users-modal users-modal-lg" role="dialog" aria-modal="true">
+        <div class="users-modal-content">
+            <div class="users-modal-header users-modal-header-secondary">
+                <div>
+                    <span class="modal-kicker">Detalle de usuario</span>
+                    <h3>@usuarioSeleccionado.Nombres @usuarioSeleccionado.Apellidos</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarDetalle" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="users-modal-body">
+                <div class="detail-layout">
+                    <aside class="detail-profile">
+                        @if (TieneAvatar(usuarioSeleccionado.AvatarUrl))
+                        {
+                            <img src="@usuarioSeleccionado.AvatarUrl"
+                                 alt="Avatar del usuario"
+                                 class="detail-avatar" />
+                        }
+                        else
+                        {
+                            <span class="detail-avatar avatar-default avatar-default-large">
+                                <i class="bi bi-person-fill"></i>
+                            </span>
+                        }
+                        <h4>@usuarioSeleccionado.Nombres @usuarioSeleccionado.Apellidos</h4>
+                        <span class="role-pill">@(GetRolAsignado(usuarioSeleccionado.IdUsuario)?.NombreRol ?? "Sin rol E-Contax")</span>
+                        <span class="status-pill @(usuarioSeleccionado.Estado == true ? "status-pill-active" : "status-pill-inactive")">
+                            @(usuarioSeleccionado.Estado == true ? "Usuario activo" : "Usuario inactivo")
+                        </span>
+                    </aside>
+
+                    <div class="detail-sections">
+                        <section class="detail-section">
+                            <span class="detail-kicker">Contacto e identificacion</span>
+                            <div class="detail-grid">
+                                <article class="detail-item">
+                                    <span>Email</span>
+                                    <strong>@usuarioSeleccionado.Email</strong>
+                                </article>
+                                <article class="detail-item">
+                                    <span>Fecha de nacimiento</span>
+                                    <strong>@FormatFechaNacimientoDetalle(usuarioSeleccionado.FechaNacimiento)</strong>
+                                </article>
+                                <article class="detail-item">
+                                    <span>Identificacion</span>
+                                    <strong>@(string.IsNullOrWhiteSpace(usuarioSeleccionado.Identificacion) ? "No registrada" : usuarioSeleccionado.Identificacion)</strong>
+                                </article>
+                            </div>
+                        </section>
+
+                        <section class="detail-section">
+                            <span class="detail-kicker">Seguridad de la cuenta</span>
+                            <div class="detail-grid">
+                                <article class="detail-item">
+                                    <span>Bloqueo</span>
+                                    <strong>@(usuarioSeleccionado.CuentaBloqueada == true ? "Cuenta bloqueada" : "Sin bloqueo")</strong>
+                                </article>
+                                <article class="detail-item">
+                                    <span>Estado de clave</span>
+                                    <strong>@(usuarioSeleccionado.ClaveTemporal == true ? "Temporal" : "Permanente")</strong>
+                                </article>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <div class="users-modal-footer">
+                <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarDetalle">
+                    Cerrar
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showAvatarManager)
+{
+    <div class="users-modal-backdrop"></div>
+    <div class="users-modal users-modal-xl" role="dialog" aria-modal="true">
+        <div class="users-modal-content">
+            <div class="users-modal-header users-modal-header-dark">
+                <div>
+                    <span class="modal-kicker">Biblioteca visual</span>
+                    <h3>Galeria de avatares</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="() => showAvatarManager = false" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="users-modal-body">
+                <label class="upload-dropzone">
+                    <span class="upload-icon">
+                        <i class="bi bi-cloud-arrow-up"></i>
+                    </span>
+                    <strong>Subir nuevo avatar</strong>
+                    <small>Formatos admitidos: JPG, JPEG y PNG. Tamano maximo 2 MB.</small>
+                    <InputFile OnChange="SubirNuevoAvatar" accept=".jpg,.jpeg,.png" class="d-none" />
+                </label>
+
+                <div class="avatar-gallery-grid">
+                    @foreach (var avatar in avatarFiles)
+                    {
+                        var avatarUrl = $"images/avatars/{avatar}";
+                        <article class="avatar-gallery-card">
+                            @if (!string.Equals(avatar, "default.png", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <button type="button"
+                                        class="avatar-gallery-remove"
+                                        @onclick="() => EliminarArchivoAvatar(avatar)"
+                                        title="Eliminar avatar"
+                                        aria-label="Eliminar avatar">
+                                    <i class="bi bi-x-lg"></i>
+                                </button>
+                            }
+                            <img src="@avatarUrl" alt="Avatar almacenado" class="avatar-gallery-image" />
+                        </article>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private const int TipoUsuarioSistemaPredeterminado = 1;
+
+    private List<Usuario> usuariosList = new();
+    private List<EContaxRol> rolesEContax = new();
+    private List<EContaxUsuarioRolAsignadoDto> asignaciones = new();
+    private List<EContaxUserAssignmentDto> asignacionesContexto = new();
+    private List<EContaxEmpresaDto> empresasEContax = new();
+    private List<EContaxSucursalDto> sucursalesEContax = new();
+    private List<string> avatarFiles = new();
+    private Usuario tempUser = new();
+    private Usuario? usuarioSeleccionado;
+    private string nuevaClave = string.Empty;
+    private string? mensajeEstado;
+    private string? errorEstado;
+    private string? errorFormularioUsuario;
+    private UsuarioCajaDto? cajaUsuarioEditando;
+    private string serieCajaUsuarioInput = string.Empty;
+    private bool cargandoCajaUsuario;
+    private bool showModal;
+    private bool showAvatarSelector;
+    private bool showAvatarManager;
+    private bool showDetailModal;
+    private bool isLoading = true;
+    private int currentUserId;
+    private int rolSeleccionadoId;
+    private int empresaSeleccionadaId;
+    private int sucursalSeleccionadaId;
+
+    private int UsuariosConRol => usuariosList.Count(u => GetRolAsignado(u.IdUsuario) is not null);
+    private int UsuariosBloqueados => usuariosList.Count(u => u.CuentaBloqueada == true);
+    private bool RolSeleccionadoEsJefeEmpresa => EsRolJefeEmpresa(rolSeleccionadoId);
+    private IEnumerable<EContaxSucursalDto> SucursalesEmpresaSeleccionada =>
+        sucursalesEContax.Where(s => s.IdEmpresa == empresaSeleccionadaId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        CargarAvatares();
+    }
+
+    private async Task LoadData()
+    {
+        isLoading = true;
+        mensajeEstado = null;
+        errorEstado = null;
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (!await ValidarAccesoEContaxAsync(user))
+            {
+                return;
+            }
+
+            var tipoActual = int.TryParse(user.FindFirst("IdTipoUsuario")?.Value, out var idTipoUsuario)
+                ? idTipoUsuario
+                : 0;
+
+            usuariosList = await UserService.GetUsuariosAsync(currentUserId, tipoActual);
+            rolesEContax = (await AdministracionService.GetEContaxRolesAsync())
+                .Where(item => item.EstadoRol == 1)
+                .OrderBy(item => item.NombreRol)
+                .ToList();
+            asignaciones = await AdministracionService.GetEContaxUsuariosRolesAsync();
+            empresasEContax = await OrganizacionService.GetEmpresasAsync();
+            sucursalesEContax = await OrganizacionService.GetSucursalesAsync();
+            asignacionesContexto = await OrganizacionService.GetUsuariosContextoAsync(currentUserId);
+        }
+        catch (Exception ex)
+        {
+            errorEstado = $"No se pudieron cargar los usuarios. {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void VerDetalle(Usuario u)
+    {
+        usuarioSeleccionado = u;
+        showDetailModal = true;
+    }
+
+    private void CerrarDetalle()
+    {
+        showDetailModal = false;
+        usuarioSeleccionado = null;
+    }
+
+    private void CargarAvatares()
+    {
+        try
+        {
+            var path = Path.Combine(Env.WebRootPath, "images", "avatars");
+            if (!Directory.Exists(path))
+            {
+                Directory.CreateDirectory(path);
+            }
+
+            avatarFiles = Directory.GetFiles(path)
+                .Select(Path.GetFileName)
+                .Where(f => !string.IsNullOrWhiteSpace(f) &&
+                            (f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(f => string.Equals(f, "default.png", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenByDescending(f => f.StartsWith("Bandera-", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToList()!;
+        }
+        catch
+        {
+            avatarFiles = new List<string>();
+        }
+    }
+
+    private async Task AbrirModal(Usuario? u = null)
+    {
+        nuevaClave = string.Empty;
+        errorFormularioUsuario = null;
+        mensajeEstado = null;
+        errorEstado = null;
+        showAvatarSelector = false;
+        cajaUsuarioEditando = null;
+        serieCajaUsuarioInput = string.Empty;
+        empresaSeleccionadaId = empresasEContax.FirstOrDefault()?.IdEmpresa ?? 0;
+        sucursalSeleccionadaId = 0;
+
+        if (u != null)
+        {
+            tempUser = ClonarUsuario(u);
+            rolSeleccionadoId = GetRolAsignado(u.IdUsuario)?.IdRol ?? 0;
+            var contextoUsuario = GetContextoUsuario(u.IdUsuario);
+            empresaSeleccionadaId = contextoUsuario?.IdEmpresa ?? empresaSeleccionadaId;
+            sucursalSeleccionadaId = contextoUsuario?.IdSucursal ?? 0;
+            cargandoCajaUsuario = true;
+            showModal = true;
+            StateHasChanged();
+
+            cajaUsuarioEditando = await UserService.GetCajaUsuarioAsync(u.IdUsuario);
+            serieCajaUsuarioInput = cajaUsuarioEditando?.Serie ?? string.Empty;
+            cargandoCajaUsuario = false;
+        }
+        else
+        {
+            tempUser = new Usuario
+            {
+                IdUsuario = 0,
+                Estado = true,
+                IdTipoUsuario = TipoUsuarioSistemaPredeterminado,
+                AvatarUrl = null,
+                ClaveTemporal = true,
+                CuentaBloqueada = false
+            };
+            rolSeleccionadoId = 0;
+            var contextoActual = GetContextoUsuario(currentUserId);
+            empresaSeleccionadaId = contextoActual?.IdEmpresa ?? empresaSeleccionadaId;
+            sucursalSeleccionadaId = contextoActual?.IdSucursal ?? SucursalesEmpresaSeleccionada.FirstOrDefault()?.IdSucursal ?? 0;
+        }
+
+        showModal = true;
+    }
+
+    private void CerrarModal()
+    {
+        showModal = false;
+        showAvatarSelector = false;
+        errorFormularioUsuario = null;
+    }
+
+    private void ToggleAvatarSelector() => showAvatarSelector = !showAvatarSelector;
+
+    private void SeleccionarAvatar(string url)
+    {
+        tempUser.AvatarUrl = url;
+        showAvatarSelector = false;
+    }
+
+    private void AbrirGestorAvatares() => showAvatarManager = true;
+
+    private void OnFechaNacimientoChanged(ChangeEventArgs e)
+    {
+        var valor = e.Value?.ToString();
+        tempUser.FechaNacimiento = DateTime.TryParse(valor, out var fecha) ? fecha : null;
+    }
+
+    private async Task ResetearPassword(Usuario u)
+    {
+        const string passDefault = "00000000";
+        var confirm = await JS.InvokeAsync<bool>("confirm", $"Resetear contrasena de {u.Nombres} a '{passDefault}'?");
+        if (!confirm)
+        {
+            return;
+        }
+
+        var codigoAcceso = string.Empty;
+
+        try
+        {
+            const int minutosExpira = RecoveryCodeHelper.MinutosExpiracionPorDefecto;
+            codigoAcceso = RecoveryCodeHelper.GenerarCodigoNumerico();
+
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuarioDb = await context.Usuarios.FindAsync(u.IdUsuario);
+
+            if (usuarioDb == null)
+            {
+                await JS.ShowAlertAsync("No se pudo completar", "No se encontro el usuario para resetear la contrasena.", "warning");
+                return;
+            }
+
+            usuarioDb.PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(passDefault);
+            usuarioDb.ClaveTemporal = true;
+            usuarioDb.CuentaBloqueada = false;
+            usuarioDb.IntentosFallidos = 0;
+            usuarioDb.FechaDesbloqueo = null;
+            usuarioDb.FechaExpiracionToken = DateTime.Now.AddMinutes(minutosExpira);
+            usuarioDb.TokenRecuperacion = Simetric.Components.Helpers.SecurityHelper.HashPassword(codigoAcceso);
+
+            await context.SaveChangesAsync();
+            await EmailService.EnviarClaveTemporal(usuarioDb.Email, codigoAcceso, minutosExpira, "Reseteo de contrasena por administrador");
+            await JS.ShowAlertAsync(
+                "Contrasena restablecida",
+                "El usuario debe ingresar con '00000000' y usar el codigo enviado al correo para cambiarla.",
+                "success");
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync(
+                "Correo no enviado",
+                $"La contrasena se cambio a '{passDefault}', pero no se pudo enviar el correo. Codigo manual: {codigoAcceso}. Error: {ex.Message}",
+                "warning");
+        }
+        finally
+        {
+            await LoadData();
+        }
+    }
+
+    private async Task Guardar()
+    {
+        errorFormularioUsuario = ValidarFormularioUsuario();
+        if (!string.IsNullOrWhiteSpace(errorFormularioUsuario))
+        {
+            return;
+        }
+
+        if (tempUser.IdUsuario == 0)
+        {
+            tempUser.PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(nuevaClave.Trim());
+            tempUser.IdTipoUsuario = tempUser.IdTipoUsuario is > 0
+                ? tempUser.IdTipoUsuario
+                : TipoUsuarioSistemaPredeterminado;
+        }
+
+        await UserService.SaveUsuarioAsync(tempUser);
+
+        if (rolSeleccionadoId > 0)
+        {
+            var rolGuardado = await AdministracionService.AsignarEContaxRolAUsuarioAsync(tempUser.IdUsuario, rolSeleccionadoId);
+            if (!rolGuardado)
+            {
+                errorFormularioUsuario = "El usuario se guardo, pero no se pudo asignar el rol E-Contax.";
+                return;
+            }
+        }
+
+        try
+        {
+            await OrganizacionService.AsignarUsuarioAsync(
+                currentUserId,
+                tempUser.IdUsuario,
+                empresaSeleccionadaId,
+                sucursalSeleccionadaId > 0 ? sucursalSeleccionadaId : null);
+        }
+        catch (Exception ex)
+        {
+            errorFormularioUsuario = $"El usuario se guardo, pero no se pudo asignar empresa/sucursal. {ex.Message}";
+            return;
+        }
+
+        if (tempUser.IdUsuario > 0 && cajaUsuarioEditando != null)
+        {
+            try
+            {
+                await UserService.GuardarSerieCajaUsuarioAsync(tempUser.IdUsuario, serieCajaUsuarioInput);
+            }
+            catch (Exception ex)
+            {
+                errorFormularioUsuario = ex.Message;
+                return;
+            }
+        }
+
+        var idUsuarioGuardado = tempUser.IdUsuario;
+        await RefrescarSesionActualSiCorrespondeAsync(idUsuarioGuardado);
+        showModal = false;
+        errorFormularioUsuario = null;
+        await LoadData();
+        mensajeEstado = "Usuario guardado correctamente.";
+        MenuStateService.NotifyMenuChanged();
+        StateHasChanged();
+    }
+
+    private async Task RefrescarSesionActualSiCorrespondeAsync(int idUsuario)
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var claimIdUsuario = authState.User.FindFirst("IdUsuario")?.Value;
+
+        if (!int.TryParse(claimIdUsuario, out var idUsuarioActual) || idUsuarioActual != idUsuario)
+        {
+            return;
+        }
+
+        var usuarioActualizado = await UserService.GetUsuarioByIdAsync(idUsuario);
+        if (usuarioActualizado is null)
+        {
+            return;
+        }
+
+        if (AuthStateProvider is CustomAuthStateProvider authProvider)
+        {
+            await authProvider.UpdateAuthenticationState(usuarioActualizado);
+        }
+    }
+
+    private async Task DesbloquearUsuario(Usuario u)
+    {
+        await UserService.UnlockAccountAsync(u.IdUsuario);
+        await LoadData();
+        await JS.ShowToastAsync("Usuario desbloqueado");
+    }
+
+    private async Task ConfirmarBaja(int id)
+    {
+        if (!await JS.ConfirmDeleteAsync("Dar de baja usuario", "Se dara de baja al usuario seleccionado.", "Si, dar de baja"))
+        {
+            return;
+        }
+
+        try
+        {
+            var eliminado = await UserService.SoftDeleteAsync(id);
+            if (!eliminado)
+            {
+                await JS.ShowAlertAsync("No se pudo completar", "No encontramos el usuario que intentas dar de baja.", "warning");
+                return;
+            }
+
+            await LoadData();
+            MenuStateService.NotifyMenuChanged();
+            await JS.ShowToastAsync("Usuario dado de baja");
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("No se pudo eliminar", ex.Message, "error");
+        }
+    }
+
+    private async Task SubirNuevoAvatar(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            if (file.Size > 2 * 1024 * 1024)
+            {
+                await JS.ShowAlertAsync("Archivo muy grande", "El tamano maximo permitido es 2 MB.", "warning");
+                return;
+            }
+
+            var extension = Path.GetExtension(file.Name);
+            if (!new[] { ".jpg", ".jpeg", ".png" }.Contains(extension, StringComparer.OrdinalIgnoreCase))
+            {
+                await JS.ShowAlertAsync("Formato no permitido", "Solo se permiten imagenes JPG, JPEG y PNG.", "warning");
+                return;
+            }
+
+            var fileName = $"avatar_{Guid.NewGuid()}{extension}";
+            var path = Path.Combine(Env.WebRootPath, "images", "avatars", fileName);
+
+            await using var stream = file.OpenReadStream(2 * 1024 * 1024);
+            await using var fs = new FileStream(path, FileMode.Create);
+            await stream.CopyToAsync(fs);
+
+            CargarAvatares();
+            await JS.ShowToastAsync("Avatar subido");
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("No se pudo subir", ex.Message, "error");
+        }
+    }
+
+    private async Task EliminarArchivoAvatar(string nombreArchivo)
+    {
+        if (!await JS.ConfirmDeleteAsync("Eliminar avatar", "Se eliminara el avatar seleccionado."))
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(Env.WebRootPath, "images", "avatars", nombreArchivo);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            var avatarUrl = $"images/avatars/{nombreArchivo}";
+
+            await using (var context = await DbFactory.CreateDbContextAsync())
+            {
+                var usuariosConAvatar = await context.Usuarios
+                    .Where(u => u.AvatarUrl == avatarUrl)
+                    .ToListAsync();
+
+                foreach (var usuario in usuariosConAvatar)
+                {
+                    usuario.AvatarUrl = null;
+                }
+
+                if (usuariosConAvatar.Any())
+                {
+                    await context.SaveChangesAsync();
+                }
+            }
+
+            if (string.Equals(tempUser.AvatarUrl, avatarUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                tempUser.AvatarUrl = null;
+            }
+
+            if (usuarioSeleccionado is not null &&
+                string.Equals(usuarioSeleccionado.AvatarUrl, avatarUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                usuarioSeleccionado.AvatarUrl = null;
+            }
+
+            CargarAvatares();
+            await LoadData();
+            await JS.ShowToastAsync("Avatar eliminado");
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("No se pudo eliminar", ex.Message, "error");
+        }
+    }
+
+    private string? ValidarFormularioUsuario()
+    {
+        tempUser.Nombres = (tempUser.Nombres ?? string.Empty).Trim();
+        tempUser.Apellidos = (tempUser.Apellidos ?? string.Empty).Trim();
+        tempUser.Email = (tempUser.Email ?? string.Empty).Trim();
+        tempUser.Identificacion = (tempUser.Identificacion ?? string.Empty).Trim();
+        tempUser.Celular = null;
+        nuevaClave = (nuevaClave ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(tempUser.Nombres) || tempUser.Nombres.Length < 2)
+        {
+            return "Los nombres son obligatorios y deben tener al menos 2 caracteres.";
+        }
+
+        if (string.IsNullOrWhiteSpace(tempUser.Apellidos) || tempUser.Apellidos.Length < 2)
+        {
+            return "Los apellidos son obligatorios y deben tener al menos 2 caracteres.";
+        }
+
+        if (string.IsNullOrWhiteSpace(tempUser.Email))
+        {
+            return "El correo corporativo es obligatorio.";
+        }
+
+        if (!EsCorreoValido(tempUser.Email))
+        {
+            return "El correo corporativo no tiene un formato valido.";
+        }
+
+        if (usuariosList.Any(u =>
+                u.IdUsuario != tempUser.IdUsuario &&
+                string.Equals((u.Email ?? string.Empty).Trim(), tempUser.Email, StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Ya existe otro usuario registrado con ese correo.";
+        }
+
+        if (rolSeleccionadoId <= 0)
+        {
+            return "Debes seleccionar un rol E-Contax para el usuario.";
+        }
+
+        if (empresaSeleccionadaId <= 0)
+        {
+            return "Debes seleccionar la empresa del usuario.";
+        }
+
+        if (!RolSeleccionadoEsJefeEmpresa && sucursalSeleccionadaId <= 0)
+        {
+            return "Debes seleccionar la sucursal del usuario.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(tempUser.Identificacion) &&
+            !EsIdentificacionValida(tempUser.Identificacion))
+        {
+            return "La identificacion debe tener 10 o 13 digitos numericos.";
+        }
+
+        if (tempUser.IdUsuario == 0)
+        {
+            if (string.IsNullOrWhiteSpace(nuevaClave))
+            {
+                return "Debes establecer una contrasena inicial.";
+            }
+
+            if (nuevaClave.Length < 8)
+            {
+                return "La contrasena inicial debe tener al menos 8 caracteres.";
+            }
+        }
+
+        if (tempUser.IdUsuario > 0 && cajaUsuarioEditando != null)
+        {
+            var serieLimpia = (serieCajaUsuarioInput ?? string.Empty).Trim();
+            var regexSerie = new System.Text.RegularExpressions.Regex(@"^\d{3}-\d{3}$");
+
+            if (!regexSerie.IsMatch(serieLimpia))
+            {
+                return "El formato de la serie debe ser XXX-XXX (ej. 001-001).";
+            }
+
+            if (serieLimpia == "000-000" || serieLimpia.EndsWith("-000") || serieLimpia.StartsWith("000-"))
+            {
+                return "La serie no puede contener '000'. El SRI requiere numeracion desde 001.";
+            }
+        }
+
+        return null;
+    }
+
+    private EContaxUsuarioRolAsignadoDto? GetRolAsignado(int idUsuario)
+    {
+        var asignacion = asignaciones.FirstOrDefault(item => item.IdUsuario == idUsuario && item.Estado);
+        if (asignacion is null)
+        {
+            return null;
+        }
+
+        var rolActivo = rolesEContax.Any(item => item.IdRol == asignacion.IdRol);
+        return rolActivo ? asignacion : null;
+    }
+
+    private EContaxUserAssignmentDto? GetContextoUsuario(int idUsuario) =>
+        asignacionesContexto.FirstOrDefault(item => item.IdUsuario == idUsuario);
+
+    private void OnEmpresaSeleccionadaChanged(ChangeEventArgs e)
+    {
+        empresaSeleccionadaId = int.TryParse(e.Value?.ToString(), out var idEmpresa) ? idEmpresa : 0;
+
+        if (!SucursalesEmpresaSeleccionada.Any(s => s.IdSucursal == sucursalSeleccionadaId))
+        {
+            sucursalSeleccionadaId = SucursalesEmpresaSeleccionada.FirstOrDefault()?.IdSucursal ?? 0;
+        }
+    }
+
+    private bool EsRolJefeEmpresa(int idRol)
+    {
+        var nombre = rolesEContax.FirstOrDefault(item => item.IdRol == idRol)?.NombreRol;
+        return EContaxTenantService.EsRolJefeEmpresa(nombre);
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(System.Security.Claims.ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        currentUserId = int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) ? userId : 0;
+        if (currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(currentUserId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static Usuario ClonarUsuario(Usuario u) => new()
+    {
+        IdUsuario = u.IdUsuario,
+        Nombres = u.Nombres,
+        Apellidos = u.Apellidos,
+        NombreEmpresa = u.NombreEmpresa,
+        Email = u.Email,
+        DireccionEmpresa = u.DireccionEmpresa,
+        PasswordHash = u.PasswordHash,
+        IdTipoUsuario = u.IdTipoUsuario,
+        IdTipoIdentificacion = u.IdTipoIdentificacion,
+        IntentosFallidos = u.IntentosFallidos,
+        CuentaBloqueada = u.CuentaBloqueada,
+        FechaDesbloqueo = u.FechaDesbloqueo,
+        AvatarUrl = u.AvatarUrl,
+        TokenRecuperacion = u.TokenRecuperacion,
+        FechaExpiracionToken = u.FechaExpiracionToken,
+        MfaHabilitado = u.MfaHabilitado,
+        MfaSecretKey = u.MfaSecretKey,
+        CodigoSmsTemp = u.CodigoSmsTemp,
+        FechaCreacion = u.FechaCreacion,
+        UltimoAcceso = u.UltimoAcceso,
+        Estado = u.Estado,
+        ClaveTemporal = u.ClaveTemporal,
+        Celular = u.Celular,
+        Identificacion = u.Identificacion,
+        FechaNacimiento = u.FechaNacimiento,
+        idJefe = u.idJefe,
+        estadoAsociado = u.estadoAsociado,
+        SaldoDocumentos = u.SaldoDocumentos,
+        FechaUltimaRecargaDocumentos = u.FechaUltimaRecargaDocumentos,
+        HistorialComprasDocumentosJson = u.HistorialComprasDocumentosJson
+    };
+
+    private static bool TieneAvatar(string? avatarUrl) =>
+        !string.IsNullOrWhiteSpace(avatarUrl) &&
+        !avatarUrl.EndsWith("/default.png", StringComparison.OrdinalIgnoreCase) &&
+        !avatarUrl.EndsWith("\\default.png", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatFechaNacimiento(DateTime? fecha) =>
+        fecha.HasValue ? fecha.Value.ToString("yyyy-MM-dd") : string.Empty;
+
+    private static string FormatFechaNacimientoDetalle(DateTime? fecha) =>
+        fecha.HasValue ? fecha.Value.ToString("dd/MM/yyyy") : "No registrada";
+
+    private static bool EsCorreoValido(string correo)
+    {
+        try
+        {
+            _ = new System.Net.Mail.MailAddress(correo);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool EsIdentificacionValida(string identificacion) =>
+        identificacion.All(char.IsDigit) && identificacion.Length is 10 or 13;
+}

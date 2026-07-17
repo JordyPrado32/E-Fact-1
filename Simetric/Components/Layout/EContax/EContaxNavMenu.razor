@@ -1,0 +1,356 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Routing
+@using System.Security.Claims
+@using Simetric.Models.EContax
+@using Simetric.Services
+@using Simetric.Services.EContax
+@implements IDisposable
+@inject AuthenticationStateProvider AuthStateProvider
+@inject EContaxAdministracionService AdministracionService
+@inject MenuStateService MenuStateService
+@inject NavigationManager NavManager
+
+<div class="nav-item">
+    <NavLink class="menu-link" href="/portal-servicios" Match="NavLinkMatch.Prefix" @onclick="NotifyNavigateAsync">
+        <span class="menu-icon">
+            <i class="ri-apps-2-line"></i>
+        </span>
+        <span class="menu-text">Servicios</span>
+    </NavLink>
+</div>
+
+@if (isLoading)
+{
+    <div class="loading-pill">
+        <span class="spinner-border spinner-border-sm" role="status"></span>
+        <span>Cargando modulos...</span>
+    </div>
+}
+else if (listadoMenus.Any())
+{
+    @foreach (var padre in GetMenusPadreOrdenados())
+    {
+        var hijos = GetMenusHijosOrdenados(padre.IdMenu).ToList();
+
+        if (hijos.Any())
+        {
+            <div class="nav-item">
+                <button type="button"
+                        class="menu-button @(IsSubmenuOpen(padre) ? "is-active" : string.Empty)"
+                        @onclick="() => ToggleSubmenu(padre.IdMenu)">
+                    <span class="menu-icon">
+                        <i class="@ResolveIcono(padre.IconoMenu, "ri-folder-line")"></i>
+                    </span>
+                    <span class="menu-text">@padre.NombreMenu</span>
+                    <i class="menu-caret @(IsSubmenuOpen(padre) ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+                </button>
+
+                @if (IsSubmenuOpen(padre))
+                {
+                    <div class="submenu-panel animate__animated animate__fadeIn">
+                        @foreach (var hijo in hijos)
+                        {
+                            if (string.IsNullOrWhiteSpace(hijo.UrlMenu))
+                            {
+                                continue;
+                            }
+
+                            <NavLink class="menu-link submenu-link"
+                                     href="@hijo.UrlMenu"
+                                     Match="@GetNavLinkMatch(hijo.UrlMenu)"
+                                     @onclick="NotifyNavigateAsync">
+                                <span class="menu-icon">
+                                    <i class="@ResolveIcono(hijo.IconoMenu, "ri-subtract-line")"></i>
+                                </span>
+                                <span class="menu-text">@hijo.NombreMenu</span>
+                            </NavLink>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(padre.UrlMenu))
+        {
+            <div class="nav-item">
+                <NavLink class="menu-link"
+                         href="@padre.UrlMenu"
+                         Match="@GetNavLinkMatch(padre.UrlMenu)"
+                         @onclick="NotifyNavigateAsync">
+                    <span class="menu-icon">
+                        <i class="@ResolveIcono(padre.IconoMenu, "ri-circle-line")"></i>
+                    </span>
+                    <span class="menu-text">@padre.NombreMenu</span>
+                </NavLink>
+            </div>
+        }
+    }
+}
+else
+{
+    <div class="loading-pill">
+        <i class="ri-shield-keyhole-line"></i>
+        <span>@GetMensajeSinMenus()</span>
+    </div>
+}
+
+@code {
+    [Parameter] public EventCallback OnNavigate { get; set; }
+
+    private readonly List<EContaxMenu> listadoMenus = new();
+    private readonly HashSet<int> submenusActivosCerrados = new();
+    private bool isLoading = true;
+    private int menuAbiertoId;
+    private int? menuPadreActivoId;
+    private int? currentUserId;
+    private int? currentRoleId;
+    private bool isSystemAdmin;
+    private const int BootstrapAdministracionId = -900000;
+    private const int BootstrapRolesPermisosId = -900001;
+
+    protected override async Task OnInitializedAsync()
+    {
+        NavManager.LocationChanged += OnLocationChanged;
+        MenuStateService.OnMenuChanged += HandleMenuChanged;
+        await CargarMenus();
+    }
+
+    private async void HandleMenuChanged()
+    {
+        await CargarMenus();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleSubmenu(int idMenu)
+    {
+        var padre = listadoMenus.FirstOrDefault(item => item.IdMenu == idMenu);
+        var estaAbierto = padre is not null
+            ? IsSubmenuOpen(padre)
+            : IsSubmenuOpen(idMenu);
+
+        if (estaAbierto)
+        {
+            menuAbiertoId = 0;
+
+            if (padre is not null && IsMenuPadreActivo(padre))
+            {
+                submenusActivosCerrados.Add(idMenu);
+            }
+
+            return;
+        }
+
+        submenusActivosCerrados.Remove(idMenu);
+        menuAbiertoId = idMenu;
+    }
+
+    private async Task NotifyNavigateAsync()
+    {
+        await OnNavigate.InvokeAsync();
+    }
+
+    private async Task CargarMenus()
+    {
+        isLoading = true;
+        listadoMenus.Clear();
+        currentUserId = null;
+        currentRoleId = null;
+        isSystemAdmin = false;
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated != true)
+            {
+                return;
+            }
+
+            currentUserId = ObtenerIdUsuario(user);
+            isSystemAdmin = EsSuperAdminSistema(user);
+            if (currentUserId is null or <= 0)
+            {
+                return;
+            }
+
+            currentRoleId = await AdministracionService.GetEContaxRolIdUsuarioAsync(currentUserId.Value);
+            var menus = await AdministracionService.GetEContaxMenusVisiblesPorUsuarioAsync(currentUserId.Value);
+            listadoMenus.AddRange(menus);
+            AgregarAccesoConfiguracionBase();
+            AsegurarSubmenuActivo();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error en EContaxNavMenu: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private IEnumerable<EContaxMenu> GetMenusPadreOrdenados() =>
+        listadoMenus
+            .Where(item => !item.IdPadre.HasValue || item.IdPadre == 0)
+            .OrderBy(item => item.OrdenMenu ?? 9999)
+            .ThenBy(item => item.IdMenu);
+
+    private IEnumerable<EContaxMenu> GetMenusHijosOrdenados(int idPadre)
+    {
+        var padre = listadoMenus.FirstOrDefault(item => item.IdMenu == idPadre);
+
+        return listadoMenus
+            .Where(item => item.IdPadre == idPadre && !CoincideRutaMenu(item.UrlMenu, padre?.UrlMenu))
+            .GroupBy(item => NormalizarRutaMenu(item.UrlMenu) ?? $"menu:{item.IdMenu}")
+            .Select(group => group.First())
+            .OrderBy(item => item.OrdenMenu ?? 9999)
+            .ThenBy(item => item.IdMenu);
+    }
+
+
+    private bool IsSubmenuOpen(EContaxMenu padre) =>
+        IsSubmenuOpen(padre.IdMenu) ||
+        (IsMenuPadreActivo(padre) && !submenusActivosCerrados.Contains(padre.IdMenu));
+
+    private bool IsSubmenuOpen(int idMenu) => menuAbiertoId == idMenu;
+
+    private bool IsMenuPadreActivo(EContaxMenu padre) =>
+        IsRutaActual(padre.UrlMenu) ||
+        listadoMenus.Any(item => item.IdPadre == padre.IdMenu && IsRutaActual(item.UrlMenu));
+
+    private void AsegurarSubmenuActivo()
+    {
+        var padreActivo = GetMenusPadreOrdenados().FirstOrDefault(IsMenuPadreActivo);
+
+        if (padreActivo?.IdMenu != menuPadreActivoId)
+        {
+            submenusActivosCerrados.Clear();
+            menuPadreActivoId = padreActivo?.IdMenu;
+            menuAbiertoId = padreActivo?.IdMenu ?? 0;
+            return;
+        }
+
+        if (padreActivo is not null &&
+            menuAbiertoId == 0 &&
+            !submenusActivosCerrados.Contains(padreActivo.IdMenu))
+        {
+            menuAbiertoId = padreActivo.IdMenu;
+        }
+    }
+
+    private bool IsRutaActual(string? ruta)
+    {
+        if (string.IsNullOrWhiteSpace(ruta))
+        {
+            return false;
+        }
+
+        var rutaActual = NormalizarRutaMenu("/" + ObtenerPathRelativoActual());
+        var rutaMenu = NormalizarRutaMenu(ruta);
+
+        return !string.IsNullOrWhiteSpace(rutaMenu) &&
+               (string.Equals(rutaActual, rutaMenu, StringComparison.OrdinalIgnoreCase) ||
+                rutaActual?.StartsWith($"{rutaMenu}/", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    private NavLinkMatch GetNavLinkMatch(string? ruta) =>
+        CoincideRutaMenu(ruta, EContaxRoutes.Dashboard) ? NavLinkMatch.All : NavLinkMatch.Prefix;
+
+    private static string ResolveIcono(string? icono, string fallback) =>
+        string.IsNullOrWhiteSpace(icono) ? fallback : icono.Trim();
+
+    private static bool CoincideRutaMenu(string? rutaActual, string? rutaObjetivo) =>
+        !string.IsNullOrWhiteSpace(rutaActual) &&
+        !string.IsNullOrWhiteSpace(rutaObjetivo) &&
+        string.Equals(
+            rutaActual.Trim().TrimEnd('/'),
+            rutaObjetivo.Trim().TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string? NormalizarRutaMenu(string? ruta) =>
+        string.IsNullOrWhiteSpace(ruta) ? null : ruta.Trim().TrimEnd('/').ToLowerInvariant();
+
+    private string ObtenerPathRelativoActual()
+    {
+        var relativePath = NavManager.ToBaseRelativePath(NavManager.Uri);
+        var separatorIndex = relativePath.IndexOfAny(new[] { '?', '#' });
+        return separatorIndex >= 0 ? relativePath[..separatorIndex] : relativePath;
+    }
+
+    private static int? ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var idUsuario) ? idUsuario : null;
+    }
+
+    private string GetMensajeSinMenus() =>
+        currentRoleId is > 0
+            ? $"Sin menus asignados para el rol E-Contax {currentRoleId}."
+            : "Sin rol de E-Contax asignado a este usuario.";
+
+    private void AgregarAccesoConfiguracionBase()
+    {
+        if (!EsSuperAdminActual())
+        {
+            return;
+        }
+
+        var padre = listadoMenus.FirstOrDefault(item =>
+            (!item.IdPadre.HasValue || item.IdPadre == 0) &&
+            string.Equals(item.NombreMenu?.Trim(), "Administracion", StringComparison.OrdinalIgnoreCase));
+
+        if (padre is null)
+        {
+            padre = new EContaxMenu
+            {
+                IdMenu = BootstrapAdministracionId,
+                NombreMenu = "Administracion",
+                IconoMenu = "ri-settings-3-line",
+                EstadoMenu = 1,
+                IdPadre = null
+            };
+
+            listadoMenus.Add(padre);
+        }
+
+        if (listadoMenus.Any(item => CoincideRutaMenu(item.UrlMenu, EContaxRoutes.AdministracionRoles)))
+        {
+            return;
+        }
+
+        listadoMenus.Add(new EContaxMenu
+        {
+            IdMenu = BootstrapRolesPermisosId,
+            NombreMenu = "Roles y permisos",
+            UrlMenu = EContaxRoutes.AdministracionRoles,
+            IconoMenu = "ri-shield-keyhole-line",
+            EstadoMenu = 1,
+            IdPadre = padre.IdMenu
+        });
+    }
+
+    private static bool EsSuperAdminSistema(ClaimsPrincipal user) =>
+        string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+    private bool EsSuperAdminActual() => isSystemAdmin;
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(() =>
+        {
+            AsegurarSubmenuActivo();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        NavManager.LocationChanged -= OnLocationChanged;
+        MenuStateService.OnMenuChanged -= HandleMenuChanged;
+    }
+}

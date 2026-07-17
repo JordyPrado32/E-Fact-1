@@ -1,0 +1,97 @@
+@page "/servicios/{ServiceKey}"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Extensions
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using Simetric.Services.EDeclara
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Cargando servicio | Numerica</PageTitle>
+
+@code {
+    [Parameter]
+    public string ServiceKey { get; set; } = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateToIfNeeded("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+        {
+            NavManager.NavigateToIfNeeded("/login", forceLoad: true);
+            return;
+        }
+
+        var serviceKey = ServiceKey.Trim().ToLowerInvariant();
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        if (isSuperAdmin)
+        {
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(serviceKey);
+            var rutaAdmin = ObtenerRutaDashboard(serviceKey) ?? "/dashboard";
+            NavManager.NavigateToIfNeeded(rutaAdmin, forceLoad: true);
+            return;
+        }
+
+        try
+        {
+            var catalog = await AppAccessService.GetCatalogForUserAsync(userId, isSuperAdmin);
+
+            // Busca por clave exacta O por la clave canónica del servicio
+            var service = catalog.FirstOrDefault(x =>
+                string.Equals(x.Clave, serviceKey, StringComparison.OrdinalIgnoreCase));
+
+            if (service is null)
+            {
+                NavManager.NavigateToIfNeeded("/portal-servicios", forceLoad: true);
+                return;
+            }
+
+            if (!service.TieneAcceso)
+            {
+                NavManager.NavigateToIfNeeded(
+                    $"/suscripciones?servicio={Uri.EscapeDataString(service.Clave)}",
+                    forceLoad: true);
+                return;
+            }
+
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(service.Clave);
+
+            // Intenta con la clave que vino en la URL, luego con la clave del catálogo
+            var ruta = ObtenerRutaDashboard(serviceKey)
+                    ?? ObtenerRutaDashboard(service.Clave)
+                    ?? service.RutaAcceso
+                    ?? "/portal-servicios";
+
+            NavManager.NavigateToIfNeeded(ruta, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ServicioModulo] Error: {ex.Message}");
+            NavManager.NavigateToIfNeeded("/portal-servicios", forceLoad: true);
+        }
+    }
+
+    private static string? ObtenerRutaDashboard(string serviceKey) => serviceKey.ToLowerInvariant() switch
+    {
+        EContaxRoutes.ServiceKey => EContaxRoutes.Dashboard,   // clave canónica en BD
+        "e-contax" => EContaxRoutes.Dashboard,   // clave que puede venir en la URL
+        EDeclaraRoutes.ServiceKey => EDeclaraRoutes.Dashboard,
+        "e-fact" => "/dashboard",
+        _ => null
+    };
+}

@@ -1,0 +1,1565 @@
+@page "/solicitud/nueva"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.Models
+@using Simetric.Services
+@inject PagoService PagoService
+@inject SolicitudService SolicitudService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<div class="solicitud-shell" data-tour="solicitud.page">
+    <section class="solicitud-hero" data-tour="solicitud.hero">
+        <div>
+            <span class="solicitud-kicker">Firma electrónica</span>
+            <h2>Solicitud guiada en dos pasos</h2>
+            <p>
+                Primero define el tipo de firma y la vigencia requerida. Después completa tus datos
+                y adjunta la documentación obligatoria.
+            </p>
+        </div>
+
+        <div class="solicitud-hero-badges">
+            <span class="solicitud-hero-chip"><i class="bi bi-shield-check"></i> Validación completa</span>
+        </div>
+    </section>
+
+    <EditForm EditContext="editContext" OnValidSubmit="Enviar">
+        <DataAnnotationsValidator />
+
+        @if (mostrarResumenValidacion)
+        {
+            <ValidationSummary class="solicitud-validation-summary" />
+        }
+
+        @if (!string.IsNullOrWhiteSpace(mensajeGeneralFormulario))
+        {
+            <div class="solicitud-alert solicitud-alert-danger">
+                <i class="bi bi-exclamation-triangle-fill"></i>
+                <span>@mensajeGeneralFormulario</span>
+            </div>
+        }
+
+        @if (paso == 1)
+        {
+            <section class="solicitud-card" data-tour="solicitud.step1">
+                <div class="solicitud-card-header">
+                    <div class="solicitud-step-pill">Paso 1</div>
+                    <div>
+                        <h3>Configura la firma que necesitas</h3>
+                        <p>Esta selección desbloquea el resto del formulario y deja el flujo en el orden correcto.</p>
+                    </div>
+                </div>
+
+                <div class="solicitud-setup-shell">
+                    <div class="solicitud-setup-card">
+                        <div class="solicitud-field-top">
+                            <label class="solicitud-field-label">Tipo de firma requerida *</label>
+                            <span class="solicitud-field-tag">Servicio</span>
+                        </div>
+
+                        <div class="solicitud-choice-grid">
+                            <button type="button"
+                                    class="solicitud-choice-card is-selected"
+                                    @onclick='() => SeleccionarFormatoFirma("ARCHIVO_P12")'>
+                                <span class="solicitud-choice-icon">
+                                    <i class="bi bi-file-earmark-lock"></i>
+                                </span>
+                                <span class="solicitud-choice-copy">
+                                    <strong>Archivo .P12</strong>
+                                    <small>Descargable para usarlo desde tu equipo.</small>
+                                </span>
+                            </button>
+
+                        </div>
+
+                        <ValidationMessage For="@(() => solicitud.SolFormatoFirma)" class="solicitud-field-error" />
+                    </div>
+
+                    <div class="solicitud-setup-card">
+                        <div class="solicitud-field-top">
+                            <label class="solicitud-field-label">Vigencia requerida *</label>
+                            <span class="solicitud-field-tag">Tiempo</span>
+                        </div>
+
+                        <div class="solicitud-duration-grid">
+                            @foreach (var vigencia in VigenciasDisponibles)
+                            {
+                                <button type="button"
+                                        class="solicitud-duration-pill @(solicitud.SolVigencia == vigencia ? "is-selected" : string.Empty)"
+                                        @onclick='() => SeleccionarVigencia(vigencia)'>
+                                    <div>
+                                        <strong>@GetVigenciaLabel(vigencia)</strong>
+                                        <small>@GetPrecioVigencia(vigencia)</small>
+                                    </div>
+                                </button>
+                            }
+                        </div>
+
+                        <ValidationMessage For="@(() => solicitud.SolVigencia)" class="solicitud-field-error" />
+                        <div class="solicitud-empty-state mt-3">
+                            <i class="bi bi-cash-coin"></i>
+                            <div>
+                                <strong>Precio final al cliente.</strong>
+                                <span>Los valores mostrados incluyen nuestro servicio, acompañamiento y valor agregado sobre el costo base del proveedor.</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                @if (!ConfiguracionFirmaCompleta)
+                {
+                    <div class="solicitud-empty-state">
+                        <i class="bi bi-arrow-up-right-circle"></i>
+                        <div>
+                            <strong>Completa primero la configuración de la firma.</strong>
+                            <span>En cuanto selecciones el tipo y la vigencia, aparecerá el formulario completo.</span>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="solicitud-config-banner">
+                        <span class="solicitud-config-chip">@GetFormatoFirmaLabel()</span>
+                        <span class="solicitud-config-chip">@GetVigenciaLabel(solicitud.SolVigencia)</span>
+                    </div>
+                    <section class="solicitud-persona-panel">
+                        <div class="solicitud-persona-header">
+                            <span class="solicitud-section-kicker">Tipo de persona</span>
+                            <h4>Selecciona el titular</h4>
+                        </div>
+
+                        <div class="solicitud-persona-grid">
+                            @foreach (var tipoPersona in TiposPersonaDisponibles)
+                            {
+                                var tipoPersonaSeleccionado = string.Equals(
+                                    solicitud.SolTipoPersona,
+                                    tipoPersona.Valor,
+                                    StringComparison.OrdinalIgnoreCase);
+
+                                <button type="button"
+                                        class="solicitud-persona-card @(tipoPersonaSeleccionado ? "is-selected" : string.Empty)"
+                                        @onclick='() => SeleccionarTipoPersona(tipoPersona.Valor)'>
+                                    <span class="solicitud-persona-icon">
+                                        <i class="@tipoPersona.Icono"></i>
+                                    </span>
+                                    <span class="solicitud-persona-copy">
+                                        <strong>@tipoPersona.Titulo</strong>
+                                        <small>@tipoPersona.Descripcion</small>
+                                    </span>
+                                </button>
+                            }
+                        </div>
+
+                        <ValidationMessage For="@(() => solicitud.SolTipoPersona)" class="solicitud-field-error" />
+                    </section>
+
+                    <div class="solicitud-section-head">
+                        <span class="solicitud-section-kicker">Datos personales</span>
+                        <h4>Completa la información del solicitante</h4>
+                    </div>
+
+                    <div class="solicitud-grid" data-tour="solicitud.form">
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Tipo de documento *</label>
+                                <span class="solicitud-field-tag">Identidad</span>
+                            </div>
+                            <div class="solicitud-input-shell solicitud-input-shell-select">
+                                <i class="bi bi-person-vcard solicitud-input-icon"></i>
+                                <InputSelect @bind-Value="solicitud.SolTipoIdentificacion"
+                                             class="solicitud-field-input"
+                                             @onchange="OnTipoIdentificacionChanged">
+                                    <option value="">Seleccione...</option>
+                                    <option value="CEDULA">Cédula</option>
+                                    <option value="PASAPORTE">Pasaporte</option>
+                                </InputSelect>
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolTipoIdentificacion)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Identificación *</label>
+                                <span class="solicitud-field-tag">Documento</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-credit-card solicitud-input-icon"></i>
+                                @if (solicitud.SolTipoIdentificacion == "CEDULA")
+                                {
+                                    <InputText @bind-Value="solicitud.SolIdentificacion"
+                                               class="solicitud-field-input solicitud-field-input-code"
+                                               maxlength="10"
+                                               placeholder="Ej: 1723456789"
+                                               autocomplete="off"
+                                               inputmode="numeric"
+                                               spellcheck="false"
+                                               oninput="this.value = this.value.replace(/\D/g, '').slice(0, 10);" />
+                                }
+                                else
+                                {
+                                    <InputText @bind-Value="solicitud.SolIdentificacion"
+                                               class="solicitud-field-input solicitud-field-input-code"
+                                               maxlength="20"
+                                               placeholder="Ej: AB1234567"
+                                               autocomplete="off"
+                                               spellcheck="false"
+                                               oninput="this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20);" />
+                                }
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolIdentificacion)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card solicitud-ruc-card">
+                            <div class="solicitud-field-top solicitud-field-top-ruc">
+                                <span class="solicitud-field-label">Posee RUC?</span>
+
+                                @if (solicitud.SolTipoPersona == TipoPersonaJuridica)
+                                {
+                                    <div class="solicitud-switch solicitud-switch-locked solicitud-switch-locked-compact">
+                                        <span class="solicitud-switch-lock">
+                                            <i class="bi bi-lock-fill"></i>
+                                        </span>
+                                        <span>Obligatorio</span>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="form-check form-switch solicitud-switch solicitud-switch-inline">
+                                        <InputCheckbox @bind-Value="solicitud.SolTieneRuc" class="form-check-input" id="checkRuc" aria-label="Posee RUC" />
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="solicitud-inline-input-shell @(!solicitud.SolTieneRuc ? "solicitud-input-shell-disabled" : string.Empty)">
+                                <i class="bi bi-receipt-cutoff solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolNroRuc"
+                                           class="solicitud-field-input solicitud-field-input-code"
+                                           maxlength="13"
+                                           placeholder="Ingrese los 13 digitos del RUC"
+                                           autocomplete="off"
+                                           inputmode="numeric"
+                                           spellcheck="false"
+                                           disabled="@(!solicitud.SolTieneRuc)"
+                                           oninput="this.value = this.value.replace(/\D/g, '').slice(0, 13);" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolNroRuc)" class="solicitud-field-error" />
+                        </div>
+
+                        @if (solicitud.SolTipoIdentificacion == "CEDULA")
+                        {
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Código dactilar *</label>
+                                    <span class="solicitud-field-tag">Cédula</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-fingerprint solicitud-input-icon"></i>
+                                    <InputText @bind-Value="solicitud.SolCodigoDactilar"
+                                               class="solicitud-field-input solicitud-field-input-uppercase solicitud-field-input-code"
+                                               maxlength="10"
+                                               placeholder="Ej: A1234B5678"
+                                               autocomplete="off"
+                                               spellcheck="false"
+                                               oninput="this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);" />
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolCodigoDactilar)" class="solicitud-field-error" />
+                            </div>
+                        }
+
+                        @if (solicitud.SolTipoPersona == TipoPersonaJuridica)
+                        {
+                            <div class="solicitud-section-head solicitud-section-head-corporate solicitud-field-wide">
+                                <span class="solicitud-section-kicker">Datos de la empresa</span>
+                                <h4>Información corporativa</h4>
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Razón social de la empresa *</label>
+                                    <span class="solicitud-field-tag">Empresa</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-building-fill-gear solicitud-input-icon"></i>
+                                    <InputText @bind-Value="solicitud.SolCompanyName"
+                                               class="solicitud-field-input"
+                                               maxlength="150"
+                                               placeholder="Ej: SIMETRIC S.A." />
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolCompanyName)" class="solicitud-field-error" />
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Departamento</label>
+                                    <span class="solicitud-field-tag solicitud-field-tag-soft">Opcional</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-diagram-3 solicitud-input-icon"></i>
+                                    <InputText @bind-Value="solicitud.SolDepartment"
+                                               class="solicitud-field-input"
+                                               maxlength="100"
+                                               placeholder="Ej: TI / Financiero" />
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolDepartment)" class="solicitud-field-error" />
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Cargo *</label>
+                                    <span class="solicitud-field-tag">Empresa</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-person-workspace solicitud-input-icon"></i>
+                                    <InputText @bind-Value="solicitud.SolPosition"
+                                               class="solicitud-field-input"
+                                               maxlength="100"
+                                               placeholder="Ej: Gerente General" />
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolPosition)" class="solicitud-field-error" />
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Motivo de firma *</label>
+                                    <span class="solicitud-field-tag">Empresa</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-patch-question-fill solicitud-input-icon"></i>
+                                    <InputText @bind-Value="solicitud.SolReason"
+                                               class="solicitud-field-input"
+                                               maxlength="250"
+                                               placeholder="Ej: Facturacion Electronica" />
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolReason)" class="solicitud-field-error" />
+                            </div>
+
+                            <div class="solicitud-section-head solicitud-section-head-manager solicitud-field-wide">
+                                <span class="solicitud-section-kicker">Representante legal</span>
+                                <h4>Información del representante</h4>
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Tipo de documento *</label>
+                                    <span class="solicitud-field-tag">Representante</span>
+                                </div>
+                                <div class="solicitud-input-shell solicitud-input-shell-select">
+                                    <i class="bi bi-person-vcard solicitud-input-icon"></i>
+                                    <InputSelect @bind-Value="solicitud.SolIdentificationTypeManager"
+                                                 class="solicitud-field-input">
+                                        <option value="">Seleccione...</option>
+                                        <option value="CEDULA">Cédula</option>
+                                        <option value="PASAPORTE">Pasaporte</option>
+                                    </InputSelect>
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolIdentificationTypeManager)" class="solicitud-field-error" />
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Identificación *</label>
+                                    <span class="solicitud-field-tag">Representante</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-credit-card solicitud-input-icon"></i>
+                                    @if (solicitud.SolIdentificationTypeManager == "CEDULA")
+                                    {
+                                        <InputText @bind-Value="solicitud.SolIdentificationManager"
+                                                   class="solicitud-field-input solicitud-field-input-code"
+                                                   maxlength="10"
+                                                   placeholder="Ej: 1723456789"
+                                                   autocomplete="off"
+                                                   inputmode="numeric"
+                                                   spellcheck="false"
+                                                   oninput="this.value = this.value.replace(/\D/g, '').slice(0, 10);" />
+                                    }
+                                    else
+                                    {
+                                        <InputText @bind-Value="solicitud.SolIdentificationManager"
+                                                   class="solicitud-field-input solicitud-field-input-code"
+                                                   maxlength="20"
+                                                   placeholder="Ej: AB1234567"
+                                                   autocomplete="off"
+                                                   spellcheck="false"
+                                                   oninput="this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20);" />
+                                    }
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolIdentificationManager)" class="solicitud-field-error" />
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Nombres del Representante *</label>
+                                    <span class="solicitud-field-tag">Representante</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-person-fill solicitud-input-icon"></i>
+                                    <InputText @bind-Value="solicitud.SolNamesManager"
+                                               class="solicitud-field-input"
+                                               maxlength="100"
+                                               oninput="this.value = this.value.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]/g, '').slice(0, 100);" />
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolNamesManager)" class="solicitud-field-error" />
+                            </div>
+
+                            <div class="solicitud-field-card">
+                                <div class="solicitud-field-top">
+                                    <label class="solicitud-field-label">Apellidos del Representante *</label>
+                                    <span class="solicitud-field-tag">Representante</span>
+                                </div>
+                                <div class="solicitud-input-shell">
+                                    <i class="bi bi-person-fill solicitud-input-icon"></i>
+                                    <InputText @bind-Value="solicitud.SolLastNameManager"
+                                               class="solicitud-field-input"
+                                               maxlength="100"
+                                               oninput="this.value = this.value.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]/g, '').slice(0, 100);" />
+                                </div>
+                                <ValidationMessage For="@(() => solicitud.SolLastNameManager)" class="solicitud-field-error" />
+                            </div>
+                        }
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Nombres *</label>
+                                <span class="solicitud-field-tag">Personal</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-person solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolNombres"
+                                           class="solicitud-field-input"
+                                           maxlength="100"
+                                           autocomplete="given-name"
+                                           oninput="this.value = this.value.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]/g, '').slice(0, 100);" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolNombres)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Primer apellido *</label>
+                                <span class="solicitud-field-tag">Personal</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-person solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolPrimerApellido"
+                                           class="solicitud-field-input"
+                                           maxlength="100"
+                                           autocomplete="family-name"
+                                           oninput="this.value = this.value.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]/g, '').slice(0, 100);" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolPrimerApellido)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Segundo apellido</label>
+                                <span class="solicitud-field-tag solicitud-field-tag-soft">Opcional</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-person solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolSegundoApellido"
+                                           class="solicitud-field-input"
+                                           maxlength="100"
+                                           autocomplete="additional-name"
+                                           oninput="this.value = this.value.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]/g, '').slice(0, 100);" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolSegundoApellido)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Fecha de nacimiento *</label>
+                                <span class="solicitud-field-tag">Edad</span>
+                            </div>
+                            <div class="solicitud-input-shell solicitud-input-shell-date">
+                                <i class="bi bi-calendar-event solicitud-input-icon"></i>
+                                <InputDate TValue="DateTime"
+                                           @bind-Value="solicitud.SolFechaNacimiento"
+                                           @onblur="@(_ => VerificarEdad())"
+                                           class="solicitud-field-input"
+                                           max="@fechaMaximaNacimiento" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolFechaNacimiento)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Sexo *</label>
+                                <span class="solicitud-field-tag">Perfil</span>
+                            </div>
+                            <div class="solicitud-input-shell solicitud-input-shell-select">
+                                <i class="bi bi-gender-ambiguous solicitud-input-icon"></i>
+                                <InputSelect @bind-Value="solicitud.SolSexo" class="solicitud-field-input">
+                                    <option value="">Seleccione...</option>
+                                    <option value="M">Hombre</option>
+                                    <option value="F">Mujer</option>
+                                </InputSelect>
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolSexo)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Nacionalidad *</label>
+                                <span class="solicitud-field-tag">Catálogo</span>
+                            </div>
+                            <div class="solicitud-input-shell solicitud-input-shell-select">
+                                <i class="bi bi-globe-americas solicitud-input-icon"></i>
+                                <InputSelect @bind-Value="solicitud.SolNacionalidad" class="solicitud-field-input">
+                                    <option value="">Seleccione...</option>
+                                    @foreach (var item in catalogoNacionalidades)
+                                    {
+                                        <option value="@item">@item</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolNacionalidad)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Celular *</label>
+                                <span class="solicitud-field-tag">Contacto</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-phone solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolTelefono1"
+                                           class="solicitud-field-input solicitud-field-input-code"
+                                           maxlength="10"
+                                           placeholder="Ej: 0998887766"
+                                           autocomplete="tel"
+                                           inputmode="numeric"
+                                           spellcheck="false"
+                                           oninput="this.value = this.value.replace(/\D/g, '').slice(0, 10);" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolTelefono1)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Correo principal *</label>
+                                <span class="solicitud-field-tag">Contacto</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-envelope solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolCorreo1"
+                                           class="solicitud-field-input"
+                                           type="email"
+                                           maxlength="150"
+                                           placeholder="correo@ejemplo.com"
+                                           autocomplete="email"
+                                           inputmode="email"
+                                           autocapitalize="off"
+                                           spellcheck="false" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolCorreo1)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Teléfono secundario</label>
+                                <span class="solicitud-field-tag solicitud-field-tag-soft">Opcional</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-telephone solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolTelefono2"
+                                           class="solicitud-field-input solicitud-field-input-code"
+                                           maxlength="10"
+                                           autocomplete="tel"
+                                           inputmode="numeric"
+                                           spellcheck="false"
+                                           oninput="this.value = this.value.replace(/\D/g, '').slice(0, 10);" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolTelefono2)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Correo secundario</label>
+                                <span class="solicitud-field-tag solicitud-field-tag-soft">Opcional</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-envelope-paper solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolCorreo2"
+                                           class="solicitud-field-input"
+                                           type="email"
+                                           maxlength="150"
+                                           placeholder="correo@ejemplo.com"
+                                           autocomplete="email"
+                                           inputmode="email"
+                                           autocapitalize="off"
+                                           spellcheck="false" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolCorreo2)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Provincia *</label>
+                                <span class="solicitud-field-tag">Seleccione</span>
+                            </div>
+                            <div class="solicitud-input-shell solicitud-input-shell-select">
+                                <i class="bi bi-geo-alt solicitud-input-icon"></i>
+                                <InputSelect TValue="string"
+                                             Value="@solicitud.SolProvincia"
+                                             ValueChanged="@((string value) => OnProvinciaChanged(value))"
+                                             ValueExpression="@(() => solicitud.SolProvincia)"
+                                             class="solicitud-field-input">
+                                    <option value="">Seleccione...</option>
+                                    @foreach (var provincia in provinciasEcuador)
+                                    {
+                                        <option value="@provincia.Nombre">@provincia.Nombre</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolProvincia)" class="solicitud-field-error" />
+                        </div>
+
+                        <div class="solicitud-field-card">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Cantón *</label>
+                                <span class="solicitud-field-tag">Seleccione</span>
+                            </div>
+                            <div class="solicitud-input-shell solicitud-input-shell-select">
+                                <i class="bi bi-buildings solicitud-input-icon"></i>
+                                <InputSelect @key="solicitud.SolProvincia"
+                                             @bind-Value="solicitud.SolCanton"
+                                             class="solicitud-field-input"
+                                             disabled="@(!cantonesDisponibles.Any())">
+                                     <option value="">@(cantonesDisponibles.Any() ? "Seleccione..." : "Seleccione una provincia")</option>
+                                    @foreach (var canton in cantonesDisponibles)
+                                    {
+                                        <option value="@canton">@canton</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                        </div>
+
+                        <div class="solicitud-field-card solicitud-field-wide">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">Dirección *</label>
+                                <span class="solicitud-field-tag">Domicilio</span>
+                            </div>
+                            <div class="solicitud-input-shell">
+                                <i class="bi bi-signpost solicitud-input-icon"></i>
+                                <InputText @bind-Value="solicitud.SolDireccion"
+                                           class="solicitud-field-input"
+                                           maxlength="300"
+                                           placeholder="Calle principal y secundaria"
+                                           autocomplete="street-address" />
+                            </div>
+                            <ValidationMessage For="@(() => solicitud.SolDireccion)" class="solicitud-field-error" />
+                        </div>
+
+                        @if (solicitud.SolEsMayor65)
+                        {
+                            <div class="solicitud-alert solicitud-alert-warning">
+                                <i class="bi bi-camera-video-fill"></i>
+                                <span>Al ser mayor de 65 años, en el siguiente paso se solicitará también un video corto de aceptación.</span>
+                            </div>
+                        }
+
+                        <div class="solicitud-actions">
+                            <button type="button" class="primary-btn solicitud-action-main" @onclick="IrAPasoDocumentos">
+                                Continuar con documentos <i class="bi bi-arrow-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                }
+            </section>
+        }
+        else
+        {
+            <section class="solicitud-card" data-tour="solicitud.step2">
+                <div class="solicitud-card-header">
+                    <div class="solicitud-step-pill">Paso 2</div>
+                    <div>
+                        <h3>Adjunta la documentación requerida</h3>
+                        <p>Los archivos se validan por formato y tamaño antes de enviar la solicitud.</p>
+                    </div>
+                </div>
+
+                <div class="solicitud-config-banner">
+                    <span class="solicitud-config-chip">@GetFormatoFirmaLabel()</span>
+                    <span class="solicitud-config-chip">@GetVigenciaLabel(solicitud.SolVigencia)</span>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(mensajeArchivos))
+                {
+                    <div class="solicitud-alert solicitud-alert-danger">
+                        <i class="bi bi-paperclip"></i>
+                        <span>@mensajeArchivos</span>
+                    </div>
+                }
+
+                <div class="solicitud-grid solicitud-upload-grid" data-tour="solicitud.uploads">
+                    @foreach (var documento in ObtenerDocumentosVisibles())
+                    {
+                        <div class="solicitud-upload-card @(TieneArchivo(documento.Tipo) ? "solicitud-upload-card-loaded" : string.Empty) @(documento.Tipo == "VIDEO_ACEPTACION" ? "solicitud-upload-card-warning" : string.Empty)">
+                            <div class="solicitud-field-top">
+                                <label class="solicitud-field-label">@documento.Titulo</label>
+                                <span class="solicitud-field-tag">@(documento.EsObligatorio ? "Obligatorio" : "Opcional")</span>
+                            </div>
+
+                            <p class="solicitud-upload-help">@documento.Ayuda</p>
+
+                            <InputFile OnChange="@(e => OnFile(e, documento.Tipo))"
+                                       class="solicitud-upload-input"
+                                       accept="@documento.Accept" />
+
+                            @if (TieneArchivo(documento.Tipo))
+                            {
+                                <div class="solicitud-upload-ok">
+                                    <i class="bi bi-check-circle-fill"></i>
+                                    <span>@ObtenerNombreArchivo(documento.Tipo)</span>
+                                </div>
+                            }
+
+                            @if (erroresDocumentos.TryGetValue(documento.Tipo, out var errorDocumento))
+                            {
+                                <div class="solicitud-field-error">@errorDocumento</div>
+                            }
+
+                            <small class="solicitud-upload-meta">
+                                Formatos: @documento.FormatosTexto | Máximo: @FormatearTamano(documento.TamanoMaximoBytes)
+                            </small>
+                        </div>
+                    }
+                </div>
+
+                <div class="solicitud-actions solicitud-actions-between" data-tour="solicitud.submit">
+                    <button type="button" class="secondary-btn" @onclick="RegresarAPasoUno">
+                        <i class="bi bi-arrow-left"></i> Regresar
+                    </button>
+
+                    <button type="submit" class="primary-btn solicitud-action-main" disabled="@enviando">
+                        @if (enviando)
+                        {
+                            <span>Enviando solicitud...</span>
+                        }
+                        else
+                        {
+                            <span>Finalizar y enviar</span>
+                        }
+                    </button>
+                </div>
+            </section>
+        }
+    </EditForm>
+</div>
+
+@code {
+    private sealed record DocumentoConfig(
+        string Tipo,
+        string Titulo,
+        string Ayuda,
+        string Accept,
+        string FormatosTexto,
+        long TamanoMaximoBytes,
+        bool EsObligatorio,
+        string[] ExtensionesPermitidas);
+
+    private sealed record TipoPersonaConfig(
+        string Valor,
+        string Titulo,
+        string Descripcion,
+        string Icono);
+
+    private const string TipoPersonaNatural = "NATURAL";
+    private const string TipoPersonaJuridica = "JURIDICA";
+
+    private static readonly List<string> NacionalidadesCatalogo =
+    [
+        "AFGAN",
+        "ALBANESA",
+        "ALEMANA",
+        "ANDORRANA",
+        "ANGOLEÑA",
+        "ANTIGUANA",
+        "ARGELINA",
+        "ARGENTINA",
+        "ARMENIA",
+        "ARUBEÑA",
+        "AUSTRALIANA",
+        "AUSTRIACA",
+        "AZERBAIYANA",
+        "BAHAMEÑA",
+        "BAHREINI",
+        "BANGLADESI",
+        "BARBADENSE",
+        "BELGA",
+        "BELICEÑA",
+        "BENINESA",
+        "BHUTANESA",
+        "BIELORRUSA",
+        "BIRMANA",
+        "BOLIVIANA",
+        "BOSNIA",
+        "BOTSUANA",
+        "BRASILEÑA",
+        "BRITÁNICO",
+        "BRUNEANA",
+        "BULGARA",
+        "BURKINÉS",
+        "BURUNDIENSE",
+        "CABOVERDIANA",
+        "CAMBOYANA",
+        "CAMERUNESA",
+        "CANADIENSE",
+        "CATARENSE",
+        "CENTROAFRICANO",
+        "CEYLONÉS",
+        "CHADIANA",
+        "CHECO",
+        "CHILENA",
+        "CHINA",
+        "CHIPRIOTA",
+        "COLOMBIANA",
+        "COMORENSE",
+        "CONGOLEÑO",
+        "CONGOLEÑO",
+        "COREANA",
+        "COREANA",
+        "COREANO",
+        "COSTARRICENSE",
+        "CROATA",
+        "CUBANA",
+        "DANESA",
+        "DOMINICANA",
+        "DOMINIQUESA",
+        "ECUATOGUINEANA",
+        "ECUATORIANA",
+        "EGIPCIA",
+        "EMIRATI",
+        "ERITREA",
+        "ESLOVACA",
+        "ESLOVENA",
+        "ESPAÑOLA",
+        "ESTADOUNIDENSE",
+        "ESTONIA",
+        "ETIOPE",
+        "FILIPINA",
+        "FINLANDESA",
+        "FIYIANA",
+        "FRANCESA",
+        "GABONESA",
+        "GAMBIANA",
+        "GEORGIANA",
+        "GHANJIANA",
+        "GRANADINA",
+        "GRIEGA",
+        "GUATEMALTECA",
+        "GUERNSEY",
+        "GUINEANA",
+        "GUINEANA",
+        "GUYANESA",
+        "HAITIANA",
+        "HOLANDÓS",
+        "HONDUREÑA",
+        "HONGKONGUÉS",
+        "HUNGARA",
+        "INDIA",
+        "INDONESIA",
+        "IRANÍ",
+        "IRAQUI",
+        "IRLANDÉSA",
+        "ISLANDESA",
+        "ISRAELÍ",
+        "ITALIANA",
+        "JAMAIQUINA",
+        "JAPONESA",
+        "JERSEY",
+        "JORDANA",
+        "KAZAJA",
+        "KENIATA",
+        "KIRGUISA",
+        "KIRIBATIANA",
+        "KOSOVAR",
+        "KUWAITI",
+        "LAOSIANA",
+        "LESOTENSE",
+        "LETÓN",
+        "LIBANESA",
+        "LIBERIANA",
+        "LIBIA",
+        "LIECHTENSTEINENSE",
+        "LITUANA",
+        "LUXEMBURGUESA",
+        "MACAENSE",
+        "MACEDONIA",
+        "MACEDONIO",
+        "MALASIA",
+        "MALAUÍ",
+        "MALDIVA",
+        "MALGACHE",
+        "MALIENSE",
+        "MALTA",
+        "MARFILEÑA",
+        "MARROQUÍ",
+        "MARSHALÉS",
+        "MAURICIANA",
+        "MAURITANA",
+        "MEXICANA",
+        "MICRONESIA",
+        "MOLDAVA",
+        "MOLDAVA",
+        "MONEGASCA",
+        "MONGOLA",
+        "MONTENEGRINA",
+        "MOZAMBIQUEÑA",
+        "NAMIBIANA",
+        "NAURUANA",
+        "NEOZELANDÉS",
+        "NEPALESA",
+        "NICARAGÜENSE",
+        "NIGERIANA",
+        "NIGERINA",
+        "NORUEGA",
+        "OMANÍ",
+        "PALAOSA",
+        "PALESTINO",
+        "PANAMEÑA",
+        "PAPÚ",
+        "PAQUISTANÍ",
+        "PARAGUAYA",
+        "PERUANA",
+        "POLACA",
+        "PORTUGUÉS",
+        "RUANDÉS",
+        "RUMANO",
+        "RUSO",
+        "SALVADOREÑA",
+        "SAMOANA",
+        "SANCRISTOBELEÑO",
+        "SANMARINENSE",
+        "SANTALUCENSE",
+        "SANTOTOMÉS",
+        "SANVINCENCIANO",
+        "SAUDITA",
+        "SENEGALÉS",
+        "SERBIO",
+        "SEYCHELLENSE",
+        "SIERRALEONÉS",
+        "SINGAPURÉS",
+        "SIRIO",
+        "SOMALÍ",
+        "SUDAFRICANO",
+        "SUDANÉS",
+        "SUDANÉS",
+        "SUECO",
+        "SUIZO",
+        "SURINAMÉS",
+        "SWAZI",
+        "TAILANDÉS",
+        "TAIWANÉS",
+        "TANZANO",
+        "TAYIKO",
+        "TIMORENSE",
+        "TOGOLÉS",
+        "TONGANO",
+        "TRINITENSE",
+        "TUNECINO",
+        "TURCO",
+        "TURCOMANO",
+        "TUVALUANO",
+        "UCRANIANO",
+        "UGANDÉS",
+        "URUGUAYO",
+        "UZBEKO",
+        "VANUATUENSE",
+        "VENEZOLANO",
+        "VIETNAMITA",
+        "YEMENÍ",
+        "YIBUTIANA",
+        "YIBUTIANO",
+        "ZAMBIANO",
+        "ZIMBABUENSE"
+    ];
+
+    private static readonly string[] VigenciasDisponibles =
+    [
+        "30 DIAS",
+        "1 AÑO",
+        "2 AÑOS",
+        "3 AÑOS",
+        "4 AÑOS"
+    ];
+
+    private static readonly TipoPersonaConfig[] TiposPersonaDisponibles =
+    [
+        new(
+            TipoPersonaNatural,
+            "Persona natural",
+            "RUC opcional",
+            "bi bi-person-badge"),
+        new(
+            TipoPersonaJuridica,
+            "Persona jurídica",
+            "RUC obligatorio",
+            "bi bi-building")
+    ];
+
+    private readonly Dictionary<string, DocumentoConfig> documentos = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["CEDULA_FRONTAL"] = new(
+            "CEDULA_FRONTAL",
+            "Documento de identificación frontal",
+            "Sube la cara frontal del documento de identificación en imagen o PDF.",
+            "image/*,.pdf",
+            "JPG, JPEG, PNG, PDF",
+            10 * 1024 * 1024,
+            true,
+            [".jpg", ".jpeg", ".png", ".pdf"]),
+        ["CEDULA_POSTERIOR"] = new(
+            "CEDULA_POSTERIOR",
+            "Documento de identificación posterior",
+            "Sube la cara posterior del documento de identificación en imagen o PDF.",
+            "image/*,.pdf",
+            "JPG, JPEG, PNG, PDF",
+            10 * 1024 * 1024,
+            true,
+            [".jpg", ".jpeg", ".png", ".pdf"]),
+        ["SELFIE_CEDULA"] = new(
+            "SELFIE_CEDULA",
+            "Selfie sosteniendo su documento de identificación",
+            "Debe ser una imagen legible donde se vea claramente el rostro y el documento de identificación.",
+            "image/*",
+            "JPG, JPEG, PNG",
+            10 * 1024 * 1024,
+            true,
+            [".jpg", ".jpeg", ".png"]),
+        ["VIDEO_ACEPTACION"] = new(
+            "VIDEO_ACEPTACION",
+            "Video corto de aceptación",
+            "Requerido para solicitantes mayores de 65 años. Indique su nombre y la aceptación del servicio.",
+            "video/*",
+            "MP4, MOV, AVI, WEBM",
+            50 * 1024 * 1024,
+            true,
+            [".mp4", ".mov", ".avi", ".webm"]),
+        ["RUC_FILE"] = new(
+            "RUC_FILE",
+            "Copia de RUC",
+            "Sube el documento del RUC (PDF).",
+            ".pdf",
+            "PDF",
+            10 * 1024 * 1024,
+            true,
+            [".pdf"]),
+        ["NOMBRAMIENTO"] = new(
+            "NOMBRAMIENTO",
+            "Nombramiento del Representante",
+            "Sube el nombramiento vigente inscrito en el registro correspondiente (PDF).",
+            ".pdf",
+            "PDF",
+            10 * 1024 * 1024,
+            true,
+            [".pdf"]),
+        ["CONSTITUCION"] = new(
+            "CONSTITUCION",
+            "Constitución de la Compañía",
+            "Sube la escritura de constitución o documento equivalente (PDF).",
+            ".pdf",
+            "PDF",
+            10 * 1024 * 1024,
+            true,
+            [".pdf"]),
+        ["CEDULA_REPRESENTANTE"] = new(
+            "CEDULA_REPRESENTANTE",
+            "Documento de identificación del Representante Legal",
+            "Sube el documento de identificación (frontal y posterior) del representante en un solo archivo PDF o imagen.",
+            "image/*,.pdf",
+            "JPG, JPEG, PNG, PDF",
+            10 * 1024 * 1024,
+            true,
+            [".jpg", ".jpeg", ".png", ".pdf"]),
+        ["AUTORIZACION"] = new(
+            "AUTORIZACION",
+            "Autorización del Representante",
+            "Sube la autorización firmada por el representante legal (PDF).",
+            ".pdf",
+            "PDF",
+            10 * 1024 * 1024,
+            true,
+            [".pdf"]),
+        ["ACEPTACION_NOMBRAMIENTO"] = new(
+            "ACEPTACION_NOMBRAMIENTO",
+            "Aceptación de Nombramiento",
+            "Sube el documento de aceptación de nombramiento debidamente inscrito (PDF).",
+            ".pdf",
+            "PDF",
+            10 * 1024 * 1024,
+            true,
+            [".pdf"]),
+        ["ARCHIVO_ADICIONAL"] = new(
+            "ARCHIVO_ADICIONAL",
+            "Documentos Adicionales",
+            "Sube cualquier documento de soporte adicional (Opcional).",
+            "image/*,.pdf",
+            "JPG, JPEG, PNG, PDF",
+            10 * 1024 * 1024,
+            false,
+            [".jpg", ".jpeg", ".png", ".pdf"])
+    };
+
+    private sealed record ArchivoTemporal(string TempFileName, string NombreOriginal);
+    private readonly Dictionary<string, ArchivoTemporal> archivosTemporales = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> erroresDocumentos = new(StringComparer.OrdinalIgnoreCase);
+
+    private int paso = 1;
+    private bool enviando;
+    private bool mostrarResumenValidacion;
+    private string? mensajeArchivos;
+    private string? mensajeGeneralFormulario;
+    private int usuarioActualId;
+    private List<string> catalogoNacionalidades = new();
+    private IReadOnlyList<ProvinciaEcuador> provinciasEcuador = Array.Empty<ProvinciaEcuador>();
+    private List<string> cantonesDisponibles = new();
+    private EditContext editContext = default!;
+    private readonly string fechaMaximaNacimiento = DateTime.Today.ToString("yyyy-MM-dd");
+
+    private readonly UsuSolicitudFirma solicitud = new()
+    {
+        SolFechaNacimiento = DateTime.Today,
+        SolNacionalidad = "ECUATORIANA"
+    };
+    private string GetPrecioVigencia(string vigencia)
+    {
+        return vigencia switch
+        {
+            "30 DIAS" => "12,29$",
+            "1 AÑO" => "21,91$",
+            "2 AÑOS" => "34,60$",
+            "3 AÑOS" => "46,14$",
+            "4 AÑOS" => "57,68$",
+            _ => ""
+        };
+    }
+    private bool ConfiguracionFirmaCompleta =>
+        !string.IsNullOrWhiteSpace(solicitud.SolFormatoFirma) &&
+        !string.IsNullOrWhiteSpace(solicitud.SolVigencia);
+
+    private void SeleccionarFormatoFirma(string formato)
+    {
+        solicitud.SolFormatoFirma = formato;
+        editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolFormatoFirma));
+    }
+
+    private void SeleccionarVigencia(string vigencia)
+    {
+        solicitud.SolVigencia = vigencia;
+
+        solicitud.SolMontoPago = vigencia switch
+        {
+            "30 DIAS" => 12.29m,
+            "1 AÑO" => 21.91m,
+            "2 AÑOS" => 34.60m,
+            "3 AÑOS" => 46.14m,
+            "4 AÑOS" => 57.68m,
+            _ => 0m
+        };
+
+        editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolVigencia));
+        StateHasChanged();
+    }
+
+    private static string GetVigenciaLabel(string vigencia) => vigencia switch
+    {
+        "30 DIAS" => "30 días",
+        "1 AÑO" => "1 año",
+        "2 AÑOS" => "2 años",
+        "3 AÑOS" => "3 años",
+        "4 AÑOS" => "4 años",
+        _ => vigencia
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        editContext = new EditContext(solicitud);
+        catalogoNacionalidades = NacionalidadesCatalogo.ToList();
+        provinciasEcuador = CatalogoUbicacionEcuador.Provincias;
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        usuarioActualId = int.TryParse(idClaim, out var parsedId) ? parsedId : 0;
+        solicitud.SolFormatoFirma = "ARCHIVO_P12";
+        solicitud.SolVigencia = "30 DIAS";
+        solicitud.SolMontoPago = 12.29m;
+        solicitud.SolTipoPersona = TipoPersonaNatural;
+        SincronizarTipoPersonaConRuc();
+        ActualizarCantonesDisponibles();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync("e-sign");
+        }
+    }
+
+    private void VerificarEdad()
+    {
+        if (solicitud.SolFechaNacimiento == default)
+        {
+            solicitud.SolEsMayor65 = false;
+            return;
+        }
+
+        var edad = DateTime.Today.Year - solicitud.SolFechaNacimiento.Year;
+        if (solicitud.SolFechaNacimiento.Date > DateTime.Today.AddYears(-edad))
+        {
+            edad--;
+        }
+
+        solicitud.SolEsMayor65 = edad >= 65;
+    }
+    private void SeleccionarTipoPersona(string tipoPersona)
+    {
+        solicitud.SolTipoPersona = tipoPersona;
+
+        if (tipoPersona == TipoPersonaJuridica)
+        {
+            solicitud.SolTieneRuc = true;
+        }
+        else
+        {
+            solicitud.SolTieneRuc = false;
+            solicitud.SolNroRuc = null;
+        }
+
+        editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolTipoPersona));
+        editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolNroRuc));
+    }
+
+    private void OnTipoIdentificacionChanged(ChangeEventArgs e)
+    {
+        solicitud.SolTipoIdentificacion = e.Value?.ToString() ?? string.Empty;
+
+        if (!string.Equals(solicitud.SolTipoIdentificacion, "CEDULA", StringComparison.OrdinalIgnoreCase))
+        {
+            solicitud.SolCodigoDactilar = null;
+            editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolCodigoDactilar));
+        }
+    }
+
+    private void OnProvinciaChanged(string? provincia)
+    {
+        solicitud.SolProvincia = provincia ?? string.Empty;
+        solicitud.SolCanton = string.Empty;
+        ActualizarCantonesDisponibles();
+        editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolProvincia));
+        editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolCanton));
+    }
+
+    private void IrAPasoDocumentos()
+    {
+        mostrarResumenValidacion = true;
+        mensajeGeneralFormulario = null;
+        NormalizarSolicitud();
+        VerificarEdad();
+
+        if (!editContext.Validate())
+        {
+            return;
+        }
+
+        paso = 2;
+    }
+
+    private void RegresarAPasoUno()
+    {
+        mensajeArchivos = null;
+        mensajeGeneralFormulario = null;
+        paso = 1;
+    }
+
+    private async Task OnFile(InputFileChangeEventArgs e, string tipo)
+    {
+        mensajeArchivos = null;
+        mensajeGeneralFormulario = null;
+        erroresDocumentos.Remove(tipo);
+
+        if (archivosTemporales.TryGetValue(tipo, out var oldFile))
+        {
+            SolicitudService.EliminarArchivoTemporal(oldFile.TempFileName);
+            archivosTemporales.Remove(tipo);
+        }
+
+        if (!documentos.TryGetValue(tipo, out var config) || e.FileCount == 0)
+        {
+            return;
+        }
+
+        var archivo = e.File;
+        var extension = Path.GetExtension(archivo.Name);
+
+        if (string.IsNullOrWhiteSpace(extension) ||
+            !config.ExtensionesPermitidas.Contains(extension, StringComparer.OrdinalIgnoreCase))
+        {
+            erroresDocumentos[tipo] = $"Formato no permitido. Use: {config.FormatosTexto}.";
+            return;
+        }
+
+        if (archivo.Size > config.TamanoMaximoBytes)
+        {
+            erroresDocumentos[tipo] = $"El archivo supera el tamaño máximo de {FormatearTamano(config.TamanoMaximoBytes)}.";
+            return;
+        }
+
+        try
+        {
+            var tempName = await SolicitudService.GuardarArchivoTemporalAsync(archivo, tipo, config.TamanoMaximoBytes);
+            archivosTemporales[tipo] = new ArchivoTemporal(tempName, archivo.Name);
+        }
+        catch (Exception ex)
+        {
+            erroresDocumentos[tipo] = $"Error al guardar archivo temporal: {ex.Message}";
+        }
+    }
+
+    private bool ValidarArchivos()
+    {
+        mensajeArchivos = null;
+
+        foreach (var item in ObtenerDocumentosVisibles())
+        {
+            if (!item.EsObligatorio)
+            {
+                continue;
+            }
+
+            if (!archivosTemporales.ContainsKey(item.Tipo) && !erroresDocumentos.ContainsKey(item.Tipo))
+            {
+                erroresDocumentos[item.Tipo] = $"Adjunte {item.Titulo.ToLowerInvariant()}.";
+            }
+        }
+
+        var hayErrores = ObtenerDocumentosVisibles().Any(item =>
+            (item.EsObligatorio && !archivosTemporales.ContainsKey(item.Tipo)) ||
+            erroresDocumentos.ContainsKey(item.Tipo));
+
+        if (hayErrores)
+        {
+            mensajeArchivos = "Revisa los documentos obligatorios y corrige los archivos con errores antes de enviar.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task Enviar()
+    {
+        mensajeGeneralFormulario = null;
+        mensajeArchivos = null;
+        mostrarResumenValidacion = true;
+        NormalizarSolicitud();
+        VerificarEdad();
+
+        if (!ValidarArchivos())
+        {
+            return;
+        }
+
+        enviando = true;
+
+        try
+        {
+            if (usuarioActualId <= 0)
+            {
+                mensajeGeneralFormulario = "No se pudo identificar al usuario actual. Cierra sesion e ingresa nuevamente.";
+                paso = 1;
+                return;
+            }
+
+            solicitud.SolIdUsuarioCliente = usuarioActualId;
+
+            var archivosEnviar = archivosTemporales
+                .Select(x => (x.Value.TempFileName, x.Key))
+                .ToList();
+
+            var ok = await SolicitudService.CrearSolicitudFullAsync(solicitud, archivosEnviar);
+            if (ok)
+            {
+                var notifyUrl = Navigation
+                    .ToAbsoluteUri($"/api/pagomedios/notificacion")
+                    .ToString();
+
+                string? urlPago = await PagoService.GenerarSolicitudPago(solicitud, notifyUrl);
+
+                if (!string.IsNullOrEmpty(urlPago))
+                {
+                    // 3. Redirigir al checkout de Pagomedios
+                    Navigation.NavigateTo(urlPago);
+                    return;
+                }
+                else
+                {
+                    mensajeGeneralFormulario = "Error al conectar con la pasarela de pagos.";
+                    return;
+                }
+            }
+
+            mensajeGeneralFormulario = string.IsNullOrWhiteSpace(SolicitudService.UltimoErrorCrearSolicitud)
+                ? "No se pudo procesar la solicitud. Intente nuevamente en unos minutos."
+                : $"No se pudo procesar la solicitud: {SolicitudService.UltimoErrorCrearSolicitud}";
+        }
+        finally
+        {
+            enviando = false;
+        }
+    }
+
+    private IEnumerable<DocumentoConfig> ObtenerDocumentosVisibles()
+    {
+        yield return documentos["CEDULA_FRONTAL"];
+        yield return documentos["CEDULA_POSTERIOR"];
+        yield return documentos["SELFIE_CEDULA"];
+
+        if (solicitud.SolEsMayor65)
+        {
+            yield return documentos["VIDEO_ACEPTACION"];
+        }
+
+        if (solicitud.SolTieneRuc)
+        {
+            yield return documentos["RUC_FILE"];
+        }
+
+        if (string.Equals(solicitud.SolTipoPersona, "JURIDICA", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return documentos["NOMBRAMIENTO"];
+            yield return documentos["CONSTITUCION"];
+            yield return documentos["CEDULA_REPRESENTANTE"];
+            yield return documentos["AUTORIZACION"];
+            yield return documentos["ACEPTACION_NOMBRAMIENTO"];
+        }
+
+        yield return documentos["ARCHIVO_ADICIONAL"];
+    }
+
+    private bool TieneArchivo(string tipo) => archivosTemporales.ContainsKey(tipo);
+
+    private string ObtenerNombreArchivo(string tipo)
+        => archivosTemporales.TryGetValue(tipo, out var archivo) ? archivo.NombreOriginal : string.Empty;
+
+    private string GetFormatoFirmaLabel() => solicitud.SolFormatoFirma switch
+    {
+        "ARCHIVO_P12" => "Archivo .P12",
+        "NUBE" => "Firma en la nube",
+        _ => "Firma"
+    };
+
+    private void NormalizarSolicitud()
+    {
+        solicitud.SolTipoPersona = NormalizarMayusculas(solicitud.SolTipoPersona);
+        solicitud.SolTipoIdentificacion = NormalizarMayusculas(solicitud.SolTipoIdentificacion);
+        solicitud.SolIdentificacion = solicitud.SolTipoIdentificacion == "CEDULA"
+            ? SoloDigitos(solicitud.SolIdentificacion)
+            : NormalizarMayusculasSinEspacios(solicitud.SolIdentificacion);
+        solicitud.SolCodigoDactilar = solicitud.SolTipoIdentificacion == "CEDULA"
+            ? NormalizarMayusculasSinEspacios(solicitud.SolCodigoDactilar)
+            : null;
+        solicitud.SolNombres = NormalizarTexto(solicitud.SolNombres);
+        solicitud.SolPrimerApellido = NormalizarTexto(solicitud.SolPrimerApellido);
+        solicitud.SolSegundoApellido = NormalizarTexto(solicitud.SolSegundoApellido);
+        solicitud.SolNacionalidad = NormalizarMayusculas(solicitud.SolNacionalidad);
+        solicitud.SolSexo = NormalizarMayusculas(solicitud.SolSexo);
+        solicitud.SolTelefono1 = SoloDigitos(solicitud.SolTelefono1);
+        solicitud.SolTelefono2 = SoloDigitos(solicitud.SolTelefono2);
+        solicitud.SolCorreo1 = NormalizarEmail(solicitud.SolCorreo1);
+        solicitud.SolCorreo2 = NormalizarEmail(solicitud.SolCorreo2);
+        solicitud.SolNroRuc = solicitud.SolTieneRuc
+            ? SoloDigitos(solicitud.SolNroRuc)
+            : null;
+        solicitud.SolProvincia = CatalogoUbicacionEcuador.ObtenerProvinciaCanonical(solicitud.SolProvincia)
+            ?? NormalizarTexto(solicitud.SolProvincia);
+        solicitud.SolCanton = CatalogoUbicacionEcuador.ObtenerCantonCanonical(solicitud.SolProvincia, solicitud.SolCanton)
+            ?? NormalizarTexto(solicitud.SolCanton);
+        solicitud.SolDireccion = NormalizarTexto(solicitud.SolDireccion);
+        solicitud.SolFormatoFirma = NormalizarMayusculas(solicitud.SolFormatoFirma);
+        solicitud.SolVigencia = NormalizarMayusculas(solicitud.SolVigencia);
+
+        if (solicitud.SolTipoPersona == TipoPersonaJuridica)
+        {
+            solicitud.SolCompanyName = NormalizarTexto(solicitud.SolCompanyName);
+            solicitud.SolDepartment = NormalizarTexto(solicitud.SolDepartment);
+            solicitud.SolPosition = NormalizarTexto(solicitud.SolPosition);
+            solicitud.SolReason = NormalizarTexto(solicitud.SolReason);
+            solicitud.SolIdentificationTypeManager = NormalizarMayusculas(solicitud.SolIdentificationTypeManager);
+            solicitud.SolIdentificationManager = solicitud.SolIdentificationTypeManager == "CEDULA"
+                ? SoloDigitos(solicitud.SolIdentificationManager)
+                : NormalizarMayusculasSinEspacios(solicitud.SolIdentificationManager);
+            solicitud.SolNamesManager = NormalizarTexto(solicitud.SolNamesManager);
+            solicitud.SolLastNameManager = NormalizarTexto(solicitud.SolLastNameManager);
+        }
+        else
+        {
+            solicitud.SolCompanyName = null;
+            solicitud.SolDepartment = null;
+            solicitud.SolPosition = null;
+            solicitud.SolReason = null;
+            solicitud.SolIdentificationTypeManager = null;
+            solicitud.SolIdentificationManager = null;
+            solicitud.SolNamesManager = null;
+            solicitud.SolLastNameManager = null;
+        }
+
+        SincronizarTipoPersonaConRuc();
+        ActualizarCantonesDisponibles();
+    }
+
+    private void SincronizarTipoPersonaConRuc()
+    {
+        if (solicitud.SolTipoPersona == TipoPersonaJuridica)
+        {
+            solicitud.SolTieneRuc = true;
+            return;
+        }
+
+        if (!solicitud.SolTieneRuc)
+        {
+            solicitud.SolNroRuc = null;
+        }
+    }
+
+    private void ActualizarCantonesDisponibles()
+    {
+        cantonesDisponibles = CatalogoUbicacionEcuador.ObtenerCantones(solicitud.SolProvincia).ToList();
+
+        if (cantonesDisponibles.Count == 0)
+        {
+            solicitud.SolCanton = string.Empty;
+            return;
+        }
+
+        var cantonCanonical = CatalogoUbicacionEcuador.ObtenerCantonCanonical(solicitud.SolProvincia, solicitud.SolCanton);
+        solicitud.SolCanton = cantonCanonical ?? string.Empty;
+    }
+
+    private static string NormalizarTexto(string? valor)
+        => string.Join(" ", (valor ?? string.Empty).Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+    private static string NormalizarMayusculas(string? valor)
+        => NormalizarTexto(valor).ToUpperInvariant();
+
+    private static string NormalizarMayusculasSinEspacios(string? valor)
+        => NormalizarTexto(valor).Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+
+    private static string NormalizarEmail(string? valor)
+        => NormalizarTexto(valor).ToLowerInvariant();
+
+    private static string SoloDigitos(string? valor)
+        => System.Text.RegularExpressions.Regex.Replace(valor ?? string.Empty, @"\D", string.Empty);
+
+    private static string FormatearTamano(long bytes)
+    {
+        const long kilo = 1024;
+        const long mega = kilo * 1024;
+
+        return bytes >= mega
+            ? $"{bytes / (double)mega:0.#} MB"
+            : $"{bytes / (double)kilo:0.#} KB";
+    }
+}

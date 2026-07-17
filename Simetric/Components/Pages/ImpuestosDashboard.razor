@@ -1,0 +1,985 @@
+@page "/configuracion/impuestos"
+@using Simetric.Models
+@using Simetric.Services
+@inject TaxService TaxService
+@inject IJSRuntime JS
+
+<PageTitle>Impuestos | Numerica e-fact</PageTitle>
+
+<div class="tax-shell" data-tour="impuestos.page">
+    <section class="tabs-shell" aria-label="Tipos de impuestos" data-tour="impuestos.tabs">
+        <button type="button"
+                class="tab-pill @(activeTab == "codigos" ? "is-active" : string.Empty)"
+                @onclick='() => SwitchTab("codigos")'>
+            <i class="bi bi-upc-scan"></i>
+            <span>Codigos de Impuesto</span>
+        </button>
+
+        <button type="button"
+                class="tab-pill @(activeTab == "iva" ? "is-active" : string.Empty)"
+                @onclick='() => SwitchTab("iva")'>
+            <i class="bi bi-percent"></i>
+            <span>Porcentajes IVA</span>
+        </button>
+    </section>
+
+    @if (loading)
+    {
+        <section class="state-card state-card-loading">
+            <span class="state-icon">
+                <i class="bi bi-arrow-repeat spin"></i>
+            </span>
+            <h3>Cargando registros</h3>
+            <p>Estamos consultando la informacion fiscal disponible para esta seccion.</p>
+        </section>
+    }
+    else if (!HasVisibleItems)
+    {
+        <section class="state-card state-card-empty">
+            <span class="state-icon">
+                <i class="bi bi-inboxes"></i>
+            </span>
+            <h3>Sin resultados visibles</h3>
+            <p>@EmptyMessage</p>
+        </section>
+    }
+    else
+    {
+        <section class="table-card" data-tour="impuestos.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>@ActiveListTitle</h3>
+                </div>
+            </div>
+
+            <div class="table-toolbar" data-tour="impuestos.toolbar">
+                <label class="search-box table-search-box">
+                    <span class="search-icon">
+                        <i class="bi bi-search"></i>
+                    </span>
+                    <input type="text"
+                           class="search-input"
+                           placeholder="@SearchPlaceholder"
+                           @bind="SearchText"
+                           @bind:event="oninput"
+                           @onkeyup="HandleSearch" />
+                    @if (!string.IsNullOrWhiteSpace(SearchText))
+                    {
+                        <button type="button" class="search-clear" @onclick="ClearSearch" aria-label="Limpiar busqueda">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    }
+                </label>
+
+                <div class="table-toolbar-controls">
+                    <label class="filter-box">
+                        <span class="filter-label">Estado</span>
+                        <select class="filter-select" @bind="FiltroEstado">
+                            <option value="">Todos</option>
+                            <option value="A">Activo</option>
+                            <option value="I">Inactivo</option>
+                        </select>
+                    </label>
+
+                    <label class="filter-box filter-box-small">
+                        <span class="filter-label">Pagina</span>
+                        <select class="filter-select" @bind="PageSize">
+                            <option value="5">5 registros</option>
+                            <option value="10">10 registros</option>
+                            <option value="20">20 registros</option>
+                        </select>
+                    </label>
+
+                    <button type="button" class="primary-btn table-primary-btn" @onclick="() => AbrirModal()">
+                        <i class="bi bi-plus-lg"></i>
+                        <span>Nuevo</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table class="tax-table">
+                    <thead>
+                        <tr>
+                            <th>Codigo</th>
+                            <th>Descripcion</th>
+                            @if (activeTab == "iva")
+                            {
+                                <th>Valor</th>
+                                <th>Calculo</th>
+                            }
+                            <th>Estado</th>
+                            <th class="text-center">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (activeTab == "codigos")
+                        {
+                            @foreach (var item in CodigosPaginados)
+                            {
+                                <tr>
+                                    <td>
+                                        <span class="code-pill">@item.Codigo</span>
+                                    </td>
+                                    <td>
+                                        <div class="cell-main">
+                                            <strong>@item.Descripcion</strong>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="state-pill @(item.Estado == "A" ? "state-active" : "state-inactive")">
+                                            @(item.Estado == "A" ? "Activo" : "Inactivo")
+                                        </span>
+                                    </td>
+                                    <td class="text-center">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view" title="Ver detalle" @onclick="() => VerDetalle(c: item)">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            <button type="button" class="action-btn action-edit" title="Editar" @onclick="() => AbrirModal(c: item)">
+                                                <i class="bi bi-pencil-square"></i>
+                                            </button>
+                                            <button type="button" class="action-btn action-delete" title="Eliminar" @onclick="() => SolicitarEliminar(item.Codigo)">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                        else
+                        {
+                            @foreach (var item in IvaPaginados)
+                            {
+                                <tr>
+                                    <td>
+                                        <span class="code-pill">@item.Codigo</span>
+                                    </td>
+                                    <td>
+                                        <div class="cell-main">
+                                            <strong>@item.Descripcion</strong>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="value-pill">@item.Valor%</span>
+                                    </td>
+                                    <td>
+                                        <span class="value-pill value-pill-muted">@((item.ValorCalculo ?? 0).ToString("0.##"))</span>
+                                    </td>
+                                    <td>
+                                        <span class="state-pill @(item.Estado == "A" ? "state-active" : "state-inactive")">
+                                            @(item.Estado == "A" ? "Activo" : "Inactivo")
+                                        </span>
+                                    </td>
+                                    <td class="text-center">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view" title="Ver detalle" @onclick="() => VerDetalle(i: item)">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            <button type="button" class="action-btn action-edit" title="Editar" @onclick="() => AbrirModal(i: item)">
+                                                <i class="bi bi-pencil-square"></i>
+                                            </button>
+                                            <button type="button" class="action-btn action-delete" title="Eliminar" @onclick="() => SolicitarEliminar(item.Codigo)">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pager-bar">
+                <div class="pager-meta">
+                    Mostrando @PageStart - @PageEnd de @FilteredItems registros
+                </div>
+
+                <div class="pager-actions">
+                    <button type="button" class="secondary-btn secondary-btn-quiet pager-icon-btn" disabled="@(currentPage == 1)" @onclick="() => GoToPage(currentPage - 1)">
+                        <i class="bi bi-chevron-left"></i>
+                    </button>
+                    <span class="pager-page-label">Pagina @currentPage de @totalPages</span>
+                    <button type="button" class="secondary-btn secondary-btn-quiet pager-icon-btn" disabled="@(currentPage >= totalPages)" @onclick="() => GoToPage(currentPage + 1)">
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </section>
+    }
+</div>
+
+@if (showModal)
+{
+    <div class="tax-modal-backdrop"></div>
+    <div class="modal fade show d-block tax-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content tax-modal-content">
+                <div class="modal-header tax-modal-header is-editable">
+                    <div>
+                        <span class="modal-kicker">Formulario</span>
+                        <h5 class="modal-title">@(isEdit ? $"Editar {ActiveCreateLabel}" : $"Registrar {ActiveCreateLabel}")</h5>
+                    </div>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarModal"></button>
+                </div>
+
+                <div class="modal-body tax-modal-body">
+                    @if (!string.IsNullOrEmpty(modalError))
+                    {
+                        <div class="modal-alert modal-alert-error">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <span>@modalError</span>
+                        </div>
+                    }
+
+                    <div class="field-grid">
+                        <div class="field-block">
+                            <label class="field-label">Codigo</label>
+                            <input class="form-control field-input @(TieneError(nameof(tempCodigo)) ? "input-invalid" : "")"
+                                   value="@tempCodigo"
+                                   @oninput="OnCodigoInput"
+                                   disabled="@isEdit"
+                                   placeholder="@(activeTab == "codigos" ? "Ej: IVA15" : "Ej: 2")" />
+                            @if (TieneError(nameof(tempCodigo)))
+                            {
+                                <div class="field-validation-error">@errores[nameof(tempCodigo)]</div>
+                            }
+                        </div>
+
+                        <div class="field-block field-span-2">
+                            <label class="field-label">Descripcion</label>
+                            <input class="form-control field-input @(TieneError(nameof(tempDescripcion)) ? "input-invalid" : "")"
+                                   value="@tempDescripcion"
+                                   @oninput="OnDescripcionInput"
+                                   placeholder="Ingrese la descripcion del registro" />
+                            @if (TieneError(nameof(tempDescripcion)))
+                            {
+                                <div class="field-validation-error">@errores[nameof(tempDescripcion)]</div>
+                            }
+                        </div>
+
+                        @if (activeTab == "iva")
+                        {
+                            <div class="field-block">
+                                <label class="field-label">Valor (%)</label>
+                                <input class="form-control field-input @(TieneError(nameof(tempValor)) ? "input-invalid" : "")"
+                                       value="@tempValor"
+                                       @oninput="OnValorInput"
+                                       placeholder="15" />
+                                @if (TieneError(nameof(tempValor)))
+                                {
+                                    <div class="field-validation-error">@errores[nameof(tempValor)]</div>
+                                }
+                            </div>
+
+                            <div class="field-block">
+                                <label class="field-label">Calculo decimal</label>
+                                <input class="form-control field-input @(TieneError(nameof(tempValorCalculoTexto)) ? "input-invalid" : "")"
+                                       value="@tempValorCalculoTexto"
+                                       @oninput="OnValorCalculoInput"
+                                       placeholder="0.15" />
+                                @if (TieneError(nameof(tempValorCalculoTexto)))
+                                {
+                                    <div class="field-validation-error">@errores[nameof(tempValorCalculoTexto)]</div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="modal-footer tax-modal-footer">
+                    <button type="button" class="secondary-btn" @onclick="CerrarModal">Cancelar</button>
+                    <button type="button" class="primary-btn" @onclick="Guardar">
+                        <i class="bi bi-save"></i>
+                        <span>Guardar</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showDeleteConfirm)
+{
+    <div class="tax-modal-backdrop"></div>
+    <div class="modal fade show d-block tax-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content tax-modal-content">
+                <div class="modal-header tax-modal-header is-delete">
+                    <div>
+                        <span class="modal-kicker">Confirmacion</span>
+                        <h5 class="modal-title">Eliminar registro</h5>
+                    </div>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarConfirmacionEliminar"></button>
+                </div>
+
+                <div class="modal-body tax-modal-body">
+                    <div class="delete-confirm-card">
+                        <strong>@deleteConfirmTitle</strong>
+                        <p>@deleteConfirmMessage</p>
+                    </div>
+                </div>
+
+                <div class="modal-footer tax-modal-footer">
+                    <button type="button" class="secondary-btn" @onclick="CerrarConfirmacionEliminar" disabled="@isDeleting">Cancelar</button>
+                    <button type="button" class="danger-btn" @onclick="ConfirmarEliminarAsync" disabled="@isDeleting">
+                        @if (isDeleting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2"></span>
+                            <span>Eliminando...</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-trash"></i>
+                            <span>Eliminar</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showDetailModal)
+{
+    <div class="tax-modal-backdrop"></div>
+    <div class="modal fade show d-block tax-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content tax-modal-content">
+                <div class="modal-header tax-modal-header is-readonly">
+                    <div>
+                        <span class="modal-kicker">Detalle</span>
+                        <h5 class="modal-title">Informacion del registro</h5>
+                    </div>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarDetalle"></button>
+                </div>
+
+                <div class="modal-body tax-modal-body">
+                    @if (codigoSeleccionado is not null)
+                    {
+                        <div class="detail-grid">
+                            <div class="detail-block">
+                                <span class="field-label">Tipo</span>
+                                <div class="detail-value">Codigo de impuesto</div>
+                            </div>
+
+                            <div class="detail-block">
+                                <span class="field-label">Estado</span>
+                                <div class="detail-value">
+                                    <span class="state-pill @(codigoSeleccionado.Estado == "A" ? "state-active" : "state-inactive")">
+                                        @(codigoSeleccionado.Estado == "A" ? "Activo" : "Inactivo")
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="detail-block">
+                                <span class="field-label">Codigo</span>
+                                <div class="detail-value">
+                                    <span class="code-pill">@codigoSeleccionado.Codigo</span>
+                                </div>
+                            </div>
+
+                            <div class="detail-block detail-span-2">
+                                <span class="field-label">Descripcion</span>
+                                <div class="detail-value">@codigoSeleccionado.Descripcion</div>
+                            </div>
+                        </div>
+                    }
+                    else if (ivaSeleccionado is not null)
+                    {
+                        <div class="detail-grid">
+                            <div class="detail-block">
+                                <span class="field-label">Tipo</span>
+                                <div class="detail-value">Porcentaje IVA</div>
+                            </div>
+
+                            <div class="detail-block">
+                                <span class="field-label">Estado</span>
+                                <div class="detail-value">
+                                    <span class="state-pill @(ivaSeleccionado.Estado == "A" ? "state-active" : "state-inactive")">
+                                        @(ivaSeleccionado.Estado == "A" ? "Activo" : "Inactivo")
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="detail-block">
+                                <span class="field-label">Codigo</span>
+                                <div class="detail-value">
+                                    <span class="code-pill">@ivaSeleccionado.Codigo</span>
+                                </div>
+                            </div>
+
+                            <div class="detail-block">
+                                <span class="field-label">Valor (%)</span>
+                                <div class="detail-value">
+                                    <span class="value-pill">@ivaSeleccionado.Valor%</span>
+                                </div>
+                            </div>
+
+                            <div class="detail-block detail-span-2">
+                                <span class="field-label">Descripcion</span>
+                                <div class="detail-value">@ivaSeleccionado.Descripcion</div>
+                            </div>
+
+                            <div class="detail-block detail-span-2">
+                                <span class="field-label">Calculo decimal</span>
+                                <div class="detail-value">@((ivaSeleccionado.ValorCalculo ?? 0).ToString("0.##"))</div>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div class="modal-footer tax-modal-footer">
+                    <button type="button" class="secondary-btn" @onclick="CerrarDetalle">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string filtroEstado = "";
+
+    private string activeTab = "codigos";
+    private string SearchText = "";
+    private bool loading = true;
+    private bool showModal = false;
+    private bool isEdit = false;
+    private bool showDeleteConfirm = false;
+    private bool isDeleting = false;
+
+    private bool showDetailModal = false;
+    private Codigosimpuesto? codigoSeleccionado;
+    private Porcentajeiva? ivaSeleccionado;
+
+    private string tempCodigo = "";
+    private string tempDescripcion = "";
+    private string tempValor = "";
+    private string tempValorCalculoTexto = "";
+    private decimal? tempValorCalculo = null;
+    private string modalError = "";
+
+    private Dictionary<string, string> errores = new();
+
+    private List<Codigosimpuesto> codigosList = new();
+    private List<Porcentajeiva> ivaList = new();
+
+    private int currentPage = 1;
+    private int pageSize = 10;
+    private string deleteConfirmTitle = string.Empty;
+    private string deleteConfirmMessage = string.Empty;
+    private Func<Task>? deleteConfirmAction;
+
+    private string ActiveSectionTitle => activeTab == "codigos" ? "Codigos de Impuesto" : "Porcentajes de IVA";
+    private string ActiveListTitle => activeTab == "codigos" ? "Codigos registrados" : "Tarifas de IVA registradas";
+    private string ActiveCreateLabel => activeTab == "codigos" ? "Codigo" : "IVA";
+    private string SearchPlaceholder => activeTab == "codigos"
+        ? "Buscar por codigo o descripcion..."
+        : "Buscar por codigo, descripcion o valor...";
+    private string ActiveTableDescription => activeTab == "codigos"
+        ? "Codigos base disponibles para clasificacion fiscal y productos."
+        : "Porcentajes configurados para calculo de IVA en documentos y catalogos.";
+    private int VisibleItems => activeTab == "codigos" ? CodigosPaginados.Count() : IvaPaginados.Count();
+    private int FilteredItems => activeTab == "codigos" ? CodigosFiltrados.Count() : IvaFiltrados.Count();
+    private bool HasVisibleItems => VisibleItems > 0;
+    private string EmptyMessage => !string.IsNullOrWhiteSpace(SearchText) || !string.IsNullOrWhiteSpace(filtroEstado)
+        ? "No hay registros que coincidan con los filtros aplicados."
+        : $"Aun no hay {(activeTab == "codigos" ? "codigos de impuesto" : "porcentajes IVA")} registrados.";
+    private int totalPages => Math.Max(1, (int)Math.Ceiling((double)FilteredItems / pageSize));
+    private int PageStart => FilteredItems == 0 ? 0 : ((currentPage - 1) * pageSize) + 1;
+    private int PageEnd => FilteredItems == 0 ? 0 : Math.Min(FilteredItems, currentPage * pageSize);
+
+    private int PageSize
+    {
+        get => pageSize;
+        set
+        {
+            if (pageSize == value)
+                return;
+
+            pageSize = value;
+            currentPage = 1;
+            _ = InvokeAsync(LoadData);
+        }
+    }
+
+    private string FiltroEstado
+    {
+        get => filtroEstado;
+        set
+        {
+            if (filtroEstado == value)
+                return;
+
+            filtroEstado = value;
+            currentPage = 1;
+        }
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadData();
+
+    private async Task LoadData()
+    {
+        loading = true;
+        try
+        {
+            if (activeTab == "codigos")
+            {
+                codigosList = await TaxService.GetCodigosImpuestosAsync(SearchText, includeInactivos: true);
+            }
+            else
+            {
+                ivaList = await TaxService.GetPorcentajesIvaAsync(SearchText, includeInactivos: true);
+            }
+
+            currentPage = Math.Min(Math.Max(1, currentPage), totalPages);
+        }
+        catch (Exception ex)
+        {
+            await JS.InvokeVoidAsync("console.error", "Error loading data", ex.Message);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private IEnumerable<Codigosimpuesto> CodigosFiltrados =>
+        string.IsNullOrEmpty(filtroEstado)
+            ? codigosList.OrderBy(x => ParseCodigoOrden(x.Codigo)).ThenBy(x => x.Codigo)
+            : codigosList.Where(x => x.Estado == filtroEstado).OrderBy(x => ParseCodigoOrden(x.Codigo)).ThenBy(x => x.Codigo);
+
+    private IEnumerable<Porcentajeiva> IvaFiltrados =>
+        string.IsNullOrEmpty(filtroEstado)
+            ? ivaList.OrderBy(x => ParseCodigoOrden(x.Codigo)).ThenBy(x => x.Codigo)
+            : ivaList.Where(x => x.Estado == filtroEstado).OrderBy(x => ParseCodigoOrden(x.Codigo)).ThenBy(x => x.Codigo);
+
+    private IEnumerable<Codigosimpuesto> CodigosPaginados =>
+        CodigosFiltrados.Skip((currentPage - 1) * pageSize).Take(pageSize);
+
+    private IEnumerable<Porcentajeiva> IvaPaginados =>
+        IvaFiltrados.Skip((currentPage - 1) * pageSize).Take(pageSize);
+
+    private async Task SwitchTab(string tab)
+    {
+        activeTab = tab;
+        SearchText = "";
+        filtroEstado = "";
+        currentPage = 1;
+        CerrarModal();
+        await LoadData();
+    }
+
+    private async Task HandleSearch()
+    {
+        currentPage = 1;
+        await LoadData();
+    }
+
+    private async Task ClearSearch()
+    {
+        SearchText = "";
+        await HandleSearch();
+    }
+
+    private async Task GoToPage(int page)
+    {
+        currentPage = Math.Clamp(page, 1, totalPages);
+        await LoadData();
+    }
+
+    private static int ParseCodigoOrden(string? codigo) =>
+        int.TryParse((codigo ?? string.Empty).Trim(), out var numero) ? numero : int.MaxValue;
+
+    private void AbrirModal(Codigosimpuesto? c = null, Porcentajeiva? i = null)
+    {
+        modalError = "";
+        errores.Clear();
+        isEdit = c is not null || i is not null;
+
+        if (c is not null)
+        {
+            tempCodigo = c.Codigo ?? "";
+            tempDescripcion = c.Descripcion ?? "";
+            tempValor = "";
+            tempValorCalculoTexto = "";
+            tempValorCalculo = null;
+        }
+        else if (i is not null)
+        {
+            tempCodigo = i.Codigo ?? "";
+            tempDescripcion = i.Descripcion ?? "";
+            tempValor = i.Valor ?? "";
+            tempValorCalculo = i.ValorCalculo;
+            tempValorCalculoTexto = i.ValorCalculo?.ToString("0.##") ?? "";
+        }
+        else
+        {
+            LimpiarFormulario();
+        }
+
+        showModal = true;
+    }
+
+    private void CerrarModal()
+    {
+        showModal = false;
+        LimpiarFormulario();
+    }
+
+    private void LimpiarFormulario()
+    {
+        tempCodigo = "";
+        tempDescripcion = "";
+        tempValor = "";
+        tempValorCalculoTexto = "";
+        tempValorCalculo = null;
+        modalError = "";
+        errores.Clear();
+    }
+
+    private bool TieneError(string campo) => errores.ContainsKey(campo);
+
+    private void SetError(string campo, string mensaje)
+    {
+        errores[campo] = mensaje;
+    }
+
+    private void ClearError(string campo)
+    {
+        if (errores.ContainsKey(campo))
+            errores.Remove(campo);
+    }
+
+    private void OnCodigoInput(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? "";
+
+        if (activeTab == "codigos")
+        {
+            tempCodigo = new string(value
+                .Where(c => char.IsLetterOrDigit(c))
+                .ToArray())
+                .ToUpper();
+        }
+        else
+        {
+            tempCodigo = new string(value
+                .Where(char.IsDigit)
+                .ToArray());
+        }
+
+        ValidarCodigoLocal();
+    }
+
+    private void OnDescripcionInput(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? "";
+
+        tempDescripcion = new string(value
+            .Where(c => char.IsLetter(c) || char.IsWhiteSpace(c))
+            .ToArray());
+
+        ValidarDescripcionLocal();
+    }
+
+    private void OnValorInput(ChangeEventArgs e)
+    {
+        var value = (e.Value?.ToString() ?? "").Replace(',', '.');
+        tempValor = FiltrarNumeroDecimal(value);
+        ValidarValorLocal();
+    }
+
+    private void OnValorCalculoInput(ChangeEventArgs e)
+    {
+        var value = (e.Value?.ToString() ?? "").Replace(',', '.');
+        tempValorCalculoTexto = FiltrarNumeroDecimal(value);
+
+        if (decimal.TryParse(tempValorCalculoTexto, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var numero))
+            tempValorCalculo = numero;
+        else
+            tempValorCalculo = null;
+
+        ValidarValorCalculoLocal();
+    }
+
+    private string FiltrarNumeroDecimal(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return "";
+
+        bool puntoUsado = false;
+        var chars = new List<char>();
+
+        foreach (var c in input)
+        {
+            if (char.IsDigit(c))
+            {
+                chars.Add(c);
+            }
+            else if (c == '.' && !puntoUsado)
+            {
+                chars.Add(c);
+                puntoUsado = true;
+            }
+        }
+
+        return new string(chars.ToArray());
+    }
+
+    private void ValidarCodigoLocal()
+    {
+        if (string.IsNullOrWhiteSpace(tempCodigo))
+        {
+            SetError(nameof(tempCodigo), "El codigo es obligatorio.");
+            return;
+        }
+
+        if (activeTab == "codigos")
+        {
+            if (tempCodigo.Any(c => !char.IsLetterOrDigit(c)))
+                SetError(nameof(tempCodigo), "El codigo solo puede tener letras y numeros.");
+            else
+                ClearError(nameof(tempCodigo));
+        }
+        else
+        {
+            if (!tempCodigo.All(char.IsDigit))
+                SetError(nameof(tempCodigo), "El codigo IVA solo acepta numeros.");
+            else
+                ClearError(nameof(tempCodigo));
+        }
+    }
+
+    private void ValidarDescripcionLocal()
+    {
+        if (string.IsNullOrWhiteSpace(tempDescripcion))
+        {
+            SetError(nameof(tempDescripcion), "La descripcion es obligatoria.");
+            return;
+        }
+
+        if (tempDescripcion.Any(c => !char.IsLetter(c) && !char.IsWhiteSpace(c)))
+        {
+            SetError(nameof(tempDescripcion), "La descripcion solo puede contener letras y espacios.");
+            return;
+        }
+
+        ClearError(nameof(tempDescripcion));
+    }
+
+    private void ValidarValorLocal()
+    {
+        if (activeTab != "iva")
+            return;
+
+        if (string.IsNullOrWhiteSpace(tempValor))
+        {
+            SetError(nameof(tempValor), "El valor es obligatorio.");
+            return;
+        }
+
+        if (!decimal.TryParse(tempValor, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _))
+        {
+            SetError(nameof(tempValor), "El valor debe ser numerico.");
+            return;
+        }
+
+        ClearError(nameof(tempValor));
+    }
+
+    private void ValidarValorCalculoLocal()
+    {
+        if (activeTab != "iva")
+            return;
+
+        if (string.IsNullOrWhiteSpace(tempValorCalculoTexto))
+        {
+            SetError(nameof(tempValorCalculoTexto), "El calculo decimal es obligatorio.");
+            return;
+        }
+
+        if (!decimal.TryParse(tempValorCalculoTexto, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var numero))
+        {
+            SetError(nameof(tempValorCalculoTexto), "El calculo decimal debe ser numerico.");
+            return;
+        }
+
+        if (numero < 0 || numero > 1)
+        {
+            SetError(nameof(tempValorCalculoTexto), "El calculo decimal debe estar entre 0 y 1.");
+            return;
+        }
+
+        ClearError(nameof(tempValorCalculoTexto));
+    }
+
+    private async Task<bool> ValidarFormularioAsync()
+    {
+        modalError = "";
+        errores.Clear();
+
+        ValidarCodigoLocal();
+        ValidarDescripcionLocal();
+
+        if (activeTab == "iva")
+        {
+            ValidarValorLocal();
+            ValidarValorCalculoLocal();
+        }
+
+        if (errores.Any())
+            return false;
+
+        if (!isEdit)
+        {
+            bool existe = activeTab == "codigos"
+                ? await TaxService.ExisteCodigoImpuestoAsync(tempCodigo)
+                : await TaxService.ExistePorcentajeIvaAsync(tempCodigo);
+
+            if (existe)
+            {
+                SetError(nameof(tempCodigo), "Este codigo ya existe.");
+                return false;
+            }
+        }
+
+        return !errores.Any();
+    }
+
+    private async Task Guardar()
+    {
+        if (!await ValidarFormularioAsync())
+        {
+            modalError = "Corrija los campos marcados en rojo.";
+            return;
+        }
+
+        try
+        {
+            if (activeTab == "codigos")
+            {
+                var model = new Codigosimpuesto
+                {
+                    Codigo = tempCodigo.Trim(),
+                    Descripcion = tempDescripcion.Trim(),
+                    Estado = "A"
+                };
+
+                if (isEdit)
+                    await TaxService.UpdateCodigoAsync(model);
+                else
+                    await TaxService.SaveCodigoAsync(model);
+            }
+            else
+            {
+                var model = new Porcentajeiva
+                {
+                    Codigo = tempCodigo.Trim(),
+                    Descripcion = tempDescripcion.Trim(),
+                    Valor = tempValor.Trim(),
+                    ValorCalculo = tempValorCalculo,
+                    Estado = "A"
+                };
+
+                if (isEdit)
+                    await TaxService.UpdateIvaAsync(model);
+                else
+                    await TaxService.SaveIvaAsync(model);
+            }
+
+            showModal = false;
+            LimpiarFormulario();
+            await LoadData();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            modalError = "No se pudo guardar el registro.";
+            await JS.InvokeVoidAsync("console.error", "Save error:", ex.Message);
+        }
+    }
+
+    private async Task ConfirmDelete(string codigo)
+    {
+        if (!await JS.ConfirmDeleteAsync("Desactivar registro", $"Se desactivara el codigo {codigo}."))
+        {
+            return;
+        }
+
+        try
+        {
+            if (activeTab == "codigos")
+                await TaxService.SoftDeleteCodigoImpuestoAsync(codigo);
+            else
+                await TaxService.SoftDeletePorcentajeIvaAsync(codigo);
+
+            await LoadData();
+            await JS.ShowToastAsync("Registro desactivado");
+        }
+        catch (Exception ex)
+        {
+            modalError = "No se pudo eliminar el registro.";
+            await JS.InvokeVoidAsync("console.error", "Delete error:", ex.Message);
+            await JS.ShowAlertAsync("No se pudo eliminar", "No se pudo eliminar el registro.", "error");
+        }
+    }
+
+    private async Task SolicitarEliminar(string codigo)
+    {
+        await ConfirmDelete(codigo);
+    }
+    private void CerrarConfirmacionEliminar()
+    {
+        if (isDeleting)
+            return;
+
+        showDeleteConfirm = false;
+        deleteConfirmTitle = string.Empty;
+        deleteConfirmMessage = string.Empty;
+        deleteConfirmAction = null;
+    }
+
+    private async Task ConfirmarEliminarAsync()
+    {
+        if (deleteConfirmAction is null)
+        {
+            CerrarConfirmacionEliminar();
+            return;
+        }
+
+        isDeleting = true;
+
+        try
+        {
+            await deleteConfirmAction.Invoke();
+            CerrarConfirmacionEliminar();
+            await LoadData();
+        }
+        catch (Exception ex)
+        {
+            modalError = "No se pudo eliminar el registro.";
+            await JS.InvokeVoidAsync("console.error", "Delete error:", ex.Message);
+        }
+        finally
+        {
+            isDeleting = false;
+        }
+    }
+
+    private void VerDetalle(Codigosimpuesto? c = null, Porcentajeiva? i = null)
+    {
+        codigoSeleccionado = c;
+        ivaSeleccionado = i;
+        showDetailModal = true;
+    }
+
+    private void CerrarDetalle()
+    {
+        showDetailModal = false;
+        codigoSeleccionado = null;
+        ivaSeleccionado = null;
+    }
+}

@@ -1,0 +1,979 @@
+@page "/cuentas-por-cobrar/estado-cuenta"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using Simetric.Services
+@using Simetric.ViewModels
+@using System.Globalization
+@using System.Text
+@attribute [AllowAnonymous]
+@inject AbonoService AbonoService
+@inject IEstadoCuentaExcelService EstadoCuentaExcelService
+@inject IEstadoCuentaPdfService EstadoCuentaPdfService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject IEmailService EmailService
+@inject SweetAlertService AlertService
+
+<PageTitle>Estado de cuenta | Numerica e-fact</PageTitle>
+
+<div class="statement-shell">
+    @if (cargando)
+    {
+        <section class="statement-state statement-state-loading">
+            <div class="statement-state-spinner">
+                <div class="spinner-border text-primary" role="status"></div>
+            </div>
+            <h3>Cargando estado de cuenta</h3>
+            <p>Estamos reuniendo facturas, abonos y saldos por cliente.</p>
+        </section>
+    }
+    else
+    {
+        <section class="statement-hero">
+            <span class="statement-hero-orb is-one" aria-hidden="true"></span>
+            <span class="statement-hero-orb is-two" aria-hidden="true"></span>
+
+            <div class="statement-hero-grid">
+                <div class="statement-hero-copy">
+                    <span class="statement-kicker">Cuentas por cobrar</span>
+                    <h1>Estado de cuenta por cliente</h1>
+                    <p>Facturas, abonos y saldos por cliente.</p>
+                </div>
+
+                <div class="statement-hero-summary">
+                    <article class="statement-hero-card is-balance">
+                        <i class="ri-wallet-3-line"></i>
+                        <span>Saldo visible</span>
+                        <strong>@FormatoMoneda(SaldoVisibleTotal)</strong>
+                        <small>Filtrado</small>
+                    </article>
+                    <article class="statement-hero-card is-clients">
+                        <i class="ri-team-line"></i>
+                        <span>Clientes visibles</span>
+                        <strong>@ClientesVisibles</strong>
+                        <small>En pantalla</small>
+                    </article>
+                    <article class="statement-hero-card is-documents">
+                        <i class="ri-file-list-3-line"></i>
+                        <span>Facturas visibles</span>
+                        <strong>@FacturasVisibles</strong>
+                        <small>Del periodo</small>
+                    </article>
+                    <article class="statement-hero-card is-payments">
+                        <i class="ri-line-chart-line"></i>
+                        <span>Abonos visibles</span>
+                        <strong>@AbonosVisibles</strong>
+                        <small>Del periodo</small>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section class="statement-toolbar">
+            <div class="statement-toolbar-top">
+                <div class="statement-filter-grid">
+                    <label class="statement-field statement-field-search">
+                        <span>Buscar por cliente, RUC o factura</span>
+                        <div class="statement-input-shell">
+                            <input @bind="busqueda" @bind:event="oninput" @bind:after="ResetPagina" placeholder="Escribe para buscar..." />
+                            <i class="ri-search-line"></i>
+                        </div>
+                    </label>
+
+                    <label class="statement-field">
+                        <span>Estado</span>
+                        <select @bind="estadoFiltro" @bind:after="ResetPagina">
+                            <option value="TODOS">Todos</option>
+                            <option value="PENDIENTE">Pendiente</option>
+                            <option value="VENCIDO">Vencido</option>
+                            <option value="PAGADO">Pagado</option>
+                        </select>
+                    </label>
+
+                    <label class="statement-field">
+                        <span>Saldo</span>
+                        <select @bind="saldoFiltro" @bind:after="ResetPagina">
+                            <option value="TODOS">Con saldo</option>
+                            <option value="CON_SALDO">Con saldo</option>
+                            <option value="SALDADOS">Saldados</option>
+                        </select>
+                    </label>
+
+                    <label class="statement-field statement-date-range">
+                        <span>Rango de fechas</span>
+                        <div class="statement-date-shell">
+                            <i class="ri-calendar-line"></i>
+                            <input type="date" value="@fechaDesdeTexto" @onchange="OnFechaDesdeChanged" />
+                            <span class="statement-date-separator">-</span>
+                            <input type="date" value="@fechaHastaTexto" @onchange="OnFechaHastaChanged" />
+                        </div>
+                    </label>
+                </div>
+
+            </div>
+
+            <div class="statement-toolbar-bottom">
+                <div class="statement-quick-filters">
+                </div>
+
+                <div class="statement-toolbar-actions">
+                    <button type="button" class="statement-excel-btn" @onclick="ExportarListadoExcelAsync">
+                        <i class="ri-file-excel-2-line"></i>
+                        <span>Descargar Excel</span>
+                    </button>
+
+                    <button type="button" class="statement-ghost-btn" @onclick="LimpiarFiltros">
+                        <i class="ri-refresh-line"></i>
+                        <span>Limpiar</span>
+                    </button>
+                </div>
+            </div>
+
+        </section>
+
+        <section class="statement-content">
+            <div class="statement-main-card">
+                <div class="statement-card-head">
+                    <div class="statement-card-title">
+                        <span><i class="ri-team-line"></i></span>
+                        <div>
+                            <h2>Listado por cliente</h2>
+                        </div>
+                    </div>
+
+                    <div class="statement-head-metrics">
+                        <span><strong>$@SaldoVisibleTotal.ToString("N2")</strong> saldo visible</span>
+                        <span><strong>@FacturasVisibles</strong> factura(s)</span>
+                        <button type="button" class="statement-card-menu" aria-label="Opciones del listado">
+                            <i class="ri-more-2-fill"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="statement-table-wrap">
+                    <table class="statement-table">
+                        <thead>
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Identificación</th>
+                                <th>Facturas</th>
+                                <th>Total facturado</th>
+                                <th>Total abonos</th>
+                                <th>Saldo total</th>
+                                <th>Estado</th>
+                                <th>Último abono</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!ClientesPagina.Any())
+                            {
+                                <tr>
+                                    <td colspan="9">
+                                        <div class="statement-empty-inline">No hay resultados con los filtros actuales.</div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var item in ClientesPagina)
+                                {
+                                    var estado = ObtenerEstadoCliente(item);
+                                    <tr class="@(EsFilaSeleccionada(item) ? "is-selected" : string.Empty)">
+                                        <td class="statement-client-cell">
+                                            <strong>@item.NombreCliente</strong>
+                                            <small>@item.FacturasPendientes factura(s) en seguimiento</small>
+                                        </td>
+                                        <td>@item.NumeroIdentificacion</td>
+                                        <td>
+                                            <span class="statement-count-chip">@item.FacturasPendientes</span>
+                                        </td>
+                                        <td>$@item.TotalFacturado.ToString("N2")</td>
+                                        <td>$@item.TotalAbonos.ToString("N2")</td>
+                                        <td class="statement-balance @(item.SaldoActual > 0 ? "is-danger" : "is-success")">$@item.SaldoActual.ToString("N2")</td>
+                                        <td>
+                                            <span class="statement-status @GetEstadoClase(estado)">@ToTitle(estado)</span>
+                                        </td>
+                                        <td>
+                                            <div class="statement-last-payment">
+                                                <strong>@FormatoMoneda(item.MontoUltimoAbono)</strong>
+                                                <small>@FormatearFecha(item.FechaUltimoAbono)</small>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="statement-row-actions">
+                                                <button type="button" class="statement-action-btn is-view" title="Ver detalle" @onclick="() => SeleccionarClienteAsync(item)">
+                                                    <i class="ri-eye-line"></i>
+                                                </button>
+                                                <button type="button" class="statement-action-btn is-pay" title="Registrar abono" @onclick="() => IrARegistroAbono(item.IdCliente)">
+                                                    <i class="ri-hand-coin-line"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="statement-pagination">
+                    <span>Mostrando @InicioPagina-@FinPagina de @ClientesFiltrados.Count cliente(s)</span>
+                    <div class="statement-pagination-actions">
+                        <button type="button" @onclick="PaginaAnterior" disabled="@(paginaActual <= 1)">
+                            <i class="ri-arrow-left-s-line"></i>
+                        </button>
+                        <strong>@paginaActual</strong>
+                        <button type="button" @onclick="PaginaSiguiente" disabled="@(paginaActual >= TotalPaginas)">
+                            <i class="ri-arrow-right-s-line"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <aside class="statement-side-card">
+                @if (detalleSeleccionado is null)
+                {
+                    <div class="statement-empty-side">
+                        <i class="ri-file-list-3-line"></i>
+                        <h3>Selecciona un cliente</h3>
+                        <p>Al elegir una fila verás el estado de cuenta, las facturas y los abonos en un solo panel.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="statement-detail-head">
+                        <div>
+                            <div class="statement-detail-title-row">
+                                <span class="statement-detail-kicker">Estado de cuenta</span>
+                                <span class="statement-client-chip">Cliente</span>
+                            </div>
+                            <h2>@detalleSeleccionado.NombreCliente</h2>
+                            <small>RUC/CI: @detalleSeleccionado.NumeroIdentificacion</small>
+                        </div>
+                        <button type="button" class="statement-icon-btn" title="Cerrar detalle" @onclick="LimpiarSeleccion">
+                            <i class="ri-close-line"></i>
+                        </button>
+                    </div>
+
+                    <div class="statement-detail-metrics">
+                        <article>
+                            <div class="statement-metric-icon is-danger-soft">
+                                <i class="ri-wallet-3-line"></i>
+                            </div>
+                            <span>Saldo total</span>
+                            <strong class="is-danger">$@detalleSeleccionado.SaldoTotal.ToString("N2")</strong>
+                        </article>
+                        <article>
+                            <div class="statement-metric-icon is-primary-soft">
+                                <i class="ri-file-list-3-line"></i>
+                            </div>
+                            <span>Facturas pendientes</span>
+                            <strong>@detalleSeleccionado.FacturasPendientes</strong>
+                        </article>
+                        <article>
+                            <span>Último abono</span>
+                            <strong>$@detalleSeleccionado.MontoUltimoAbono.ToString("N2")</strong>
+                            <small>@FormatearFecha(detalleSeleccionado.FechaUltimoAbono)</small>
+                        </article>
+                        <article>
+                            <span>Días vencidos</span>
+                            <strong class="is-danger">@detalleSeleccionado.DiasVencidosMaximos días</strong>
+                        </article>
+                    </div>
+
+                    <div class="statement-tabs">
+                        <button type="button" class="@GetTabClass("HISTORIAL")" @onclick='() => SetTab("HISTORIAL")'>Historial</button>
+                        <button type="button" class="@GetTabClass("FACTURAS")" @onclick='() => SetTab("FACTURAS")'>Facturas</button>
+                        <button type="button" class="@GetTabClass("ABONOS")" @onclick='() => SetTab("ABONOS")'>Abonos</button>
+                        <button type="button" class="@GetTabClass("RESUMEN")" @onclick='() => SetTab("RESUMEN")'>Resumen</button>
+                    </div>
+
+                    <div class="statement-tab-body">
+                        @if (tabActiva == "HISTORIAL")
+                        {
+                            <table class="statement-mini-table">
+                                <thead>
+                                    <tr>
+                                        <th>Fecha</th>
+                                        <th>Documento</th>
+                                        <th>Concepto</th>
+                                        <th>Débito</th>
+                                        <th>Crédito</th>
+                                        <th>Saldo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var item in detalleSeleccionado.Movimientos.Take(12))
+                                    {
+                                        <tr>
+                                            <td>@item.Fecha.ToString("dd/MM/yyyy")</td>
+                                            <td>@item.Documento</td>
+                                            <td>@item.Concepto</td>
+                                            <td>@FormatoMoneda(item.Debito)</td>
+                                            <td>@FormatoMoneda(item.Credito)</td>
+                                            <td>@FormatoMoneda(item.Saldo)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                        else if (tabActiva == "FACTURAS")
+                        {
+                            <div class="statement-list-stack">
+                                @foreach (var factura in detalleSeleccionado.Facturas)
+                                {
+                                    <article class="statement-line-card">
+                                        <div>
+                                            <strong>@factura.NumeroFactura</strong>
+                                            <small>@FormatearFecha(factura.FechaEmision) · vence @FormatearFecha(factura.FechaVencimiento)</small>
+                                        </div>
+                                        <div class="statement-line-meta">
+                                            <span>@FormatoMoneda(factura.ValorFacturado)</span>
+                                            <span class="statement-status @GetEstadoClase(factura.Estado)">@factura.Estado</span>
+                                        </div>
+                                    </article>
+                                }
+                            </div>
+                        }
+                        else if (tabActiva == "ABONOS")
+                        {
+                            <div class="statement-list-stack">
+                                @foreach (var abono in detalleSeleccionado.Abonos.Take(12))
+                                {
+                                    <article class="statement-line-card">
+                                        <div>
+                                            <strong>@abono.NumeroFactura</strong>
+                                            <small>@FormatearFecha(abono.FechaPago) · @(string.IsNullOrWhiteSpace(abono.FormaPago) ? "Abono registrado" : abono.FormaPago)</small>
+                                        </div>
+                                        <div class="statement-line-meta">
+                                            <span class="is-success">@FormatoMoneda(abono.Monto)</span>
+                                        </div>
+                                    </article>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="statement-summary-grid">
+                                <article>
+                                    <span>Total facturado</span>
+                                    <strong>@FormatoMoneda(detalleSeleccionado.Facturas.Sum(x => x.ValorFacturado))</strong>
+                                </article>
+                                <article>
+                                    <span>Total abonado</span>
+                                    <strong>@FormatoMoneda(detalleSeleccionado.Abonos.Sum(x => x.Monto))</strong>
+                                </article>
+                                <article>
+                                    <span>Saldo a favor</span>
+                                    <strong>@FormatoMoneda(detalleSeleccionado.SaldoAFavorDisponible)</strong>
+                                </article>
+                                <article>
+                                    <span>Documentos saldados</span>
+                                    <strong>@detalleSeleccionado.Facturas.Count(x => x.SaldoActual <= 0)</strong>
+                                </article>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="statement-side-actions">
+                        <button type="button" class="statement-success-btn" @onclick="() => IrARegistroAbono(detalleSeleccionado.IdCliente)">
+                            <i class="ri-hand-coin-line"></i>
+                            <span>Registrar abono</span>
+                        </button>
+                        <button type="button" class="statement-primary-btn statement-outline-btn" @onclick="EnviarEstadoCuentaAsync" disabled="@enviandoEstadoCuenta">
+                            <i class="ri-mail-send-line"></i>
+                            <span>@(enviandoEstadoCuenta ? "Enviando..." : "Enviar estado de cuenta")</span>
+                        </button>
+                        <button type="button" class="statement-primary-btn statement-outline-btn" @onclick="DescargarDetallePdfAsync">
+                            <i class="ri-file-pdf-line"></i>
+                            <span>Descargar PDF</span>
+                        </button>
+                        <button type="button" class="statement-ghost-btn" @onclick="ImprimirAsync">
+                            <i class="ri-printer-line"></i>
+                            <span>Imprimir</span>
+                        </button>
+                    </div>
+                }
+            </aside>
+
+            @if (detalleSeleccionado is not null)
+            {
+                <div class="statement-modal-backdrop" @onclick="LimpiarSeleccion">
+                    <div class="statement-modal-card" role="dialog" aria-modal="true" aria-labelledby="estadoCuentaModalTitulo" @onclick:stopPropagation="true">
+                        <div class="statement-modal-hero">
+                            <div class="statement-detail-head is-modal">
+                            <div>
+                                <div class="statement-detail-title-row">
+                                    <span class="statement-detail-kicker"><i class="ri-file-list-3-line"></i> Estado de cuenta</span>
+                                    <span class="statement-client-chip">Cliente</span>
+                                </div>
+                                <h2 id="estadoCuentaModalTitulo">@detalleSeleccionado.NombreCliente</h2>
+                                <small>RUC/CI: @detalleSeleccionado.NumeroIdentificacion</small>
+                                <div class="statement-detail-submeta">
+                                    <span>
+                                        <i class="ri-mail-line"></i>
+                                        @(string.IsNullOrWhiteSpace(detalleSeleccionado.Correo) ? "Sin correo" : detalleSeleccionado.Correo)
+                                    </span>
+                                    <span>
+                                        <i class="ri-file-list-3-line"></i>
+                                        @detalleSeleccionado.Facturas.Count factura(s)
+                                    </span>
+                                    <span>
+                                        <i class="ri-safe-2-line"></i>
+                                        @FormatoMoneda(detalleSeleccionado.SaldoAFavorDisponible)
+                                    </span>
+                                </div>
+                            </div>
+                            <button type="button" class="statement-icon-btn" title="Cerrar detalle" @onclick="LimpiarSeleccion">
+                                <i class="ri-close-line"></i>
+                            </button>
+                            </div>
+
+                        <div class="statement-detail-metrics">
+                            <article>
+                                <div class="statement-metric-icon is-danger-soft">
+                                    <i class="ri-wallet-3-line"></i>
+                                </div>
+                                <span>Saldo total</span>
+                                <strong class="is-danger">$@detalleSeleccionado.SaldoTotal.ToString("N2")</strong>
+                            </article>
+                            <article>
+                                <div class="statement-metric-icon is-primary-soft">
+                                    <i class="ri-file-list-3-line"></i>
+                                </div>
+                                <span>Facturas pendientes</span>
+                                <strong>@detalleSeleccionado.FacturasPendientes</strong>
+                            </article>
+                            <article>
+                                <span>Último abono</span>
+                                <div class="statement-metric-icon is-success-soft">
+                                    <i class="ri-calendar-check-line"></i>
+                                </div>
+                                <strong>$@detalleSeleccionado.MontoUltimoAbono.ToString("N2")</strong>
+                                <small>@FormatearFecha(detalleSeleccionado.FechaUltimoAbono)</small>
+                            </article>
+                            <article>
+                                <span>Días vencidos</span>
+                                <div class="statement-metric-icon is-warning-soft">
+                                    <i class="ri-time-line"></i>
+                                </div>
+                                <strong class="@(detalleSeleccionado.DiasVencidosMaximos > 0 ? "is-danger" : "is-success")">@detalleSeleccionado.DiasVencidosMaximos días</strong>
+                            </article>
+                        </div>
+                        </div>
+
+                        <div class="statement-tabs">
+                            <button type="button" class="@GetTabClass("HISTORIAL")" @onclick='() => SetTab("HISTORIAL")'>Historial</button>
+                            <button type="button" class="@GetTabClass("FACTURAS")" @onclick='() => SetTab("FACTURAS")'>Facturas</button>
+                            <button type="button" class="@GetTabClass("ABONOS")" @onclick='() => SetTab("ABONOS")'>Abonos</button>
+                            <button type="button" class="@GetTabClass("RESUMEN")" @onclick='() => SetTab("RESUMEN")'>Resumen</button>
+                        </div>
+
+                        <div class="statement-tab-body statement-modal-body">
+                            @if (tabActiva == "HISTORIAL")
+                            {
+                                <table class="statement-mini-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Documento</th>
+                                            <th>Concepto</th>
+                                            <th>Débito</th>
+                                            <th>Crédito</th>
+                                            <th>Saldo</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var item in detalleSeleccionado.Movimientos.Take(12))
+                                        {
+                                            <tr>
+                                                <td>@item.Fecha.ToString("dd/MM/yyyy")</td>
+                                                <td>@item.Documento</td>
+                                                <td>@item.Concepto</td>
+                                                <td>@FormatoMoneda(item.Debito)</td>
+                                                <td>@FormatoMoneda(item.Credito)</td>
+                                                <td>@FormatoMoneda(item.Saldo)</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                            else if (tabActiva == "FACTURAS")
+                            {
+                                <div class="statement-list-stack">
+                                    @foreach (var factura in detalleSeleccionado.Facturas)
+                                    {
+                                        <article class="statement-line-card">
+                                            <div>
+                                                <strong>@factura.NumeroFactura</strong>
+                                                <small>@FormatearFecha(factura.FechaEmision) · vence @FormatearFecha(factura.FechaVencimiento)</small>
+                                            </div>
+                                            <div class="statement-line-meta">
+                                                <span>@FormatoMoneda(factura.ValorFacturado)</span>
+                                                <span class="statement-status @GetEstadoClase(factura.Estado)">@factura.Estado</span>
+                                            </div>
+                                        </article>
+                                    }
+                                </div>
+                            }
+                            else if (tabActiva == "ABONOS")
+                            {
+                                <div class="statement-list-stack">
+                                    @foreach (var abono in detalleSeleccionado.Abonos.Take(12))
+                                    {
+                                        <article class="statement-line-card">
+                                            <div>
+                                                <strong>@abono.NumeroFactura</strong>
+                                                <small>@FormatearFecha(abono.FechaPago) · @(string.IsNullOrWhiteSpace(abono.FormaPago) ? "Abono registrado" : abono.FormaPago)</small>
+                                            </div>
+                                            <div class="statement-line-meta">
+                                                <span class="is-success">@FormatoMoneda(abono.Monto)</span>
+                                            </div>
+                                        </article>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="statement-summary-grid">
+                                    <article>
+                                        <span>Total facturado</span>
+                                        <strong>@FormatoMoneda(detalleSeleccionado.Facturas.Sum(x => x.ValorFacturado))</strong>
+                                    </article>
+                                    <article>
+                                        <span>Total abonado</span>
+                                        <strong>@FormatoMoneda(detalleSeleccionado.Abonos.Sum(x => x.Monto))</strong>
+                                    </article>
+                                    <article>
+                                        <span>Saldo a favor</span>
+                                        <strong>@FormatoMoneda(detalleSeleccionado.SaldoAFavorDisponible)</strong>
+                                    </article>
+                                    <article>
+                                        <span>Documentos saldados</span>
+                                        <strong>@detalleSeleccionado.Facturas.Count(x => x.SaldoActual <= 0)</strong>
+                                    </article>
+                                </div>
+                            }
+                        </div>
+
+                        <div class="statement-modal-footer">
+                            <div class="statement-side-actions">
+                                <button type="button" class="statement-success-btn" @onclick="() => IrARegistroAbono(detalleSeleccionado.IdCliente)">
+                                    <i class="ri-hand-coin-line"></i>
+                                    <span>Registrar abono</span>
+                                </button>
+                                <button type="button" class="statement-primary-btn statement-outline-btn" @onclick="EnviarEstadoCuentaAsync" disabled="@enviandoEstadoCuenta">
+                                    <i class="ri-mail-send-line"></i>
+                                    <span>@(enviandoEstadoCuenta ? "Enviando..." : "Enviar estado de cuenta")</span>
+                                </button>
+                                <button type="button" class="statement-primary-btn statement-outline-btn" @onclick="DescargarDetallePdfAsync">
+                                    <i class="ri-download-2-line"></i>
+                                    <span>Descargar PDF</span>
+                                </button>
+                                <button type="button" class="statement-ghost-btn" @onclick="ImprimirAsync">
+                                    <i class="ri-printer-line"></i>
+                                    <span>Imprimir</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private const int PageSize = 8;
+
+    private List<EstadoCuentaClienteResumenVM> items = new();
+    private EstadoCuentaDetalleVM? detalleSeleccionado;
+    private int currentUserId;
+    private int paginaActual = 1;
+    private bool cargando = true;
+    private string busqueda = string.Empty;
+    private string estadoFiltro = "TODOS";
+    private string saldoFiltro = "TODOS";
+    private string tabActiva = "HISTORIAL";
+    private string fechaDesdeTexto = string.Empty;
+    private string fechaHastaTexto = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+    private int? quickRange;
+    private int? clienteSeleccionadoId;
+    private bool enviandoEstadoCuenta;
+    
+    private List<ClienteEstadoCuentaListaVM> ClientesFiltrados =>
+        AplicarFiltros(items);
+
+    private List<ClienteEstadoCuentaListaVM> ClientesPagina =>
+        ClientesFiltrados
+            .Skip((paginaActual - 1) * PageSize)
+            .Take(PageSize)
+            .ToList();
+
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(ClientesFiltrados.Count / (double)PageSize));
+    private int InicioPagina => ClientesFiltrados.Count == 0 ? 0 : ((paginaActual - 1) * PageSize) + 1;
+    private int FinPagina => Math.Min(paginaActual * PageSize, ClientesFiltrados.Count);
+    private decimal SaldoVisibleTotal => ClientesFiltrados.Sum(x => x.SaldoActual);
+    private int ClientesVisibles => ClientesFiltrados.Count;
+    private int FacturasVisibles => ClientesFiltrados.Sum(x => x.FacturasPendientes);
+    private int AbonosVisibles => ClientesFiltrados.Count(x => x.TotalAbonos > 0);
+    private IReadOnlyCollection<EstadoCuentaClienteResumenVM> ResumenListadoExportable =>
+        ClientesFiltrados
+            .Select(x => new EstadoCuentaClienteResumenVM
+            {
+                IdCliente = x.IdCliente,
+                NombreCliente = x.NombreCliente,
+                NumeroIdentificacion = x.NumeroIdentificacion,
+                FechaEmision = x.FechaReferencia,
+                ValorFacturado = x.TotalFacturado,
+                TotalAbonos = x.TotalAbonos,
+                SaldoActual = x.SaldoActual,
+                FacturasPendientes = x.FacturasPendientes,
+                MontoUltimoAbono = x.MontoUltimoAbono,
+                FechaUltimoAbono = x.FechaUltimoAbono,
+                DiasVencidosMaximos = x.DiasVencidosMaximos
+            })
+            .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        currentUserId = int.TryParse(idClaim, out var idUsuario) ? idUsuario : 0;
+
+        if (currentUserId <= 0)
+        {
+            Navigation.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        items = await AbonoService.GetEstadoCuentaClientesAsync(currentUserId);
+        paginaActual = 1;
+
+        cargando = false;
+    }
+
+    private async Task SeleccionarClienteAsync(ClienteEstadoCuentaListaVM item)
+    {
+        clienteSeleccionadoId = item.IdCliente;
+        tabActiva = "HISTORIAL";
+        detalleSeleccionado = await AbonoService.GetEstadoCuentaDetalleAsync(currentUserId, item.IdCliente);
+    }
+
+    private List<ClienteEstadoCuentaListaVM> AplicarFiltros(IEnumerable<EstadoCuentaClienteResumenVM> origen)
+    {
+        var query = origen
+            .GroupBy(x => new { x.IdCliente, x.NombreCliente, x.NumeroIdentificacion })
+            .Select(group =>
+            {
+                var filas = group.ToList();
+                var ultimoAbono = filas
+                    .Where(x => x.FechaUltimoAbono.HasValue)
+                    .OrderByDescending(x => x.FechaUltimoAbono)
+                    .FirstOrDefault();
+                var saldoTotal = filas.Max(x => x.SaldoTotalCliente);
+
+                return new ClienteEstadoCuentaListaVM
+                {
+                    IdCliente = group.Key.IdCliente,
+                    NombreCliente = group.Key.NombreCliente,
+                    NumeroIdentificacion = group.Key.NumeroIdentificacion,
+                    FacturasPendientes = filas.Max(x => x.FacturasPendientes),
+                    TotalFacturado = filas.Sum(x => x.ValorFacturado),
+                    TotalAbonos = filas.Sum(x => x.TotalAbonos),
+                    SaldoActual = saldoTotal > 0 ? saldoTotal : filas.Sum(x => x.SaldoActual),
+                    MontoUltimoAbono = ultimoAbono?.MontoUltimoAbono ?? filas.Max(x => x.MontoUltimoAbono),
+                    FechaUltimoAbono = ultimoAbono?.FechaUltimoAbono ?? filas.Max(x => x.FechaUltimoAbono),
+                    FechaReferencia = filas.Max(x => x.FechaEmision),
+                    DiasVencidosMaximos = filas.Max(x => x.DiasVencidosMaximos),
+                    TieneVencidas = filas.Any(x => string.Equals(ObtenerEstadoItem(x), "VENCIDO", StringComparison.OrdinalIgnoreCase)),
+                    FacturasRelacionadas = filas
+                        .Select(x => x.NumeroFactura)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList()
+                };
+            })
+            .AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(busqueda))
+        {
+            var filtro = Normalizar(busqueda);
+            query = query.Where(x =>
+                Normalizar(x.NombreCliente).Contains(filtro, StringComparison.Ordinal) ||
+                Normalizar(x.NumeroIdentificacion).Contains(filtro, StringComparison.Ordinal) ||
+                x.FacturasRelacionadas.Any(f => Normalizar(f).Contains(filtro, StringComparison.Ordinal)));
+        }
+
+        if (!string.Equals(estadoFiltro, "TODOS", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(x => string.Equals(ObtenerEstadoCliente(x), estadoFiltro, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (string.Equals(saldoFiltro, "CON_SALDO", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(x => x.SaldoActual > 0);
+        }
+        else if (string.Equals(saldoFiltro, "SALDADOS", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(x => x.SaldoActual <= 0);
+        }
+
+        if (fechaDesde.HasValue)
+        {
+            query = query.Where(x => x.FechaReferencia.HasValue && x.FechaReferencia.Value.Date >= fechaDesde.Value.Date);
+        }
+
+        if (fechaHasta.HasValue)
+        {
+            query = query.Where(x => x.FechaReferencia.HasValue && x.FechaReferencia.Value.Date <= fechaHasta.Value.Date);
+        }
+
+        return query
+            .OrderByDescending(x => x.SaldoActual > 0)
+            .ThenByDescending(x => string.Equals(ObtenerEstadoCliente(x), "VENCIDO", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(x => x.NombreCliente)
+            .ThenByDescending(x => x.FechaReferencia ?? DateTime.MinValue)
+            .ToList();
+    }
+
+    private static string ObtenerEstadoItem(EstadoCuentaClienteResumenVM item)
+    {
+        if (item.SaldoActual <= 0)
+            return "PAGADO";
+
+        if (item.FechaVencimiento.HasValue && item.FechaVencimiento.Value.Date < DateTime.Today)
+            return "VENCIDO";
+
+        return "PENDIENTE";
+    }
+
+    private static string ObtenerEstadoCliente(ClienteEstadoCuentaListaVM item)
+    {
+        if (item.SaldoActual <= 0)
+            return "PAGADO";
+
+        if (item.TieneVencidas || item.DiasVencidosMaximos > 0)
+            return "VENCIDO";
+
+        return "PENDIENTE";
+    }
+
+    private bool EsFilaSeleccionada(ClienteEstadoCuentaListaVM item) =>
+        clienteSeleccionadoId == item.IdCliente;
+
+    private string GetEstadoClase(string estado) =>
+        estado.ToUpperInvariant() switch
+        {
+            "PAGADO" => "is-success",
+            "VENCIDO" => "is-danger",
+            _ => "is-warning"
+        };
+
+    private string GetTabClass(string tab) =>
+        string.Equals(tabActiva, tab, StringComparison.OrdinalIgnoreCase) ? "is-active" : string.Empty;
+
+    private void SetTab(string tab) => tabActiva = tab;
+
+    private static string ToTitle(string value) =>
+        value.Length == 0 ? string.Empty : char.ToUpperInvariant(value[0]) + value[1..].ToLowerInvariant();
+
+    private string FormatoMoneda(decimal valor) => $"$ {valor:N2}";
+    private string FormatearFecha(DateTime? fecha) => fecha.HasValue ? fecha.Value.ToString("dd/MM/yyyy") : "-";
+
+    private void OnFechaDesdeChanged(ChangeEventArgs args)
+    {
+        fechaDesdeTexto = Convert.ToString(args.Value) ?? string.Empty;
+        OnFechaFiltroChanged();
+    }
+
+    private void OnFechaHastaChanged(ChangeEventArgs args)
+    {
+        fechaHastaTexto = Convert.ToString(args.Value) ?? string.Empty;
+        OnFechaFiltroChanged();
+    }
+
+    private void OnFechaFiltroChanged()
+    {
+        fechaDesde = DateTime.TryParse(fechaDesdeTexto, out var inicio) ? inicio.Date : null;
+        fechaHasta = DateTime.TryParse(fechaHastaTexto, out var fin) ? fin.Date : null;
+        quickRange = null;
+        ResetPagina();
+    }
+
+    private void AplicarRangoRapido(int dias)
+    {
+        quickRange = dias;
+        fechaHasta = DateTime.Today;
+        fechaDesde = DateTime.Today.AddDays(-dias);
+        fechaDesdeTexto = fechaDesde.Value.ToString("yyyy-MM-dd");
+        fechaHastaTexto = fechaHasta.Value.ToString("yyyy-MM-dd");
+        ResetPagina();
+    }
+
+    private string GetQuickRangeClass(int dias) =>
+        quickRange == dias ? "is-active" : string.Empty;
+
+    private void LimpiarFiltros()
+    {
+        busqueda = string.Empty;
+        estadoFiltro = "TODOS";
+        saldoFiltro = "TODOS";
+        fechaDesde = null;
+        fechaHasta = null;
+        fechaDesdeTexto = string.Empty;
+        fechaHastaTexto = string.Empty;
+        quickRange = null;
+        ResetPagina();
+    }
+
+    private void ResetPagina()
+    {
+        paginaActual = 1;
+    }
+
+    private void LimpiarSeleccion()
+    {
+        detalleSeleccionado = null;
+        clienteSeleccionadoId = null;
+    }
+
+    private void PaginaAnterior()
+    {
+        if (paginaActual > 1)
+            paginaActual--;
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (paginaActual < TotalPaginas)
+            paginaActual++;
+    }
+
+    private void IrARegistroAbono(int idCliente)
+    {
+        Navigation.NavigateTo($"/cuentas-por-cobrar?clienteId={idCliente}#registro-abono-paso-2");
+    }
+
+    private async Task EnviarEstadoCuentaAsync()
+    {
+        if (detalleSeleccionado is null)
+            return;
+
+        if (enviandoEstadoCuenta)
+            return;
+
+        if (string.IsNullOrWhiteSpace(detalleSeleccionado.Correo))
+        {
+            await AlertService.ShowWarningAsync("El cliente no tiene un correo registrado para enviar el estado de cuenta.");
+            return;
+        }
+
+        try
+        {
+            enviandoEstadoCuenta = true;
+            var archivoPdf = await EstadoCuentaPdfService.GenerarDetalleAsync(detalleSeleccionado);
+            await EmailService.EnviarEstadoCuentaAsync(
+                new[] { detalleSeleccionado.Correo },
+                detalleSeleccionado,
+                archivoPdf.Content,
+                archivoPdf.FileName);
+
+            await AlertService.ShowSuccessAsync(
+                $"Se envió el estado de cuenta de {detalleSeleccionado.NombreCliente} a {detalleSeleccionado.Correo} con el PDF adjunto.",
+                "Estado de cuenta enviado");
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync(
+                ex is OperationCanceledException or TaskCanceledException
+                    ? "El envío tardó demasiado en completarse. Intenta nuevamente."
+                    : ex.Message,
+                "No se pudo enviar el estado de cuenta");
+        }
+        finally
+        {
+            enviandoEstadoCuenta = false;
+        }
+    }
+
+    private async Task ExportarListadoExcelAsync()
+    {
+        var archivo = await EstadoCuentaExcelService.GenerarListadoAsync(ResumenListadoExportable);
+        await DescargarArchivoAsync(archivo.FileName, archivo.Content, archivo.ContentType);
+    }
+
+    private async Task ExportarDetalleExcelAsync()
+    {
+        if (detalleSeleccionado is null)
+            return;
+
+        var archivo = await EstadoCuentaExcelService.GenerarDetalleAsync(detalleSeleccionado);
+        await DescargarArchivoAsync(archivo.FileName, archivo.Content, archivo.ContentType);
+    }
+
+    private async Task DescargarDetallePdfAsync()
+    {
+        if (detalleSeleccionado is null)
+            return;
+
+        var archivo = await EstadoCuentaPdfService.GenerarDetalleAsync(detalleSeleccionado);
+        await DescargarArchivoAsync(archivo.FileName, archivo.Content, archivo.ContentType);
+    }
+
+    private async Task DescargarArchivoAsync(string fileName, byte[] content, string contentType)
+    {
+        await using var stream = new MemoryStream(content);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef, contentType);
+    }
+
+    private Task ImprimirAsync() => JS.InvokeVoidAsync("print").AsTask();
+
+    private static string Normalizar(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var normalized = value.Trim().Normalize(NormalizationForm.FormD);
+        var builder = new StringBuilder(normalized.Length);
+
+        foreach (var character in normalized)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(character) != UnicodeCategory.NonSpacingMark)
+            {
+                builder.Append(char.ToUpperInvariant(character));
+            }
+        }
+
+        return builder.ToString().Normalize(NormalizationForm.FormC);
+    }
+
+    private sealed class ClienteEstadoCuentaListaVM
+    {
+        public int IdCliente { get; init; }
+        public string NombreCliente { get; init; } = string.Empty;
+        public string NumeroIdentificacion { get; init; } = string.Empty;
+        public int FacturasPendientes { get; init; }
+        public decimal TotalFacturado { get; init; }
+        public decimal TotalAbonos { get; init; }
+        public decimal SaldoActual { get; init; }
+        public decimal MontoUltimoAbono { get; init; }
+        public DateTime? FechaUltimoAbono { get; init; }
+        public DateTime? FechaReferencia { get; init; }
+        public int DiasVencidosMaximos { get; init; }
+        public bool TieneVencidas { get; init; }
+        public List<string> FacturasRelacionadas { get; init; } = new();
+    }
+}

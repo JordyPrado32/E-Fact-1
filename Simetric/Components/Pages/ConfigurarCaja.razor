@@ -1,0 +1,794 @@
+@page "/mi-caja"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
+@using Simetric.Services
+@using System.Security.Claims
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ConfiguracionService ConfigService
+@inject FacturacionService FacturacionService
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject EmisionControlService EmisionControlService
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
+
+<PageTitle>Puntos de emision | Numerica e-fact</PageTitle>
+
+<div class="points-page" data-tour="caja.page">
+    @if (isLoading)
+    {
+        <section class="points-loading">
+            <span class="spinner-border" role="status"></span>
+            <h3>Preparando tus puntos de emision</h3>
+            <p>Organizando establecimientos, series y configuracion principal.</p>
+        </section>
+    }
+    else
+    {
+        @if (MostrarVolverInicioOnboarding)
+        {
+            <div class="breadcrumb-container">
+                <button type="button" class="breadcrumb-home-btn" @onclick='() => NavManager.NavigateTo("/dashboard")'>
+                    <i class="bi bi-house-door"></i>
+                    <span>Volver al inicio</span>
+                </button>
+            </div>
+        }
+
+        <header class="points-hero" data-tour="caja.card">
+            <span class="points-hero-orb is-one" aria-hidden="true"></span>
+            <span class="points-hero-orb is-two" aria-hidden="true"></span>
+
+            <div class="points-hero-main">
+                <span class="points-hero-icon" aria-hidden="true">
+                    <i class="bi bi-buildings"></i>
+                </span>
+                <div class="points-hero-copy">
+                    <span class="points-kicker">Configuracion tributaria</span>
+                    <h1>Establecimientos y puntos de emision</h1>
+                    <p>Administra las series electronicas que utilizara tu cuenta para emitir documentos.</p>
+                </div>
+            </div>
+
+            <div class="points-hero-actions">
+                <div class="points-hero-series">
+                    <span class="points-hero-series-icon"><i class="bi bi-file-earmark-check"></i></span>
+                    <span>
+                        <small>Serie en uso</small>
+                        <strong>@SerieSeleccionada</strong>
+                    </span>
+                </div>
+                <button type="button"
+                        class="points-primary-btn points-hero-button"
+                        @onclick="AbrirNuevoPunto"
+                        disabled="@RequiereConfigurarEmisorAntesDePunto">
+                    <i class="bi bi-plus-lg"></i>
+                    <span>Agregar punto de emision</span>
+                </button>
+
+            </div>
+        </header>
+
+        @if (!string.IsNullOrWhiteSpace(mensajeStatus))
+        {
+            <div class="points-alert @(StatusIsError ? "is-error" : "is-success")">
+                <i class="bi @(StatusIsError ? "bi-exclamation-triangle" : "bi-check2-circle")"></i>
+                <span>@mensajeStatus</span>
+            </div>
+        }
+
+        @if (RequiereConfigurarEmisorAntesDePunto)
+        {
+            <div class="points-alert is-error">
+                <i class="bi bi-info-circle"></i>
+                <span>Primero debes configurar y guardar el emisor. El establecimiento se toma automáticamente desde esa configuración y luego se usará en puntos de emisión.</span>
+            </div>
+        }
+
+        <section class="points-metrics" data-tour="caja.summary">
+            <article class="metric-card">
+                <span class="metric-icon"><i class="bi bi-building"></i></span>
+                <div><small>Emisor activo</small><strong>@(emisorActivo is null ? 0 : 1)</strong></div>
+            </article>
+            <article class="metric-card">
+                <span class="metric-icon"><i class="bi bi-shop"></i></span>
+                <div><small>Establecimientos</small><strong>@GruposEstablecimiento.Count</strong></div>
+            </article>
+            <article class="metric-card">
+                <span class="metric-icon"><i class="bi bi-bullseye"></i></span>
+                <div><small>Puntos de emision</small><strong>@cajas.Count</strong></div>
+            </article>
+            <article class="metric-card is-series">
+                <span class="metric-icon"><i class="bi bi-file-earmark-binary"></i></span>
+                <div><small>Serie seleccionada</small><strong>@SerieSeleccionada</strong></div>
+            </article>
+        </section>
+
+        @if (!cajas.Any())
+        {
+            <section class="points-empty" data-tour="caja.series">
+                <span class="points-empty-icon"><i class="bi bi-shop-window"></i></span>
+                <span class="points-kicker">Primer paso</span>
+                <h2>Crea tu punto de emision principal</h2>
+                <p>Define el establecimiento y el punto que formaran tu primera serie electronica.</p>
+                <button type="button"
+                        class="points-primary-btn"
+                        data-tour="caja.save"
+                        @onclick="AbrirNuevoPunto"
+                        disabled="@RequiereConfigurarEmisorAntesDePunto">
+                    <i class="bi bi-plus-lg"></i>
+                    <span>Crear punto principal</span>
+                </button>
+            </section>
+        }
+        else
+        {
+            <section class="points-workspace" data-tour="caja.series">
+                <aside class="establishments-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <span class="points-kicker">Organizacion</span>
+                            <h2>Establecimientos</h2>
+                        </div>
+                        <span class="panel-count">@GruposEstablecimiento.Count</span>
+                    </div>
+
+                    <div class="issuer-card">
+                        <span class="issuer-icon"><i class="bi bi-person-badge"></i></span>
+                        <div>
+                            <small>Emisor</small>
+                            <strong>@NombreEmisor</strong>
+                            <span>@RucEmisor</span>
+                        </div>
+                    </div>
+
+                    <div class="establishment-list">
+                        @foreach (var grupo in GruposEstablecimiento)
+                        {
+                            var seleccionado = grupo.Codigo == establecimientoSeleccionado;
+                            <button type="button"
+                                    class="establishment-item @(seleccionado ? "is-selected" : string.Empty)"
+                                    @onclick="() => SeleccionarEstablecimiento(grupo.Codigo)">
+                                <span class="establishment-radio"><i class="bi @(seleccionado ? "bi-record-circle-fill" : "bi-circle")"></i></span>
+                                <span class="establishment-copy">
+                                    <strong>@grupo.Codigo - @NombreEstablecimiento(grupo.Codigo)</strong>
+                                    <small>@DireccionEstablecimiento(grupo.Codigo)</small>
+                                </span>
+                                <span class="establishment-meta">
+                                    <b>@grupo.Puntos.Count punto@(grupo.Puntos.Count == 1 ? string.Empty : "s")</b>
+                                    @if (grupo.Puntos.Any(EsPrincipal))
+                                    {
+                                        <em>Principal</em>
+                                    }
+                                </span>
+                            </button>
+                        }
+                    </div>
+
+                    <div class="panel-tip">
+                        <i class="bi bi-info-circle"></i>
+                        <span>Selecciona un establecimiento para administrar sus puntos de emision.</span>
+                    </div>
+                </aside>
+
+                <main class="points-panel">
+                    <div class="selected-establishment-head">
+                        <div>
+                            <span class="points-kicker">Establecimiento seleccionado</span>
+                            <h2>@establecimientoSeleccionado - @NombreEstablecimiento(establecimientoSeleccionado)</h2>
+                            <p>@DireccionEstablecimiento(establecimientoSeleccionado)</p>
+                        </div>
+                        <button type="button"
+                                class="points-primary-btn is-compact"
+                                data-tour="caja.save"
+                                @onclick="AbrirNuevoPuntoMismoEstablecimiento"
+                                disabled="@RequiereConfigurarEmisorAntesDePunto">
+                            <i class="bi bi-plus-lg"></i>
+                            <span>Agregar punto</span>
+                        </button>
+                    </div>
+
+                    <div class="selected-establishment-info">
+                        <span><small>Codigo de establecimiento</small><strong>@establecimientoSeleccionado</strong></span>
+                        <span><small>Puntos configurados</small><strong>@PuntosEstablecimientoSeleccionado.Count</strong></span>
+                        <span><small>Estado</small><strong class="status-active">Activo</strong></span>
+                    </div>
+
+                    <div class="points-list-head">
+                        <h3>Puntos de emision</h3>
+                        <span>@PuntosEstablecimientoSeleccionado.Count configurado@(PuntosEstablecimientoSeleccionado.Count == 1 ? string.Empty : "s")</span>
+                    </div>
+
+                    <div class="emission-grid">
+                        @foreach (var caja in PuntosEstablecimientoSeleccionado)
+                        {
+                            var seleccionada = caja.Sec == cajaSeleccionada?.Sec;
+                            <article class="emission-card @(seleccionada ? "is-selected" : string.Empty)" @onclick="() => SeleccionarCaja(caja)">
+                                <div class="emission-card-top">
+                                    <div>
+                                        <small>Punto @ExtraerPuntoEmision(caja.SerieFactura)</small>
+                                        <h4>@NombrePunto(caja)</h4>
+                                    </div>
+                                    @if (EsPrincipal(caja))
+                                    {
+                                        <span class="principal-badge"><i class="bi bi-star-fill"></i> Principal</span>
+                                    }
+                                </div>
+                                <strong class="emission-series">Serie @FormatearSerie(caja.SerieFactura)</strong>
+                                <div class="emission-meta">
+                                    <span><i class="bi bi-check-circle-fill"></i> Activo</span>
+                                    <span>Caja @(caja.NumCaja ?? 0)</span>
+                                </div>
+                                <div class="emission-actions">
+                                    <button type="button" @onclick:stopPropagation="true" @onclick="() => AbrirEdicion(caja)">
+                                        <i class="bi bi-pencil"></i><span>Editar</span>
+                                    </button>
+                                    <button type="button"
+                                            disabled="@EsPrincipal(caja)"
+                                            @onclick:stopPropagation="true"
+                                            @onclick="() => MarcarPrincipal(caja)">
+                                        <i class="bi bi-star"></i><span>@(EsPrincipal(caja) ? "Principal" : "Marcar principal")</span>
+                                    </button>
+                                    @if (!EsPrincipal(caja) && cajas.Count > 1)
+                                    {
+                                        <button type="button"
+                                                class="is-danger"
+                                                @onclick:stopPropagation="true"
+                                                @onclick="() => ConfirmarEliminarCaja(caja)">
+                                            <i class="bi bi-trash"></i><span>Eliminar</span>
+                                        </button>
+                                    }
+                                </div>
+                            </article>
+                        }
+                    </div>
+                </main>
+
+                <aside class="preview-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <span class="points-kicker">Vista previa</span>
+                            <h2>Serie seleccionada</h2>
+                        </div>
+                    </div>
+                    <div class="series-preview">
+                        <span class="series-preview-icon"><i class="bi bi-qr-code-scan"></i></span>
+                        <strong>@SerieSeleccionada</strong>
+                        <span>Documentos electronicos</span>
+                    </div>
+                    <p class="preview-copy">Esta serie se aplicara a facturas, notas de credito, debito, retenciones y guias de remision.</p>
+                    <div class="preview-warning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <span>El punto principal es el que utiliza el sistema para generar los siguientes documentos.</span>
+                    </div>
+                    <div class="preview-details">
+                        <span><small>Establecimiento</small><strong>@ExtraerEstablecimiento(cajaSeleccionada?.SerieFactura)</strong></span>
+                        <span><small>Punto de emision</small><strong>@ExtraerPuntoEmision(cajaSeleccionada?.SerieFactura)</strong></span>
+                        <span><small>Rol</small><strong>@(cajaSeleccionada is not null && EsPrincipal(cajaSeleccionada) ? "Principal" : "Alterno")</strong></span>
+                    </div>
+                </aside>
+            </section>
+        }
+    }
+</div>
+
+@if (mostrarModalPunto)
+{
+    <div class="point-modal-backdrop" @onclick="CerrarModal"></div>
+    <div class="point-modal-shell">
+        <section class="point-modal-card" role="dialog" aria-modal="true">
+            <header>
+                <div>
+                    <span class="points-kicker">@(cajaEditando is null ? "Nueva serie" : "Actualizar serie")</span>
+                    <h2>@(cajaEditando is null ? "Agregar punto de emision" : "Editar punto de emision")</h2>
+                    <p>El establecimiento y el punto deben contener tres digitos.</p>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarModal"><i class="bi bi-x-lg"></i></button>
+            </header>
+
+            <div class="point-modal-body">
+                @if (!string.IsNullOrWhiteSpace(errorModal))
+                {
+                    <div class="points-alert is-error"><i class="bi bi-exclamation-triangle"></i><span>@errorModal</span></div>
+                }
+
+                <label class="point-field">
+                    <span>Codigo de establecimiento</span>
+                    <div class="point-input-shell">
+                        <i class="bi bi-building"></i>
+                        <input @bind="establecimientoInput"
+                               @bind:event="oninput"
+                               maxlength="3"
+                               inputmode="numeric"
+                               placeholder="001"
+                               disabled="true" />
+                    </div>
+                    <small>@MensajeEstablecimientoModal</small>
+                </label>
+
+                <label class="point-field">
+                    <span>Punto de emision</span>
+                    <div class="point-input-shell">
+                        <i class="bi bi-upc-scan"></i>
+                        <input @bind="puntoEmisionInput"
+                               @bind:event="oninput"
+                               maxlength="3"
+                               inputmode="numeric"
+                               placeholder="002" />
+                    </div>
+                    <small>Cada serie debe ser unica dentro de la cuenta.</small>
+                </label>
+
+                <div class="modal-series-preview">
+                    <span>Vista previa de la serie</span>
+                    <strong>@SerieModalPreview</strong>
+                </div>
+            </div>
+
+            <footer>
+                <button type="button" class="points-secondary-btn" @onclick="CerrarModal" disabled="@isSaving">Cancelar</button>
+                <button type="button" class="points-primary-btn" @onclick="GuardarPunto" disabled="@isSaving">
+                    @if (isSaving)
+                    {
+                        <span class="spinner-border spinner-border-sm"></span>
+                        <span>Guardando...</span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-check2-circle"></i>
+                        <span>@(cajaEditando is null ? "Crear punto de emision" : "Guardar cambios")</span>
+                    }
+                </button>
+            </footer>
+        </section>
+    </div>
+}
+
+@code {
+    private readonly List<Caja> cajas = new();
+    private Simetric.Models.Emisor? emisorActivo;
+    private Caja? cajaSeleccionada;
+    private Caja? cajaEditando;
+    private int idUsuarioActual;
+    private bool isLoading = true;
+    private bool isSaving;
+    private bool mostrarModalPunto;
+    private EmisionEstado? emisionEstado;
+    private string establecimientoSeleccionado = "001";
+    private string establecimientoInput = "001";
+    private string puntoEmisionInput = "001";
+    private string? mensajeStatus;
+    private string? errorModal;
+
+    private bool StatusIsError => mensajeStatus?.StartsWith("Error", StringComparison.OrdinalIgnoreCase) == true;
+    private string? CodigoEstablecimientoEmisor => NormalizarCodigo(emisorActivo?.CodEstablecimiento);
+    private bool RequiereConfigurarEmisorAntesDePunto => string.IsNullOrWhiteSpace(CodigoEstablecimientoEmisor);
+    private bool MostrarVolverInicioOnboarding =>
+        EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false;
+    private string MensajeEstablecimientoModal =>
+        $"Este establecimiento se asigna automáticamente y no se puede modificar desde aquí: {EstablecimientoModalPreview}.";
+    private string NombreEmisor => FirstFilled(emisorActivo?.NomComercial, emisorActivo?.RazonSocial, "Emisor configurado");
+    private string RucEmisor => string.IsNullOrWhiteSpace(emisorActivo?.Ruc) ? "RUC no disponible" : $"RUC: {emisorActivo.Ruc}";
+    private string SerieSeleccionada => FormatearSerie(cajaSeleccionada?.SerieFactura);
+    private string EstablecimientoModalPreview => NormalizarCodigoPreview(establecimientoInput);
+    private string PuntoModalPreview => NormalizarCodigoPreview(puntoEmisionInput);
+    private string SerieModalPreview => $"{EstablecimientoModalPreview}-{PuntoModalPreview}";
+    private List<string> CodigosEstablecimientoExistentes => cajas
+        .Select(c => ExtraerEstablecimiento(c.SerieFactura))
+        .Distinct()
+        .OrderBy(c => c)
+        .ToList();
+    private List<GrupoEstablecimiento> GruposEstablecimiento => cajas
+        .GroupBy(c => ExtraerEstablecimiento(c.SerieFactura))
+        .Select(g => new GrupoEstablecimiento(g.Key, g.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).ToList()))
+        .OrderBy(g => g.Codigo)
+        .ToList();
+    private List<Caja> PuntosEstablecimientoSeleccionado => cajas
+        .Where(c => ExtraerEstablecimiento(c.SerieFactura) == establecimientoSeleccionado)
+        .OrderBy(c => c.NumCaja)
+        .ThenBy(c => c.Sec)
+        .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        idUsuarioActual = ObtenerIdUsuario(user);
+        if (idUsuarioActual <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        await CargarDatos();
+    }
+
+    private async Task CargarDatos(bool preserveStatus = false, int? seleccionarSec = null)
+    {
+        isLoading = true;
+        if (!preserveStatus)
+        {
+            mensajeStatus = null;
+        }
+
+        try
+        {
+            cajas.Clear();
+            cajas.AddRange(await ConfigService.GetCajasCuentaActivasAsync(idUsuarioActual));
+            emisorActivo = (await FacturacionService.GetEmisoresActivosAsync(idUsuarioActual)).FirstOrDefault();
+
+            cajaSeleccionada = seleccionarSec.HasValue
+                ? cajas.FirstOrDefault(c => c.Sec == seleccionarSec.Value)
+                : cajas.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).FirstOrDefault();
+
+            if (cajaSeleccionada != null)
+            {
+                establecimientoSeleccionado = ExtraerEstablecimiento(cajaSeleccionada.SerieFactura);
+            }
+
+            await EmisorOnboardingService.RefreshRequirementAsync(idUsuarioActual);
+            emisionEstado = await EmisionControlService.ObtenerEstadoAsync(idUsuarioActual);
+        }
+        catch (Exception ex)
+        {
+            mensajeStatus = $"Error al cargar datos: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void SeleccionarEstablecimiento(string codigo)
+    {
+        establecimientoSeleccionado = codigo;
+        cajaSeleccionada = PuntosEstablecimientoSeleccionado.FirstOrDefault();
+    }
+
+    private void SeleccionarCaja(Caja caja)
+    {
+        cajaSeleccionada = caja;
+        establecimientoSeleccionado = ExtraerEstablecimiento(caja.SerieFactura);
+    }
+
+    private void AbrirNuevoPunto()
+    {
+        if (RequiereConfigurarEmisorAntesDePunto)
+        {
+            mensajeStatus = "Primero configura y guarda el emisor para que el establecimiento se asigne automáticamente.";
+            return;
+        }
+
+        cajaEditando = null;
+        establecimientoInput = ObtenerEstablecimientoBaseParaPuntos();
+        puntoEmisionInput = SiguientePuntoSugerido(establecimientoInput);
+        errorModal = null;
+        mostrarModalPunto = true;
+    }
+
+    private void AbrirNuevoPuntoMismoEstablecimiento()
+    {
+        if (RequiereConfigurarEmisorAntesDePunto)
+        {
+            mensajeStatus = "Primero configura y guarda el emisor para que el establecimiento se asigne automáticamente.";
+            return;
+        }
+
+        cajaEditando = null;
+        establecimientoInput = ObtenerEstablecimientoBaseParaPuntos();
+        puntoEmisionInput = SiguientePuntoSugerido(establecimientoInput);
+        errorModal = null;
+        mostrarModalPunto = true;
+    }
+
+    private void AbrirEdicion(Caja caja)
+    {
+        cajaEditando = caja;
+        establecimientoInput = ExtraerEstablecimiento(caja.SerieFactura);
+        puntoEmisionInput = ExtraerPuntoEmision(caja.SerieFactura);
+        errorModal = null;
+        mostrarModalPunto = true;
+    }
+
+    private void CerrarModal()
+    {
+        if (isSaving)
+        {
+            return;
+        }
+
+        mostrarModalPunto = false;
+        cajaEditando = null;
+        errorModal = null;
+    }
+
+    private async Task GuardarPunto()
+    {
+        if (isSaving)
+        {
+            return;
+        }
+
+        var establecimiento = NormalizarCodigo(establecimientoInput);
+        var punto = NormalizarCodigo(puntoEmisionInput);
+        if (establecimiento is null)
+        {
+            errorModal = "El establecimiento debe contener tres digitos y no puede ser 000.";
+            return;
+        }
+        if (punto is null)
+        {
+            errorModal = "El punto de emision debe contener tres digitos y no puede ser 000.";
+            return;
+        }
+
+        var serie = $"{establecimiento}-{punto}";
+        if (cajas.Any(c => c.Sec != cajaEditando?.Sec && FormatearSerie(c.SerieFactura) == serie))
+        {
+            errorModal = $"La serie {serie} ya esta configurada.";
+            return;
+        }
+
+        isSaving = true;
+        errorModal = null;
+        try
+        {
+            var caja = cajaEditando ?? CrearNuevaCajaBase();
+            caja.SerieFactura = serie;
+            caja.SerieNotasCred = serie;
+            caja.SerieGuia = serie;
+            caja.SerieCompras = serie;
+            caja.SerieDebitos = serie;
+            caja.Estado = true;
+
+            if (!await ConfigService.SaveCajaAsync(caja, idUsuarioActual))
+            {
+                errorModal = "No se pudo guardar el punto. Verifica que la serie sea unica y vuelve a intentarlo.";
+                return;
+            }
+
+            mostrarModalPunto = false;
+            mensajeStatus = cajaEditando is null
+                ? $"Punto de emision {serie} creado correctamente."
+                : $"Serie {serie} actualizada correctamente.";
+            var secSeleccionado = caja.Sec > 0 ? caja.Sec : (int?)null;
+            cajaEditando = null;
+            await CargarDatos(true, secSeleccionado);
+            establecimientoSeleccionado = establecimiento;
+            cajaSeleccionada = cajas.FirstOrDefault(c => FormatearSerie(c.SerieFactura) == serie) ?? cajaSeleccionada;
+        }
+        catch (Exception ex)
+        {
+            errorModal = $"No fue posible guardar el punto: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private string ObtenerEstablecimientoBaseParaPuntos()
+        => cajas.Any() ? establecimientoSeleccionado : CodigoEstablecimientoEmisor ?? "001";
+
+    private Caja CrearNuevaCajaBase()
+    {
+        var principal = cajas.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).FirstOrDefault();
+        var siguienteNumero = cajas.Select(c => c.NumCaja ?? 0).DefaultIfEmpty(0).Max() + 1;
+
+        return new Caja
+        {
+            IdUsuario = idUsuarioActual,
+            NumCaja = siguienteNumero,
+            idJefe = idUsuarioActual,
+            IdEmpresa = principal?.IdEmpresa is > 0 ? principal.IdEmpresa : emisorActivo?.IdEmpresa is > 0 ? emisorActivo.IdEmpresa : 1,
+            IdSucursal = principal?.IdSucursal is > 0 ? principal.IdSucursal : emisorActivo?.IdSucursal is > 0 ? emisorActivo.IdSucursal : 1
+        };
+    }
+
+    private async Task MarcarPrincipal(Caja caja)
+    {
+        if (isSaving || EsPrincipal(caja))
+        {
+            return;
+        }
+
+        isSaving = true;
+        mensajeStatus = null;
+        try
+        {
+            if (!await ConfigService.MarcarCajaPrincipalAsync(caja.Sec, idUsuarioActual))
+            {
+                mensajeStatus = "Error: No se pudo marcar el punto como principal.";
+                return;
+            }
+
+            mensajeStatus = $"La serie {FormatearSerie(caja.SerieFactura)} ahora es el punto principal.";
+            await CargarDatos(true, caja.Sec);
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task ConfirmarEliminarCaja(Caja caja)
+    {
+        if (isSaving || EsPrincipal(caja) || cajas.Count <= 1)
+        {
+            return;
+        }
+
+        var serie = FormatearSerie(caja.SerieFactura);
+        var resultado = await JS.InvokeAsync<System.Text.Json.JsonElement>("Swal.fire", new
+        {
+            icon = "warning",
+            title = "¿Está seguro?",
+            text = $"¿Desea eliminar el punto de emisión con la serie {serie}?",
+            showCancelButton = true,
+            confirmButtonText = "Sí, eliminar",
+            cancelButtonText = "Cancelar",
+            reverseButtons = true,
+            focusCancel = true,
+            confirmButtonColor = "#aa3140",
+            cancelButtonColor = "#71849a"
+        });
+
+        if (resultado.TryGetProperty("isConfirmed", out var confirmacion) && confirmacion.GetBoolean())
+        {
+            await EliminarCajaAsync(caja);
+        }
+    }
+
+    private async Task EliminarCajaAsync(Caja caja)
+    {
+        isSaving = true;
+        mensajeStatus = null;
+        try
+        {
+            var serie = FormatearSerie(caja.SerieFactura);
+            if (await ConfigService.DeleteCajaAsync(caja.Sec, idUsuarioActual))
+            {
+                await JS.InvokeVoidAsync("Swal.fire", new
+                {
+                    icon = "success",
+                    title = "¡Éxito!",
+                    text = $"Punto de emisión {serie} eliminado correctamente.",
+                    confirmButtonText = "Aceptar",
+                    timer = 1800,
+                    showConfirmButton = false
+                });
+
+                int? seleccionarSec = null;
+                if (cajaSeleccionada?.Sec == caja.Sec)
+                {
+                    // Al no pasar parámetro, CargarDatos seleccionará la caja principal
+                }
+                else
+                {
+                    seleccionarSec = cajaSeleccionada?.Sec;
+                }
+
+                await CargarDatos(true, seleccionarSec);
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("Swal.fire", new
+                {
+                    icon = "error",
+                    title = "Error",
+                    text = "No se pudo eliminar el punto de emisión. Inténtelo nuevamente.",
+                    confirmButtonText = "Aceptar"
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            await JS.InvokeVoidAsync("Swal.fire", new
+            {
+                icon = "error",
+                title = "Error",
+                text = $"Error al eliminar el punto de emisión: {ex.Message}",
+                confirmButtonText = "Aceptar"
+            });
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private string SiguientePuntoSugerido(string establecimiento)
+    {
+        var codigo = NormalizarCodigoPreview(establecimiento);
+        var usados = cajas
+            .Where(c => ExtraerEstablecimiento(c.SerieFactura) == codigo)
+            .Select(c => int.TryParse(ExtraerPuntoEmision(c.SerieFactura), out var value) ? value : 0)
+            .ToHashSet();
+
+        for (var numero = 1; numero <= 999; numero++)
+        {
+            if (!usados.Contains(numero))
+            {
+                return numero.ToString("D3");
+            }
+        }
+
+        return "001";
+    }
+
+    private string NombreEstablecimiento(string codigo) =>
+        cajas.Any(c => EsPrincipal(c) && ExtraerEstablecimiento(c.SerieFactura) == codigo)
+            ? "Matriz"
+            : $"Establecimiento {codigo}";
+
+    private string DireccionEstablecimiento(string codigo)
+    {
+        if (emisorActivo != null && ExtraerEstablecimiento(emisorActivo.CodEstablecimiento) == codigo)
+        {
+            return FirstFilled(emisorActivo.DirEstablecimiento, emisorActivo.DireccionMatriz, "Direccion no registrada");
+        }
+
+        return "Direccion asociada al establecimiento";
+    }
+
+    private static string NombrePunto(Caja caja) =>
+        EsPrincipal(caja) ? "Caja principal" : $"Punto de emision {ExtraerPuntoEmision(caja.SerieFactura)}";
+
+    private static bool EsPrincipal(Caja caja) => caja.NumCaja == 1;
+
+    private static string FormatearSerie(string? serie)
+    {
+        var establecimiento = ExtraerEstablecimiento(serie);
+        var punto = ExtraerPuntoEmision(serie);
+        return $"{establecimiento}-{punto}";
+    }
+
+    private static string ExtraerEstablecimiento(string? serie)
+    {
+        var digitos = LimpiarDigitos(serie);
+        return digitos.Length >= 3 ? digitos[..3] : "001";
+    }
+
+    private static string ExtraerPuntoEmision(string? serie)
+    {
+        var digitos = LimpiarDigitos(serie);
+        return digitos.Length >= 6 ? digitos.Substring(3, 3) : "001";
+    }
+
+    private static string NormalizarCodigoPreview(string? value)
+    {
+        var digitos = LimpiarDigitos(value);
+        if (digitos.Length == 0)
+        {
+            return "001";
+        }
+
+        return (digitos.Length > 3 ? digitos[..3] : digitos).PadLeft(3, '0');
+    }
+
+    private static string? NormalizarCodigo(string? value)
+    {
+        var digitos = LimpiarDigitos(value);
+        if (digitos.Length is < 1 or > 3)
+        {
+            return null;
+        }
+
+        var codigo = digitos.PadLeft(3, '0');
+        return codigo == "000" ? null : codigo;
+    }
+
+    private static string LimpiarDigitos(string? value) =>
+        new((value ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private static string FirstFilled(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private sealed record GrupoEstablecimiento(string Codigo, List<Caja> Puntos);
+}

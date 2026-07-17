@@ -1,0 +1,899 @@
+@page "/backoffice/suscripciones"
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.DTOs
+@using System.Text.Json
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>Suscripciones y Licencias - BackOffice | Numerica</PageTitle>
+
+<div class="suscripciones-wrapper animate__animated animate__fadeIn">
+    <!-- Header Block -->
+    <header class="suscripciones-header">
+        <div class="header-text">
+            <h2>Control de Suscripciones y Licencias</h2>
+            <p>Métricas consolidadas de facturas electrónicas (e-Fact) y vigencia de firmas electrónicas activas (e-Sign) del sistema.</p>
+        </div>
+    </header>
+
+    @if (isLoading)
+    {
+        <div class="text-center my-5 py-5">
+            <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+                <span class="visually-hidden">Cargando información...</span>
+            </div>
+            <p class="mt-3 text-muted fw-bold">Cargando métricas y suscripciones...</p>
+        </div>
+    }
+    else
+    {
+        <!-- KPI Summary Cards -->
+        <section class="kpi-grid">
+            <div class="kpi-card is-success">
+                <div class="kpi-card-content">
+                    <span class="kpi-title">e-Fact Clientes Activos</span>
+                    <strong class="kpi-value text-success">@efactActivosCount</strong>
+                    <span class="kpi-desc">Usuarios con saldo de documentos</span>
+                </div>
+                <div class="kpi-icon-wrapper">
+                    <i class="bi bi-people-fill"></i>
+                </div>
+                <div class="kpi-progress-bar">
+                    <div class="kpi-progress" style="width: @(totalEFactSuscripciones > 0 ? Math.Round((double)efactActivosCount / totalEFactSuscripciones * 100) : 0)%"></div>
+                </div>
+            </div>
+            <div class="kpi-card is-warning">
+                <div class="kpi-card-content">
+                    <span class="kpi-title">e-Fact Clientes Sin Saldo</span>
+                    <strong class="kpi-value text-warning">@efactSinSaldoCount</strong>
+                    <span class="kpi-desc">Usuarios que necesitan recargar</span>
+                </div>
+                <div class="kpi-icon-wrapper">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                </div>
+                <div class="kpi-progress-bar">
+                    <div class="kpi-progress" style="width: @(totalEFactSuscripciones > 0 ? Math.Round((double)efactSinSaldoCount / totalEFactSuscripciones * 100) : 0)%"></div>
+                </div>
+            </div>
+            <div class="kpi-card is-primary">
+                <div class="kpi-card-content">
+                    <span class="kpi-title">Firmas e-Sign Vigentes</span>
+                    <strong class="kpi-value text-primary">@esignVigentesCount</strong>
+                    <span class="kpi-desc">Firmas electrónicas activas</span>
+                </div>
+                <div class="kpi-icon-wrapper">
+                    <i class="bi bi-shield-check"></i>
+                </div>
+                <div class="kpi-progress-bar">
+                    <div class="kpi-progress" style="width: @(totalESignSuscripciones > 0 ? Math.Round((double)esignVigentesCount / totalESignSuscripciones * 100) : 0)%"></div>
+                </div>
+            </div>
+            <div class="kpi-card is-danger">
+                <div class="kpi-card-content">
+                    <span class="kpi-title">Firmas e-Sign por Vencer</span>
+                    <strong class="kpi-value text-danger">@esignPorVencerCount</strong>
+                    <span class="kpi-desc">Firmas por vencer</span>
+                </div>
+                <div class="kpi-icon-wrapper">
+                    <i class="bi bi-clock-history"></i>
+                </div>
+                <div class="kpi-progress-bar">
+                    <div class="kpi-progress" style="width: @(totalESignSuscripciones > 0 ? Math.Round((double)esignPorVencerCount / totalESignSuscripciones * 100) : 0)%"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Charts Grid (2 columns) -->
+        <section class="charts-grid">
+            <!-- Card 1: e-Fact Donut Chart -->
+            <div class="chart-card">
+                <div class="chart-title-group">
+                    <h3>Suscripciones e-Fact (Documentos)</h3>
+                    <p>Proporción y distribución de clientes de facturación electrónica por estado</p>
+                </div>
+                <div class="chart-container-wrap">
+                    <div class="donut-svg-wrapper">
+                        <canvas id="efactDoughnutChart"></canvas>
+                        <div class="donut-label">
+                            <span class="donut-total">@totalEFactSuscripciones</span>
+                            <span class="donut-sub">Clientes</span>
+                        </div>
+                    </div>
+                    <div class="donut-legend">
+                        <div class="legend-item"><span class="dot dot-activo"></span> <span class="legend-name">Activos</span> <span class="legend-value">@efactActivosCount (@(totalEFactSuscripciones > 0 ? Math.Round((double)efactActivosCount / totalEFactSuscripciones * 100) : 0)%)</span></div>
+                        <div class="legend-item"><span class="dot dot-sinsaldo"></span> <span class="legend-name">Sin Saldo</span> <span class="legend-value">@efactSinSaldoCount (@(totalEFactSuscripciones > 0 ? Math.Round((double)efactSinSaldoCount / totalEFactSuscripciones * 100) : 0)%)</span></div>
+                        <div class="legend-item"><span class="dot dot-suspendido"></span> <span class="legend-name">Suspendidos</span> <span class="legend-value">@efactSuspendidosCount (@(totalEFactSuscripciones > 0 ? Math.Round((double)efactSuspendidosCount / totalEFactSuscripciones * 100) : 0)%)</span></div>
+                    </div>
+                </div>
+                <button type="button" class="btn-ver-detalles btn-detalles-efact @(showEFactDetails ? "active" : "")" @onclick="ToggleEFactDetails">
+                    <i class="bi bi-file-earmark-check-fill"></i> @(showEFactDetails ? "Ocultar Detalles" : "Ver Detalles e-Fact")
+                </button>
+            </div>
+
+            <!-- Card 2: e-Sign Donut Chart -->
+            <div class="chart-card">
+                <div class="chart-title-group">
+                    <h3>Vigencias e-Sign (Firma Electrónica)</h3>
+                    <p>Distribución de firmas emitidas según su fecha de vencimiento</p>
+                </div>
+                <div class="chart-container-wrap">
+                    <div class="donut-svg-wrapper">
+                        <canvas id="esignDoughnutChart"></canvas>
+                        <div class="donut-label">
+                            <span class="donut-total">@totalESignSuscripciones</span>
+                            <span class="donut-sub">Firmas</span>
+                        </div>
+                    </div>
+                    <div class="donut-legend">
+                        <div class="legend-item"><span class="dot dot-vigente"></span> <span class="legend-name">Vigentes</span> <span class="legend-value">@esignVigentesCount (@(totalESignSuscripciones > 0 ? Math.Round((double)esignVigentesCount / totalESignSuscripciones * 100) : 0)%)</span></div>
+                        <div class="legend-item"><span class="dot dot-porvencer"></span> <span class="legend-name">Por Vencer</span> <span class="legend-value">@esignPorVencerCount (@(totalESignSuscripciones > 0 ? Math.Round((double)esignPorVencerCount / totalESignSuscripciones * 100) : 0)%)</span></div>
+                        <div class="legend-item"><span class="dot dot-vencida"></span> <span class="legend-name">Vencidas</span> <span class="legend-value">@esignVencidasCount (@(totalESignSuscripciones > 0 ? Math.Round((double)esignVencidasCount / totalESignSuscripciones * 100) : 0)%)</span></div>
+                    </div>
+                </div>
+                <button type="button" class="btn-ver-detalles btn-detalles-esign @(showESignDetails ? "active" : "")" @onclick="ToggleESignDetails">
+                    <i class="bi bi-shield-check"></i> @(showESignDetails ? "Ocultar Detalles" : "Ver Detalles e-Sign")
+                </button>
+            </div>
+        </section>
+
+        <!-- e-Fact Detailed Section -->
+        @if (showEFactDetails)
+        {
+            <section class="details-section animate__animated animate__fadeIn">
+                <div class="table-card">
+                    <div class="table-card-head">
+                        <div>
+                            <h3>Detalle de Clientes e-Fact</h3>
+                            <p>Lista detallada de saldos, consumos y paquetes contratados por usuario.</p>
+                        </div>
+                    </div>
+
+                    <!-- Filter / Search toolbar -->
+                    <div class="filters-toolbar">
+                        <div class="filters-grid">
+                            <div class="filter-input-wrap">
+                                <i class="bi bi-search filter-input-icon"></i>
+                                <input type="text" class="filter-input" placeholder="Buscar por cliente o paquete..." @bind="searchEFact" @bind:event="oninput" @bind:after="OnSearchEFactChanged" />
+                            </div>
+                            <div>
+                                <select class="filter-select" @bind="filterEFactEstado" @bind:after="OnFilterEFactChanged">
+                                    <option value="ALL">Todos los estados</option>
+                                    <option value="activo">Activo</option>
+                                    <option value="sin saldo">Sin Saldo</option>
+                                    <option value="suspendido">Suspendido</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Table content -->
+                    <div class="table-wrap">
+                        <table class="suscripciones-table">
+                            <thead>
+                                <tr>
+                                    <th>Cliente</th>
+                                    <th>Vendedor</th>
+                                    <th>Paquete Contratado</th>
+                                    <th>Docs Comprados</th>
+                                    <th>Docs Consumidos</th>
+                                    <th>Saldo Disponible</th>
+                                    <th>Fecha de Compra</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @if (!paginatedEFactRows.Any())
+                                {
+                                    <tr>
+                                        <td colspan="8" class="table-empty">
+                                            <i class="bi bi-info-circle"></i>
+                                            No se encontraron clientes de e-Fact
+                                        </td>
+                                    </tr>
+                                }
+                                else
+                                {
+                                    @foreach (var row in paginatedEFactRows)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <div class="client-cell">
+                                                    <span class="client-name">@row.Cliente</span>
+                                                    <span class="client-email">@row.Email</span>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span class="vendedor-text">@row.Vendedor</span>
+                                            </td>
+                                            <td>
+                                                <span class="package-badge efact">
+                                                    <i class="bi bi-file-earmark-check-fill"></i> @row.PaqueteContratado
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span class="value-bold">@row.DocumentosComprados</span>
+                                            </td>
+                                            <td>
+                                                <span class="value-bold">@row.DocumentosConsumidos</span>
+                                            </td>
+                                            <td>
+                                                <span class="value-bold @(row.SaldoDisponible <= 0 && !row.PaqueteContratado.ToLower().Contains("ilimitad") ? "danger-red" : "")">
+                                                    @(row.PaqueteContratado.ToLower().Contains("ilimitad") ? "Ilimitado" : row.SaldoDisponible.ToString())
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span class="date-text">@row.FechaCompra.ToString("dd/MM/yyyy HH:mm")</span>
+                                            </td>
+                                            <td>
+                                                <span class="status-badge @row.Estado">
+                                                    <i class="bi @(row.Estado == "activo" ? "bi-check-circle-fill" : row.Estado == "sin saldo" ? "bi-exclamation-triangle-fill" : "bi-x-circle-fill")"></i>
+                                                    @row.Estado
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    @if (totalEFactPages > 1)
+                    {
+                        <div class="pager-container">
+                            <span class="pager-info">
+                                Mostrando del @((currentEFactPage - 1) * pageSize + 1) al @Math.Min(currentEFactPage * pageSize, filteredEFactRows.Count) de @filteredEFactRows.Count registros
+                            </span>
+                            <div class="pager-buttons">
+                                <button type="button" class="pager-btn" disabled="@(currentEFactPage == 1)" @onclick="() => SetEFactPage(1)">
+                                    <i class="bi bi-chevron-double-left"></i>
+                                </button>
+                                <button type="button" class="pager-btn" disabled="@(currentEFactPage == 1)" @onclick="() => SetEFactPage(currentEFactPage - 1)">
+                                    <i class="bi bi-chevron-left"></i>
+                                </button>
+                                @for (int i = Math.Max(1, currentEFactPage - 2); i <= Math.Min(totalEFactPages, currentEFactPage + 2); i++)
+                                {
+                                    int pageNum = i;
+                                    <button type="button" class="pager-btn @(currentEFactPage == pageNum ? "active" : "")" @onclick="() => SetEFactPage(pageNum)">
+                                        @pageNum
+                                    </button>
+                                }
+                                <button type="button" class="pager-btn" disabled="@(currentEFactPage == totalEFactPages)" @onclick="() => SetEFactPage(currentEFactPage + 1)">
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                                <button type="button" class="pager-btn" disabled="@(currentEFactPage == totalEFactPages)" @onclick="() => SetEFactPage(totalEFactPages)">
+                                    <i class="bi bi-chevron-double-right"></i>
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+
+        <!-- e-Sign Detailed Section -->
+        @if (showESignDetails)
+        {
+            <section class="details-section animate__animated animate__fadeIn">
+                <div class="table-card">
+                    <div class="table-card-head">
+                        <div>
+                            <h3>Detalle de Firmas e-Sign</h3>
+                            <p>Historial y vigencia de firmas electrónicas emitidas por el sistema.</p>
+                        </div>
+                    </div>
+
+                    <!-- Filter / Search toolbar -->
+                    <div class="filters-toolbar">
+                        <div class="filters-grid">
+                            <div class="filter-input-wrap">
+                                <i class="bi bi-search filter-input-icon"></i>
+                                <input type="text" class="filter-input" placeholder="Buscar por cliente o tipo..." @bind="searchESign" @bind:event="oninput" @bind:after="OnSearchESignChanged" />
+                            </div>
+                            <div>
+                                <select class="filter-select" @bind="filterESignEstado" @bind:after="OnFilterESignChanged">
+                                    <option value="ALL">Todos los estados</option>
+                                    <option value="vigente">Vigente</option>
+                                    <option value="por vencer">Por Vencer</option>
+                                    <option value="vencida">Vencida</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Table content -->
+                    <div class="table-wrap">
+                        <table class="suscripciones-table">
+                            <thead>
+                                <tr>
+                                    <th>Cliente</th>
+                                    <th>Tipo de Firma</th>
+                                    <th>Vigencia</th>
+                                    <th>Fecha de Emisión</th>
+                                    <th>Fecha de Vencimiento</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @if (!paginatedESignRows.Any())
+                                {
+                                    <tr>
+                                        <td colspan="6" class="table-empty">
+                                            <i class="bi bi-info-circle"></i>
+                                            No se encontraron firmas electrónicas e-Sign
+                                        </td>
+                                    </tr>
+                                }
+                                else
+                                {
+                                    @foreach (var row in paginatedESignRows)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <div class="client-cell">
+                                                    <span class="client-name">@row.Cliente</span>
+                                                    <span class="client-email">@row.Email</span>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span class="package-badge esign">
+                                                    <i class="bi bi-shield-check"></i> @row.TipoFirma
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span class="value-bold">@row.Vigencia</span>
+                                            </td>
+                                            <td>
+                                                <span class="date-text">@row.FechaEmision.ToString("dd/MM/yyyy")</span>
+                                            </td>
+                                            <td>
+                                                <span class="date-text value-bold @(row.Estado == "vencida" ? "danger-red" : "")">@row.FechaVencimiento.ToString("dd/MM/yyyy")</span>
+                                            </td>
+                                            <td>
+                                                <span class="status-badge @row.Estado.Replace(" ", "")">
+                                                    <i class="bi @(row.Estado == "vigente" ? "bi-check-circle-fill" : row.Estado == "por vencer" ? "bi-exclamation-triangle-fill" : "bi-x-circle-fill")"></i>
+                                                    @row.Estado
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    @if (totalESignPages > 1)
+                    {
+                        <div class="pager-container">
+                            <span class="pager-info">
+                                Mostrando del @((currentESignPage - 1) * pageSize + 1) al @Math.Min(currentESignPage * pageSize, filteredESignRows.Count) de @filteredESignRows.Count registros
+                            </span>
+                            <div class="pager-buttons">
+                                <button type="button" class="pager-btn" disabled="@(currentESignPage == 1)" @onclick="() => SetESignPage(1)">
+                                    <i class="bi bi-chevron-double-left"></i>
+                                </button>
+                                <button type="button" class="pager-btn" disabled="@(currentESignPage == 1)" @onclick="() => SetESignPage(currentESignPage - 1)">
+                                    <i class="bi bi-chevron-left"></i>
+                                </button>
+                                @for (int i = Math.Max(1, currentESignPage - 2); i <= Math.Min(totalESignPages, currentESignPage + 2); i++)
+                                {
+                                    int pageNum = i;
+                                    <button type="button" class="pager-btn @(currentESignPage == pageNum ? "active" : "")" @onclick="() => SetESignPage(pageNum)">
+                                        @pageNum
+                                    </button>
+                                }
+                                <button type="button" class="pager-btn" disabled="@(currentESignPage == totalESignPages)" @onclick="() => SetESignPage(currentESignPage + 1)">
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                                <button type="button" class="pager-btn" disabled="@(currentESignPage == totalESignPages)" @onclick="() => SetESignPage(totalESignPages)">
+                                    <i class="bi bi-chevron-double-right"></i>
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private bool isLoading = true;
+
+    // e-Fact Data Lists
+    private List<EFactSubscriptionRow> efactAllRows = new();
+    private List<EFactSubscriptionRow> filteredEFactRows = new();
+    private List<EFactSubscriptionRow> paginatedEFactRows = new();
+
+    // e-Sign Data Lists
+    private List<ESignSubscriptionRow> esignAllRows = new();
+    private List<ESignSubscriptionRow> filteredESignRows = new();
+    private List<ESignSubscriptionRow> paginatedESignRows = new();
+
+    // KPI Counters
+    private int efactActivosCount;
+    private int efactSinSaldoCount;
+    private int efactSuspendidosCount;
+    private int totalEFactSuscripciones => efactActivosCount + efactSinSaldoCount + efactSuspendidosCount;
+
+    private int esignVigentesCount;
+    private int esignPorVencerCount;
+    private int esignVencidasCount;
+    private int totalESignSuscripciones => esignVigentesCount + esignPorVencerCount + esignVencidasCount;
+
+    // UI Panel Toggles
+    private bool showEFactDetails = false;
+    private bool showESignDetails = false;
+
+    // Filters & Pagination
+    private string searchEFact = "";
+    private string filterEFactEstado = "ALL";
+    private int currentEFactPage = 1;
+    private int totalEFactPages = 0;
+
+    private string searchESign = "";
+    private string filterESignEstado = "ALL";
+    private int currentESignPage = 1;
+    private int totalESignPages = 0;
+
+    private int pageSize = 5;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSubscriptionsData();
+    }
+
+    private async Task LoadSubscriptionsData()
+    {
+        isLoading = true;
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var userIds = new List<int>();
+
+            // 1. LOAD E-FACT SUBSCRIPTIONS (Facturación)
+            try
+            {
+                var users = await context.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.IdTipoUsuario == 1)
+                    .ToListAsync();
+
+                userIds = users.Select(u => u.IdUsuario).ToList();
+                var invoiceCounts = await context.Facturas
+                    .AsNoTracking()
+                    .Where(f => f.Idusuario.HasValue && userIds.Contains(f.Idusuario.Value))
+                    .GroupBy(f => f.Idusuario!.Value)
+                    .Select(g => new { IdUsuario = g.Key, Total = g.Count() })
+                    .ToDictionaryAsync(x => x.IdUsuario, x => x.Total);
+                var creditNoteCounts = await context.NotaCreditos
+                    .AsNoTracking()
+                    .Where(nc => nc.Usuario.HasValue && userIds.Contains(nc.Usuario.Value))
+                    .GroupBy(nc => nc.Usuario!.Value)
+                    .Select(g => new { IdUsuario = g.Key, Total = g.Count() })
+                    .ToDictionaryAsync(x => x.IdUsuario, x => x.Total);
+                var unlimitedSubscriptions = (await context.UsuarioServicioSuscripciones
+                        .AsNoTracking()
+                        .Where(s => userIds.Contains(s.IdUsuario) &&
+                                    s.Estado == "ACTIVO" &&
+                                    s.PlanActual != null &&
+                                    s.PlanActual.ToLower().Contains("ilimitad"))
+                        .ToListAsync())
+                    .GroupBy(s => s.IdUsuario)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.OrderByDescending(s => s.FechaActualizacion ?? s.FechaCreacion).First());
+                var approvedPurchases = users.ToDictionary(
+                    u => u.IdUsuario,
+                    u => LeerHistorial(u.HistorialComprasDocumentosJson)
+                        .FirstOrDefault(h => h.Estado == "Aprobado" || h.SaldoAplicado));
+                var saleIds = users
+                    .Select(u => unlimitedSubscriptions.TryGetValue(u.IdUsuario, out var subscription)
+                        ? ObtenerIdReporte(subscription.Observacion)
+                        : ObtenerIdReporte(approvedPurchases[u.IdUsuario]?.Descripcion))
+                    .Where(id => id.HasValue)
+                    .Select(id => id!.Value)
+                    .Distinct()
+                    .ToList();
+                var sales = saleIds.Count == 0
+                    ? new Dictionary<int, ReporteVentaBackOffice>()
+                    : await context.ReporteVentasBackOffice
+                        .AsNoTracking()
+                        .Where(v => saleIds.Contains(v.IdReporte))
+                        .ToDictionaryAsync(v => v.IdReporte);
+
+                efactAllRows.Clear();
+                efactActivosCount = 0;
+                efactSinSaldoCount = 0;
+                efactSuspendidosCount = 0;
+
+                foreach (var u in users)
+                {
+                    var invoicesCount = invoiceCounts.GetValueOrDefault(u.IdUsuario);
+                    var creditNotesCount = creditNoteCounts.GetValueOrDefault(u.IdUsuario);
+                    var totalConsumed = invoicesCount + creditNotesCount;
+
+                    var lastApprovedPurchase = approvedPurchases[u.IdUsuario];
+                    unlimitedSubscriptions.TryGetValue(u.IdUsuario, out var activeUnlimitedSub);
+
+                    string package = "Paquete Básico";
+                    string vendedor = "Sistema";
+                    DateTime purchaseDate = u.FechaCreacion ?? DateTime.Now;
+
+                    if (activeUnlimitedSub != null)
+                    {
+                        package = activeUnlimitedSub.PlanActual ?? "Plan Ilimitado";
+                        purchaseDate = activeUnlimitedSub.FechaInicio ?? activeUnlimitedSub.FechaCreacion;
+
+                        var idReporte = ObtenerIdReporte(activeUnlimitedSub.Observacion);
+                        if (idReporte.HasValue && sales.TryGetValue(idReporte.Value, out var sale))
+                        {
+                            vendedor = sale.Vendedor ?? "Sistema";
+                        }
+                    }
+                    else if (lastApprovedPurchase != null)
+                    {
+                        package = lastApprovedPurchase.Descripcion ?? $"{lastApprovedPurchase.Documentos} documentos";
+                        purchaseDate = lastApprovedPurchase.Fecha;
+
+                        var idReporte = ObtenerIdReporte(lastApprovedPurchase.Descripcion);
+                        if (idReporte.HasValue && sales.TryGetValue(idReporte.Value, out var sale))
+                        {
+                            vendedor = sale.Vendedor ?? "Sistema";
+                            package = sale.PlanPaquete ?? $"{lastApprovedPurchase.Documentos} documentos";
+                        }
+                    }
+
+                    // Determine State
+                    string status = "activo";
+                    if (u.Estado == false)
+                    {
+                        status = "suspendido";
+                        efactSuspendidosCount++;
+                    }
+                    else if (u.SaldoDocumentos <= 0 && activeUnlimitedSub == null)
+                    {
+                        status = "sin saldo";
+                        efactSinSaldoCount++;
+                    }
+                    else
+                    {
+                        efactActivosCount++;
+                    }
+
+                    // Documentos comprados = Saldo disponible + Consumidos
+                    int purchased = u.SaldoDocumentos + totalConsumed;
+
+                    efactAllRows.Add(new EFactSubscriptionRow
+                    {
+                        IdUsuario = u.IdUsuario,
+                        Cliente = $"{u.Nombres} {u.Apellidos}".Trim(),
+                        Email = u.Email,
+                        PaqueteContratado = package,
+                        Vendedor = vendedor,
+                        DocumentosComprados = purchased,
+                        DocumentosConsumidos = totalConsumed,
+                        SaldoDisponible = u.SaldoDocumentos,
+                        FechaCompra = purchaseDate,
+                        Estado = status
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading e-Fact subscriptions: {ex.Message}");
+            }
+
+            // 2. LOAD E-SIGN SUBSCRIPTIONS (Firmas Electrónicas)
+            try
+            {
+                var signatures = await context.Set<UsuSolicitudFirma>()
+                    .AsNoTracking()
+                    .Include(s => s.EstadoNumerica)
+                    .Where(s => (s.SolIdEstadoNumerica == 3 || s.SolActivo) && userIds.Contains(s.SolIdUsuarioCliente))
+                    .ToListAsync();
+
+                esignAllRows.Clear();
+                esignVigentesCount = 0;
+                esignPorVencerCount = 0;
+                esignVencidasCount = 0;
+
+                foreach (var s in signatures)
+                {
+                    var issueDate = s.SolFechaAprobacion ?? s.SolFechaSolicitud;
+                    var expirationDate = CalcularExpiracion(s);
+
+                    string status = "vigente";
+                    if (expirationDate < DateTime.Today)
+                    {
+                        status = "vencida";
+                        esignVencidasCount++;
+                    }
+                    else if (expirationDate <= DateTime.Today.AddDays(30))
+                    {
+                        status = "por vencer";
+                        esignPorVencerCount++;
+                    }
+                    else
+                    {
+                        esignVigentesCount++;
+                    }
+
+                    esignAllRows.Add(new ESignSubscriptionRow
+                    {
+                        SolId = s.SolId,
+                        Cliente = $"{s.SolNombres} {s.SolPrimerApellido} {s.SolSegundoApellido}".Trim(),
+                        Email = s.SolCorreo1,
+                        TipoFirma = s.SolFormatoFirma,
+                        Vigencia = s.SolVigencia,
+                        FechaEmision = issueDate,
+                        FechaVencimiento = expirationDate,
+                        Estado = status
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading e-Sign subscriptions: {ex.Message}");
+            }
+
+            // Apply Filters and Paginate initially
+            ApplyEFactFilters();
+            ApplyESignFilters();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading subscriptions in BackOffice: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!isLoading)
+        {
+            var efactPayload = new
+            {
+                labels = new[] { "Activos", "Sin Saldo", "Suspendidos" },
+                values = new[] { efactActivosCount, efactSinSaldoCount, efactSuspendidosCount }
+            };
+
+            var esignPayload = new
+            {
+                labels = new[] { "Vigentes", "Por Vencer", "Vencidas" },
+                values = new[] { esignVigentesCount, esignPorVencerCount, esignVencidasCount }
+            };
+
+            await JS.InvokeVoidAsync("numericaDashboardCharts.renderSubscriptions", efactPayload, esignPayload);
+        }
+    }
+
+    // Toggle Panels
+    private async Task ToggleEFactDetails()
+    {
+        showEFactDetails = !showEFactDetails;
+        if (showEFactDetails)
+        {
+            showESignDetails = false;
+            // Wait for Blazor to render the expanded details section
+            await Task.Delay(100);
+            try
+            {
+                await JS.InvokeVoidAsync("numericaDashboardCharts.scrollToDetails");
+            }
+            catch { }
+        }
+    }
+
+    private async Task ToggleESignDetails()
+    {
+        showESignDetails = !showESignDetails;
+        if (showESignDetails)
+        {
+            showEFactDetails = false;
+            // Wait for Blazor to render the expanded details section
+            await Task.Delay(100);
+            try
+            {
+                await JS.InvokeVoidAsync("numericaDashboardCharts.scrollToDetails");
+            }
+            catch { }
+        }
+    }
+
+    // e-Fact Filter & Pagination Logic
+    private void OnSearchEFactChanged()
+    {
+        currentEFactPage = 1;
+        ApplyEFactFilters();
+    }
+
+    private void OnFilterEFactChanged()
+    {
+        currentEFactPage = 1;
+        ApplyEFactFilters();
+    }
+
+    private void ApplyEFactFilters()
+    {
+        var query = efactAllRows.AsQueryable();
+
+        // Search text filter
+        if (!string.IsNullOrWhiteSpace(searchEFact))
+        {
+            var txt = searchEFact.ToLower().Trim();
+            query = query.Where(r => r.Cliente.ToLower().Contains(txt) || 
+                                     r.Email.ToLower().Contains(txt) || 
+                                     r.PaqueteContratado.ToLower().Contains(txt));
+        }
+
+        // Status dropdown filter
+        if (filterEFactEstado != "ALL")
+        {
+            query = query.Where(r => r.Estado == filterEFactEstado);
+        }
+
+        filteredEFactRows = query.ToList();
+        totalEFactPages = (int)Math.Ceiling((double)filteredEFactRows.Count / pageSize);
+        if (currentEFactPage > totalEFactPages) currentEFactPage = Math.Max(1, totalEFactPages);
+
+        PaginateEFact();
+    }
+
+    private void PaginateEFact()
+    {
+        paginatedEFactRows = filteredEFactRows
+            .Skip((currentEFactPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+    }
+
+    private void SetEFactPage(int pageNum)
+    {
+        currentEFactPage = pageNum;
+        PaginateEFact();
+    }
+
+    // e-Sign Filter & Pagination Logic
+    private void OnSearchESignChanged()
+    {
+        currentESignPage = 1;
+        ApplyESignFilters();
+    }
+
+    private void OnFilterESignChanged()
+    {
+        currentESignPage = 1;
+        ApplyESignFilters();
+    }
+
+    private void ApplyESignFilters()
+    {
+        var query = esignAllRows.AsQueryable();
+
+        // Search text filter
+        if (!string.IsNullOrWhiteSpace(searchESign))
+        {
+            var txt = searchESign.ToLower().Trim();
+            query = query.Where(r => r.Cliente.ToLower().Contains(txt) || 
+                                     r.Email.ToLower().Contains(txt) || 
+                                     r.TipoFirma.ToLower().Contains(txt));
+        }
+
+        // Status dropdown filter
+        if (filterESignEstado != "ALL")
+        {
+            query = query.Where(r => r.Estado == filterESignEstado);
+        }
+
+        filteredESignRows = query.ToList();
+        totalESignPages = (int)Math.Ceiling((double)filteredESignRows.Count / pageSize);
+        if (currentESignPage > totalESignPages) currentESignPage = Math.Max(1, totalESignPages);
+
+        PaginateESign();
+    }
+
+    private void PaginateESign()
+    {
+        paginatedESignRows = filteredESignRows
+            .Skip((currentESignPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+    }
+
+    private void SetESignPage(int pageNum)
+    {
+        currentESignPage = pageNum;
+        PaginateESign();
+    }
+
+    // Helper loaders
+    private List<CompraDocumentosHistorialItem> LeerHistorial(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new List<CompraDocumentosHistorialItem>();
+
+        try
+        {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(json, options) 
+                   ?? new List<CompraDocumentosHistorialItem>();
+        }
+        catch
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private static int? ObtenerIdReporte(string? texto)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(texto ?? string.Empty, @"Ref #(\d+)");
+        return match.Success && int.TryParse(match.Groups[1].Value, out var idReporte)
+            ? idReporte
+            : null;
+    }
+
+    private DateTime CalcularExpiracion(UsuSolicitudFirma sol)
+    {
+        var baseDate = sol.SolFechaAprobacion ?? sol.SolFechaSolicitud;
+        var vigencia = sol.SolVigencia?.ToLowerInvariant() ?? "";
+        if (vigencia.Contains("30") || vigencia.Contains("mes"))
+            return baseDate.AddDays(30);
+        if (vigencia.Contains("2"))
+            return baseDate.AddYears(2);
+        if (vigencia.Contains("3"))
+            return baseDate.AddYears(3);
+        if (vigencia.Contains("4"))
+            return baseDate.AddYears(4);
+        if (vigencia.Contains("5"))
+            return baseDate.AddYears(5);
+        return baseDate.AddYears(1); // Default 1 year
+    }
+
+    // Row definitions DTOs
+    public class EFactSubscriptionRow
+    {
+        public int IdUsuario { get; set; }
+        public string Cliente { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string PaqueteContratado { get; set; } = "";
+        public string Vendedor { get; set; } = "Sistema";
+        public int DocumentosComprados { get; set; }
+        public int DocumentosConsumidos { get; set; }
+        public int SaldoDisponible { get; set; }
+        public DateTime FechaCompra { get; set; }
+        public string Estado { get; set; } = ""; // "activo", "sin saldo", "suspendido"
+    }
+
+    public class ESignSubscriptionRow
+    {
+        public int SolId { get; set; }
+        public string Cliente { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string TipoFirma { get; set; } = "";
+        public string Vigencia { get; set; } = "";
+        public DateTime FechaEmision { get; set; }
+        public DateTime FechaVencimiento { get; set; }
+        public string Estado { get; set; } = ""; // "vigente", "por vencer", "vencida"
+    }
+
+    public void Dispose()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("numericaDashboardCharts.destroy");
+            }
+            catch { }
+        });
+    }
+}

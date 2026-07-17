@@ -1,0 +1,1370 @@
+@page "/e-contax/emisor"
+
+@using System.Net.Http.Json
+@using System.ComponentModel.DataAnnotations
+@using Simetric.Models
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using System.IO
+@using System.Text.Json
+@using System.Security.Claims
+
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject IWebHostEnvironment HostEnvironment
+@inject NavigationManager NavManager
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+@rendermode InteractiveServer
+
+@{
+    var filteredEmisores = EmisoresFiltrados.ToList();
+    var totalActivos = emisores.Count(e => e.Estado == true);
+    var totalConLogo = emisores.Count(e => !string.IsNullOrWhiteSpace(e.LogoImagen));
+    var totalConRetenciones = emisores.Count(e => string.Equals(e.Retenciones, "SI", StringComparison.OrdinalIgnoreCase));
+}
+
+<PageTitle>Emisor | @PageBrandTitle</PageTitle>
+
+<div class="entity-shell @(IsEContaxContext ? "entity-shell-econtax" : string.Empty)" data-tour="emisor.page">
+    <section class="entity-hero" data-tour="emisor.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Catálogo fiscal</span>
+            <h2>Gestión de emisor</h2>
+            <p>
+                Administra la información fiscal y operativa del emisor con un flujo visual
+                alineado al resto de pantallas administrativas.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Emisores activos</span>
+                <strong>@totalActivos</strong>
+                <small>Registros listos para operación y emisión electrónica.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Con logo</span>
+                <strong>@totalConLogo</strong>
+                <small>Empresas con identidad visual cargada en el sistema.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Retenciones</span>
+                <strong>@totalConRetenciones</strong>
+                <small>Emisores configurados para procesos de retención.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card" data-tour="emisor.toolbar">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Búsqueda y control</span>
+            <h3>Consulta y actualiza los datos del emisor</h3>
+            <p>Busca por razón social o RUC y usa el formulario lateral para crear o editar registros.</p>
+        </div>
+
+        <div class="toolbar-actions">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+                <input class="search-input"
+                       placeholder="Buscar por razón social o RUC"
+                       @bind="filtro"
+                       @bind:event="oninput" />
+            </div>
+
+            <button type="button" class="secondary-btn" @onclick="CargarTodo">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>Refrescar</span>
+            </button>
+            
+            @if (!esAsociado)
+            {
+                <button type="button"
+                    class="primary-btn"
+                    @onclick="Nuevo"
+                    disabled="@(YaExisteEmisorActivo() && !editando)">
+                    <i class="bi bi-plus-lg"></i>
+                    <span>Nuevo emisor</span>
+                </button>
+            }
+        </div>
+    </section>
+
+    <section class="entity-grid">
+        <section class="table-card" data-tour="emisor.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>Emisores registrados</h3>
+                </div>
+                <span class="table-badge">@filteredEmisores.Count registros</span>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-info-circle"></i>
+                    <span>@mensaje</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(debugError))
+            {
+                <div class="status-banner status-banner-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@debugError</span>
+                </div>
+            }
+
+            @if (cargando)
+            {
+                <div class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando emisores</h3>
+                    <p>Preparando la configuración fiscal y visual de las empresas registradas.</p>
+                </div>
+            }
+            else if (!filteredEmisores.Any())
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-building-x"></i>
+                    </div>
+                    <h3>No hay emisores para mostrar</h3>
+                    <p>Ajusta el criterio de búsqueda o registra un nuevo emisor.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table entity-table entity-table-emisores mb-0">
+                        <thead>
+                            <tr>
+                                <th>Razón social</th>
+                                <th>RUC</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var e in filteredEmisores)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="cell-main cell-main-stacked">
+                                            <strong>@e.RazonSocial</strong>
+                                            <span>@(string.IsNullOrWhiteSpace(e.NomComercial) ? "Sin nombre comercial" : e.NomComercial)</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="code-pill">@(string.IsNullOrWhiteSpace(e.Ruc) ? "Sin RUC" : e.Ruc)</span>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view"
+                                                    title="Ver detalle"
+                                                    @onclick="() => VerDetalle(e)">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            @if (!esAsociado) // Solo se muestra si NO es asociado
+                                            {
+                                                <button type="button" class="action-btn action-edit"
+                                                title="Editar"
+                                                @onclick="() => Editar(e.Codigo)">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </button>
+                                                <button type="button" class="action-btn action-delete"
+                                                title="Eliminar"
+                                                @onclick="() => ConfirmarEliminar(e)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (mostrarConfirmacion && emisorAEliminar is not null)
+            {
+                <div class="confirm-card">
+                    <div class="confirm-copy">
+                        <strong>Eliminar lógicamente el emisor</strong>
+                        <p>@emisorAEliminar.RazonSocial</p>
+                    </div>
+
+                    <div class="confirm-actions">
+                        <button type="button" class="secondary-btn" @onclick="CancelarEliminar">Cancelar</button>
+                        <button type="button" class="danger-btn" @onclick="EliminarConfirmado">Sí, eliminar</button>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <section class="editor-card entity-editor-card" data-tour="emisor.editor">
+            <div class="editor-head">
+                <div>
+                    <span class="panel-kicker">Formulario operativo</span>
+                    <h3>@(editando ? "Editar emisor" : "Registrar emisor")</h3>
+                    <p>Complete los datos fiscales, de contacto y configuración de la empresa.</p>
+                </div>
+                <span class="editor-badge @(editando ? "editor-badge-edit" : "editor-badge-new")">
+                    @(editando ? "Edición" : "Nuevo")
+                </span>
+            </div>
+
+            <div class="editor-body entity-form-legacy">
+
+                <EditForm Model="@model" OnValidSubmit="Guardar" @key="formKey">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary class="text-danger small" />
+
+                    @if (BloquearFormularioCreacion)
+                    {
+                        <div class="status-banner status-banner-info">
+                            <i class="bi bi-lock"></i>
+                            <span>@MensajeBloqueoFormulario</span>
+                        </div>
+                    }
+
+                    <fieldset class="p-0 m-0 border-0" disabled="@BloquearFormularioCreacion">
+                        <div class="row mb-2 mt-3">
+                            <div class="col">
+                                <label class="form-label small fw-bold">Razón Social *</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.RazonSocial" />
+                                <ValidationMessage For="@(() => model.RazonSocial)" class="text-danger small" />
+                            </div>
+                            <div class="col">
+                                <label class="form-label small fw-bold">RUC *</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.Ruc" />
+                                <ValidationMessage For="@(() => model.Ruc)" class="text-danger small" />
+                            </div>
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small">Nombre Comercial *</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.NomComercial" />
+                            <ValidationMessage For="@(() => model.NomComercial)" class="text-danger small" />
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small">Dirección Establecimiento *</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.DirEstablecimiento" />
+                            <ValidationMessage For="@(() => model.DirEstablecimiento)" class="text-danger small" />
+                        </div>
+
+                        <div class="mb-2 d-none">
+                            <label class="form-label small fw-bold">Lleva Contabilidad *</label>
+                            <InputSelect class="form-select form-select-sm" @bind-Value="model.LlevaContabilidad">
+                                <option value="">-- Seleccione --</option>
+                                <option value="SI">Sí</option>
+                                <option value="NO">No</option>
+                            </InputSelect>
+                            <ValidationMessage For="@(() => model.LlevaContabilidad)" class="text-danger small" />
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small">Dirección Matriz *</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.DireccionMatriz" />
+                            <ValidationMessage For="@(() => model.DireccionMatriz)" class="text-danger small" />
+                        </div>
+
+                        <div class="row mb-2">
+                            <div class="col">
+                                <label class="form-label small fw-bold text-primary">
+                                    <i class="bi bi-image me-1"></i>Logo Empresa
+                                </label>
+
+                                <InputFile class="form-control form-control-sm"
+                                           accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                                           OnChange="SubirLogo" />
+
+                                <ValidationMessage For="@(() => model.LogoImagen)" class="text-danger small" />
+
+                                <small class="text-muted d-block mt-1">
+                                    Solo se permiten imágenes JPG, JPEG o PNG de hasta 2 MB.
+                                </small>
+
+                                @if (!string.IsNullOrWhiteSpace(model.LogoImagen))
+                                {
+                                    <div class="mt-2 text-center border rounded p-2 bg-light position-relative">
+                                        <img src="@model.LogoImagen"
+                                             style="max-height: 60px; max-width: 100%; object-fit: contain;"
+                                             alt="Logo" />
+                                        <button type="button"
+                                                class="btn-close position-absolute top-0 end-0 m-1"
+                                                style="font-size: 0.5rem;"
+                                                title="Quitar logo"
+                                                @onclick="QuitarLogo"></button>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="col-12 mt-2 d-none">
+                            <div class="form-check form-switch">
+                                <InputCheckbox class="form-check-input" @bind-Value="RetencionesBool" />
+                                <label class="form-check-label fw-semibold">
+                                    ¿Es agente de Retención?
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="row mb-2">
+                            <div class="col">
+                                <label class="form-label small">Teléfono *</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.Telefono" />
+                                <ValidationMessage For="@(() => model.Telefono)" class="text-danger small" />
+                            </div>
+                        <div class="col">
+                            <label class="form-label small">Correo Electrónico</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.Email" />
+                            <ValidationMessage For="@(() => model.Email)" class="text-danger small" />
+                        </div>
+                        </div>
+
+                        <div class="row mb-3">
+                            <div class="col">
+                                <label class="form-label small">Archivo Firma</label>
+                                <InputFile class="form-control form-control-sm"
+                                           accept=".p12"
+                                           OnChange="SubirPathCertificado" />
+                                <small class="text-muted d-block mt-1">
+                                    Solo se permiten archivos .p12 de hasta 5 MB.
+                                </small>
+
+                                @if (!string.IsNullOrWhiteSpace(NombrePathCertificadoActual))
+                                {
+                                    <div class="mt-2 border rounded p-2 bg-light position-relative">
+                                        <div class="d-flex align-items-center gap-2 pe-4">
+                                            <i class="bi bi-check-circle-fill text-success"></i>
+                                            <span class="small text-break">Archivo .p12 cargado</span>
+                                        </div>
+                                        <button type="button"
+                                                class="btn-close position-absolute top-0 end-0 m-1"
+                                                style="font-size: 0.5rem;"
+                                                title="Quitar certificado"
+                                                @onclick="QuitarPathCertificado"></button>
+                                    </div>
+                                }
+                            </div>
+                            <div class="col">
+                                <label class="form-label small">Clave Certificado</label>
+                                <div class="cert-password-shell">
+                                    <input type="@tipoPassword"
+                                           class="form-control form-control-sm cert-password-input"
+                                           @bind="model.ClaveCertificado" />
+                                    <button class="cert-password-eye" type="button" @onclick="TogglePasswordVisibility" title="Mostrar u ocultar clave">
+                                        <i class="bi @(mostrarPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                                    </button>
+                                </div>
+                                <small class="text-muted d-block mt-1">
+                                    Ingresa la clave alfanumérica del archivo .p12.
+                                </small>
+
+                                @if (TieneClaveCertificadoActual)
+                                {
+                                    <div class="mt-2 border rounded p-2 bg-light position-relative">
+                                        <div class="d-flex align-items-center gap-2 pe-4">
+                                            <i class="bi bi-check-circle-fill text-success"></i>
+                                            <span class="small text-break">Clave configurada</span>
+                                        </div>
+                                        <button type="button"
+                                                class="btn-close position-absolute top-0 end-0 m-1"
+                                                style="font-size: 0.5rem;"
+                                                title="Quitar clave"
+                                                @onclick="QuitarClaveCertificado"></button>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <div class="form-actions entity-form-actions">
+                        <button class="secondary-btn" type="button" @onclick="Nuevo" disabled="@BloquearFormularioCreacion">Limpiar</button>
+                        <button class="primary-btn" type="submit" disabled="@BloquearFormularioCreacion">
+                            <i class="bi bi-save me-1"></i> @(editando ? "Guardar cambios" : "Crear emisor")
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </section>
+    </section>
+</div>
+
+@if (mostrarDetalle && emisorDetalle is not null)
+{
+    <div class="modal fade show d-block" style="background: rgba(0,0,0,0.5); z-index: 1050;" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" @onclick:stopPropagation="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 8px;">
+                <div class="modal-header text-white" style="background-color: var(--n-blue); border-radius: 8px 8px 0 0;">
+                    <h5 class="modal-title fw-bold">
+                        <i class="bi bi-building me-2"></i>Detalle del Emisor
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarDetalle"></button>
+                </div>
+
+                <div class="modal-body p-4">
+                    <div class="row g-4">
+                        <div class="col-md-6 border-end pe-md-4">
+                            <h6 class="fw-bold text-muted border-bottom pb-2 mb-3">Información General</h6>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Razón Social:</div>
+                                <div class="col-7 fw-medium text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.RazonSocial) ? "N/A" : emisorDetalle.RazonSocial)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">RUC:</div>
+                                <div class="col-7">
+                                    <span class="badge bg-light text-dark border">
+                                        @(string.IsNullOrWhiteSpace(emisorDetalle.Ruc) ? "N/A" : emisorDetalle.Ruc)
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Nombre Comercial:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.NomComercial) ? "N/A" : emisorDetalle.NomComercial)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Lleva Contabilidad:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.LlevaContabilidad) ? "N/A" : emisorDetalle.LlevaContabilidad)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Retenciones:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.Retenciones) ? "NO" : emisorDetalle.Retenciones)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Estado:</div>
+                                <div class="col-7">
+                                    <span class="badge rounded-pill bg-success-subtle text-success">
+                                        @(emisorDetalle.Estado == true ? "Activo" : "Inactivo")
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6 ps-md-4">
+                            <h6 class="fw-bold text-muted border-bottom pb-2 mb-3">Contacto y Configuración</h6>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Teléfono:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.Telefono) ? "N/A" : emisorDetalle.Telefono)
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-5 text-muted fw-bold small">Email:</div>
+                                    <div class="col-7 text-dark">
+                                        @(string.IsNullOrWhiteSpace(emisorDetalle.Email) ? "N/A" : emisorDetalle.Email)
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Dirección Establecimiento:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.DirEstablecimiento) ? "N/A" : emisorDetalle.DirEstablecimiento)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Dirección Matriz:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.DireccionMatriz) ? "N/A" : emisorDetalle.DireccionMatriz)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Archivo Firma:</div>
+                                <div class="col-7 text-dark small">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.PathCertificado) ? "N/A" : ObtenerNombreArchivo(emisorDetalle.PathCertificado))
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Clave Certificado:</div>
+                                <div class="col-7 text-dark">
+                                    @(emisorDetalle.TieneClaveCertificadoConfigurada ? "Configurada" : "N/A")
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(emisorDetalle.LogoImagen))
+                    {
+                        <div class="row mt-4">
+                            <div class="col-12 text-muted fw-bold small mb-2">Logo de la Empresa:</div>
+                            <div class="col-12 text-center p-3 rounded" style="background-color: #f8fafc; border: 1px solid #dee2e6;">
+                                <img src="@emisorDetalle.LogoImagen"
+                                     alt="Logo Empresa"
+                                     style="max-height: 120px; max-width: 100%; object-fit: contain;" />
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer bg-light" style="border-radius: 0 0 8px 8px; border-top: 1px solid #dee2e6;">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarDetalle">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+
+    private bool IsEContaxContext => IsEContaxPath(NavManager.Uri);
+    private string PageBrandTitle => IsEContaxContext ? "Numerica E-Contax" : "Numerica e-fact";
+
+    private EmisorDto? emisorDetalle;
+    private bool mostrarDetalle = false;
+    bool esAsociado = false;
+    private class EmisorDto
+    {
+        public int Codigo { get; set; }
+        public string? RazonSocial { get; set; }
+        public string? Ruc { get; set; }
+        public string? NomComercial { get; set; }
+        public string? DirEstablecimiento { get; set; }
+        public string? Email { get; set; } // <--- Añadir
+        [System.Text.Json.Serialization.JsonPropertyName("llevacontabilidad")]
+        public string? LlevaContabilidad { get; set; }
+
+        public string? LogoImagen { get; set; }
+        public string? DireccionMatriz { get; set; }
+        public string? ClaveInterna { get; set; }
+        public string? Retenciones { get; set; }
+        public string? PathCertificado { get; set; }
+        public string? ClaveCertificado { get; set; }
+        public bool TieneClaveCertificadoConfigurada { get; set; }
+        public string? Telefono { get; set; }
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+    }
+
+
+
+    private class EmisorUpsertDto
+    {
+        public int Codigo { get; set; }
+
+        [Required(ErrorMessage = "La razón social es obligatoria")]
+        [StringLength(70, ErrorMessage = "Máximo 70 caracteres")]
+        public string? RazonSocial { get; set; }
+
+        [Required(ErrorMessage = "El RUC es obligatorio")]
+        [RegularExpression(@"^\d{13}$", ErrorMessage = "El RUC debe tener 13 dígitos")]
+        public string? Ruc { get; set; }
+
+        [Required(ErrorMessage = "El nombre comercial es obligatorio")]
+        [StringLength(100, ErrorMessage = "Máximo 100 caracteres")]
+        public string? NomComercial { get; set; }
+        [EmailAddress(ErrorMessage = "Formato de correo inválido")]
+        [StringLength(50, ErrorMessage = "Máximo 50 caracteres")]
+        public string? Email { get; set; } // <--- Añadir
+        [Required(ErrorMessage = "La dirección del establecimiento es obligatoria")]
+        [StringLength(250, ErrorMessage = "Máximo 250 caracteres")]
+        public string? DirEstablecimiento { get; set; }
+
+        [Required(ErrorMessage = "Debe seleccionar si lleva contabilidad")]
+        [RegularExpression(@"^(SI|NO)$", ErrorMessage = "Solo se permite SI o NO")]
+        public string? LlevaContabilidad { get; set; }
+
+        [Required(ErrorMessage = "El logo de la empresa es obligatorio")]
+        public string? LogoImagen { get; set; }
+
+        [Required(ErrorMessage = "La dirección matriz es obligatoria")]
+        [StringLength(255, ErrorMessage = "Máximo 255 caracteres")]
+        public string? DireccionMatriz { get; set; }
+
+        [StringLength(25, ErrorMessage = "Máximo 25 caracteres")]
+        public string? ClaveInterna { get; set; }
+
+        public string? Retenciones { get; set; }
+        [StringLength(150, ErrorMessage = "Máximo 150 caracteres")]
+        public string? PathCertificado { get; set; }
+        [RegularExpression(@"^[A-Za-z0-9]*$", ErrorMessage = "La clave del certificado debe ser alfanumérica")]
+        public string? ClaveCertificado { get; set; }
+        public bool EliminarClaveCertificado { get; set; }
+
+        [Required(ErrorMessage = "El teléfono es obligatorio")]
+        [RegularExpression(@"^\d{7,10}$", ErrorMessage = "El teléfono debe tener entre 7 y 10 dígitos")]
+        public string? Telefono { get; set; }
+
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+    }
+    // Variables para el control del "ojito"
+    private bool mostrarPassword = false;
+    private string tipoPassword => mostrarPassword ? "text" : "password";
+
+    private void TogglePasswordVisibility()
+    {
+        mostrarPassword = !mostrarPassword;
+    }
+
+    // Método para descargar el archivo P12
+    private async Task DescargarCertificadoActual()
+    {
+        if (string.IsNullOrWhiteSpace(model.PathCertificado)) return;
+
+        try
+        {
+            // Construimos la ruta física igual que cuando se guarda
+            var physicalPath = Path.Combine(
+                HostEnvironment.ContentRootPath,
+                "App_Data",
+                model.PathCertificado.Replace('/', Path.DirectorySeparatorChar));
+
+            if (File.Exists(physicalPath))
+            {
+                var fileBytes = await File.ReadAllBytesAsync(physicalPath);
+                var fileName = Path.GetFileName(model.PathCertificado);
+            
+                // Usamos JSInterop para disparar la descarga en el navegador
+                using var streamRef = new DotNetStreamReference(new MemoryStream(fileBytes));
+                await JS.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+            }
+            else
+            {
+                mensaje = "El archivo físico no se encuentra en el servidor.";
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = "Error al descargar: " + ex.Message;
+        }
+    }
+    private Guid formKey = Guid.NewGuid();
+    private const long MaxCertificadoSize = 5 * 1024 * 1024;
+    private List<EmisorDto> emisores = new();
+    private EmisorUpsertDto model = new();
+    private bool cargando = true;
+    private bool editando = false;
+    private string filtro = "";
+    private string? mensaje;
+    private string? debugError;
+    private bool mostrarConfirmacion = false;
+    private EmisorDto? emisorAEliminar;
+    private string? nombrePathCertificadoSeleccionado;
+    private bool emisorDetalleEdicionTieneClaveCertificado;
+
+    private string? NombrePathCertificadoActual => nombrePathCertificadoSeleccionado ?? ObtenerNombreArchivo(model.PathCertificado);
+    private bool TieneClaveCertificadoActual =>
+        !string.IsNullOrWhiteSpace(model.ClaveCertificado) ||
+        (editando && emisorDetalleEdicionTieneClaveCertificado);
+
+    private bool RetencionesBool
+    {
+        get => model.Retenciones == "SI";
+        set => model.Retenciones = value ? "SI" : "NO";
+    }
+    private void VerDetalle(EmisorDto e)
+    {
+        emisorDetalle = e;
+        mostrarDetalle = true;
+    }
+
+    private void CerrarDetalle()
+    {
+        mostrarDetalle = false;
+        emisorDetalle = null;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (!await ValidarAccesoEContaxAsync(user))
+        {
+            return;
+        }
+
+        var jefeClaim = user.FindFirst("IdJefe")?.Value;
+        var estadoAsociadoClaim = user.FindFirst("EstadoAsociado")?.Value;
+
+        esAsociado =
+            (bool.TryParse(estadoAsociadoClaim, out var estadoAsociado) && estadoAsociado) ||
+            !string.IsNullOrWhiteSpace(jefeClaim);
+
+        await CargarTodo();
+        Nuevo();
+    }
+
+    private async Task CargarTodo()
+    {
+        cargando = true;
+        mensaje = null;
+        debugError = null;
+
+        try
+        {
+            var idUsuario = await ObtenerIdUsuarioLogueado();
+
+            if (idUsuario != null)
+            {
+                emisores = await Http.GetFromJsonAsync<List<EmisorDto>>($"api/emisores?idUsuario={idUsuario}") ?? new();
+                await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+            }
+            else
+            {
+                debugError = "No se pudo obtener la sesión del usuario.";
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private IEnumerable<EmisorDto> EmisoresFiltrados =>
+        string.IsNullOrWhiteSpace(filtro)
+            ? emisores
+            : emisores.Where(e =>
+                (e.RazonSocial ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (e.Ruc ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase));
+
+    private void Nuevo()
+    {
+        editando = false;
+        mensaje = null;
+        debugError = null;
+
+        model = new EmisorUpsertDto
+        {
+            Retenciones = "NO",
+            LlevaContabilidad = "NO",
+            Estado = true,
+            LogoImagen = null,
+            CodEstablecimiento = null,
+            CodPuntoEmision = null
+
+        };
+        nombrePathCertificadoSeleccionado = null;
+        emisorDetalleEdicionTieneClaveCertificado = false;
+
+        formKey = Guid.NewGuid();
+    }
+
+    private async Task Editar(int id)
+    {
+        mensaje = "Cargando emisor...";
+        debugError = null;
+
+        try
+        {
+            var idUsuario = await ObtenerIdUsuarioLogueado();
+            if (idUsuario == null || idUsuario <= 0)
+            {
+                mensaje = "No se pudo obtener la sesión del usuario.";
+                return;
+            }
+
+            var item = await Http.GetFromJsonAsync<EmisorDto>($"api/emisores/{id}?idUsuario={idUsuario}");
+            if (item is null)
+            {
+                mensaje = "No se encontró el emisor.";
+                return;
+            }
+
+            model = new EmisorUpsertDto
+            {
+                Codigo = item.Codigo,
+                RazonSocial = item.RazonSocial,
+                Ruc = item.Ruc,
+                NomComercial = item.NomComercial,
+                DirEstablecimiento = item.DirEstablecimiento,
+                LlevaContabilidad = "NO",
+                LogoImagen = item.LogoImagen,
+                ClaveInterna = item.ClaveInterna,
+                DireccionMatriz = item.DireccionMatriz,
+                Retenciones = string.IsNullOrWhiteSpace(item.Retenciones) ? "NO" : item.Retenciones,
+                PathCertificado = item.PathCertificado,
+                ClaveCertificado = null,
+                Telefono = item.Telefono,
+                Estado = item.Estado ?? true,
+                CodEstablecimiento = item.CodEstablecimiento,
+                CodPuntoEmision = item.CodPuntoEmision,
+                Email = item.Email
+            };
+            nombrePathCertificadoSeleccionado = null;
+            emisorDetalleEdicionTieneClaveCertificado = item.TieneClaveCertificadoConfigurada;
+
+            editando = true;
+            mensaje = "Emisor cargado para edición.";
+            formKey = Guid.NewGuid();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+            mensaje = "Error al cargar emisor.";
+        }
+    }
+
+    private async Task<int?> ObtenerIdUsuarioLogueado()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var idClaim = user.FindFirst("IdUsuario")?.Value;
+        return int.TryParse(idClaim, out var id) ? id : null;
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (!IsEContaxContext)
+            return true;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);
+
+    private bool YaExisteEmisorActivo()
+    {
+        return emisores.Any(e => e.Estado == true);
+    }
+
+    private bool BloquearFormularioCreacion => !editando && (YaExisteEmisorActivo() || esAsociado);
+    private string MensajeBloqueoFormulario => esAsociado
+        ? "Los usuarios asociados pueden consultar el emisor de la cuenta, pero no crear ni modificar emisores."
+        : "Esta cuenta ya tiene un emisor activo. Puedes editarlo desde el listado.";
+
+    private async Task Guardar()
+    {
+        mensaje = "Guardando...";
+        debugError = null;
+
+        if (esAsociado)
+        {
+            mensaje = "Los usuarios asociados no pueden crear ni modificar emisores.";
+            return;
+        }
+
+        var idActual = await ObtenerIdUsuarioLogueado();
+        if (idActual == null)
+        {
+            mensaje = "Error: No se pudo identificar al usuario en sesión.";
+            return;
+        }
+
+        // VALIDACIÓN: solo permitir un emisor al crear
+        if (!editando && YaExisteEmisorActivo())
+        {
+            await JS.InvokeVoidAsync("Swal.fire", new
+            {
+                icon = "warning",
+                title = "Emisor ya registrado",
+                text = "Solo puedes registrar un emisor activo en el sistema.",
+                confirmButtonText = "Entendido"
+            });
+
+            mensaje = "Ya existe un emisor activo registrado.";
+            return;
+        }
+
+        model.IdUsuario = idActual;
+        model.Estado ??= true;
+        model.Retenciones = "NO";
+        model.LlevaContabilidad = "NO";
+
+        model.RazonSocial = model.RazonSocial?.Trim();
+        model.Ruc = model.Ruc?.Trim();
+        model.NomComercial = model.NomComercial?.Trim();
+        model.DirEstablecimiento = model.DirEstablecimiento?.Trim();
+        model.DireccionMatriz = model.DireccionMatriz?.Trim();
+        model.ClaveInterna = model.ClaveInterna?.Trim();
+        model.Telefono = model.Telefono?.Trim();
+        model.Email = model.Email?.Trim();
+        model.LlevaContabilidad = model.LlevaContabilidad?.Trim().ToUpperInvariant();
+        model.PathCertificado = model.PathCertificado?.Trim();
+        model.ClaveCertificado = model.ClaveCertificado?.Trim();
+        if (!string.IsNullOrWhiteSpace(model.ClaveCertificado))
+        {
+            model.EliminarClaveCertificado = false;
+        }
+
+        model.CodEstablecimiento = null;
+        model.CodPuntoEmision = null;
+
+        try
+        {
+            var creandoPrimerEmisor = !editando;
+            HttpResponseMessage resp = editando
+     ? await Http.PutAsJsonAsync($"api/emisores/{model.Codigo}", model)
+     : await Http.PostAsJsonAsync("api/emisores", model);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var detalle = await LeerMensajeErrorHttpAsync(resp, "No se pudo guardar el emisor.");
+
+                await JS.InvokeVoidAsync("Swal.fire", new
+                {
+                    icon = "warning",
+                    title = "No se pudo guardar el emisor",
+                    text = detalle
+                });
+
+                debugError = detalle.Equals("No se pudo guardar el emisor.", StringComparison.Ordinal)
+                    ? null
+                    : detalle;
+                mensaje = "No se pudo guardar el emisor.";
+                return;
+            }
+
+            mensaje = "Operación realizada correctamente.";
+            await CargarTodo();
+            Nuevo();
+
+            await EmisorOnboardingService.RefreshRequirementAsync(idActual);
+            EmisorOnboardingService.NotifyChanged();
+
+            if (creandoPrimerEmisor)
+            {
+                if (!IsEContaxContext)
+                {
+                    NavManager.NavigateTo(EmisorOnboardingService.RequiredRoute ?? "/dashboard", replace: true);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+            mensaje = "Error al guardar (API).";
+        }
+    }
+
+    private void ConfirmarEliminar(EmisorDto e)
+    {
+        emisorAEliminar = e;
+        mostrarConfirmacion = true;
+    }
+
+    private void CancelarEliminar()
+    {
+        mostrarConfirmacion = false;
+        emisorAEliminar = null;
+    }
+
+    private async Task EliminarConfirmado()
+    {
+        if (emisorAEliminar is null) return;
+
+        try
+        {
+            var idUsuario = await ObtenerIdUsuarioLogueado();
+            if (idUsuario == null || idUsuario <= 0)
+            {
+                mensaje = "No se pudo obtener la sesión del usuario.";
+                return;
+            }
+
+            var resp = await Http.PutAsync(
+                $"api/emisores/{emisorAEliminar.Codigo}/desactivar?idUsuario={idUsuario}",
+                null);
+
+            if (resp.IsSuccessStatusCode)
+            {
+                mensaje = "Emisor desactivado.";
+                await CargarTodo();
+                await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+                CancelarEliminar();
+            }
+            else
+            {
+                debugError = await LeerMensajeErrorHttpAsync(resp, "No se pudo desactivar el emisor.");
+                mensaje = "No se pudo desactivar el emisor.";
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+            mensaje = "Error al desactivar emisor.";
+        }
+    }
+
+    private void QuitarLogo()
+    {
+        model.LogoImagen = null;
+        mensaje = "Logo quitado del formulario.";
+        debugError = null;
+    }
+
+    private void QuitarPathCertificado()
+    {
+        model.PathCertificado = null;
+        nombrePathCertificadoSeleccionado = null;
+        mensaje = "Archivo de firma quitado del formulario.";
+        debugError = null;
+    }
+
+    private void QuitarClaveCertificado()
+    {
+        model.ClaveCertificado = null;
+        model.EliminarClaveCertificado = true;
+        emisorDetalleEdicionTieneClaveCertificado = false;
+        mensaje = "Clave del certificado quitada del formulario.";
+        debugError = null;
+    }
+
+    private async Task SubirLogo(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            if (e.FileCount > 1)
+            {
+                mensaje = "Solo puedes subir un archivo de logo.";
+                debugError = null;
+                return;
+            }
+
+            var file = e.File;
+
+            if (file is null)
+            {
+                mensaje = "No se seleccionó ningún archivo.";
+                return;
+            }
+
+            var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
+            var extensionesPermitidas = new[] { ".jpg", ".jpeg", ".png" };
+
+            if (string.IsNullOrWhiteSpace(extension) || !extensionesPermitidas.Contains(extension))
+            {
+                model.LogoImagen = null;
+                mensaje = "Solo se permiten archivos JPG, JPEG o PNG.";
+                return;
+            }
+
+            var contentType = (file.ContentType ?? "").ToLowerInvariant();
+            var tiposPermitidos = new[] { "image/jpeg", "image/png" };
+
+            if (!tiposPermitidos.Contains(contentType))
+            {
+                model.LogoImagen = null;
+                mensaje = "El archivo seleccionado no es una imagen válida.";
+                return;
+            }
+
+            const long maxSize = 2 * 1024 * 1024;
+            if (file.Size > maxSize)
+            {
+                model.LogoImagen = null;
+                mensaje = "El logo excede el tamaño máximo de 2 MB.";
+                return;
+            }
+
+            using var stream = file.OpenReadStream(maxSize);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            var bytes = ms.ToArray();
+
+            if (bytes.Length == 0)
+            {
+                model.LogoImagen = null;
+                mensaje = "No se pudo leer la imagen seleccionada.";
+                return;
+            }
+
+            model.LogoImagen = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}";
+            mensaje = "Logo cargado correctamente.";
+            debugError = null;
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            model.LogoImagen = null;
+            debugError = ex.Message;
+            mensaje = "Error al procesar la imagen.";
+        }
+    }
+
+    private Task SubirPathCertificado(InputFileChangeEventArgs e) =>
+        SubirArchivoP12(e, "Archivo Firma", "path", relativePath =>
+        {
+            model.PathCertificado = relativePath;
+            nombrePathCertificadoSeleccionado = e.File?.Name;
+        });
+
+    private async Task SubirArchivoP12(InputFileChangeEventArgs e, string etiqueta, string subcarpeta, Action<string> asignarRuta)
+    {
+        try
+        {
+            if (e.FileCount > 1)
+            {
+                mensaje = $"Solo puedes subir un archivo .p12 para {etiqueta}.";
+                debugError = null;
+                return;
+            }
+
+            var file = e.File;
+
+            if (file is null)
+            {
+                mensaje = $"No se seleccionó ningún archivo para {etiqueta}.";
+                return;
+            }
+
+            var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
+            if (!string.Equals(extension, ".p12", StringComparison.OrdinalIgnoreCase))
+            {
+                mensaje = $"Solo se permiten archivos .p12 para {etiqueta}.";
+                debugError = null;
+                return;
+            }
+
+            var contentType = (file.ContentType ?? string.Empty).Trim().ToLowerInvariant();
+            var tiposPermitidos = new[]
+            {
+                string.Empty,
+                "application/x-pkcs12",
+                "application/pkcs12",
+                "application/x-pkcs-12",
+                "application/octet-stream"
+            };
+
+            if (!tiposPermitidos.Contains(contentType))
+            {
+                mensaje = $"El archivo seleccionado para {etiqueta} no es un certificado .p12 válido.";
+                debugError = null;
+                return;
+            }
+
+            if (file.Size <= 0)
+            {
+                mensaje = $"El archivo seleccionado para {etiqueta} está vacío.";
+                debugError = null;
+                return;
+            }
+
+            if (file.Size > MaxCertificadoSize)
+            {
+                mensaje = $"El archivo de {etiqueta} excede el tamaño máximo de 5 MB.";
+                debugError = null;
+                return;
+            }
+
+            using var stream = file.OpenReadStream(MaxCertificadoSize);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            var bytes = ms.ToArray();
+            if (bytes.Length == 0)
+            {
+                mensaje = $"No se pudo leer el archivo seleccionado para {etiqueta}.";
+                debugError = null;
+                return;
+            }
+
+            var relativePath = await GuardarArchivoCertificadoAsync(bytes, subcarpeta);
+            asignarRuta(relativePath);
+            mensaje = $"{etiqueta} cargado correctamente.";
+            debugError = null;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+            mensaje = $"Error al procesar el archivo de {etiqueta}.";
+        }
+    }
+
+    private async Task<string> GuardarArchivoCertificadoAsync(byte[] bytes, string subcarpeta)
+    {
+        var relativePath = $"certs/{subcarpeta}/{Guid.NewGuid():N}.p12";
+        var physicalPath = Path.Combine(
+            HostEnvironment.ContentRootPath,
+            "App_Data",
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+        var directory = Path.GetDirectoryName(physicalPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        await File.WriteAllBytesAsync(physicalPath, bytes);
+        return relativePath;
+    }
+
+    private static string? ObtenerNombreArchivo(string? rutaArchivo) =>
+        string.IsNullOrWhiteSpace(rutaArchivo)
+            ? null
+            : Path.GetFileName(rutaArchivo.Replace('\\', '/'));
+
+    private static string FormatearMensajeError(string? rawMessage)
+    {
+        if (string.IsNullOrWhiteSpace(rawMessage))
+        {
+            return "Se produjo un error inesperado.";
+        }
+
+        var limpio = rawMessage
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+
+        if (PareceHtml(limpio))
+        {
+            return "El servidor devolvió un error interno no controlado.";
+        }
+
+        return limpio.Length > 320
+            ? $"{limpio[..317].TrimEnd()}..."
+            : limpio;
+    }
+
+    private async Task<string> LeerMensajeErrorHttpAsync(HttpResponseMessage response, string fallbackMessage)
+    {
+        var rawBody = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(rawBody))
+        {
+            return fallbackMessage;
+        }
+
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        var normalizedBody = rawBody.Trim();
+
+        if (string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase) || PareceHtml(normalizedBody))
+        {
+            return $"{fallbackMessage} El servidor devolvió un error interno.";
+        }
+
+        var messageFromJson = IntentarExtraerMensajeJson(normalizedBody);
+        if (!string.IsNullOrWhiteSpace(messageFromJson))
+        {
+            return FormatearMensajeError(messageFromJson);
+        }
+
+        return FormatearMensajeError(normalizedBody);
+    }
+
+    private static string? IntentarExtraerMensajeJson(string rawBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(rawBody);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                return root.GetString();
+            }
+
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (root.TryGetProperty("message", out var messageElement) && messageElement.ValueKind == JsonValueKind.String)
+            {
+                return messageElement.GetString();
+            }
+
+            if (root.TryGetProperty("title", out var titleElement) && titleElement.ValueKind == JsonValueKind.String)
+            {
+                return titleElement.GetString();
+            }
+
+            if (root.TryGetProperty("errors", out var errorsElement) && errorsElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in errorsElement.EnumerateObject())
+                {
+                    if (property.Value.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    foreach (var item in property.Value.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
+                        {
+                            return item.GetString();
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static bool PareceHtml(string value) =>
+        value.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("<html", StringComparison.OrdinalIgnoreCase);
+}

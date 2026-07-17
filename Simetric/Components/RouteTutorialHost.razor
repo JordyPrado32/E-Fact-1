@@ -1,0 +1,118 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using Simetric.Services
+@using Simetric.Tutorials
+@implements IDisposable
+@inject NavigationManager NavManager
+@inject TutorialRegistryService TutorialRegistry
+@inject TutorialStateService TutorialStateService
+
+@if (_activeTutorial is not null)
+{
+    <AppTutorialOverlay Definition="_activeTutorial"
+                        Visible="_showTutorial"
+                        OnClosed="HandleTutorialClosedAsync" />
+}
+
+@code {
+    private TutorialDefinition? _activeTutorial;
+    private string _currentRoutePath = "/";
+    private bool _showTutorial;
+    private bool _routeEvaluated;
+    private bool _launchedFromCatalog;
+
+    protected override void OnInitialized()
+    {
+        SetRouteState(NavManager.Uri);
+        NavManager.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_activeTutorial is null || _routeEvaluated)
+            return;
+
+        _routeEvaluated = true;
+
+        var (forcedTutorialId, forced) = GetRequestedTutorial();
+        var shouldOpen = forced &&
+                         string.Equals(forcedTutorialId, _activeTutorial.Id, StringComparison.OrdinalIgnoreCase);
+
+        if (!shouldOpen)
+            return;
+
+        _launchedFromCatalog = forced;
+
+        if (!_showTutorial)
+        {
+            _showTutorial = true;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        NavManager.LocationChanged -= OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        SetRouteState(e.Location);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void SetRouteState(string location)
+    {
+        _showTutorial = false;
+        _routeEvaluated = false;
+        _launchedFromCatalog = false;
+        _currentRoutePath = NormalizeRoutePath(location);
+        var tutorial = TutorialRegistry.GetByRoute(_currentRoutePath);
+        _activeTutorial = tutorial is { UseGlobalHost: true } ? tutorial : null;
+    }
+
+    private (string? tutorialId, bool forced) GetRequestedTutorial()
+    {
+        var uri = NavManager.ToAbsoluteUri(NavManager.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        query.TryGetValue("tutorial", out var tutorialValue);
+        query.TryGetValue("forceTutorial", out var forceValue);
+
+        var isForced = bool.TryParse(forceValue, out var parsedForce) && parsedForce;
+        return (tutorialValue.ToString(), isForced);
+    }
+
+    private async Task HandleTutorialClosedAsync(TutorialCloseResult result)
+    {
+        _showTutorial = false;
+
+        await TutorialStateService.SaveCloseProgressAsync(
+            result.TutorialId,
+            result.LastStepIndex,
+            result.Completed,
+            result.AutoShowDisabled);
+
+        if (_launchedFromCatalog)
+        {
+            _launchedFromCatalog = false;
+            NavManager.NavigateTo(_currentRoutePath, replace: true);
+        }
+    }
+
+    private string NormalizeRoutePath(string location)
+    {
+        var relativePath = NavManager.ToBaseRelativePath(location);
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return "/";
+
+        var separatorIndex = relativePath.IndexOfAny(new[] { '?', '#' });
+        var pathOnly = (separatorIndex >= 0 ? relativePath[..separatorIndex] : relativePath).Trim();
+
+        if (string.IsNullOrWhiteSpace(pathOnly))
+            return "/";
+
+        return pathOnly.StartsWith("/", StringComparison.Ordinal)
+            ? pathOnly
+            : $"/{pathOnly}";
+    }
+}

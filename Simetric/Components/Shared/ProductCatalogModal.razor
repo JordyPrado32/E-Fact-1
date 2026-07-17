@@ -1,0 +1,532 @@
+@namespace Simetric.Components.Shared
+@using System.ComponentModel.DataAnnotations
+@using Simetric.DTOs
+@using Simetric.Services
+@inject HttpClient Http
+@inject FacturacionService FacturacionService
+
+@if (ShowCatalog)
+{
+    <div class="pcm-backdrop" @onclick="CerrarCatalogoAsync"></div>
+    <div class="pcm-shell" role="dialog" aria-modal="true" aria-labelledby="@CatalogTitleId">
+        <div class="pcm-modal pcm-catalog">
+            <div class="pcm-header">
+                <div class="pcm-title-wrap">
+                    <span class="pcm-icon"><i class="bi bi-grid-3x3-gap"></i></span>
+                    <div>
+                        <div id="@CatalogTitleId" class="pcm-title">Catalogo de productos y servicios</div>
+                        <p>Selecciona uno o varios items y agregalos al @ContextLabel.</p>
+                    </div>
+                </div>
+                <button type="button" class="pcm-close" @onclick="CerrarCatalogoAsync" aria-label="Cerrar catalogo">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="pcm-body">
+                <div class="pcm-toolbar">
+                    <label class="pcm-search">
+                        <i class="bi bi-search"></i>
+                        <input class="n-input"
+                               @bind="catalogFilter"
+                               @bind:event="oninput"
+                               placeholder="Buscar por nombre, codigo, categoria o subcategoria" />
+                    </label>
+                    <div class="pcm-selection">
+                        <span>@selectedKeys.Count seleccionados</span>
+                        <button type="button" class="n-btn-link" disabled="@(!selectedKeys.Any())" @onclick="LimpiarSeleccion">Limpiar</button>
+                        <button type="button" class="n-btn-primary" disabled="@(!selectedKeys.Any())" @onclick="AgregarSeleccionadosAsync">
+                            <i class="bi bi-plus-circle"></i>
+                            <span>Agregar seleccionados</span>
+                        </button>
+                    </div>
+                </div>
+
+                @if (catalogLoading)
+                {
+                    <div class="pcm-empty">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <strong>Cargando productos...</strong>
+                    </div>
+                }
+                else if (!catalogProducts.Any())
+                {
+                    <div class="pcm-empty">
+                        <i class="bi bi-box-seam"></i>
+                        <strong>No hay productos registrados.</strong>
+                        <small>Registra un producto nuevo para poder usarlo.</small>
+                    </div>
+                }
+                else if (!FilteredProducts.Any())
+                {
+                    <div class="pcm-empty">
+                        <i class="bi bi-search"></i>
+                        <strong>Sin coincidencias.</strong>
+                        <small>Prueba con otro nombre, codigo o categoria.</small>
+                    </div>
+                }
+                else
+                {
+                    <div class="pcm-grid">
+                        @foreach (var product in FilteredProducts)
+                        {
+                            var selected = IsSelected(product);
+                            <article class="pcm-card @(selected ? "is-selected" : string.Empty)">
+                                <button type="button"
+                                        class="pcm-select"
+                                        title="Seleccionar producto"
+                                        aria-label="Seleccionar producto"
+                                        @onclick="() => ToggleProduct(product)">
+                                    <i class="bi @(selected ? "bi-check-lg" : "bi-plus-lg")"></i>
+                                </button>
+                                <span class="pcm-card-icon"><i class="bi bi-box-seam"></i></span>
+                                <div class="pcm-card-main">
+                                    <strong>@(product.Descripcion ?? "Producto")</strong>
+                                    <small>@(string.IsNullOrWhiteSpace(product.Codprincipal) ? "Sin codigo" : product.Codprincipal)</small>
+                                    <small>@(string.IsNullOrWhiteSpace(product.Categoria) ? "Catalogo" : product.Categoria) | IVA @product.TarifaIva.ToString("0.##")%</small>
+                                </div>
+                                <div class="pcm-card-side">
+                                    <span>$ @product.PrecioUnitario.ToString("N2")</span>
+                                    <button type="button" class="pcm-use" @onclick="() => AgregarProductoAsync(product)">Agregar</button>
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@if (ShowCreate)
+{
+    <div class="pcm-backdrop" @onclick="CerrarCrearAsync"></div>
+    <div class="pcm-shell" role="dialog" aria-modal="true" aria-labelledby="@CreateTitleId">
+        <div class="pcm-modal pcm-create">
+            <div class="pcm-header">
+                <div class="pcm-title-wrap">
+                    <span class="pcm-icon"><i class="bi bi-box-seam"></i></span>
+                    <div>
+                        <div id="@CreateTitleId" class="pcm-title">Registrar producto</div>
+                        <p>Crea el producto y dejalo listo para usarlo en el @ContextLabel.</p>
+                    </div>
+                </div>
+                <button type="button" class="pcm-close" @onclick="CerrarCrearAsync" aria-label="Cerrar modal">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <EditForm Model="productModel" OnValidSubmit="GuardarProductoAsync">
+                <DataAnnotationsValidator />
+                <div class="pcm-body">
+                    @if (!string.IsNullOrWhiteSpace(createError))
+                    {
+                        <div class="pcm-alert"><i class="bi bi-exclamation-octagon"></i><span>@createError</span></div>
+                    }
+
+                    <ValidationSummary class="text-danger small mb-3" />
+
+                    <div class="pcm-form-grid">
+                        <section class="pcm-panel">
+                            <div class="pcm-panel-title">Datos principales</div>
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <label class="n-label">Tipo de registro *</label>
+                                    <div class="pcm-choice" role="group" aria-label="Tipo de producto o servicio">
+                                        <button type="button" class="@(productModel.TipoCompravena == "PRODUCTO" ? "is-active" : string.Empty)" @onclick="SeleccionarProducto">Producto</button>
+                                        <button type="button" class="@(productModel.TipoCompravena == "SERVICIO" ? "is-active" : string.Empty)" @onclick="SeleccionarServicio">Servicio</button>
+                                    </div>
+                                </div>
+                                <div class="col-md-8">
+                                    <label class="n-label">Nombre *</label>
+                                    <InputText class="n-input" @bind-Value="productModel.Nombre" placeholder="Nombre del producto o servicio" />
+                                    <ValidationMessage For="@(() => productModel.Nombre)" class="text-danger small" />
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="n-label">Codigo *</label>
+                                    <InputText class="n-input" @bind-Value="productModel.CodigoPrincipal" placeholder="10001" />
+                                    <ValidationMessage For="@(() => productModel.CodigoPrincipal)" class="text-danger small" />
+                                </div>
+                                <div class="col-12">
+                                    <label class="n-label">Codigo auxiliar</label>
+                                    <InputText class="n-input" @bind-Value="productModel.CodAuxiliar" placeholder="Opcional" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="n-label">Categoria *</label>
+                                    <InputSelect class="n-select" @bind-Value="SelectedCategory">
+                                        <option value="">-- Seleccione --</option>
+                                        @foreach (var type in productTypes)
+                                        {
+                                            <option value="@type.Idtipoproducto">@type.Descripcion</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => productModel.TipoProducto)" class="text-danger small" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="n-label">Subcategoria</label>
+                                    <InputSelect class="n-select" @bind-Value="productModel.Idsubtipo" disabled="@(!productModel.TipoProducto.HasValue)">
+                                        <option value="">-- Seleccione --</option>
+                                        @foreach (var subtype in FilteredSubtypes)
+                                        {
+                                            <option value="@subtype.Idsubtipo">@subtype.Descripcion</option>
+                                        }
+                                    </InputSelect>
+                                </div>
+                            </div>
+                        </section>
+
+                        <aside class="pcm-panel">
+                            <div class="pcm-panel-title">Configuracion comercial</div>
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <label class="n-label">Precio base *</label>
+                                    <InputNumber class="n-input text-end" @bind-Value="productModel.ValorUnitario" placeholder="0.00" />
+                                    <ValidationMessage For="@(() => productModel.ValorUnitario)" class="text-danger small" />
+                                </div>
+                                <div class="col-12">
+                                    <label class="n-label">IVA</label>
+                                    <InputSelect class="n-select" @bind-Value="SelectedVat">
+                                        <option value="">Sin IVA</option>
+                                        @foreach (var vat in vats)
+                                        {
+                                            <option value="@vat.Codigo">@GetVatLabel(vat)</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => productModel.Porcentajeimpuesto)" class="text-danger small" />
+                                </div>
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+
+                <div class="pcm-footer">
+                    <span><i class="bi bi-lightning-charge"></i> Al guardar se agregara al @ContextLabel.</span>
+                    <div>
+                        <button type="button" class="n-btn-link" @onclick="CerrarCrearAsync" disabled="@saving">Cancelar</button>
+                        <button type="submit" class="n-btn-primary" disabled="@saving">
+                            @if (saving)
+                            {
+                                <span class="spinner-border spinner-border-sm"></span>
+                                <span>Guardando...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-check2-circle"></i>
+                                <span>Guardar y usar</span>
+                            }
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int UserId { get; set; }
+    [Parameter] public string ContextLabel { get; set; } = "detalle";
+    [Parameter] public bool ShowCatalog { get; set; }
+    [Parameter] public EventCallback<bool> ShowCatalogChanged { get; set; }
+    [Parameter] public bool ShowCreate { get; set; }
+    [Parameter] public EventCallback<bool> ShowCreateChanged { get; set; }
+    [Parameter] public EventCallback<ProductoLookupDetalleDto> ProductSelected { get; set; }
+    [Parameter] public EventCallback<IReadOnlyList<ProductoLookupDetalleDto>> ProductsSelected { get; set; }
+
+    private readonly string CatalogTitleId = $"catalogoProductos_{Guid.NewGuid():N}";
+    private readonly string CreateTitleId = $"nuevoProducto_{Guid.NewGuid():N}";
+    private string catalogFilter = string.Empty;
+    private bool catalogLoading;
+    private bool saving;
+    private string? createError;
+    private List<ProductoLookupDetalleDto> catalogProducts = new();
+    private HashSet<string> selectedKeys = new(StringComparer.OrdinalIgnoreCase);
+    private List<ProductTypeLookup> productTypes = new();
+    private List<ProductSubtypeLookup> productSubtypes = new();
+    private List<VatLookup> vats = new();
+    private ProductModalModel productModel = CreateProductModel();
+
+    private IEnumerable<ProductoLookupDetalleDto> FilteredProducts
+    {
+        get
+        {
+            var query = (catalogFilter ?? string.Empty).Trim();
+            var products = catalogProducts.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                products = products.Where(p =>
+                    (p.Descripcion?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (p.Codprincipal?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (p.Categoria?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (p.Subcategoria?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+
+            return products.Take(40);
+        }
+    }
+
+    private IEnumerable<ProductSubtypeLookup> FilteredSubtypes =>
+        productModel.TipoProducto.HasValue
+            ? productSubtypes.Where(x => x.Idtipoproducto == productModel.TipoProducto.Value)
+            : Enumerable.Empty<ProductSubtypeLookup>();
+
+    private int? SelectedCategory
+    {
+        get => productModel.TipoProducto;
+        set
+        {
+            productModel.TipoProducto = value;
+            if (productModel.Idsubtipo.HasValue &&
+                !productSubtypes.Any(x => x.Idsubtipo == productModel.Idsubtipo.Value && x.Idtipoproducto == value))
+            {
+                productModel.Idsubtipo = null;
+            }
+        }
+    }
+
+    private string? SelectedVat
+    {
+        get => productModel.Porcentajeimpuesto;
+        set
+        {
+            productModel.Porcentajeimpuesto = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            productModel.Codigoimpuesto = string.IsNullOrWhiteSpace(productModel.Porcentajeimpuesto) ? null : "2";
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ShowCatalog && !catalogProducts.Any() && !catalogLoading)
+            await LoadCatalogAsync();
+
+        if (ShowCreate && !productTypes.Any())
+            await LoadLookupsAsync();
+    }
+
+    private async Task LoadCatalogAsync()
+    {
+        if (UserId <= 0)
+            return;
+
+        catalogLoading = true;
+        try
+        {
+            catalogProducts = (await FacturacionService.BuscarProductosFiltroAsync(UserId, string.Empty)).Take(80).ToList();
+        }
+        finally
+        {
+            catalogLoading = false;
+        }
+    }
+
+    private async Task LoadLookupsAsync()
+    {
+        try
+        {
+            var response = await Http.GetFromJsonAsync<LookupsResponse>($"api/productos/lookups?userId={UserId}");
+            if (response is null)
+                return;
+
+            productTypes = response.Tipos ?? new();
+            productSubtypes = response.Subtipos ?? new();
+            vats = response.Ivas ?? new();
+        }
+        catch (Exception ex)
+        {
+            createError = $"No se pudo cargar catalogos: {ex.Message}";
+        }
+    }
+
+    private async Task CerrarCatalogoAsync()
+    {
+        ShowCatalog = false;
+        selectedKeys.Clear();
+        await ShowCatalogChanged.InvokeAsync(false);
+    }
+
+    private async Task CerrarCrearAsync()
+    {
+        ShowCreate = false;
+        createError = null;
+        await ShowCreateChanged.InvokeAsync(false);
+    }
+
+    private void SeleccionarProducto() => productModel.TipoCompravena = "PRODUCTO";
+
+    private void SeleccionarServicio() => productModel.TipoCompravena = "SERVICIO";
+
+    private static string GetKey(ProductoLookupDetalleDto product)
+    {
+        if (product.Codproducto > 0)
+            return $"ID:{product.Codproducto}";
+
+        if (!string.IsNullOrWhiteSpace(product.Codprincipal))
+            return $"COD:{product.Codprincipal.Trim()}";
+
+        return $"DESC:{product.Descripcion?.Trim()}";
+    }
+
+    private bool IsSelected(ProductoLookupDetalleDto product) => selectedKeys.Contains(GetKey(product));
+
+    private void ToggleProduct(ProductoLookupDetalleDto product)
+    {
+        var key = GetKey(product);
+        if (!selectedKeys.Add(key))
+            selectedKeys.Remove(key);
+    }
+
+    private void LimpiarSeleccion() => selectedKeys.Clear();
+
+    private async Task AgregarProductoAsync(ProductoLookupDetalleDto product)
+    {
+        selectedKeys.Remove(GetKey(product));
+        await ProductSelected.InvokeAsync(product);
+    }
+
+    private async Task AgregarSeleccionadosAsync()
+    {
+        var products = catalogProducts.Where(x => selectedKeys.Contains(GetKey(x))).ToList();
+        if (!products.Any())
+            return;
+
+        selectedKeys.Clear();
+        await ProductsSelected.InvokeAsync(products);
+        await CerrarCatalogoAsync();
+    }
+
+    private async Task GuardarProductoAsync()
+    {
+        saving = true;
+        createError = null;
+
+        try
+        {
+            productModel.Nombre = (productModel.Nombre ?? string.Empty).Trim();
+            productModel.CodigoPrincipal = (productModel.CodigoPrincipal ?? string.Empty).Trim();
+            productModel.CodAuxiliar = string.IsNullOrWhiteSpace(productModel.CodAuxiliar) ? null : productModel.CodAuxiliar.Trim();
+            productModel.TipoCompravena = productModel.TipoCompravena?.Trim().ToUpperInvariant();
+            productModel.Codigoimpuesto = string.IsNullOrWhiteSpace(productModel.Porcentajeimpuesto) ? null : "2";
+
+            var response = await Http.PostAsJsonAsync($"api/productos?userId={UserId}", new
+            {
+                Codigo = 0,
+                productModel.Nombre,
+                CodigoPrincipal = productModel.CodigoPrincipal,
+                productModel.CodAuxiliar,
+                productModel.ValorUnitario,
+                Precio2 = (decimal?)null,
+                Precio3 = (decimal?)null,
+                productModel.TipoCompravena,
+                TipoProducto = productModel.TipoProducto,
+                Idsubtipo = productModel.Idsubtipo,
+                productModel.Codigoimpuesto,
+                Porcentajeimpuesto = productModel.Porcentajeimpuesto,
+                Estado = true,
+                Margen = (decimal?)null,
+                Facturable = true
+            });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var text = await response.Content.ReadAsStringAsync();
+                createError = string.IsNullOrWhiteSpace(text)
+                    ? $"No se pudo guardar (HTTP {(int)response.StatusCode})."
+                    : text;
+                return;
+            }
+
+            var product = await FacturacionService.BuscarProductoParaDetalleAsync(UserId, productModel.CodigoPrincipal);
+            productModel = CreateProductModel();
+            catalogProducts.Clear();
+            await CerrarCrearAsync();
+
+            if (product is not null)
+                await ProductSelected.InvokeAsync(product);
+        }
+        catch (Exception ex)
+        {
+            createError = $"Error guardando producto: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private static string GetVatLabel(VatLookup vat)
+    {
+        var value = string.IsNullOrWhiteSpace(vat.Valor) ? vat.Codigo : vat.Valor;
+        return string.IsNullOrWhiteSpace(value) ? (vat.Descripcion ?? "IVA") : $"{vat.Descripcion ?? "IVA"} ({value}%)";
+    }
+
+    private static ProductModalModel CreateProductModel() => new()
+    {
+        TipoCompravena = "PRODUCTO",
+        Codigoimpuesto = string.Empty,
+        Porcentajeimpuesto = string.Empty,
+        Facturable = true
+    };
+
+    private class LookupsResponse
+    {
+        public List<ProductTypeLookup> Tipos { get; set; } = new();
+        public List<ProductSubtypeLookup> Subtipos { get; set; } = new();
+        public List<VatLookup> Ivas { get; set; } = new();
+    }
+
+    private class ProductTypeLookup
+    {
+        public int Idtipoproducto { get; set; }
+        public string? Descripcion { get; set; }
+    }
+
+    private class ProductSubtypeLookup
+    {
+        public int Idsubtipo { get; set; }
+        public string? Descripcion { get; set; }
+        public int Idtipoproducto { get; set; }
+    }
+
+    private class VatLookup
+    {
+        public string? Codigo { get; set; }
+        public string? Descripcion { get; set; }
+        public string? Valor { get; set; }
+    }
+
+    private class ProductModalModel : IValidatableObject
+    {
+        [Required(ErrorMessage = "El nombre es requerido.")]
+        [StringLength(120, ErrorMessage = "Maximo 120 caracteres.")]
+        public string? Nombre { get; set; }
+
+        [Required(ErrorMessage = "El codigo principal es requerido.")]
+        [StringLength(50, ErrorMessage = "Maximo 50 caracteres.")]
+        public string? CodigoPrincipal { get; set; }
+
+        [StringLength(50, ErrorMessage = "Maximo 50 caracteres.")]
+        public string? CodAuxiliar { get; set; }
+
+        [Required(ErrorMessage = "El precio unitario es requerido.")]
+        [Range(0.01, 999999, ErrorMessage = "Precio invalido.")]
+        public decimal? ValorUnitario { get; set; }
+
+        [Required(ErrorMessage = "Debe seleccionar si el registro es producto o servicio.")]
+        public string? TipoCompravena { get; set; }
+
+        public int? TipoProducto { get; set; }
+        public int? Idsubtipo { get; set; }
+        public string? Codigoimpuesto { get; set; }
+        public string? Porcentajeimpuesto { get; set; }
+        public bool Facturable { get; set; } = true;
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (TipoCompravena is not ("PRODUCTO" or "SERVICIO"))
+                yield return new ValidationResult("Debe elegir PRODUCTO o SERVICIO.", new[] { nameof(TipoCompravena) });
+
+            if (!TipoProducto.HasValue)
+                yield return new ValidationResult("Debe seleccionar una categoria.", new[] { nameof(TipoProducto) });
+        }
+    }
+}

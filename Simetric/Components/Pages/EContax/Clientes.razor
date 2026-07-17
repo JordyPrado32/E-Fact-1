@@ -1,0 +1,2301 @@
+@page "/e-contax/clientes"
+
+@using System.Net.Http.Json
+@inject HttpClient Http
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json.Serialization
+@using System.Security.Claims
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.EContax
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+@{
+    var filteredClientes = ClientesFiltrados.ToList();
+    var clientesPaginados = ClientesPaginados.ToList();
+    var clientesReales = clientes.Where(c => !EsConsumidorFinal(c)).ToList();
+    var totalActivos = clientesReales.Count(c => c.Estado == true);
+    var totalConCorreo = clientesReales.Count(c => !string.IsNullOrWhiteSpace(c.Correo));
+    var totalTipos = tiposCliente.Count;
+    var paginaActualVista = PaginaActualNormalizada;
+    var totalPaginasVista = TotalPaginasClientes;
+    var primerRegistroVista = TotalRegistrosFiltrados == 0 ? 0 : ((paginaActualVista - 1) * registrosPorPagina) + 1;
+    var ultimoRegistroVista = Math.Min(paginaActualVista * registrosPorPagina, TotalRegistrosFiltrados);
+}
+
+<PageTitle>Clientes | @PageBrandTitle</PageTitle>
+
+<div class="entity-shell" data-tour="clientes.page">
+    <section class="entity-hero" data-tour="clientes.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Catálogo comercial</span>
+            <h2>Gestión de clientes</h2>
+            <p>
+                Centraliza la cartera comercial y mantén el registro de clientes alineado
+                con el mismo patrón visual y operativo de Productos.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Clientes activos</span>
+                <strong>@totalActivos</strong>
+                <small>Registros disponibles para facturación y operación diaria.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Tipos disponibles</span>
+                <strong>@totalTipos</strong>
+                <small>Clasificaciones activas para segmentar la cartera comercial.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Con correo</span>
+                <strong>@totalConCorreo</strong>
+                <small>Clientes listos para notificaciones y documentos electrónicos.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card" data-tour="clientes.toolbar">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Búsqueda y control</span>
+            <h3>Consulta los datos y administra tus clientes</h3>
+            <p>Aqui tienes una lista de tus clientes, donde puedes administrar tu negocio </p>
+        </div>
+
+        <div class="toolbar-actions">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+                <input class="search-input"
+                       placeholder="Buscar por nombre o identificación"
+                       value="@filtro"
+                       @oninput="OnFiltroChanged" />
+            </div>
+
+            <div class="toolbar-secondary-actions">
+                <div class="filter-box">
+                    <label class="filter-label" for="clienteTipoFiltro">Tipo</label>
+                    <select id="clienteTipoFiltro" class="filter-select" value="@filtroTipoCliente" @onchange="OnTipoFiltroChanged">
+                        <option value="0">Todos</option>
+                        @foreach (var tipo in tiposCliente)
+                        {
+                            <option value="@tipo.TclCodigo">@TipoClienteClasificacion.ObtenerEtiqueta(tipo.Descripcion)</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="filter-box">
+                    <label class="filter-label" for="clientesRegistrosFiltro">Registros</label>
+                    <select id="clientesRegistrosFiltro" class="filter-select" value="@registrosPorPagina" @onchange="OnRegistrosPorPaginaChanged">
+                        @foreach (var opcion in opcionesRegistrosPorPagina)
+                        {
+                            <option value="@opcion">@opcion</option>
+                        }
+                    </select>
+                </div>
+
+                <button type="button" class="secondary-btn toolbar-secondary-btn" @onclick="() => CargarTodo(true)">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    <span>Refrescar</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <div class="quick-tip-card" style="margin-top:1rem;">
+        <div class="quick-tip-icon">
+            <i class="bi bi-lightbulb-fill fs-5"></i>
+        </div>
+        <div class="flex-grow-1">
+            <strong>Consejo rápido</strong>
+            <p>Puedes usar la IA para crear clientes automáticamente, escanear el RUC para completar datos o agregar múltiples correos de contacto.</p>
+            <button type="button" class="btn btn-link p-0 link-primary fw-semibold text-decoration-none">Ver guía completa →</button>
+        </div>
+        <div class="ms-auto d-none d-md-flex align-items-center justify-content-center" style="width:120px;height:92px;border-radius:18px;background:linear-gradient(180deg,#f8fbff 0%,#eef5ff 100%);border:1px solid #dce8f4;box-shadow:0 10px 24px rgba(22,105,224,.08);">
+            <div class="d-flex flex-column align-items-start gap-2" style="width:70px;">
+                <div class="d-flex align-items-center gap-2 w-100">
+                    <span class="rounded-circle d-inline-flex align-items-center justify-content-center" style="width:26px;height:26px;background:#dbeafe;color:#1769e0;"><i class="bi bi-person-fill"></i></span>
+                    <span class="flex-grow-1" style="height:5px;border-radius:999px;background:#d9e6f7;"></span>
+                </div>
+                <span style="height:5px;width:100%;border-radius:999px;background:#d9e6f7;"></span>
+                <span style="height:5px;width:82%;border-radius:999px;background:#d9e6f7;"></span>
+                <div class="d-flex align-items-center gap-2 w-100 mt-1">
+                    <span class="rounded-circle d-inline-flex align-items-center justify-content-center" style="width:26px;height:26px;background:#d1fae5;color:#10b981;"><i class="bi bi-check-lg"></i></span>
+                    <span class="flex-grow-1" style="height:5px;border-radius:999px;background:#d9e6f7;"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <section class="entity-grid">
+        <section class="table-card" data-tour="clientes.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>Clientes registrados</h3>
+                </div>
+                <span class="table-badge">@filteredClientes.Count registros</span>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-info-circle"></i>
+                    <span>@mensaje</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(debugError))
+            {
+                <div class="status-banner status-banner-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@debugError</span>
+                </div>
+            }
+
+            @if (cargando)
+            {
+                <div class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando clientes</h3>
+                    <p>Preparando la cartera comercial y sus datos de identificación.</p>
+                </div>
+            }
+            else if (!filteredClientes.Any())
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-people"></i>
+                    </div>
+                    <h3>No hay clientes para mostrar</h3>
+                    <p>Ajusta la búsqueda, cambia el tipo o registra un nuevo cliente.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table entity-table entity-table-clients mb-0">
+                        <thead>
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Identificación</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in clientesPaginados)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="cell-main cell-main-stacked">
+                                            <strong>@GetNombreCompletoCliente(c)</strong>
+                                            @if (!string.IsNullOrWhiteSpace(ObtenerNombreSecundarioCliente(c)))
+                                            {
+                                                <span class="meta-line">
+                                                    <i class="bi bi-building"></i>
+                                                    <span>@ObtenerNombreSecundarioCliente(c)</span>
+                                                </span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(c.Correo))
+                                            {
+                                                <span class="meta-line">
+                                                    <i class="bi bi-envelope"></i>
+                                                    <span>@c.Correo</span>
+                                                </span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="code-pill">@(string.IsNullOrWhiteSpace(c.Numeroidentificacion) ? "Sin ID" : c.Numeroidentificacion)</span>
+                                    </td>
+                                    <td class="text-end">
+                                        @if (EsConsumidorFinal(c))
+                                        {
+                                            <span class="action-empty">Sin acciones</span>
+                                        }
+                                        else
+                                        {
+                                            <div class="action-group">
+                                                <button type="button" class="action-btn action-view" title="Ver"
+                                                        @onclick="() => VerCliente(c)">
+                                                    <i class="bi bi-eye"></i>
+                                                </button>
+
+                                                <button type="button" class="action-btn action-edit" title="Editar"
+                                                        @onclick="() => Editar(c.Codcliente)">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </button>
+
+                                                <button type="button" class="action-btn action-delete" title="Eliminar"
+                                                        @onclick="() => ConfirmarEliminar(c)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-pagination">
+                    <span>Mostrando @primerRegistroVista-@ultimoRegistroVista de @TotalRegistrosFiltrados registros</span>
+                    <div class="pagination-actions">
+                        <button type="button"
+                                class="pagination-btn"
+                                disabled="@(paginaActualVista <= 1)"
+                                @onclick="() => CambiarPagina(paginaActualVista - 1)">
+                            <i class="bi bi-chevron-left"></i>
+                        </button>
+                        <strong>@paginaActualVista / @totalPaginasVista</strong>
+                        <button type="button"
+                                class="pagination-btn"
+                                disabled="@(paginaActualVista >= totalPaginasVista)"
+                                @onclick="() => CambiarPagina(paginaActualVista + 1)">
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+            }
+
+            @if (mostrarConfirmacion && clienteAEliminar is not null)
+            {
+                <div class="confirm-card">
+                    <div class="confirm-copy">
+                        <strong>Eliminar el cliente seleccionado</strong>
+                        <p>@GetNombreCompletoCliente(clienteAEliminar)</p>
+                    </div>
+
+                    <div class="confirm-actions">
+                        <button type="button" class="secondary-btn" @onclick="CancelarEliminar">Cancelar</button>
+                        <button type="button" class="danger-btn" @onclick="EliminarConfirmado">Sí, eliminar</button>
+                    </div>
+                </div>
+            }
+
+            @if (clienteEnVista is not null)
+            {
+                <div class="detail-modal-backdrop" @onclick:stopPropagation="true"></div>
+                <div class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="clienteDetalleTitulo">
+                    <div class="detail-modal-content" @onclick:stopPropagation="true">
+                        <div class="detail-modal-header">
+                            <div>
+                                <span class="detail-kicker">Vista de cliente</span>
+                                <h3 id="clienteDetalleTitulo">@GetNombreCompletoCliente(clienteEnVista)</h3>
+                                <p>@GetTipoClienteDescripcion(clienteEnVista.TipoCliente) - @GetTipoIdentificacionDescripcion(clienteEnVista.Tipoidentificacion)</p>
+                            </div>
+
+                            <button type="button" class="detail-close" @onclick="CerrarVistaCliente" aria-label="Cerrar detalle" title="Cerrar">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+
+                        <div class="detail-modal-body">
+                            <div class="detail-sections">
+                                <section class="detail-section">
+                                    <h4 class="detail-section-title">Datos principales</h4>
+                                    <div class="detail-grid">
+                                        <div class="detail-item">
+                                            <span>Identificación</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(clienteEnVista.Numeroidentificacion) ? "Sin identificación" : clienteEnVista.Numeroidentificacion)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Estado</span>
+                                            <strong>@GetEstadoDescripcion(clienteEnVista.Estado)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Correo principal</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(clienteEnVista.Correo) ? "Sin correo" : clienteEnVista.Correo)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Obligado a contabilidad</span>
+                                            <strong>@GetObligadoContabilidadDescripcion(clienteEnVista.Oblgconta)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Nombre comercial</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(ObtenerNombreComercialCliente(clienteEnVista)) ? "Sin nombre comercial" : ObtenerNombreComercialCliente(clienteEnVista))</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Razón social</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(clienteEnVista.Nombrerazonsocial) ? "Sin razón social" : clienteEnVista.Nombrerazonsocial)</strong>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section class="detail-section">
+                                    <h4 class="detail-section-title">Contacto y ubicación</h4>
+                                    <div class="detail-grid">
+                                        <div class="detail-item">
+                                            <span>Teléfono</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(clienteEnVista.Telefonoconvencional) ? "Sin teléfono" : clienteEnVista.Telefonoconvencional)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Celular</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(clienteEnVista.Celular) ? "Sin celular" : clienteEnVista.Celular)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>País</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(GetPaisNombre(clienteEnVista.Pais)) ? "Sin país" : GetPaisNombre(clienteEnVista.Pais))</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Provincia</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(GetProvinciaNombre(clienteEnVista.Provincia)) ? "Sin provincia" : GetProvinciaNombre(clienteEnVista.Provincia))</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Ciudad</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(GetCiudadNombre(clienteEnVista.Ciudad)) ? "Sin ciudad" : GetCiudadNombre(clienteEnVista.Ciudad))</strong>
+                                        </div>
+
+                                        <div class="detail-item detail-item-full">
+                                            <span>Dirección</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(clienteEnVista.Direccion) ? "Sin dirección" : clienteEnVista.Direccion)</strong>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                @if (!string.IsNullOrWhiteSpace(GetCorreosAdicionalesTexto(clienteEnVista)))
+                                {
+                                    <div class="detail-note">
+                                        <span>Correos adicionales</span>
+                                        <strong>@GetCorreosAdicionalesTexto(clienteEnVista)</strong>
+                                    </div>
+                                }
+
+                                @if (!string.IsNullOrWhiteSpace(clienteEnVista.Observaciones))
+                                {
+                                    <div class="detail-note">
+                                        <span>Observaciones</span>
+                                        <strong>@clienteEnVista.Observaciones</strong>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="detail-modal-footer">
+                            <button type="button" class="secondary-btn" @onclick="CerrarVistaCliente">Cerrar</button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <section class="editor-card entity-editor-card" data-tour="clientes.editor">
+            <div class="editor-head">
+                <div>
+                    <span class="panel-kicker">Formulario operativo</span>
+                    <h3>@(editando ? "Editar cliente" : "Registrar cliente")</h3>
+                    <p>Complete los datos comerciales, de contacto y ubicación del cliente.</p>
+                </div>
+                <span class="editor-badge @(editando ? "editor-badge-edit" : "editor-badge-new")">
+                    @(editando ? "Edición" : "Nuevo")
+                </span>
+            </div>
+
+            <div class="editor-body entity-form-legacy">
+                <EditForm Model="@model" OnValidSubmit="Guardar">
+                    <DataAnnotationsValidator />
+
+                    <div @key="formKey">
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Tipo de Cliente *</label>
+                                    <InputSelect class="form-select form-select-sm"
+                                                 @bind-Value="model.TipoCliente"
+                                                 @bind-Value:after="OnTipoClienteChanged">
+                                        <option value="0">-- Seleccione Tipo --</option>
+                                        @foreach (var t in tiposCliente)
+                                        {
+                                            <option value="@t.TclCodigo">@TipoClienteClasificacion.ObtenerEtiqueta(t.Descripcion)</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => model.TipoCliente)" class="text-danger small" />
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Tipo Identificación *</label>
+                                    <InputSelect class="form-select form-select-sm"
+                                                 @bind-Value="model.Tipoidentificacion"
+                                                 @bind-Value:after="OnTipoIdentificacionChangedAsync">
+                                        <option value="">-- Seleccione --</option>
+                                            @foreach (var id in IdentificacionesDisponibles)
+                                            {
+                                                <option value="@id.Id">@id.Descripcion</option>
+                                            }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => model.Tipoidentificacion)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            @if (!TieneTipoClienteSeleccionado)
+                            {
+                                <div class="status-banner status-banner-info mb-2">
+                                    <i class="bi bi-info-circle"></i>
+                                    <span>Selecciona primero el tipo de cliente</span>
+                                </div>
+                            }
+
+                            @if (EsPersonaSeleccionada)
+                            {
+                                <div class="row mb-2">
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Apellidos *</label>
+                                        <InputText class="form-control form-control-sm" @bind-Value="model.Apellidos" />
+                                        <ValidationMessage For="@(() => model.Apellidos)" class="text-danger small" />
+                                    </div>
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Nombres *</label>
+                                        <InputText class="form-control form-control-sm" @bind-Value="model.Nombres" />
+                                        <ValidationMessage For="@(() => model.Nombres)" class="text-danger small" />
+                                    </div>
+                                </div>
+                            }
+
+                            @if (EsEmpresaSeleccionada)
+                            {
+                                <div class="row mb-2">
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Nombre Comercial *</label>
+                                        <InputText class="form-control form-control-sm" @bind-Value="model.Nombrecomercial" />
+                                        <ValidationMessage For="@(() => model.Nombrecomercial)" class="text-danger small" />
+                                    </div>
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Razón Social *</label>
+                                        <InputText class="form-control form-control-sm" @bind-Value="model.Nombrerazonsocial" />
+                                        <ValidationMessage For="@(() => model.Nombrerazonsocial)" class="text-danger small" />
+                                    </div>
+                                </div>
+                            }
+
+                             <div class="row mb-2">
+                                 <div class="col">
+                                     <label class="form-label small fw-bold">Número Identificación *</label>
+                                     <input class="form-control form-control-sm"
+                                            value="@model.Numeroidentificacion"
+                                            @oninput="OnNumeroIdentificacionChangedAsync"
+                                            @onblur="OnNumeroIdentificacionBlurAsync" />
+                                     <ValidationMessage For="@(() => model.Numeroidentificacion)" class="text-danger small" />
+                                     @if (consultandoCedula)
+                                     {
+                                         <div class="status-banner status-banner-info mt-2">
+                                             <i class="bi bi-search"></i>
+                                             <span>Buscando datos de la identificación...</span>
+                                         </div>
+                                         <div class="small text-muted mt-1">Consultando datos de la cédula...</div>
+                                     }
+                                     else if (!string.IsNullOrWhiteSpace(mensajeConsultaCedula))
+                                     {
+                                         <div class="small mt-1 @(consultaCedulaEsError ? "text-danger" : "text-success")">@mensajeConsultaCedula</div>
+                                     }
+                                 </div>
+                             </div>
+
+                            <div class="email-fields-shell mb-3">
+                                <div class="form-group">
+                                    <div class="email-primary-row">
+                                        <div class="email-primary-field">
+                                            <label class="form-label small fw-bold">Correo Principal</label>
+                                            <InputText type="email"
+                                                       @bind-Value="model.Correo"
+                                                       class="form-control form-control-sm"
+                                                       placeholder="correo@empresa.com" />
+                                            <ValidationMessage For="@(() => model.Correo)" class="text-danger small" />
+                                        </div>
+
+                                        <button type="button"
+                                                class="email-add-icon-btn"
+                                                @onclick="AgregarCorreoCampo"
+                                                title="Agregar correo adicional"
+                                                aria-label="Agregar correo adicional">
+                                            <i class="bi bi-plus-lg"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                @if (model.CorreosAdicionales.Any())
+                                {
+                                    <div class="email-extra-shell">
+                                        <div class="email-extra-head">
+                                            <label class="form-label small fw-bold mb-0">Correos adicionales</label>
+                                            <button type="button"
+                                                    class="email-add-btn"
+                                                    @onclick="AgregarCorreoCampo">
+                                                <i class="bi bi-plus-lg"></i>
+                                                <span>Agregar otro correo</span>
+                                            </button>
+                                        </div>
+
+                                        @for (var correoIndex = 0; correoIndex < model.CorreosAdicionales.Count; correoIndex++)
+                                        {
+                                            var indiceCorreo = correoIndex;
+                                            <div class="email-extra-row">
+                                                <InputText type="email"
+                                                           @bind-Value="model.CorreosAdicionales[indiceCorreo]"
+                                                           class="form-control form-control-sm"
+                                                           placeholder="correo.adicional@empresa.com" />
+                                                <button type="button"
+                                                        class="email-remove-btn"
+                                                        @onclick="() => EliminarCorreoAdicional(indiceCorreo)"
+                                                        title="Eliminar correo adicional"
+                                                        aria-label="Eliminar correo adicional">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    @if (DebeMostrarObligadoContabilidad)
+                                    {
+                                        <label class="form-label small">Obligado a llevar contabilidad</label>
+                                        <InputSelect class="form-select form-select-sm" @bind-Value="model.Oblgconta">
+                                            <option value="">-- Seleccione --</option>
+                                            <option value="SI">SI</option>
+                                            <option value="NO">NO</option>
+                                        </InputSelect>
+                                    }
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small">Teléfono Convencional</label>
+                                    <InputText class="form-control form-control-sm" @bind-Value="model.Telefonoconvencional" />
+                                    <ValidationMessage For="@(() => model.Telefonoconvencional)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small">Celular</label>
+                                    <InputText class="form-control form-control-sm" @bind-Value="model.Celular" />
+                                    <ValidationMessage For="@(() => model.Celular)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="form-label small">Dirección</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.Direccion" />
+                            </div>
+
+                            <div class="row mb-3">
+                                <div class="col">
+                                    <label class="form-label small fw-bold">País</label>
+                                    <InputSelect class="form-select form-select-sm"
+                                                 @bind-Value="model.Pais"
+                                                 @bind-Value:after="OnPaisChangedAsync">
+                                        <option value="">-- Seleccione País --</option>
+                                        @foreach (var p in paises)
+                                        {
+                                            <option value="@p.IdPais">@p.Descripcion</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => model.Pais)" class="text-danger small" />
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Provincia</label>
+                                    <InputSelect class="form-select form-select-sm"
+                                                 @bind-Value="model.Provincia"
+                                                 @bind-Value:after="OnProvinciaChangedAsync"
+                                                 disabled="@(model.Pais is null)">
+                                        <option value="">-- Seleccione Provincia --</option>
+                                        @foreach (var pr in ProvinciasDisponibles)
+                                        {
+                                            <option value="@pr.IdProvincia">@pr.Descripcion</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => model.Provincia)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">Ciudad</label>
+                                <InputSelect class="form-select form-select-sm"
+                                             @bind-Value="model.Ciudad"
+                                             disabled="@(model.Provincia is null || !CiudadesDisponibles.Any())">
+                                    <option value="">@(model.Provincia.HasValue ? "-- Seleccione Ciudad --" : "-- Seleccione una provincia --")</option>
+                                    @foreach (var c in CiudadesDisponibles)
+                                    {
+                                        <option value="@c.IdCiudad">@c.Descripcion</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="@(() => model.Ciudad)" class="text-danger small" />
+                            </div>
+
+                            <details class="form-accordion">
+                                <summary class="form-section-heading">
+                                    <span>4</span>
+                                    <strong>Información adicional</strong>
+                                    <i class="bi bi-chevron-down"></i>
+                                </summary>
+                                <div class="form-accordion-body">
+                                    <div class="client-extra-grid">
+                                        <div class="client-extra-block client-credit-days">
+                                            <label class="form-label small">Días de crédito</label>
+                                            <div class="credit-chip-list">
+                                                @foreach (var dias in diasCreditoOpciones)
+                                                {
+                                                    var seleccionado = model.DiasCredito == dias;
+                                                    <button type="button"
+                                                            class="credit-chip @(seleccionado ? "active" : null)"
+                                                            @onclick="() => SeleccionarDiasCredito(dias)">
+                                                        @dias
+                                                    </button>
+                                                }
+                                                <button type="button"
+                                                        class="credit-chip @(UsaDiasCreditoPersonalizado ? "active" : null)"
+                                                        @onclick="ActivarDiasCreditoPersonalizado">
+                                                    Otro
+                                                </button>
+                                            </div>
+
+                                            @if (UsaDiasCreditoPersonalizado)
+                                            {
+                                                <InputNumber class="form-control form-control-sm credit-custom-input"
+                                                             TValue="int?"
+                                                             @bind-Value="model.DiasCredito"
+                                                             min="0"
+                                                             placeholder="Ingresa los días" />
+                                            }
+                                        </div>
+
+                                        <div class="client-extra-block client-state-block">
+                                            <label class="form-label small">Estado</label>
+                                            <div class="state-chip-list">
+                                                <button type="button"
+                                                        class="state-chip @(model.Estado == true ? "active" : null)"
+                                                        @onclick="() => SeleccionarEstadoCliente(true)">
+                                                    <span class="state-dot state-dot-active"></span>
+                                                    <span>Activo</span>
+                                                </button>
+                                                <button type="button"
+                                                        class="state-chip @(model.Estado == false ? "active" : null)"
+                                                        @onclick="() => SeleccionarEstadoCliente(false)">
+                                                    <span class="state-dot state-dot-inactive"></span>
+                                                    <span>Inactivo</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="client-extra-notes">
+                                        <label class="form-label small">Observaciones</label>
+                                        <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="model.Observaciones" />
+                                    </div>
+                                </div>
+                            </details>
+
+                        <div class="form-actions entity-form-actions">
+                            <button class="secondary-btn" type="button" @onclick="Nuevo">Limpiar</button>
+                            <button class="primary-btn" type="submit">
+                                <i class="bi bi-save me-1"></i> @(editando ? "Guardar cambios" : "Crear cliente")
+                            </button>
+                        </div>
+
+                        </div>
+                </EditForm>
+            </div>
+        </section>
+    </section>
+</div>
+
+@code {
+
+    private int usuarioLogueadoId = 0;
+    private string PageBrandTitle => IsEContaxPath(NavManager.Uri) ? "Numerica E-Contax" : "Numerica e-fact";
+
+    private string filtro = "";
+    private int filtroTipoCliente = 0;
+    private int registrosPorPagina = 10;
+    private int paginaActual = 1;
+    private readonly int[] opcionesRegistrosPorPagina = { 5, 10, 20 };
+    private bool mostrarDropdownTipo = false;
+
+    private bool mostrarConfirmacion = false;
+    private ClienteDto? clienteAEliminar;
+    private ClienteDto? clienteEnVista;
+    private static readonly int[] diasCreditoOpciones = [0, 15, 30, 45, 60, 90];
+
+    private class TipoClienteDto
+    {
+        public int TclCodigo { get; set; }
+        public string Descripcion { get; set; } = "";
+    }
+
+    private class ClienteDto
+    {
+        public int Codcliente { get; set; }
+        public string? Apellidos { get; set; }
+        public string? Nombres { get; set; }
+        public string? Nombrecomercial { get; set; }
+        public string? Nombrerazonsocial { get; set; }
+        public int? Tipoidentificacion { get; set; }
+        public string? Numeroidentificacion { get; set; }
+        public string? Direccion { get; set; }
+        public string? Telefonoconvencional { get; set; }
+        public string? Celular { get; set; }
+        public string? Correo { get; set; }
+        public int? DiasCredito { get; set; }
+        public string? Oblgconta { get; set; }
+        public int TipoCliente { get; set; }
+        public bool? Estado { get; set; }
+        public string? Observaciones { get; set; }
+        public int? Pais { get; set; }
+        public int? Provincia { get; set; }
+        public int? Ciudad { get; set; }
+        public List<string> CorreosAdicionales { get; set; } = new();
+    }
+
+    private class ClienteUpsertDto : IValidatableObject
+    {
+        public int Codcliente { get; set; }
+
+        [StringLength(100, ErrorMessage = "Máximo 100 caracteres")]
+        public string? Apellidos { get; set; }
+
+        [StringLength(100, ErrorMessage = "Máximo 100 caracteres")]
+        public string? Nombres { get; set; }
+
+        [StringLength(150, ErrorMessage = "Máximo 150 caracteres")]
+        public string? Nombrecomercial { get; set; }
+        public List<string> CorreosAdicionales { get; set; } = new();
+        [StringLength(150, ErrorMessage = "Máximo 150 caracteres")]
+        public string? Nombrerazonsocial { get; set; }
+
+        [Required(ErrorMessage = "Debe seleccionar el tipo de identificación")]
+        public int? Tipoidentificacion { get; set; }
+
+        [Required(ErrorMessage = "El número de identificación es obligatorio")]
+        [StringLength(13, MinimumLength = 10, ErrorMessage = "La identificación debe tener entre 10 y 13 dígitos")]
+        public string? Numeroidentificacion { get; set; }
+
+        [Required(ErrorMessage = "La dirección es obligatoria")]
+        [StringLength(250, ErrorMessage = "Máximo 250 caracteres")]
+        public string? Direccion { get; set; }
+
+        [Required(ErrorMessage = "El teléfono convencional es obligatorio")]
+        [RegularExpression(@"^\d{7,10}$", ErrorMessage = "El teléfono convencional debe tener entre 7 y 10 dígitos")]
+        public string? Telefonoconvencional { get; set; }
+
+        [Required(ErrorMessage = "El celular es obligatorio")]
+        [RegularExpression(@"^\d{10}$", ErrorMessage = "El celular debe tener 10 dígitos")]
+        public string? Celular { get; set; }
+
+        [Required(ErrorMessage = "El correo electrónico es obligatorio")]
+        [EmailAddress(ErrorMessage = "Correo electrónico no válido")]
+        [StringLength(150, ErrorMessage = "Máximo 150 caracteres")]
+        public string? Correo { get; set; }
+
+        public int? DiasCredito { get; set; }
+
+        [Required(ErrorMessage = "Debe indicar si lleva contabilidad")]
+        [RegularExpression(@"^(SI|NO)$", ErrorMessage = "Solo se permite SI o NO")]
+        public string? Oblgconta { get; set; }
+
+        [Range(1, int.MaxValue, ErrorMessage = "Debe seleccionar el tipo de cliente")]
+        public int TipoCliente { get; set; }
+
+        [JsonIgnore]
+        public bool EsTipoEmpresa { get; set; }
+
+        public bool? Estado { get; set; } = true;
+
+        [StringLength(300, ErrorMessage = "Máximo 300 caracteres")]
+        public string? Observaciones { get; set; }
+
+        [Required(ErrorMessage = "Debe seleccionar un país")]
+        public int? Pais { get; set; }
+
+        public int? Provincia { get; set; }
+
+        public int? Ciudad { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            Numeroidentificacion = Numeroidentificacion?.Trim();
+            Apellidos = Apellidos?.Trim();
+            Nombres = Nombres?.Trim();
+            Nombrecomercial = Nombrecomercial?.Trim();
+            Nombrerazonsocial = Nombrerazonsocial?.Trim();
+            Direccion = Direccion?.Trim();
+            Correo = Correo?.Trim();
+            Telefonoconvencional = Telefonoconvencional?.Trim();
+            Celular = Celular?.Trim();
+            Observaciones = Observaciones?.Trim();
+            Oblgconta = Oblgconta?.Trim().ToUpperInvariant();
+
+            if (TipoCliente <= 0)
+                yield break;
+
+            if (!string.IsNullOrWhiteSpace(Numeroidentificacion) &&
+                !Numeroidentificacion.All(char.IsDigit))
+            {
+                yield return new ValidationResult(
+                    "La identificación solo debe contener números.",
+                    new[] { nameof(Numeroidentificacion) });
+            }
+
+            foreach (var correoAdicional in CorreosAdicionales.Where(correo => !string.IsNullOrWhiteSpace(correo)))
+            {
+                if (!EsCorreoValido(correoAdicional))
+                {
+                    yield return new ValidationResult(
+                        "El correo secundario no es válido.",
+                        new[] { nameof(CorreosAdicionales) });
+                }
+            }
+
+            var correoPrincipalNormalizado = NormalizarCorreo(Correo);
+            var correosSecundariosNormalizados = CorreosAdicionales
+                .Select(NormalizarCorreo)
+                .Where(correo => !string.IsNullOrWhiteSpace(correo))
+                .ToList();
+
+            if (!string.IsNullOrWhiteSpace(correoPrincipalNormalizado) &&
+                correosSecundariosNormalizados.Contains(correoPrincipalNormalizado, StringComparer.OrdinalIgnoreCase))
+            {
+                yield return new ValidationResult(
+                    "El correo secundario no puede ser igual al correo principal.",
+                    new[] { nameof(Correo), nameof(CorreosAdicionales) });
+            }
+
+            if (correosSecundariosNormalizados.Count != correosSecundariosNormalizados.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+            {
+                yield return new ValidationResult(
+                    "No se permiten correos secundarios repetidos.",
+                    new[] { nameof(CorreosAdicionales) });
+            }
+
+            if (EsTextoPersona())
+            {
+                if (string.IsNullOrWhiteSpace(Apellidos))
+                {
+                    yield return new ValidationResult(
+                        "Los apellidos son obligatorios.",
+                        new[] { nameof(Apellidos) });
+                }
+                else if (!TieneDosPalabras(Apellidos))
+                {
+                    yield return new ValidationResult(
+                        "Debe ingresar sus dos apellidos en el mismo campo (ej: Pérez López).",
+                        new[] { nameof(Apellidos) });
+                }
+
+                if (string.IsNullOrWhiteSpace(Nombres))
+                {
+                    yield return new ValidationResult(
+                        "Los nombres son obligatorios.",
+                        new[] { nameof(Nombres) });
+                }
+                else if (!TieneDosPalabras(Nombres))
+                {
+                    yield return new ValidationResult(
+                        "Debe ingresar sus dos nombres en el mismo campo (ej: Juan Carlos).",
+                        new[] { nameof(Nombres) });
+                }
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(Nombrerazonsocial))
+                {
+                    yield return new ValidationResult(
+                        "La razón social es obligatoria para persona jurídica.",
+                        new[] { nameof(Nombrerazonsocial) });
+                }
+
+                if (string.IsNullOrWhiteSpace(Nombrecomercial))
+                {
+                    yield return new ValidationResult(
+                        "El nombre comercial es obligatorio para persona jurídica.",
+                        new[] { nameof(Nombrecomercial) });
+                }
+            }
+        }
+
+        private bool EsTextoPersona()
+        {
+            return !EsTipoEmpresa;
+        }
+
+        private static bool EsCorreoValido(string valor)
+        {
+            try
+            {
+                _ = new System.Net.Mail.MailAddress(valor);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string NormalizarCorreo(string? valor) =>
+            (valor ?? string.Empty).Trim().ToLowerInvariant();
+
+        private static bool TieneMinimoDosPalabras(string? texto)
+        {
+            if (string.IsNullOrWhiteSpace(texto))
+                return false;
+
+            var partes = texto
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            return partes.Length >= 2;
+        }
+    }
+
+    private static bool TieneDosPalabras(string texto)
+    {
+        return !string.IsNullOrWhiteSpace(texto);
+    }
+    private List<IdentificacionDto> identificaciones = new();
+    private class IdentificacionDto
+    {
+        public int Id { get; set; }
+        public string Codigo { get; set; } = "";
+        public string Descripcion { get; set; } = "";
+    }
+
+    private sealed class ConsultaCedulaDto
+    {
+        public bool Success { get; set; }
+        public bool Found { get; set; }
+        public string? Tipo { get; set; }
+        public string? Mensaje { get; set; }
+        public string? Cedula { get; set; }
+        public string? Ruc { get; set; }
+        public string? NombreCompleto { get; set; }
+        public string? RazonSocial { get; set; }
+        public string? ObligadoLlevarContabilidad { get; set; }
+        public string? TipoContribuyente { get; set; }
+        public string? LugarNacimiento { get; set; }
+    }
+    private void AgregarCorreoCampo()
+    {
+        model.CorreosAdicionales.Add(string.Empty);
+    }
+
+    private void EliminarCorreoAdicional(int index)
+    {
+        if (index >= 0 && index < model.CorreosAdicionales.Count)
+        {
+            model.CorreosAdicionales.RemoveAt(index);
+        }
+    }
+
+    private List<PaisLookupDto> paises = new();
+    private List<ProvinciaLookupDto> provincias = new();
+    private List<CiudadLookupDto> ciudades = new();
+    private int? ecuadorPaisId;
+
+    private IEnumerable<ProvinciaLookupDto> ProvinciasDisponibles =>
+        provincias
+            .Where(x => x.IdPais == model.Pais)
+            .OrderBy(GetOrdenProvincia)
+            .ThenBy(x => x.Descripcion);
+
+    private IEnumerable<CiudadLookupDto> CiudadesDisponibles =>
+        ciudades
+            .Where(x => x.IdProvincia == model.Provincia)
+            .OrderBy(x => x.Descripcion);
+
+    private class PaisLookupDto
+    {
+        public int IdPais { get; set; }
+        public string Descripcion { get; set; } = "";
+    }
+
+    private class ProvinciaLookupDto
+    {
+        public int IdProvincia { get; set; }
+        public string Descripcion { get; set; } = "";
+        public int? IdPais { get; set; }
+    }
+
+    private class CiudadLookupDto
+    {
+        public int IdCiudad { get; set; }
+        public string Descripcion { get; set; } = "";
+        public int? IdProvincia { get; set; }
+    }
+
+    private Guid formKey = Guid.NewGuid();
+    private List<ClienteDto> clientes = new();
+    private bool cargando = true;
+    private string? mensaje;
+    private string? mensajeConsultaCedula;
+    private string? debugError;
+    private string dbName = "-";
+    private ClienteUpsertDto model = new();
+    private bool editando = false;
+    private bool estadoAux = true;
+    private bool consultandoCedula;
+    private bool consultaCedulaEsError;
+    private string? ultimaCedulaConsultada;
+    private CancellationTokenSource? consultaCedulaCts;
+    private List<TipoClienteDto> tiposCliente = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (!await ValidarAccesoEContaxAsync(user))
+        {
+            cargando = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        usuarioLogueadoId = ObtenerIdUsuario(user);
+
+        if (usuarioLogueadoId <= 0)
+        {
+            mensaje = "Sesión no válida (no se pudo obtener IdUsuario). Vuelve a iniciar sesión.";
+            cargando = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        await CargarTodo();
+    }
+
+    private async Task CargarLookupsClientes()
+    {
+        try
+        {
+            var respLook = await Http.GetAsync("api/e-contax/clientes/lookups");
+            var bodyLook = await respLook.Content.ReadAsStringAsync();
+
+            if (!respLook.IsSuccessStatusCode)
+                throw new Exception($"LOOKUPS -> HTTP {(int)respLook.StatusCode}: {bodyLook}");
+
+            using var doc = System.Text.Json.JsonDocument.Parse(bodyLook);
+
+            tiposCliente = new();
+            if (doc.RootElement.TryGetProperty("tipos", out var tiposElem) &&
+                tiposElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var t in tiposElem.EnumerateArray())
+                {
+                    var codigo = t.TryGetProperty("tclCodigo", out var c) ? c.GetInt32() : 0;
+                    var desc = t.TryGetProperty("descripcion", out var d) ? d.GetString() ?? "" : "";
+                    tiposCliente.Add(new TipoClienteDto { TclCodigo = codigo, Descripcion = desc });
+                }
+            }
+
+            paises = new();
+            if (doc.RootElement.TryGetProperty("paises", out var paisesElem) &&
+                paisesElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var p in paisesElem.EnumerateArray())
+                {
+                    var idPais = p.TryGetProperty("idPais", out var pid) ? pid.GetInt32() : 0;
+                    var desc = p.TryGetProperty("descripcion", out var pd) ? pd.GetString() ?? "" : "";
+                    paises.Add(new PaisLookupDto { IdPais = idPais, Descripcion = desc });
+                }
+            }
+
+            ActualizarPaisEcuadorId();
+
+            identificaciones = new();
+            if (doc.RootElement.TryGetProperty("identificaciones", out var idElem) &&
+                idElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var i in idElem.EnumerateArray())
+                {
+                    var ideSec = i.TryGetProperty("ideSec", out var sid) ? sid.GetInt32() : 0;
+                    var ideCodigo = i.TryGetProperty("ideCodigo", out var scod) ? scod.GetString() ?? "" : "";
+                    var ideDescripcion = i.TryGetProperty("ideDescripcion", out var sdesc) ? sdesc.GetString() ?? "" : "";
+                    identificaciones.Add(new IdentificacionDto
+                    {
+                        Id = ideSec,
+                        Codigo = ideCodigo,
+                        Descripcion = ideDescripcion
+                    });
+                }
+            }
+        }
+        catch (Exception exLook)
+        {
+            debugError = (debugError is null) ? exLook.Message : debugError + " || " + exLook.Message;
+        }
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (!IsEContaxPath(NavManager.Uri))
+            return true;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);
+
+    private async Task CargarPaises()
+    {
+        try
+        {
+            if (paises.Any())
+            {
+                ActualizarPaisEcuadorId();
+                return;
+            }
+
+            var resp = await Http.GetAsync("api/e-contax/clientes/lookups");
+            var body = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"PAISES -> HTTP {(int)resp.StatusCode}: {body}");
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            paises = new();
+
+            if (doc.RootElement.TryGetProperty("paises", out var paisesElem) &&
+                paisesElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var p in paisesElem.EnumerateArray())
+                {
+                    var idPais = p.TryGetProperty("idPais", out var pid) ? pid.GetInt32() : 0;
+                    var desc = p.TryGetProperty("descripcion", out var pd) ? pd.GetString() ?? "" : "";
+                    paises.Add(new PaisLookupDto { IdPais = idPais, Descripcion = desc });
+                }
+            }
+
+            ecuadorPaisId = paises
+                .FirstOrDefault(p => string.Equals(p.Descripcion?.Trim(), "ECUADOR", StringComparison.OrdinalIgnoreCase))
+                ?.IdPais;
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private void ActualizarPaisEcuadorId()
+    {
+        ecuadorPaisId = paises
+            .FirstOrDefault(p => string.Equals(p.Descripcion?.Trim(), "ECUADOR", StringComparison.OrdinalIgnoreCase))
+            ?.IdPais;
+    }
+
+    private async Task CargarUbicacionEcuador()
+    {
+        try
+        {
+            if (ecuadorPaisId is null || ecuadorPaisId <= 0)
+                return;
+
+            var resp = await Http.GetAsync("api/e-contax/clientes/ubicacion-ecuador");
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"UBICACION ECUADOR -> HTTP {(int)resp.StatusCode}: {body}");
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+
+            if (doc.RootElement.TryGetProperty("provincias", out var provinciasElem) &&
+                provinciasElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in provinciasElem.EnumerateArray())
+                {
+                    var idProvincia = item.TryGetProperty("idProvincia", out var idProp) ? idProp.GetInt32() : 0;
+                    if (idProvincia <= 0 || provincias.Any(p => p.IdProvincia == idProvincia))
+                        continue;
+
+                    provincias.Add(new ProvinciaLookupDto
+                    {
+                        IdProvincia = idProvincia,
+                        Descripcion = item.TryGetProperty("descripcion", out var descProp) ? descProp.GetString() ?? "" : "",
+                        IdPais = item.TryGetProperty("idPais", out var paisProp) ? paisProp.GetInt32() : ecuadorPaisId
+                    });
+                }
+            }
+
+            OrdenarProvinciasEcuador();
+
+            if (doc.RootElement.TryGetProperty("ciudades", out var ciudadesElem) &&
+                ciudadesElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in ciudadesElem.EnumerateArray())
+                {
+                    var idCiudad = item.TryGetProperty("idCiudad", out var idProp) ? idProp.GetInt32() : 0;
+                    if (idCiudad <= 0 || ciudades.Any(c => c.IdCiudad == idCiudad))
+                        continue;
+
+                    ciudades.Add(new CiudadLookupDto
+                    {
+                        IdCiudad = idCiudad,
+                        Descripcion = item.TryGetProperty("descripcion", out var descProp) ? descProp.GetString() ?? "" : "",
+                        IdProvincia = item.TryGetProperty("idProvincia", out var provProp) ? provProp.GetInt32() : null
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private void OrdenarProvinciasEcuador()
+    {
+        if (ecuadorPaisId is null || ecuadorPaisId <= 0)
+            return;
+
+        var ordenCatalogo = CatalogoUbicacionEcuador.Provincias
+            .Select((provincia, index) => new { provincia.Nombre, index })
+            .ToDictionary(x => NormalizarClaveUbicacion(x.Nombre), x => x.index);
+
+        provincias = provincias
+            .OrderBy(p =>
+            {
+                if (p.IdPais != ecuadorPaisId)
+                    return int.MaxValue - 1;
+
+                var clave = NormalizarClaveUbicacion(p.Descripcion);
+                return ordenCatalogo.TryGetValue(clave, out var orden) ? orden : int.MaxValue;
+            })
+            .ThenBy(p => p.Descripcion)
+            .ToList();
+    }
+
+    private int GetOrdenProvincia(ProvinciaLookupDto provincia)
+    {
+        if (provincia.IdPais != ecuadorPaisId)
+            return int.MaxValue;
+
+        var clave = NormalizarClaveUbicacion(provincia.Descripcion);
+        var indice = 0;
+        foreach (var item in CatalogoUbicacionEcuador.Provincias)
+        {
+            if (NormalizarClaveUbicacion(item.Nombre) == clave)
+                return indice;
+
+            indice++;
+        }
+
+        return int.MaxValue;
+    }
+
+    private static string NormalizarClaveUbicacion(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return string.Empty;
+
+        var normalizado = valor.Trim().Normalize(System.Text.NormalizationForm.FormD);
+        var builder = new System.Text.StringBuilder(normalizado.Length);
+
+        foreach (var caracter in normalizado)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(caracter) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                builder.Append(char.ToUpperInvariant(caracter));
+        }
+
+        return builder.ToString();
+    }
+
+    private async Task CargarProvincias(int paisId)
+    {
+        try
+        {
+            if (provincias.Any(p => p.IdPais == paisId))
+                return;
+
+            var resp = await Http.GetAsync($"api/e-contax/clientes/provincias?paisId={paisId}");
+            var body = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"PROVINCIAS -> HTTP {(int)resp.StatusCode}: {body}");
+
+            var data = System.Text.Json.JsonSerializer.Deserialize<List<ProvinciaLookupDto>>(
+                body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            var nuevas = data ?? new();
+            foreach (var x in nuevas)
+            {
+                x.IdPais = paisId;
+                if (!provincias.Any(p => p.IdProvincia == x.IdProvincia))
+                    provincias.Add(x);
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private async Task CargarCiudades(int provinciaId)
+    {
+        try
+        {
+            if (ciudades.Any(c => c.IdProvincia == provinciaId))
+                return;
+
+            var resp = await Http.GetAsync($"api/e-contax/clientes/ciudades?provinciaId={provinciaId}");
+            var body = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"CIUDADES -> HTTP {(int)resp.StatusCode}: {body}");
+
+            var data = System.Text.Json.JsonSerializer.Deserialize<List<CiudadLookupDto>>(
+                body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            var nuevas = data ?? new();
+            foreach (var x in nuevas)
+            {
+                x.IdProvincia = provinciaId;
+                if (!ciudades.Any(c => c.IdCiudad == x.IdCiudad))
+                    ciudades.Add(x);
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private async Task OnPaisChangedAsync()
+    {
+        model.Provincia = null;
+        model.Ciudad = null;
+
+        if (!model.Pais.HasValue || model.Pais <= 0)
+        {
+            model.Pais = null;
+            return;
+        }
+
+        if (model.Pais != ecuadorPaisId)
+            await CargarProvincias(model.Pais.Value);
+    }
+
+    private async Task OnProvinciaChangedAsync()
+    {
+        model.Ciudad = null;
+
+        if (!model.Provincia.HasValue || model.Provincia <= 0)
+        {
+            model.Provincia = null;
+            return;
+        }
+
+        if (model.Pais != ecuadorPaisId)
+            await CargarCiudades(model.Provincia.Value);
+    }
+
+    private async Task CargarTodo(bool esRefresco = false)
+    {
+        cargando = true;
+        mensaje = null;
+        debugError = null;
+
+        try
+        {
+            await CargarLookupsClientes();
+            await CargarPaises();
+            await CargarUbicacionEcuador();
+
+            if (!model.Pais.HasValue && ecuadorPaisId.HasValue)
+                model.Pais = ecuadorPaisId;
+
+            var resp = await Http.GetAsync($"api/e-contax/clientes?userId={usuarioLogueadoId}");
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"CLIENTES -> HTTP {(int)resp.StatusCode}: {body}");
+
+            var data = System.Text.Json.JsonSerializer.Deserialize<List<ClienteDto>>(
+                body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            clientes = data ?? new();
+
+            await PrepararLookupsUbicacionParaListado();
+
+            if (esRefresco) mensaje = "Datos actualizados correctamente.";
+            dbName = $"API ({Http.BaseAddress})";
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+            mensaje = "Falló la carga de datos.";
+        }
+        finally
+        {
+            cargando = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PrepararLookupsUbicacionParaListado()
+    {
+        var paisIds = clientes.Where(x => x.Pais.HasValue).Select(x => x.Pais!.Value).Distinct().ToList();
+        foreach (var pid in paisIds)
+        {
+            if (!provincias.Any(p => p.IdPais == pid))
+                await CargarProvincias(pid);
+        }
+
+        var provIds = clientes.Where(x => x.Provincia.HasValue).Select(x => x.Provincia!.Value).Distinct().ToList();
+        foreach (var prId in provIds)
+        {
+            if (!ciudades.Any(c => c.IdProvincia == prId))
+                await CargarCiudades(prId);
+        }
+    }
+
+    private void ToggleDropdownTipo() => mostrarDropdownTipo = !mostrarDropdownTipo;
+
+    private void AplicarFiltroTipo(int tipoId)
+    {
+        filtroTipoCliente = tipoId;
+        paginaActual = 1;
+        mostrarDropdownTipo = false;
+    }
+
+    private void OnFiltroChanged(ChangeEventArgs e)
+    {
+        filtro = e.Value?.ToString() ?? string.Empty;
+        paginaActual = 1;
+    }
+
+    private void OnTipoFiltroChanged(ChangeEventArgs e)
+    {
+        filtroTipoCliente = int.TryParse(e.Value?.ToString(), out var tipoId) ? tipoId : 0;
+        paginaActual = 1;
+    }
+
+    private void OnRegistrosPorPaginaChanged(ChangeEventArgs e)
+    {
+        var nuevoValor = int.TryParse(e.Value?.ToString(), out var valor) ? valor : 10;
+        registrosPorPagina = opcionesRegistrosPorPagina.Contains(nuevoValor) ? nuevoValor : 10;
+        paginaActual = 1;
+    }
+
+    private int TotalRegistrosFiltrados => ClientesFiltrados.Count();
+
+    private int TotalPaginasClientes => Math.Max(1, (int)Math.Ceiling(TotalRegistrosFiltrados / (double)registrosPorPagina));
+
+    private int PaginaActualNormalizada
+    {
+        get
+        {
+            if (paginaActual < 1)
+                paginaActual = 1;
+
+            var totalPaginas = TotalPaginasClientes;
+            if (paginaActual > totalPaginas)
+                paginaActual = totalPaginas;
+
+            return paginaActual;
+        }
+    }
+
+    private IEnumerable<ClienteDto> ClientesPaginados =>
+        ClientesFiltrados
+            .Skip((PaginaActualNormalizada - 1) * registrosPorPagina)
+            .Take(registrosPorPagina);
+
+    private void CambiarPagina(int nuevaPagina)
+    {
+        paginaActual = Math.Clamp(nuevaPagina, 1, TotalPaginasClientes);
+    }
+
+    private IEnumerable<ClienteDto> ClientesFiltrados
+    {
+        get
+        {
+            var query = clientes.AsEnumerable();
+
+            if (filtroTipoCliente != 0)
+                query = query.Where(c => c.TipoCliente == filtroTipoCliente);
+
+            if (!string.IsNullOrWhiteSpace(filtro))
+            {
+                query = query.Where(c =>
+                    ($"{c.Apellidos} {c.Nombres}".Trim()).Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                    (c.Numeroidentificacion ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                    (c.Correo ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                    (c.Nombrecomercial ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                    (c.Nombrerazonsocial ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return query;
+        }
+    }
+
+    private static string ObtenerNombreComercialCliente(ClienteDto cliente)
+    {
+        if (!string.IsNullOrWhiteSpace(cliente.Nombrecomercial))
+            return cliente.Nombrecomercial;
+
+        return string.Empty;
+    }
+
+    private string GetNombreCompletoCliente(ClienteDto cliente)
+    {
+        var nombreCompleto = $"{cliente.Apellidos} {cliente.Nombres}".Trim();
+        var razonSocial = (cliente.Nombrerazonsocial ?? string.Empty).Trim();
+        var nombreComercial = (cliente.Nombrecomercial ?? string.Empty).Trim();
+
+        if (EsTipoClienteEmpresa(cliente.TipoCliente))
+        {
+            if (!string.IsNullOrWhiteSpace(razonSocial))
+                return razonSocial;
+
+            if (!string.IsNullOrWhiteSpace(nombreComercial))
+                return nombreComercial;
+        }
+        else if (!string.IsNullOrWhiteSpace(nombreCompleto))
+        {
+            return nombreCompleto;
+        }
+
+        return !string.IsNullOrWhiteSpace(nombreCompleto)
+            ? nombreCompleto
+            : !string.IsNullOrWhiteSpace(razonSocial)
+                ? razonSocial
+                : $"Cliente #{cliente.Codcliente}";
+    }
+
+    private string ObtenerNombreSecundarioCliente(ClienteDto cliente)
+    {
+        if (!EsTipoClienteEmpresa(cliente.TipoCliente))
+            return string.Empty;
+
+        var nombreComercial = (cliente.Nombrecomercial ?? string.Empty).Trim();
+        var razonSocial = (cliente.Nombrerazonsocial ?? string.Empty).Trim();
+
+        if (!string.IsNullOrWhiteSpace(nombreComercial) &&
+            !string.Equals(nombreComercial, razonSocial, StringComparison.OrdinalIgnoreCase))
+        {
+            return nombreComercial;
+        }
+
+        return string.Empty;
+    }
+
+    private string GetTipoClienteDescripcion(int tipoCliente)
+    {
+        if (tipoCliente <= 0) return "Sin tipo de cliente";
+        var descripcion = tiposCliente.FirstOrDefault(t => t.TclCodigo == tipoCliente)?.Descripcion;
+        return string.IsNullOrWhiteSpace(descripcion)
+            ? $"Tipo #{tipoCliente}"
+            : TipoClienteClasificacion.ObtenerEtiqueta(descripcion);
+    }
+
+    private string GetTipoIdentificacionDescripcion(int? tipoIdentificacion)
+    {
+        if (!tipoIdentificacion.HasValue) return "Sin identificación";
+        return identificaciones.FirstOrDefault(i => i.Id == tipoIdentificacion.Value)?.Descripcion ?? $"Identificación #{tipoIdentificacion.Value}";
+    }
+
+    private static string GetEstadoDescripcion(bool? estado) => estado == true ? "Activo" : "Inactivo";
+
+    private static string GetObligadoContabilidadDescripcion(string? valor)
+    {
+        var normalizado = NormalizarObligadoContabilidad(valor);
+        return string.IsNullOrWhiteSpace(normalizado) ? "No definido" : normalizado;
+    }
+
+    private static string GetCorreosAdicionalesTexto(ClienteDto cliente) =>
+        string.Join(", ", (cliente.CorreosAdicionales ?? new List<string>()).Where(correo => !string.IsNullOrWhiteSpace(correo)));
+
+    private static bool EsConsumidorFinal(ClienteDto cliente)
+    {
+        var identificacion = (cliente.Numeroidentificacion ?? string.Empty).Trim();
+        if (identificacion == "9999999999999")
+        {
+            return true;
+        }
+
+        var nombres = (cliente.Nombres ?? string.Empty).Trim();
+        var apellidos = (cliente.Apellidos ?? string.Empty).Trim();
+        var correo = (cliente.Correo ?? string.Empty).Trim();
+
+        return string.Equals(nombres, "Consumidor", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(apellidos, "Final", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(correo, "consumidorfinal@numerica", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string GetPaisNombre(int? id)
+    {
+        if (id is null) return "";
+        return paises.FirstOrDefault(x => x.IdPais == id)?.Descripcion ?? $"País#{id}";
+    }
+
+    private string GetProvinciaNombre(int? id)
+    {
+        if (id is null) return "";
+        return provincias.FirstOrDefault(x => x.IdProvincia == id)?.Descripcion ?? $"Prov#{id}";
+    }
+
+    private string GetCiudadNombre(int? id)
+    {
+        if (id is null) return "";
+        return ciudades.FirstOrDefault(x => x.IdCiudad == id)?.Descripcion ?? $"Ciudad#{id}";
+    }
+
+    private void Nuevo()
+    {
+        editando = false;
+        mensaje = null;
+        clienteEnVista = null;
+
+        model = new ClienteUpsertDto
+        {
+            Apellidos = null,
+            Nombres = null,
+            Nombrecomercial = null,
+            Nombrerazonsocial = null,
+            Tipoidentificacion = null,
+            Numeroidentificacion = "",
+            Direccion = "",
+            Telefonoconvencional = "",
+            Celular = "",
+            Correo = "",
+            Oblgconta = "",
+            TipoCliente = 0,
+            Estado = true,
+            Observaciones = "",
+            Pais = ecuadorPaisId,
+            Provincia = null,
+            Ciudad = null,
+            EsTipoEmpresa = false
+        };
+
+        estadoAux = true;
+        mensajeConsultaCedula = null;
+        consultaCedulaEsError = false;
+        ultimaCedulaConsultada = null;
+        mostrarConfirmacion = false;
+        clienteAEliminar = null;
+        formKey = Guid.NewGuid();
+        StateHasChanged();
+    }
+
+    private async Task Editar(int id)
+    {
+        mensaje = "Cargando cliente...";
+        debugError = null;
+        clienteEnVista = null;
+
+        try
+        {
+            if (paises.Count == 0) await CargarPaises();
+            if (tiposCliente.Count == 0 || identificaciones.Count == 0) await CargarLookupsClientes();
+            await CargarUbicacionEcuador();
+
+            var resp = await Http.GetAsync($"api/e-contax/clientes/{id}?userId={usuarioLogueadoId}");
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                mensaje = $"No se pudo cargar el cliente (HTTP {(int)resp.StatusCode}).";
+                debugError = body;
+                return;
+            }
+
+            var item = System.Text.Json.JsonSerializer.Deserialize<ClienteDto>(
+                body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (item is null)
+            {
+                mensaje = "Respuesta vacía al cargar cliente.";
+                debugError = body;
+                return;
+            }
+
+            // Mapeo al modelo de edición
+            model = new ClienteUpsertDto
+            {
+                Codcliente = item.Codcliente,
+                Apellidos = item.Apellidos,
+                Nombres = item.Nombres,
+                Nombrecomercial = item.Nombrecomercial,
+                Nombrerazonsocial = item.Nombrerazonsocial,
+                Tipoidentificacion = item.Tipoidentificacion,
+                Numeroidentificacion = item.Numeroidentificacion,
+                Direccion = item.Direccion,
+                Telefonoconvencional = item.Telefonoconvencional,
+                Celular = item.Celular,
+                Correo = item.Correo, // Principal
+
+                CorreosAdicionales = item.CorreosAdicionales != null
+                    ? item.CorreosAdicionales.Where(correo => !string.IsNullOrWhiteSpace(correo)).ToList()
+                    : new List<string>(),
+
+                Oblgconta = NormalizarObligadoContabilidad(item.Oblgconta),
+                TipoCliente = item.TipoCliente,
+                Estado = item.Estado,
+                Observaciones = item.Observaciones,
+                Pais = item.Pais is > 0 ? item.Pais : ecuadorPaisId,
+                Provincia = item.Provincia is > 0 ? item.Provincia : null,
+                Ciudad = item.Ciudad is > 0 ? item.Ciudad : null,
+                EsTipoEmpresa = EsTipoClienteEmpresa(item.TipoCliente)
+            };
+
+            await PrepararLookupsUbicacionFormularioAsync();
+            ActualizarTipoClienteForm();
+
+            estadoAux = model.Estado ?? true;
+            mensajeConsultaCedula = null;
+            consultaCedulaEsError = false;
+            ultimaCedulaConsultada = null;
+            editando = true;
+            formKey = Guid.NewGuid();
+            mensaje = "Cliente cargado para edición.";
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            debugError = $"{ex.Message} | INNER: {ex.InnerException?.Message}";
+            mensaje = "Error al cargar cliente.";
+        }
+    }
+
+    private async Task Guardar()
+    {
+        mensaje = "Guardando...";
+        debugError = null;
+        model.Estado = estadoAux;
+        ActualizarTipoClienteForm();
+
+        model.Apellidos = model.Apellidos?.Trim();
+        model.Nombres = model.Nombres?.Trim();
+        model.Nombrecomercial = model.Nombrecomercial?.Trim();
+        model.Nombrerazonsocial = model.Nombrerazonsocial?.Trim();
+        model.Numeroidentificacion = model.Numeroidentificacion?.Trim();
+        model.Direccion = model.Direccion?.Trim();
+        model.Telefonoconvencional = model.Telefonoconvencional?.Trim();
+        model.Celular = model.Celular?.Trim();
+        model.Correo = model.Correo?.Trim();
+        model.CorreosAdicionales = model.CorreosAdicionales
+            .Select(correo => correo?.Trim() ?? string.Empty)
+            .Where(correo => !string.IsNullOrWhiteSpace(correo))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        model.Oblgconta = model.Oblgconta?.Trim().ToUpperInvariant();
+        model.Observaciones = model.Observaciones?.Trim();
+
+        if (EsEmpresaSeleccionada)
+        {
+            model.Apellidos = null;
+            model.Nombres = null;
+        }
+        else
+        {
+            model.Nombrecomercial = null;
+            model.Nombrerazonsocial = null;
+        }
+
+        try
+        {
+            HttpResponseMessage resp = !editando
+                ? await Http.PostAsJsonAsync($"api/e-contax/clientes?userId={usuarioLogueadoId}", model)
+                : await Http.PutAsJsonAsync($"api/e-contax/clientes/{model.Codcliente}?userId={usuarioLogueadoId}", model);
+
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                mensaje = $"Error API: {(int)resp.StatusCode}";
+                debugError = body;
+                return;
+            }
+
+            mensaje = editando ? "Cliente actualizado correctamente." : "Cliente creado correctamente.";
+            debugError = null;
+
+            await CargarTodo();
+            Nuevo();
+        }
+        catch (Exception ex)
+        {
+            debugError = $"{ex.Message} | INNER: {ex.InnerException?.Message}";
+            mensaje = "Error al guardar cliente.";
+        }
+    }
+
+    private bool TieneTipoClienteSeleccionado => model.TipoCliente > 0;
+
+    private bool EsPersonaSeleccionada => TieneTipoClienteSeleccionado && !EsEmpresaSeleccionada;
+
+    private bool EsEmpresaSeleccionada => TieneTipoClienteSeleccionado && EsTipoClienteEmpresa(model.TipoCliente);
+    private bool UsaDiasCreditoPersonalizado =>
+        model.DiasCredito.HasValue && !diasCreditoOpciones.Contains(model.DiasCredito.Value);
+
+    private IEnumerable<IdentificacionDto> IdentificacionesDisponibles =>
+        identificaciones.Where(EsIdentificacionPermitidaPorTipoCliente);
+
+    private bool DebeMostrarObligadoContabilidad =>
+        EsEmpresaSeleccionada || EsIdentificacionRucSeleccionada;
+
+    private bool EsIdentificacionRucSeleccionada =>
+        model.Tipoidentificacion.HasValue &&
+        EsIdentificacionRuc(identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value));
+
+    private bool EsIdentificacionPasaporteSeleccionada =>
+        model.Tipoidentificacion.HasValue &&
+        EsIdentificacionPasaporte(identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value));
+
+    private bool EsTipoIdentificacionConsultaExternaSeleccionado
+    {
+        get
+        {
+            if (!model.Tipoidentificacion.HasValue)
+                return false;
+
+            var identificacion = identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value);
+            if (identificacion is null)
+                return false;
+
+            return string.Equals(identificacion.Codigo, "05", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(identificacion.Codigo, "04", StringComparison.OrdinalIgnoreCase) ||
+                   identificacion.Descripcion.Contains("cédula", StringComparison.OrdinalIgnoreCase) ||
+                   identificacion.Descripcion.Contains("cedula", StringComparison.OrdinalIgnoreCase) ||
+                   identificacion.Descripcion.Contains("RUC", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private bool EsTipoClienteEmpresa(int tipoCliente)
+    {
+        if (tipoCliente <= 0)
+            return false;
+
+        var desc = tiposCliente.FirstOrDefault(t => t.TclCodigo == tipoCliente)?.Descripcion;
+        return TipoClienteClasificacion.EsJuridica(desc);
+    }
+
+    private void ActualizarTipoClienteForm()
+    {
+        model.EsTipoEmpresa = EsEmpresaSeleccionada;
+    }
+
+    private void OnTipoClienteChanged()
+    {
+        ActualizarTipoClienteForm();
+        AsegurarTipoIdentificacionCompatible();
+
+        if (EsEmpresaSeleccionada)
+        {
+            model.Apellidos = null;
+            model.Nombres = null;
+        }
+        else if (EsPersonaSeleccionada)
+        {
+            model.Nombrecomercial = null;
+            model.Nombrerazonsocial = null;
+        }
+
+        if (!DebeMostrarObligadoContabilidad)
+            model.Oblgconta = "NO";
+
+        StateHasChanged();
+    }
+
+    private void SeleccionarDiasCredito(int dias)
+    {
+        model.DiasCredito = dias;
+    }
+
+    private void ActivarDiasCreditoPersonalizado()
+    {
+        if (!UsaDiasCreditoPersonalizado)
+            model.DiasCredito = null;
+    }
+
+    private void SeleccionarEstadoCliente(bool estado)
+    {
+        model.Estado = estado;
+    }
+
+    private async Task OnTipoIdentificacionChangedAsync()
+    {
+        consultaCedulaCts?.Cancel();
+        mensajeConsultaCedula = null;
+        consultaCedulaEsError = false;
+        ultimaCedulaConsultada = null;
+        model.Numeroidentificacion = NormalizarNumeroIdentificacionEntrada(model.Numeroidentificacion);
+
+        if (!DebeMostrarObligadoContabilidad)
+            model.Oblgconta = "NO";
+
+        if (EsTipoIdentificacionConsultaExternaSeleccionado)
+            await ConsultarCedulaSiAplicaAsync();
+    }
+
+    private async Task OnNumeroIdentificacionChangedAsync(ChangeEventArgs args)
+    {
+        model.Numeroidentificacion = NormalizarNumeroIdentificacionEntrada(args.Value?.ToString());
+
+        consultaCedulaCts?.Cancel();
+        consultaCedulaCts?.Dispose();
+        consultaCedulaCts = null;
+
+        if (EsTipoIdentificacionConsultaExternaSeleccionado &&
+            model.Numeroidentificacion.Length is 10 or 13)
+        {
+            var cts = new CancellationTokenSource();
+            consultaCedulaCts = cts;
+
+            try
+            {
+                await Task.Delay(250, cts.Token);
+                await ConsultarCedulaSiAplicaAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                if (ReferenceEquals(consultaCedulaCts, cts))
+                {
+                    consultaCedulaCts.Dispose();
+                    consultaCedulaCts = null;
+                }
+            }
+        }
+    }
+
+    private async Task OnNumeroIdentificacionBlurAsync(FocusEventArgs _)
+    {
+        model.Numeroidentificacion = NormalizarNumeroIdentificacionEntrada(model.Numeroidentificacion);
+        consultaCedulaCts?.Cancel();
+        await ConsultarCedulaSiAplicaAsync();
+    }
+
+    private async Task ConsultarCedulaSiAplicaAsync(CancellationToken cancellationToken = default)
+    {
+        if (consultandoCedula)
+            return;
+
+        if (!EsTipoIdentificacionConsultaExternaSeleccionado)
+        {
+            mensajeConsultaCedula = null;
+            consultaCedulaEsError = false;
+            return;
+        }
+
+        var identificacion = new string((model.Numeroidentificacion ?? string.Empty).Where(char.IsDigit).ToArray());
+        model.Numeroidentificacion = identificacion;
+
+        if (identificacion.Length is not (10 or 13))
+        {
+            mensajeConsultaCedula = null;
+            consultaCedulaEsError = false;
+            return;
+        }
+
+        if (string.Equals(ultimaCedulaConsultada, identificacion, StringComparison.Ordinal))
+            return;
+
+        consultandoCedula = true;
+        mensajeConsultaCedula = null;
+        consultaCedulaEsError = false;
+
+        try
+        {
+            using var response = await Http.GetAsync(
+                $"api/e-contax/clientes/consulta-identificacion?identificacion={identificacion}",
+                cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var resultado = await response.Content.ReadFromJsonAsync<ConsultaCedulaDto>(cancellationToken: cancellationToken);
+            ultimaCedulaConsultada = identificacion;
+
+            if (resultado?.Found == true)
+            {
+                AplicarDatosCedula(resultado);
+                mensajeConsultaCedula = "Datos encontrados. Revisa la información, completa lo faltante y guarda.";
+                consultaCedulaEsError = false;
+                return;
+            }
+
+            mensajeConsultaCedula = resultado?.Mensaje ?? "No se encontraron datos automáticos para esta cédula.";
+            consultaCedulaEsError = false;
+        }
+        catch (Exception ex)
+        {
+            debugError = (debugError is null) ? ex.Message : $"{debugError} || {ex.Message}";
+            mensajeConsultaCedula = "No se pudo consultar la cédula ahora. Puedes completar los datos manualmente.";
+            consultaCedulaEsError = true;
+        }
+        finally
+        {
+            consultandoCedula = false;
+        }
+    }
+
+    private void AplicarDatosCedula(ConsultaCedulaDto resultado)
+    {
+        if (string.Equals(resultado.Tipo, "ruc", StringComparison.OrdinalIgnoreCase))
+        {
+            var esNatural = (resultado.TipoContribuyente ?? string.Empty).Contains("NATURAL", StringComparison.OrdinalIgnoreCase);
+
+            if (model.TipoCliente <= 0)
+            {
+                var tipo = tiposCliente.FirstOrDefault(x => esNatural
+                    ? TipoClienteClasificacion.EsNatural(x.Descripcion)
+                    : TipoClienteClasificacion.EsJuridica(x.Descripcion));
+
+                if (tipo is not null)
+                    model.TipoCliente = tipo.TclCodigo;
+            }
+
+            ActualizarTipoClienteForm();
+            model.Oblgconta = NormalizarObligadoContabilidad(resultado.ObligadoLlevarContabilidad);
+
+            if (esNatural && !EsEmpresaSeleccionada)
+            {
+                var (apellidosNatural, nombresNatural) = SepararNombreCompleto(resultado.NombreCompleto);
+                model.Apellidos = apellidosNatural;
+                model.Nombres = nombresNatural;
+                model.Nombrecomercial = null;
+                model.Nombrerazonsocial = null;
+                return;
+            }
+
+            model.Nombrerazonsocial = resultado.RazonSocial?.Trim();
+            model.Nombrecomercial = resultado.RazonSocial?.Trim();
+            model.Apellidos = null;
+            model.Nombres = null;
+            return;
+        }
+
+        if (model.TipoCliente <= 0)
+        {
+            var tipoPersona = tiposCliente.FirstOrDefault(x => TipoClienteClasificacion.EsNatural(x.Descripcion));
+            if (tipoPersona is not null)
+                model.TipoCliente = tipoPersona.TclCodigo;
+        }
+
+        ActualizarTipoClienteForm();
+
+        if (EsEmpresaSeleccionada)
+            return;
+
+        var (apellidos, nombres) = SepararNombreCompleto(resultado.NombreCompleto);
+        model.Apellidos = apellidos;
+        model.Nombres = nombres;
+        model.Oblgconta = "NO";
+        if (string.IsNullOrWhiteSpace(model.Direccion))
+            model.Direccion = NormalizarLugarNacimiento(resultado.LugarNacimiento);
+        model.Nombrecomercial = null;
+        model.Nombrerazonsocial = null;
+    }
+
+    private static (string? Apellidos, string? Nombres) SepararNombreCompleto(string? nombreCompleto)
+    {
+        var partes = (nombreCompleto ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (partes.Length == 2)
+            return (partes[0], partes[1]);
+
+        if (partes.Length == 3)
+            return (string.Join(" ", partes.Take(2)), partes[2]);
+
+        if (partes.Length >= 4)
+            return (string.Join(" ", partes.Take(2)), string.Join(" ", partes.Skip(2)));
+
+        if (partes.Length == 1)
+            return (partes[0], null);
+
+        return (null, null);
+    }
+
+    private async Task PrepararLookupsUbicacionFormularioAsync()
+    {
+        if (model.Pais is not null && model.Pais > 0 && model.Pais != ecuadorPaisId)
+            await CargarProvincias(model.Pais.Value);
+
+        if (model.Provincia is not null && model.Provincia > 0)
+            await CargarCiudades(model.Provincia.Value);
+    }
+
+    private static string NormalizarObligadoContabilidad(string? valor)
+    {
+        var normalizado = (valor ?? string.Empty).Trim().ToUpperInvariant();
+        return normalizado is "SI" or "NO" ? normalizado : string.Empty;
+    }
+
+    private void AsegurarTipoIdentificacionCompatible()
+    {
+        if (model.Tipoidentificacion.HasValue &&
+            !IdentificacionesDisponibles.Any(x => x.Id == model.Tipoidentificacion.Value))
+        {
+            model.Tipoidentificacion = null;
+            mensajeConsultaCedula = null;
+            consultaCedulaEsError = false;
+            ultimaCedulaConsultada = null;
+        }
+    }
+
+    private bool EsIdentificacionPermitidaPorTipoCliente(IdentificacionDto identificacion)
+    {
+        if (!TieneTipoClienteSeleccionado)
+            return true;
+
+        if (EsEmpresaSeleccionada)
+            return EsIdentificacionRuc(identificacion);
+
+        return EsIdentificacionCedula(identificacion) ||
+               EsIdentificacionRuc(identificacion) ||
+               EsIdentificacionPasaporte(identificacion);
+    }
+
+    private static bool EsIdentificacionCedula(IdentificacionDto? identificacion)
+    {
+        if (identificacion is null)
+            return false;
+
+        return string.Equals(identificacion.Codigo, "05", StringComparison.OrdinalIgnoreCase) ||
+               identificacion.Descripcion.Contains("cédula", StringComparison.OrdinalIgnoreCase) ||
+               identificacion.Descripcion.Contains("cedula", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool EsIdentificacionRuc(IdentificacionDto? identificacion)
+    {
+        if (identificacion is null)
+            return false;
+
+        return string.Equals(identificacion.Codigo, "04", StringComparison.OrdinalIgnoreCase) ||
+               identificacion.Descripcion.Contains("RUC", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool EsIdentificacionPasaporte(IdentificacionDto? identificacion)
+    {
+        if (identificacion is null)
+            return false;
+
+        return string.Equals(identificacion.Codigo, "06", StringComparison.OrdinalIgnoreCase) ||
+               identificacion.Descripcion.Contains("pasaporte", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string NormalizarNumeroIdentificacionEntrada(string? valor)
+    {
+        var limpio = (valor ?? string.Empty).Trim();
+
+        if (EsIdentificacionPasaporteSeleccionada)
+            return new string(limpio.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+
+        return new string(limpio.Where(char.IsDigit).ToArray());
+    }
+
+    private static string? NormalizarLugarNacimiento(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return null;
+
+        return valor
+            .Replace("/", ", ", StringComparison.Ordinal)
+            .Trim();
+    }
+
+    private void VerCliente(ClienteDto cliente)
+    {
+        clienteEnVista = cliente;
+    }
+
+    private void CerrarVistaCliente()
+    {
+        clienteEnVista = null;
+    }
+
+    private void ConfirmarEliminar(ClienteDto c)
+    {
+        clienteAEliminar = c;
+        mostrarConfirmacion = true;
+    }
+
+    private void CancelarEliminar()
+    {
+        mostrarConfirmacion = false;
+        clienteAEliminar = null;
+    }
+
+    private async Task EliminarConfirmado()
+    {
+        if (clienteAEliminar is null) return;
+
+        try
+        {
+            var resp = await Http.PutAsync($"api/e-contax/clientes/{clienteAEliminar.Codcliente}/desactivar?userId={usuarioLogueadoId}", null);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var detalle = await resp.Content.ReadAsStringAsync();
+                mensaje = $"No se pudo desactivar: {(int)resp.StatusCode}";
+                debugError = detalle;
+                return;
+            }
+
+            mensaje = "Cliente desactivado (eliminación lógica).";
+            await CargarTodo();
+            CancelarEliminar();
+        }
+        catch (Exception ex)
+        {
+            debugError = $"{ex.Message} | INNER: {ex.InnerException?.Message}";
+            mensaje = "No se pudo desactivar (API).";
+        }
+    }
+}

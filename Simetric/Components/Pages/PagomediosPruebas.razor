@@ -1,0 +1,453 @@
+@page "/pagomedios/pruebas"
+@using System.Text.Json
+@using Simetric.Services
+@inject PagoService PagoService
+@inject IWebHostEnvironment Env
+
+<div class="pagomedios-shell">
+    @if (!Env.IsDevelopment())
+    {
+        <section class="pagomedios-hero">
+            <div>
+                <span class="pagomedios-kicker">Pagomedios V2</span>
+                <h2>Pruebas deshabilitadas</h2>
+                <p>Este panel de pruebas solo queda disponible en entorno de desarrollo para no afectar la operación de e-fact.</p>
+            </div>
+        </section>
+    }
+    else
+    {
+    <section class="pagomedios-hero">
+        <div>
+            <span class="pagomedios-kicker">Pagomedios V2</span>
+            <h2>Comprobador de API</h2>
+            <p>
+                Usa el servidor oficial de consumo: <strong>@PagoService.BaseUrl</strong>.
+                La ruta de <strong>services.abitmedia.cloud/pagomedios-v2</strong> es la documentacion Swagger.
+            </p>
+        </div>
+        <a class="pagomedios-doc-link" href="https://services.abitmedia.cloud/pagomedios-v2" target="_blank" rel="noopener noreferrer">
+            Abrir documentacion
+        </a>
+    </section>
+
+    <section class="pagomedios-control">
+        <div>
+            <span>Autenticacion</span>
+            <strong>@TokenStatus</strong>
+        </div>
+        <label>
+            Token temporal
+            <input type="password"
+                   @bind="bearerTokenOverride"
+                   @bind:event="oninput"
+                   placeholder="Opcional: pega un Bearer token solo para esta prueba" />
+        </label>
+    </section>
+
+    <div class="pagomedios-grid">
+        @foreach (var endpoint in endpoints)
+        {
+            <article class="endpoint-panel">
+                <header class="endpoint-header">
+                    <div>
+                        <span class="method-pill @GetMethodClass(endpoint.Method)">@endpoint.Method</span>
+                        <strong>@endpoint.Path</strong>
+                    </div>
+                    <small>@endpoint.Group</small>
+                </header>
+
+                <p class="endpoint-summary">@endpoint.Summary</p>
+
+                @if (!string.IsNullOrWhiteSpace(endpoint.PathTokenName))
+                {
+                    <label class="endpoint-field">
+                        @endpoint.PathTokenLabel
+                        <input @bind="endpoint.PathTokenValue"
+                               @bind:event="oninput"
+                               placeholder="@endpoint.PathTokenPlaceholder" />
+                    </label>
+                }
+
+                @if (endpoint.Query.Any())
+                {
+                    <div class="endpoint-query-grid">
+                        @foreach (var param in endpoint.Query)
+                        {
+                            <label class="endpoint-field">
+                                @param.Label
+                                <input @bind="param.Value"
+                                       @bind:event="oninput"
+                                       placeholder="@param.Placeholder" />
+                            </label>
+                        }
+                    </div>
+                }
+
+                @if (endpoint.HasBody)
+                {
+                    <label class="endpoint-field">
+                        JSON de envio
+                        <textarea @bind="endpoint.BodyJson" @bind:event="oninput" spellcheck="false"></textarea>
+                    </label>
+                }
+
+                @if (endpoint.RequiresConfirmation)
+                {
+                    <label class="endpoint-confirm">
+                        <input type="checkbox" @bind="endpoint.Confirmed" />
+                        Confirmo que quiero ejecutar este metodo sensible
+                    </label>
+                }
+
+                <button type="button"
+                        class="endpoint-run"
+                        disabled="@(!CanExecute(endpoint))"
+                        @onclick="() => Ejecutar(endpoint)">
+                    @(IsRunning(endpoint) ? "Probando..." : "Probar endpoint")
+                </button>
+
+                @if (endpoint.Result is not null)
+                {
+                    <div class="endpoint-result @GetResultClass(endpoint.Result)">
+                        <div class="endpoint-result-meta">
+                            <strong>@GetResultTitle(endpoint.Result)</strong>
+                            <span>@endpoint.Result.ElapsedMilliseconds ms</span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(endpoint.Result.ErrorMessage))
+                        {
+                            <p>@endpoint.Result.ErrorMessage</p>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(endpoint.Result.RequestUrl))
+                        {
+                            <small>@endpoint.Result.RequestUrl</small>
+                        }
+                        <pre>@endpoint.Result.ResponseBody</pre>
+                    </div>
+                }
+            </article>
+        }
+    </div>
+    }
+</div>
+
+@code {
+    private readonly List<PagomediosEndpoint> endpoints = BuildEndpoints();
+    private string? bearerTokenOverride;
+    private string? runningKey;
+
+    private string TokenStatus =>
+        string.IsNullOrWhiteSpace(PagoService.ConfiguredToken)
+            ? "Falta token"
+            : "Token listo en el servidor";
+
+    private async Task Ejecutar(PagomediosEndpoint endpoint)
+    {
+        if (!CanExecute(endpoint))
+        {
+            return;
+        }
+
+        runningKey = endpoint.Key;
+        endpoint.Result = null;
+
+        try
+        {
+            var path = BuildPath(endpoint);
+            var query = endpoint.Query.ToDictionary(item => item.Name, item => (string?)item.Value);
+            endpoint.Result = await PagoService.SendRawAsync(
+                endpoint.Method,
+                path,
+                endpoint.HasBody ? endpoint.BodyJson : null,
+                query,
+                bearerTokenOverride);
+        }
+        finally
+        {
+            runningKey = null;
+        }
+    }
+
+    private bool CanExecute(PagomediosEndpoint endpoint)
+    {
+        if (runningKey is not null)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(endpoint.PathTokenName) &&
+            string.IsNullOrWhiteSpace(endpoint.PathTokenValue))
+        {
+            return false;
+        }
+
+        return !endpoint.RequiresConfirmation || endpoint.Confirmed;
+    }
+
+    private bool IsRunning(PagomediosEndpoint endpoint) => runningKey == endpoint.Key;
+
+    private static string BuildPath(PagomediosEndpoint endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint.PathTokenName))
+        {
+            return endpoint.Path;
+        }
+
+        return endpoint.Path.Replace(
+            "{" + endpoint.PathTokenName + "}",
+            Uri.EscapeDataString(endpoint.PathTokenValue.Trim()),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetMethodClass(string method) => method switch
+    {
+        "GET" => "is-get",
+        "POST" => "is-post",
+        "DELETE" => "is-delete",
+        _ => string.Empty
+    };
+
+    private static string GetResultClass(PagomediosApiResult result) =>
+        result.IsSuccess ? "is-ok" : "is-error";
+
+    private static string GetResultTitle(PagomediosApiResult result) =>
+        result.StatusCode is null
+            ? "Sin respuesta HTTP"
+            : $"HTTP {result.StatusCode} {result.ReasonPhrase}";
+
+    private static readonly JsonSerializerOptions EndpointJsonOptions = new()
+    {
+        PropertyNamingPolicy = null,
+        WriteIndented = true
+    };
+
+    private static string ToJson(object value) =>
+        JsonSerializer.Serialize(value, EndpointJsonOptions);
+
+    private static List<PagomediosEndpoint> BuildEndpoints()
+    {
+        var thirdParty = new
+        {
+            document = "1724328164",
+            document_type = "05",
+            name = "Arleth Quintana",
+            email = "quintana@gmail.com",
+            phones = "0978879622",
+            address = "Comite del pueblo",
+            type = "Individual"
+        };
+
+        return new List<PagomediosEndpoint>
+        {
+            new(
+                "payment-requests-post",
+                "Solicitudes de pago",
+                "POST",
+                "/payment-requests",
+                "Crear solicitud de pago y obtener URL de checkout.",
+                ToJson(new
+                {
+                    integration = true,
+                    third = thirdParty,
+                    generate_invoice = 0,
+                    description = "Pago de Firma Electronica E-FACT - prueba",
+                    amount = 20.70m,
+                    amount_with_tax = 18.00m,
+                    amount_without_tax = 0.00m,
+                    tax_value = 2.70m,
+                    settings = Array.Empty<string>(),
+                    has_cards = 0,
+                    has_de_una = 1,
+                    has_paypal = 0,
+                    has_safetypay = false,
+                    custom_value = "simetric-test"
+                })),
+            new(
+                "payment-requests-get",
+                "Solicitudes de pago",
+                "GET",
+                "/payment-requests",
+                "Consultar solicitudes creadas y filtrar por referencia, token o estado.",
+                query: new List<QueryParam>
+                {
+                    new("integration", "Integration", "true", "true"),
+                    new("reference", "Referencia", string.Empty, "PM-000000"),
+                    new("uuid", "UUID/token", string.Empty, "token de la solicitud"),
+                    new("description", "Descripcion", string.Empty, "Pago de prueba"),
+                    new("status", "Estado", string.Empty, "0, 1, 2 o 3")
+                }),
+            new(
+                "payment-links-post",
+                "Links de pago",
+                "POST",
+                "/payment-links",
+                "Crear link de pago para que el cliente registre sus datos.",
+                ToJson(new
+                {
+                    integration = true,
+                    generate_invoice = 0,
+                    description = "Link de pago Simetric - prueba",
+                    amount = 20.70m,
+                    amount_with_tax = 18.00m,
+                    amount_without_tax = 0.00m,
+                    tax_value = 2.70m,
+                    settings = Array.Empty<string>(),
+                    has_cards = 0,
+                    has_de_una = 1,
+                    has_paypal = 0,
+                    has_safetypay = false,
+                    custom_value = "simetric-link-test"
+                })),
+            new(
+                "payment-links-get",
+                "Links de pago",
+                "GET",
+                "/payment-links",
+                "Consultar links de pago creados.",
+                query: new List<QueryParam>
+                {
+                    new("integration", "Integration", "true", "true"),
+                    new("description", "Descripcion", string.Empty, "Link de pago"),
+                    new("uuid", "UUID/token", string.Empty, "token del link")
+                }),
+            new(
+                "cards-get",
+                "Recurrencia",
+                "GET",
+                "/cards",
+                "Listar tarjetas tokenizadas por documento.",
+                query: new List<QueryParam>
+                {
+                    new("integration", "Integration", "true", "true"),
+                    new("document", "Documento", "1724328164", "1724328164")
+                }),
+            new(
+                "cards-delete",
+                "Recurrencia",
+                "DELETE",
+                "/cards/{token}",
+                "Borrar una tarjeta tokenizada.",
+                requiresConfirmation: true,
+                pathTokenName: "token",
+                pathTokenLabel: "Token de tarjeta",
+                pathTokenPlaceholder: "denljywrk5yafpzaqcfrpgzvj6skkxiev1ezh1hodiozgyjxadfymjgxtcwg1wpu2fbgr"),
+            new(
+                "cards-register",
+                "Recurrencia",
+                "POST",
+                "/cards/register",
+                "Crear URL para registrar y tokenizar una tarjeta.",
+                ToJson(new
+                {
+                    integration = true,
+                    third = thirdParty,
+                    generate_invoice = 0,
+                    description = "Registro de tarjeta Simetric - prueba",
+                    amount = 1.15m,
+                    amount_with_tax = 1.00m,
+                    amount_without_tax = 0.00m,
+                    tax_value = 0.15m,
+                    notify_url = string.Empty,
+                    custom_value = "simetric-card-test"
+                })),
+            new(
+                "cards-charge",
+                "Recurrencia",
+                "POST",
+                "/cards/charge",
+                "Cobrar usando una tarjeta previamente tokenizada.",
+                ToJson(new
+                {
+                    integration = true,
+                    document = "1724328164",
+                    token = "REEMPLAZA_TOKEN_TARJETA",
+                    reference = "TEST000000000001",
+                    description = "Cobro con token Simetric - prueba",
+                    amount = 1.15m,
+                    amount_with_tax = 1.00m,
+                    amount_without_tax = 0.00m,
+                    tax_value = 0.15m,
+                    generate_invoice = 0
+                }),
+                requiresConfirmation: true),
+            new(
+                "cards-reverse",
+                "Reverso",
+                "POST",
+                "/cards/reverse",
+                "Reversar un cobro realizado por referencia.",
+                ToJson(new
+                {
+                    reference = "PM-00151545"
+                }),
+                requiresConfirmation: true),
+            new(
+                "settings-get",
+                "Configuraciones",
+                "GET",
+                "/settings",
+                "Consultar metodos de pago configurados para la compania.")
+        };
+    }
+
+    private sealed class PagomediosEndpoint
+    {
+        public PagomediosEndpoint(
+            string key,
+            string group,
+            string method,
+            string path,
+            string summary,
+            string? bodyJson = null,
+            List<QueryParam>? query = null,
+            bool requiresConfirmation = false,
+            string? pathTokenName = null,
+            string? pathTokenLabel = null,
+            string? pathTokenPlaceholder = null)
+        {
+            Key = key;
+            Group = group;
+            Method = method;
+            Path = path;
+            Summary = summary;
+            BodyJson = bodyJson ?? string.Empty;
+            Query = query ?? new List<QueryParam>();
+            RequiresConfirmation = requiresConfirmation;
+            PathTokenName = pathTokenName;
+            PathTokenLabel = pathTokenLabel ?? pathTokenName ?? string.Empty;
+            PathTokenPlaceholder = pathTokenPlaceholder ?? string.Empty;
+        }
+
+        public string Key { get; }
+        public string Group { get; }
+        public string Method { get; }
+        public string Path { get; }
+        public string Summary { get; }
+        public string BodyJson { get; set; }
+        public List<QueryParam> Query { get; }
+        public bool RequiresConfirmation { get; }
+        public bool Confirmed { get; set; }
+        public string? PathTokenName { get; }
+        public string PathTokenLabel { get; }
+        public string PathTokenPlaceholder { get; }
+        public string PathTokenValue { get; set; } = string.Empty;
+        public bool HasBody => !string.IsNullOrWhiteSpace(BodyJson);
+        public PagomediosApiResult? Result { get; set; }
+    }
+
+    private sealed class QueryParam
+    {
+        public QueryParam(string name, string label, string value, string placeholder)
+        {
+            Name = name;
+            Label = label;
+            Value = value;
+            Placeholder = placeholder;
+        }
+
+        public string Name { get; }
+        public string Label { get; }
+        public string Value { get; set; }
+        public string Placeholder { get; }
+    }
+}

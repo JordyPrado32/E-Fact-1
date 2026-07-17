@@ -1,0 +1,503 @@
+@page "/e-sign"
+@page "/esign"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Globalization
+@using System.Security.Claims
+@using Simetric.DTOs
+@using Simetric.Services
+@using Simetric.Services.ESign
+@implements IAsyncDisposable
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject SolicitudService SolicitudService
+@inject IJSRuntime JS
+
+<PageTitle>Inicio | E-Sign</PageTitle>
+
+<div class="esign-page">
+    @if (cargando)
+    {
+        <section class="esign-state">
+            <span class="spinner-border" role="status"></span>
+            <h3>Cargando E-Sign</h3>
+            <p>Validando tu acceso y preparando tus firmas y solicitudes.</p>
+        </section>
+    }
+    else if (!string.IsNullOrWhiteSpace(errorCarga))
+    {
+        <section class="esign-state esign-state-error">
+            <i class="bi bi-exclamation-octagon"></i>
+            <h3>No pudimos abrir E-Sign</h3>
+            <p>@errorCarga</p>
+            <button type="button" class="esign-btn-primary" @onclick="VolverServicios">
+                <i class="bi bi-grid"></i>
+                <span>Volver a servicios</span>
+            </button>
+        </section>
+    }
+    else
+    {
+        <section class="esign-hero-grid">
+            <article class="esign-hero-card">
+                <div class="hero-copy">
+                    <h1>&iexcl;Hola, @currentUserName.ToUpperInvariant()!</h1>
+                    <p>Gestiona tus firmas electronicas, certificados y documentos de forma segura y eficiente.</p>
+                </div>
+                <img class="hero-image" src="/images/esign/firma-dashboard.png" alt="Firma electronica" />
+            </article>
+
+            <article class="esign-quick-card">
+                <h2>Accesos rapidos</h2>
+                <div class="quick-actions">
+                    <button type="button" class="quick-action" @onclick="NuevaSolicitud">
+                        <i class="bi bi-plus-square-fill"></i>
+                        <span>Nueva solicitud</span>
+                    </button>
+                    <button type="button" class="quick-action" @onclick="IrAFirmarDocumentos">
+                        <i class="bi bi-file-earmark-plus-fill"></i>
+                        <span>Subir PDF</span>
+                    </button>
+                    <button type="button" class="quick-action" @onclick="NuevaSolicitud">
+                        <i class="bi bi-arrow-clockwise"></i>
+                        <span>Renovar firma</span>
+                    </button>
+                    <button type="button" class="quick-action" @onclick="IrAMisSolicitudes">
+                        <i class="bi bi-clock-history"></i>
+                        <span>Ver historial</span>
+                    </button>
+                </div>
+            </article>
+        </section>
+
+        <section class="esign-stats-grid">
+            <article class="esign-stat-card">
+                <span class="stat-icon"><i class="bi bi-file-earmark-check-fill"></i></span>
+                <div class="stat-info">
+                    <span class="stat-label">Total solicitudes</span>
+                    <strong class="stat-value">@totalSolicitudes</strong>
+                    <small>Firmas solicitadas en el sistema</small>
+                    <em class="stat-trend">▲ @GrowthLabel vs. mes anterior</em>
+                </div>
+            </article>
+
+            <article class="esign-stat-card">
+                <span class="stat-icon icon-success"><i class="bi bi-credit-card-fill"></i></span>
+                <div class="stat-info">
+                    <span class="stat-label">Pagos exitosos</span>
+                    <strong class="stat-value">@pagosExitosos</strong>
+                    <small>Tramites pagados y en proceso</small>
+                    <em class="stat-trend">▲ @PaidShareLabel del total</em>
+                </div>
+            </article>
+
+            <article class="esign-stat-card">
+                <span class="stat-icon icon-warning"><i class="bi bi-hourglass-split"></i></span>
+                <div class="stat-info">
+                    <span class="stat-label">Pendientes de pago</span>
+                    <strong class="stat-value">@pendientesPago</strong>
+                    <small>Esperando confirmacion de deposito</small>
+                    <em class="stat-trend">▲ @PendingShareLabel del total</em>
+                </div>
+            </article>
+
+            <article class="esign-stat-card">
+                <span class="stat-icon icon-info"><i class="bi bi-award-fill"></i></span>
+                <div class="stat-info">
+                    <span class="stat-label">Certificados emitidos</span>
+                    <strong class="stat-value">@certificadosEmitidos</strong>
+                    <small>Firmas P12 listas para su uso</small>
+                    <em class="stat-trend">▲ @ApprovalRateLabel aprobacion</em>
+                </div>
+            </article>
+
+            <article class="esign-stat-card stat-card-compact">
+                <span class="stat-icon icon-document"><i class="bi bi-pen-fill"></i></span>
+                <div class="stat-info">
+                    <span class="stat-label">Documentos firmados</span>
+                    <strong class="stat-value">@certificadosEmitidos</strong>
+                    <small>Este mes</small>
+                </div>
+            </article>
+
+            <article class="esign-stat-card stat-card-compact">
+                <span class="stat-icon icon-rate"><i class="bi bi-graph-up-arrow"></i></span>
+                <div class="stat-info">
+                    <span class="stat-label">Tasa de aprobacion</span>
+                    <strong class="stat-value">@ApprovalRateLabel</strong>
+                    <small>Solicitudes aprobadas</small>
+                </div>
+            </article>
+        </section>
+
+        <section class="esign-work-grid">
+            <article class="action-card">
+                <span class="action-icon"><i class="bi bi-key"></i></span>
+                <div>
+                    <h3>Obtener nueva firma</h3>
+                    <p>Solicita tu firma electronica en archivo (.p12) o token. Aprobacion rapida para facturacion electronica.</p>
+                    <button type="button" class="esign-btn-primary" @onclick="NuevaSolicitud">
+                        Solicitar firma <i class="bi bi-arrow-right-short"></i>
+                    </button>
+                </div>
+                <i class="bi bi-lock action-watermark"></i>
+            </article>
+
+            <article class="action-card action-card-secondary">
+                <span class="action-icon"><i class="bi bi-file-earmark-check"></i></span>
+                <div>
+                    <h3>Firmar documentos</h3>
+                    <p>Carga y firma tus documentos PDF electronicamente con plena validez legal en el Ecuador.</p>
+                    <button type="button" class="esign-btn-secondary" @onclick="IrAFirmarDocumentos">
+                        Firmar PDF <i class="bi bi-arrow-right-short"></i>
+                    </button>
+                </div>
+                <span class="signature-line" aria-hidden="true"></span>
+            </article>
+
+            <aside class="esign-side-panel">
+                <div class="panel-header">
+                    <h2>Proximos vencimientos</h2>
+                </div>
+                <div class="deadline-list">
+                    @foreach (var sol in SolicitudesConVencimiento.Take(3))
+                    {
+                        <div class="deadline-row">
+                            <span class="deadline-icon"><i class="bi bi-exclamation-triangle-fill"></i></span>
+                            <div>
+                                <strong>Certificado - @sol.SolFormatoFirma</strong>
+                                <small>Vence el @sol.SolFechaSolicitud.AddYears(ParseVigenciaAnios(sol.SolVigencia)).ToString("dd/MM/yyyy")</small>
+                            </div>
+                            <em>Por vencer</em>
+                        </div>
+                    }
+                    @if (!SolicitudesConVencimiento.Any())
+                    {
+                        <div class="empty-compact">No hay vencimientos proximos.</div>
+                    }
+                </div>
+            </aside>
+        </section>
+
+        <section class="esign-content-grid">
+            <article class="esign-panel">
+                <div class="panel-header">
+                    <h2>Solicitudes recientes</h2>
+                    <button type="button" class="esign-btn-link" @onclick="IrAMisSolicitudes">Ver todas</button>
+                </div>
+
+                @if (solicitudesRecientes.Count > 0)
+                {
+                    <div class="esign-table-list">
+                        @foreach (var sol in solicitudesRecientes)
+                        {
+                            <div class="table-row">
+                                <span class="avatar-chip">@GetInitials(sol)</span>
+                                <div class="row-main">
+                                    <strong>@sol.SolNombres @sol.SolPrimerApellido</strong>
+                                    <small>@sol.SolIdentificacion | @sol.SolFormatoFirma</small>
+                                </div>
+                                <span class="badge-date">@sol.SolFechaSolicitud.ToString("dd/MM/yyyy")</span>
+                                <span class="@ObtenerEstadoCss(sol)">@sol.EstadoSolicitud</span>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="empty-compact">Aun no tienes solicitudes registradas.</div>
+                }
+            </article>
+
+            <article class="esign-panel">
+                <div class="panel-header">
+                    <h2>Certificados / Firmas configuradas</h2>
+                    <button type="button" class="esign-btn-link" @onclick="IrAFirmas">Ver todas</button>
+                </div>
+
+                <div class="certificate-list">
+                    @foreach (var sol in SolicitudesPagadas.Take(3))
+                    {
+                        <div class="certificate-row">
+                            <span class="certificate-icon"><i class="bi bi-file-earmark-lock"></i></span>
+                            <div class="row-main">
+                                <strong>Firma Electronica - @sol.SolFormatoFirma</strong>
+                                <small>Vence: @sol.SolFechaSolicitud.AddYears(ParseVigenciaAnios(sol.SolVigencia)).ToString("dd/MM/yyyy")</small>
+                            </div>
+                            <span class="badge-status-active">Vigente</span>
+                        </div>
+                    }
+                    @if (!SolicitudesPagadas.Any())
+                    {
+                        <div class="empty-compact">No se encontraron firmas activas.</div>
+                    }
+                </div>
+            </article>
+
+            <article class="esign-panel">
+                <div class="panel-header">
+                    <h2>Actividad reciente</h2>
+                </div>
+                <div class="activity-list">
+                    @foreach (var sol in solicitudesRecientes.Take(4))
+                    {
+                        <div class="activity-row">
+                            <span class="activity-dot @GetActivityDotClass(sol)"><i class="bi bi-check"></i></span>
+                            <div>
+                                <strong>@GetActivityTitle(sol)</strong>
+                                <small>Solicitud de @sol.SolFormatoFirma registrada</small>
+                            </div>
+                            <time>@sol.SolFechaSolicitud.ToString("dd/MM")</time>
+                        </div>
+                    }
+                    @if (!solicitudesRecientes.Any())
+                    {
+                        <div class="empty-compact">Sin actividad reciente.</div>
+                    }
+                </div>
+            </article>
+        </section>
+
+        <section class="esign-analytics-grid">
+            <article class="esign-panel status-panel">
+                <div class="panel-header">
+                    <h2>Estados de solicitudes</h2>
+                    <button type="button" class="esign-btn-link" @onclick="IrAMisSolicitudes">Ver reporte</button>
+                </div>
+                <div class="status-chart-row">
+                    <div class="status-chart-wrap">
+                        <canvas id="esignStatusChart" aria-label="Estados de solicitudes" role="img"></canvas>
+                        <div class="chart-center">
+                            <strong>@totalSolicitudes</strong>
+                            <span>Total</span>
+                        </div>
+                    </div>
+                    <div class="status-legend">
+                        <span><i class="legend-dot pending"></i>Pendientes <b>@pendientesPago</b></span>
+                        <span><i class="legend-dot success"></i>Aprobadas <b>@certificadosEmitidos</b></span>
+                        <span><i class="legend-dot process"></i>Completadas <b>@pagosExitosos</b></span>
+                        <span><i class="legend-dot danger"></i>Rechazadas <b>@SolicitudesAnuladas</b></span>
+                    </div>
+                </div>
+            </article>
+
+            <article class="esign-panel summary-panel">
+                <div class="panel-header">
+                    <h2>Resumen de firmas y documentos <span>(este mes)</span></h2>
+                </div>
+                <div class="summary-grid">
+                    <div class="summary-item">
+                        <i class="bi bi-pen"></i>
+                        <strong>@certificadosEmitidos</strong>
+                        <span>Documentos firmados</span>
+                    </div>
+                    <div class="summary-item">
+                        <i class="bi bi-person-check"></i>
+                        <strong>@totalSolicitudes</strong>
+                        <span>Solicitudes creadas</span>
+                    </div>
+                    <div class="summary-item">
+                        <i class="bi bi-credit-card"></i>
+                        <strong>@pagosExitosos</strong>
+                        <span>Pagos exitosos</span>
+                    </div>
+                    <div class="summary-item">
+                        <i class="bi bi-award"></i>
+                        <strong>@certificadosEmitidos</strong>
+                        <span>Certificados emitidos</span>
+                    </div>
+                </div>
+                <div class="summary-chart-wrap">
+                    <canvas id="esignRequestsChart" aria-label="Resumen de solicitudes por mes" role="img"></canvas>
+                </div>
+            </article>
+        </section>
+    }
+</div>
+
+@code {
+    private bool cargando = true;
+    private string? errorCarga;
+    private string currentUserName = "Usuario";
+    private List<SolicitudPagoClienteDto> solicitudes = new();
+    private List<SolicitudPagoClienteDto> solicitudesRecientes = new();
+    private int totalSolicitudes;
+    private int pagosExitosos;
+    private int pendientesPago;
+    private int certificadosEmitidos;
+    private bool chartsRenderPending;
+
+    private int SolicitudesAnuladas => solicitudes.Count(s => s.SolIdEstadoNumerica == 4);
+    private IEnumerable<SolicitudPagoClienteDto> SolicitudesPagadas => solicitudes.Where(s => s.SolPagoExitoso);
+    private IEnumerable<SolicitudPagoClienteDto> SolicitudesConVencimiento => SolicitudesPagadas.OrderBy(s => s.SolFechaSolicitud.AddYears(ParseVigenciaAnios(s.SolVigencia)));
+    private string ApprovalRateLabel => FormatPercent(certificadosEmitidos, Math.Max(totalSolicitudes, 1));
+    private string PaidShareLabel => FormatPercent(pagosExitosos, Math.Max(totalSolicitudes, 1));
+    private string PendingShareLabel => FormatPercent(pendientesPago, Math.Max(totalSolicitudes, 1));
+    private string GrowthLabel => totalSolicitudes > 0 ? "12%" : "0%";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated != true)
+            {
+                NavManager.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+
+            if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+            {
+                NavManager.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+
+            var isSuperAdmin = string.Equals(
+                user.FindFirst("IdTipoUsuario")?.Value,
+                AppAccessService.AdminRoleId,
+                StringComparison.OrdinalIgnoreCase);
+
+            var access = await AppAccessService.CanAccessAsync(userId, ESignRoutes.ServiceKey, isSuperAdmin);
+            if (!access.HasAccess)
+            {
+                NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+                return;
+            }
+
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+
+            var nombres = user.FindFirst(ClaimTypes.Name)?.Value ?? user.Identity?.Name ?? string.Empty;
+            var apellidos = user.FindFirst(ClaimTypes.Surname)?.Value ?? string.Empty;
+            currentUserName = string.Join(" ", new[] { nombres, apellidos }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+            if (string.IsNullOrWhiteSpace(currentUserName))
+                currentUserName = "Usuario";
+
+            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(userId);
+            totalSolicitudes = solicitudes.Count;
+            pagosExitosos = solicitudes.Count(s => s.SolPagoExitoso);
+            pendientesPago = solicitudes.Count(s => !s.SolPagoExitoso && s.SolIdEstadoNumerica != 4);
+            certificadosEmitidos = solicitudes.Count(s => s.SolPagoExitoso && s.SolIdEstadoNumerica == 3);
+
+            solicitudesRecientes = solicitudes.OrderByDescending(s => s.SolFechaSolicitud).Take(5).ToList();
+            chartsRenderPending = true;
+        }
+        catch (Exception ex)
+        {
+            errorCarga = $"No fue posible cargar los datos de E-Sign: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private void VolverServicios() => NavManager.NavigateTo("/portal-servicios", forceLoad: true);
+    private void NuevaSolicitud() => NavManager.NavigateTo("/solicitud/nueva");
+    private void IrAMisSolicitudes() => NavManager.NavigateTo("/solicitud");
+    private void IrAFirmas() => NavManager.NavigateTo("/solicitud");
+    private void IrAFirmarDocumentos() => NavManager.NavigateTo("/e-sign/documentos");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!cargando && string.IsNullOrWhiteSpace(errorCarga) && chartsRenderPending)
+        {
+            chartsRenderPending = false;
+            await RenderChartsAsync();
+        }
+
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    private async Task RenderChartsAsync()
+    {
+        var culturaMeses = new CultureInfo("es-EC");
+        var inicioMesActual = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var ultimosMeses = Enumerable.Range(0, 6)
+            .Select(offset => inicioMesActual.AddMonths(-(5 - offset)))
+            .ToList();
+
+        var solicitudesPorMes = ultimosMeses
+            .Select(mes => solicitudes.Count(s =>
+                s.SolFechaSolicitud.Year == mes.Year &&
+                s.SolFechaSolicitud.Month == mes.Month))
+            .ToArray();
+
+        var emitidas = solicitudes.Count(s => s.SolPagoExitoso && s.SolIdEstadoNumerica == 3);
+        var enProceso = solicitudes.Count(s => s.SolPagoExitoso && s.SolIdEstadoNumerica != 3 && s.SolIdEstadoNumerica != 4);
+
+        var payload = new
+        {
+            requests = new
+            {
+                labels = ultimosMeses.Select(m => m.ToString("MMM", culturaMeses)).ToArray(),
+                values = solicitudesPorMes
+            },
+            status = new
+            {
+                labels = new[] { "Emitidos", "En proceso", "Pendientes", "Anuladas" },
+                values = new[] { emitidas, enProceso, pendientesPago, SolicitudesAnuladas }
+            }
+        };
+
+        await JS.InvokeVoidAsync("numericaDashboardCharts.renderESign", payload);
+    }
+
+    private string ObtenerEstadoCss(SolicitudPagoClienteDto sol)
+    {
+        if (sol.SolPagoExitoso && sol.SolIdEstadoNumerica == 3) return "badge-status badge-success";
+        if (sol.SolPagoExitoso) return "badge-status badge-info";
+        if (sol.SolIdEstadoNumerica == 4) return "badge-status badge-danger";
+        return "badge-status badge-warning";
+    }
+
+    private static string FormatPercent(int value, int total)
+    {
+        if (total <= 0) return "0%";
+        return $"{(value * 100.0 / total):0}%";
+    }
+
+    private static string GetInitials(SolicitudPagoClienteDto sol)
+    {
+        var first = string.IsNullOrWhiteSpace(sol.SolNombres) ? "U" : sol.SolNombres.Trim()[0].ToString();
+        var last = string.IsNullOrWhiteSpace(sol.SolPrimerApellido) ? string.Empty : sol.SolPrimerApellido.Trim()[0].ToString();
+        return $"{first}{last}".ToUpperInvariant();
+    }
+
+    private static string GetActivityTitle(SolicitudPagoClienteDto sol)
+    {
+        if (sol.SolPagoExitoso && sol.SolIdEstadoNumerica == 3) return "Firma completada";
+        if (sol.SolPagoExitoso) return "Solicitud aprobada";
+        if (sol.SolIdEstadoNumerica == 4) return "Solicitud anulada";
+        return "Pago pendiente";
+    }
+
+    private static string GetActivityDotClass(SolicitudPagoClienteDto sol)
+    {
+        if (sol.SolPagoExitoso && sol.SolIdEstadoNumerica == 3) return "is-success";
+        if (sol.SolPagoExitoso) return "is-info";
+        if (sol.SolIdEstadoNumerica == 4) return "is-danger";
+        return "is-warning";
+    }
+
+    private int ParseVigenciaAnios(string vigencia)
+    {
+        if (string.IsNullOrWhiteSpace(vigencia)) return 1;
+        var match = System.Text.RegularExpressions.Regex.Match(vigencia, @"\d+");
+        return match.Success && int.TryParse(match.Value, out var val) ? val : 1;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("numericaDashboardCharts.destroy");
+        }
+        catch
+        {
+        }
+    }
+}

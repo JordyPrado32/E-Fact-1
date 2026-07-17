@@ -1,0 +1,1599 @@
+@page "/e-contax/productos"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using System.Net.Http.Json
+@using System.Text
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Security.Claims
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.EContax
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject ProductCategoryService CategoryService
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@rendermode InteractiveServer
+
+@{
+    var filteredProducts = ProductosPaginados.ToList();
+    var totalFilteredProducts = CurrentTotalRecords;
+    var totalActivos = productos.Count(p => p.Estado == true);
+    var totalServicios = productos.Count(p => p.Estado == true && string.Equals(p.TipoCompravena, "SERVICIO", StringComparison.OrdinalIgnoreCase));
+    var totalConIva = productos.Count(p => p.Estado == true && p.Codigoimpuesto == "2");
+}
+
+<PageTitle>Productos | @PageBrandTitle</PageTitle>
+
+<div class="products-shell" data-tour="productos.page">
+    <section class="products-hero" data-tour="productos.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Catálogo comercial</span>
+            <h2>Gestión de productos y servicios</h2>
+            <p>
+                Administra tu catálogo, configura precios, IVA y organiza tus registros por categoría y subcategoría.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Activos</span>
+                <strong>@totalActivos</strong>
+                <small>Productos y servicios visibles.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Servicios</span>
+                <strong>@totalServicios</strong>
+                <small>Registros marcados como servicio.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Con IVA</span>
+                <strong>@totalConIva</strong>
+                <small>Registros configurados con impuesto.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card" data-tour="productos.toolbar">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Control</span>
+            <h3>Catálogo</h3>
+            <p>Busca, filtra y administra tus productos o servicios.</p>
+        </div>
+
+        <div class="toolbar-actions">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+                <input class="search-input"
+                       placeholder="Buscar por nombre o código"
+                       @bind="FiltroBusqueda"
+                       @bind:event="oninput" />
+            </div>
+
+            <div class="toolbar-secondary-actions">
+                @if (contextoEContax?.EsJefeEmpresa == true)
+                {
+                    <div class="filter-box">
+                        <label class="filter-label" for="sucursalFiltro">Sucursal</label>
+                        <select id="sucursalFiltro" class="filter-select" @bind="FiltroSucursalSeleccionada">
+                            <option value="">Todas</option>
+                            @foreach (var sucursal in sucursales)
+                            {
+                                <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                            }
+                        </select>
+                    </div>
+                }
+
+                <div class="filter-box">
+                    <label class="filter-label" for="tipoFiltro">Categoría</label>
+                    <select id="tipoFiltro" class="filter-select" @bind="FiltroCategoriaSeleccionada">
+                        <option value="">Todas</option>
+                        @foreach (var t in tiposProducto)
+                        {
+                            <option value="@t.Idtipoproducto">@t.Descripcion</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="filter-box">
+                    <label class="filter-label" for="subtipoFiltro">Subcategorí­a</label>
+                    <select id="subtipoFiltro" class="filter-select" @bind="FiltroSubcategoriaSeleccionada">
+                        <option value="">Todas</option>
+                        @foreach (var s in SubcategoriasFiltroDisponibles)
+                        {
+                            <option value="@s.Idsubtipo">@s.Descripcion</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="filter-box">
+                    <label class="filter-label" for="compraventaFiltro">Tipo</label>
+                    <select id="compraventaFiltro" class="filter-select" @bind="FiltroCompraventaSeleccionado">
+                        <option value="">Todos</option>
+                        <option value="PRODUCTO">Producto</option>
+                        <option value="SERVICIO">Servicio</option>
+                    </select>
+                </div>
+
+                <div class="filter-box">
+                    <label class="filter-label" for="pageSizeFiltro">Registros</label>
+                    <select id="pageSizeFiltro" class="filter-select" @bind="CurrentPageSize">
+                        <option value="5">5 registros</option>
+                        <option value="10">10 registros</option>
+                        <option value="20">20 registros</option>
+                    </select>
+                </div>
+
+                <button type="button" class="secondary-btn toolbar-secondary-btn" @onclick="CargarTodo">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    <span>Refrescar</span>
+                </button>
+
+                <button type="button" class="secondary-btn toolbar-secondary-btn" @onclick="ExportarProductosCsvAsync">
+                    <i class="bi bi-download"></i>
+                    <span>Exportar todos</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="products-grid">
+        <section class="table-card" data-tour="productos.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>Productos registrados</h3>
+                </div>
+
+                <span class="table-badge">@totalFilteredProducts registros</span>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-info-circle"></i>
+                    <span>@mensaje</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(debugError))
+            {
+                <div class="status-banner status-banner-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@debugError</span>
+                </div>
+            }
+
+            @if (cargando)
+            {
+                <div class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando catálogo</h3>
+                    <p>Estamos consultando productos, categorías y tarifas IVA.</p>
+                </div>
+            }
+            else if (!filteredProducts.Any())
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-box-seam"></i>
+                    </div>
+                    <h3>No hay registros para mostrar</h3>
+                    <p>No existen productos o servicios activos con los filtros aplicados.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table table-hover align-middle mb-0 products-table products-table-compact">
+                        <thead>
+                            <tr>
+                                <th>Código</th>
+                                <th>Nombre</th>
+                                <th>Clasificacion</th>
+                                <th>Precio</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in filteredProducts)
+                            {
+                                <tr>
+                                    <td>
+                                        <span class="code-pill">@(string.IsNullOrWhiteSpace(p.CodigoPrincipal) ? $"#{p.Codigo}" : p.CodigoPrincipal)</span>
+                                    </td>
+                                    <td>
+                                        <div class="cell-main cell-main-stacked">
+                                            <strong>@(string.IsNullOrWhiteSpace(p.Nombre) ? "Sin nombre" : p.Nombre)</strong>
+                                            <span>@(string.IsNullOrWhiteSpace(p.TipoCompravena) ? "Sin tipo" : p.TipoCompravena)</span>
+                                            @if (!string.IsNullOrWhiteSpace(p.NombreSucursal))
+                                            {
+                                                <span>@p.NombreSucursal</span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="classification-stack">
+                                            <span class="category-pill">@GetCategoriaDescripcion(p.TipoProducto)</span>
+                                            <span class="subcategory-line">
+                                                <i class="bi bi-diagram-2"></i>
+                                                @GetSubcategoriaDescripcion(p.Idsubtipo)
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="price-stack">
+                                            <strong>@FormatCurrency(p.ValorUnitario)</strong>
+                                        </div>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view" @onclick="() => VerProducto(p)" title="Ver">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            <button type="button"
+                                                    class="action-btn action-edit"
+                                                    @onclick="() => Editar(p.Codigo)"
+                                                    disabled="@(isSaving || (editando && model.Codigo == p.Codigo))"
+                                                    title="@(editando && model.Codigo == p.Codigo ? "Editando" : "Editar")">
+                                                <i class="bi bi-pencil-square"></i>
+                                            </button>
+                                            <button type="button" class="action-btn action-delete" @onclick="() => ConfirmarEliminar(p)" disabled="@isSaving" title="Desactivar">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (mostrarConfirmacion && productoAEliminar is not null)
+            {
+                <div class="confirm-card">
+                    <div class="confirm-copy">
+                        <span class="confirm-kicker">Confirmación</span>
+                        <strong>Desactivar @productoAEliminar.Nombre?</strong>
+                        <p>El registro se conserva en base de datos, pero dejará de mostrarse en el catálogo activo.</p>
+                    </div>
+
+                    <div class="confirm-actions">
+                        <button type="button" class="danger-btn" @onclick="EliminarConfirmado">
+                            <i class="bi bi-trash3"></i>
+                            <span>Sí, desactivar</span>
+                        </button>
+                        <button type="button" class="secondary-btn" @onclick="CancelarEliminar">
+                            <span>Cancelar</span>
+                        </button>
+                    </div>
+                </div>
+            }
+
+            @if (productoEnVista is not null)
+            {
+                <div class="products-modal-backdrop" @onclick:stopPropagation="true"></div>
+                <div class="products-modal" role="dialog" aria-modal="true" aria-labelledby="productoDetalleTitulo">
+                    <div class="products-modal-content" @onclick:stopPropagation="true">
+                        <div class="products-modal-header">
+                            <div>
+                                <h3 id="productoDetalleTitulo">@(string.IsNullOrWhiteSpace(productoEnVista.Nombre) ? $"Registro #{productoEnVista.Codigo}" : productoEnVista.Nombre)</h3>
+                                <p>@(string.IsNullOrWhiteSpace(productoEnVista.TipoCompravena) ? "Sin tipo de registro" : productoEnVista.TipoCompravena) - @GetEstadoProductoDescripcion(productoEnVista.Estado)</p>
+                            </div>
+
+                            <button type="button" class="modal-close" @onclick="CerrarVistaProducto" aria-label="Cerrar detalle" title="Cerrar">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+
+                        <div class="products-modal-body">
+                            <div class="detail-sections">
+                                <section class="detail-section">
+                                    <h4 class="detail-section-title">Clasificación</h4>
+                                    <div class="detail-grid">
+                                        <div class="detail-item">
+                                            <span>Código principal</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(productoEnVista.CodigoPrincipal) ? $"#{productoEnVista.Codigo}" : productoEnVista.CodigoPrincipal)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Tipo</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(productoEnVista.TipoCompravena) ? "Sin tipo" : productoEnVista.TipoCompravena)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Categoría</span>
+                                            <strong>@GetCategoriaDescripcion(productoEnVista.TipoProducto)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Subcategoría</span>
+                                            <strong>@GetSubcategoriaDescripcion(productoEnVista.Idsubtipo)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Sucursal</span>
+                                            <strong>@GetSucursalDescripcion(productoEnVista.Idsucursal)</strong>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section class="detail-section">
+                                    <h4 class="detail-section-title">Precios e impuestos</h4>
+                                    <div class="detail-grid">
+                                        <div class="detail-item">
+                                            <span>Precio base</span>
+                                            <strong>@FormatCurrency(productoEnVista.ValorUnitario)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Precio 2</span>
+                                            <strong>@FormatCurrency(productoEnVista.Precio2)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Precio 3</span>
+                                            <strong>@FormatCurrency(productoEnVista.Precio3)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Impuesto</span>
+                                            <strong>@GetImpuestoDescripcion(productoEnVista.Codigoimpuesto)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Tarifa IVA</span>
+                                            <strong>@GetTarifaDescripcion(productoEnVista.Porcentajeimpuesto)</strong>
+                                        </div>
+
+                                        <div class="detail-item">
+                                            <span>Estado</span>
+                                            <strong>@GetEstadoProductoDescripcion(productoEnVista.Estado)</strong>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                @if (!string.IsNullOrWhiteSpace(productoEnVista.Observacion))
+                                {
+                                    <div class="detail-note">
+                                        <span>Observaciones</span>
+                                        <strong>@productoEnVista.Observacion</strong>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="products-modal-footer">
+                            <button type="button" class="secondary-btn" @onclick="CerrarVistaProducto">Cerrar</button>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="products-pagination">
+                <span class="products-pagination-meta">
+                    Mostrando @CurrentPageStart - @CurrentPageEnd de @CurrentTotalRecords registros
+                </span>
+
+                <div class="products-pagination-actions">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaAnterior" disabled="@(currentPage <= 1)">
+                        <i class="bi bi-chevron-left"></i>
+                    </button>
+                    <span class="products-page-indicator">Pagina @currentPage de @CurrentTotalPages</span>
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaSiguiente" disabled="@(currentPage >= CurrentTotalPages)">
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <section class="editor-card product-editor-shell" data-tour="productos.editor">
+            <div class="card shadow-sm border-top border-success border-4 product-editor-card product-editor-card-accent">
+                <div class="card-body product-card-body">
+                    <div class="product-form-copy">
+                        <h5 class="card-title fw-bold product-editor-title">@(editando ? "Editar registro" : "Registrar producto o servicio")</h5>
+                        <p class="text-muted small mb-0">Completa los campos visibles y, si deseas, agrega información opcional.</p>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(mensajeEdicion))
+                    {
+                        <div class="status-banner status-banner-info product-edit-banner">
+                            <i class="bi bi-info-circle"></i>
+                            <span>@mensajeEdicion</span>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(mensajeFormularioError))
+                    {
+                        <div class="status-banner status-banner-error product-edit-banner">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <span>@mensajeFormularioError</span>
+                        </div>
+                    }
+
+                    <EditForm Model="model"
+                              OnValidSubmit="Guardar"
+                              OnInvalidSubmit="ManejarFormularioInvalido"
+                              @key="formKey"
+                              class="product-form-legacy">
+                        <DataAnnotationsValidator />
+
+                        @if (contextoEContax?.EsJefeEmpresa == true)
+                        {
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">Sucursal</label>
+                                <InputSelect class="form-select form-select-sm" @bind-Value="model.Idsucursal">
+                                    <option value="">Seleccione una sucursal</option>
+                                    @foreach (var sucursal in sucursales)
+                                    {
+                                        <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => model.Idsucursal" class="text-danger small d-block mt-1" />
+                            </div>
+                        }
+
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold d-block">Tipo</label>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button type="button"
+                                        class="btn @(model.TipoCompravena == "PRODUCTO" ? "btn-primary" : "btn-outline-primary")"
+                                        @onclick='() => model.TipoCompravena = "PRODUCTO"'>
+                                    Producto
+                                </button>
+
+                                <button type="button"
+                                        class="btn @(model.TipoCompravena == "SERVICIO" ? "btn-primary" : "btn-outline-primary")"
+                                        @onclick='() => model.TipoCompravena = "SERVICIO"'>
+                                    Servicio
+                                </button>
+                            </div>
+                            <ValidationMessage For="() => model.TipoCompravena" class="text-danger small d-block mt-2" />
+                        </div>
+
+                        <div class="row mb-2">
+                            <div class="col-md-8">
+                                <label class="form-label small fw-bold">Nombre</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.Nombre" />
+                                <ValidationMessage For="() => model.Nombre" class="text-danger small d-block mt-1" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold">Código</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.CodigoPrincipal" />
+                                <ValidationMessage For="() => model.CodigoPrincipal" class="text-danger small d-block mt-1" />
+                            </div>
+                        </div>
+
+                        <div class="product-price-panel mb-3">
+                            <div class="product-price-main-row">
+                                <div class="product-price-field product-price-field-primary">
+                                    <div class="product-price-field-head">
+                                        <label class="form-label small fw-bold">Precio base</label>
+                                        <button type="button"
+                                                class="product-price-add-btn"
+                                                @onclick="AgregarCampoPrecioAdicional"
+                                                disabled="@(!PuedeAgregarCampoPrecioAdicional)"
+                                                title="Agregar precio adicional"
+                                                aria-label="Agregar precio adicional">
+                                            <i class="bi bi-plus-lg"></i>
+                                        </button>
+                                    </div>
+                                    <InputNumber class="form-control form-control-sm" @bind-Value="model.ValorUnitario" />
+                                    <ValidationMessage For="() => model.ValorUnitario" class="text-danger small d-block mt-1" />
+                                    <small class="text-muted">Este será el precio base del producto o servicio.</small>
+                                </div>
+                            </div>
+
+                            @if (MostrarPrecio2)
+                            {
+                                <div class="product-price-field product-price-field-secondary">
+                                    <div class="product-price-field-head">
+                                        <label class="form-label small fw-bold">Precio 2 (opcional)</label>
+                                        <button type="button"
+                                                class="product-price-remove-btn"
+                                                @onclick="() => EliminarCampoPrecioAdicional(2)"
+                                                title="Eliminar precio 2"
+                                                aria-label="Eliminar precio 2">
+                                            <i class="bi bi-x-lg"></i>
+                                        </button>
+                                    </div>
+                                    <InputNumber class="form-control form-control-sm" @bind-Value="model.Precio2" />
+                                    <ValidationMessage For="() => model.Precio2" class="text-danger small d-block mt-1" />
+                                </div>
+                            }
+
+                            @if (MostrarPrecio3)
+                            {
+                                <div class="product-price-field product-price-field-secondary">
+                                    <div class="product-price-field-head">
+                                        <label class="form-label small fw-bold">Precio 3 (opcional)</label>
+                                        <button type="button"
+                                                class="product-price-remove-btn"
+                                                @onclick="() => EliminarCampoPrecioAdicional(3)"
+                                                title="Eliminar precio 3"
+                                                aria-label="Eliminar precio 3">
+                                            <i class="bi bi-x-lg"></i>
+                                        </button>
+                                    </div>
+                                    <InputNumber class="form-control form-control-sm" @bind-Value="model.Precio3" />
+                                    <ValidationMessage For="() => model.Precio3" class="text-danger small d-block mt-1" />
+                                </div>
+                            }
+                        </div>
+
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <div class="form-check mt-4">
+                                    <input class="form-check-input"
+                                           type="checkbox"
+                                           checked="@(!string.IsNullOrWhiteSpace(model.Codigoimpuesto) && model.Codigoimpuesto == "2")"
+                                           @onchange="OnIvaChanged" />
+                                    <label class="form-check-label fw-semibold">IVA</label>
+                                </div>
+                            </div>
+
+                            <div class="col-md-8">
+                                <label class="form-label small fw-bold">Tarifa</label>
+                                <InputSelect class="form-select form-select-sm"
+                                             @bind-Value="model.Porcentajeimpuesto"
+                                             disabled="@(string.IsNullOrWhiteSpace(model.Codigoimpuesto) || model.Codigoimpuesto != "2")">
+                                    <option value="">-- Seleccione --</option>
+                                    @foreach (var iva in porcentajesIva)
+                                    {
+                                        <option value="@iva.Codigo">@iva.Descripcion (@iva.Valor%)</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => model.Porcentajeimpuesto" class="text-danger small d-block mt-1" />
+                            </div>
+                        </div>
+
+                        <details class="mb-3">
+                            <summary class="fw-bold small">Detalles adicionales</summary>
+                            <div class="mt-3">
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label small fw-bold">Categoría (opcional)</label>
+                                        <InputSelect class="form-select form-select-sm" @bind-Value="CategoriaSeleccionada">
+                                            <option value="">-- Sin categoría --</option>
+                                            @foreach (var t in tiposProducto)
+                                            {
+                                                <option value="@t.Idtipoproducto">@t.Descripcion</option>
+                                            }
+                                        </InputSelect>
+                                    </div>
+
+                                    <div class="col-md-6">
+                                        <label class="form-label small fw-bold">Subcategoría (opcional)</label>
+                                        <InputSelect class="form-select form-select-sm" @bind-Value="model.Idsubtipo">
+                                            <option value="">@(model.TipoProducto.HasValue ? "-- Seleccione --" : "-- Seleccione una categoría primero --")</option>
+                                            @foreach (var s in SubtiposDisponibles)
+                                            {
+                                                <option value="@s.Idsubtipo">@s.Descripcion</option>
+                                            }
+                                        </InputSelect>
+                                        <ValidationMessage For="() => model.Idsubtipo" class="text-danger small d-block mt-1" />
+                                    </div>
+                                </div>
+
+                                <label class="form-label small">Observaciones</label>
+                                <InputTextArea class="form-control form-control-sm product-textarea"
+                                               rows="4"
+                                               @bind-Value="model.Observacion"
+                                               placeholder="Campos opcionales del producto o servicio" />
+                                <ValidationMessage For="() => model.Observacion" class="text-danger small d-block mt-1" />
+                            </div>
+                        </details>
+
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end pt-3 border-top mt-4">
+                            <button class="secondary-btn" type="button" @onclick="Nuevo" disabled="@isSaving">Limpiar</button>
+                            <button class="primary-btn" type="submit" disabled="@isSaving">
+                                <i class="bi bi-save me-1"></i> @(isSaving ? "Guardando..." : (editando ? "Guardar Cambios" : "Crear Registro"))
+                            </button>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+        </section>
+    </section>
+</div>
+
+@code {
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "sucursalId")]
+    public int? SucursalId { get; set; }
+
+    private int usuarioLogueadoId = 0;
+    private string PageBrandTitle => IsEContaxPath(NavManager.Uri) ? "Numerica E-Contax" : "Numerica e-fact";
+    private int? filtroTipo = null;
+    private int? filtroSubtipo = null;
+    private int? filtroSucursal = null;
+    private string filtroCompraventa = string.Empty;
+
+    private class LookupResponse
+    {
+        public List<TipoDto> tipos { get; set; } = new();
+        public List<ImpuestoDto> impuestos { get; set; } = new();
+        public List<IvaDto> ivas { get; set; } = new();
+        public List<SubtipoDto> subtipos { get; set; } = new();
+        public List<SucursalDto> sucursales { get; set; } = new();
+        public EContaxContextDto? contexto { get; set; }
+    }
+
+    private class TipoDto
+    {
+        public int Idtipoproducto { get; set; }
+        public string Descripcion { get; set; } = "";
+    }
+
+    private class ImpuestoDto
+    {
+        public string Codigo { get; set; } = "";
+        public string Descripcion { get; set; } = "";
+    }
+
+    private class IvaDto
+    {
+        public string Codigo { get; set; } = "";
+        public string Descripcion { get; set; } = "";
+        public string? Valor { get; set; }
+    }
+
+    private class SubtipoDto
+    {
+        public int Idsubtipo { get; set; }
+        public string Descripcion { get; set; } = "";
+        public int Idtipoproducto { get; set; }
+    }
+
+    private class SucursalDto
+    {
+        public int IdSucursal { get; set; }
+        public int IdEmpresa { get; set; }
+        public string Nombre { get; set; } = "";
+    }
+
+    private class EContaxContextDto
+    {
+        public int IdUsuario { get; set; }
+        public int IdUsuarioTitular { get; set; }
+        public int IdEmpresa { get; set; }
+        public int? IdSucursal { get; set; }
+        public string Rol { get; set; } = "";
+        public bool EsJefeEmpresa { get; set; }
+        public bool PuedeFiltrarSucursal { get; set; }
+    }
+
+    private class ProductoDto
+    {
+        public int Codigo { get; set; }
+        public string? Nombre { get; set; }
+        public string? CodigoPrincipal { get; set; }
+
+        public decimal? ValorUnitario { get; set; }
+        public decimal? Precio2 { get; set; }
+        public decimal? Precio3 { get; set; }
+
+        public string? TipoCompravena { get; set; }
+
+        public int? TipoProducto { get; set; }
+        public int? Idsubtipo { get; set; }
+
+        public string? Codigoimpuesto { get; set; }
+        public string? Porcentajeimpuesto { get; set; }
+
+        public bool? Estado { get; set; }
+        public string? Observacion { get; set; }
+        public int? Idusuario { get; set; }
+        public int? Idempresa { get; set; }
+        public int? Idsucursal { get; set; }
+        public string? NombreSucursal { get; set; }
+    }
+
+    private class ProductoUpsertDto : IValidatableObject
+    {
+        public int Codigo { get; set; }
+
+        public string? Nombre { get; set; }
+        public string? CodigoPrincipal { get; set; }
+
+        public decimal? ValorUnitario { get; set; }
+        public decimal? Precio2 { get; set; }
+        public decimal? Precio3 { get; set; }
+
+        public string? TipoCompravena { get; set; }
+
+        public int? TipoProducto { get; set; }
+        public int? Idsubtipo { get; set; }
+
+        public string? Codigoimpuesto { get; set; }
+        public string? Porcentajeimpuesto { get; set; }
+
+        public bool? Estado { get; set; } = true;
+        public string? Observacion { get; set; }
+        public int? Idsucursal { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            Nombre = Nombre?.Trim();
+            CodigoPrincipal = CodigoPrincipal?.Trim();
+            TipoCompravena = TipoCompravena?.Trim().ToUpperInvariant();
+            Codigoimpuesto = Codigoimpuesto?.Trim();
+            Porcentajeimpuesto = Porcentajeimpuesto?.Trim();
+            Observacion = Observacion?.Trim();
+
+            if (string.IsNullOrWhiteSpace(TipoCompravena))
+            {
+                yield return new ValidationResult(
+                    "Debe seleccionar si el registro es producto o servicio.",
+                    new[] { nameof(TipoCompravena) });
+            }
+
+            if (string.IsNullOrWhiteSpace(Nombre))
+            {
+                yield return new ValidationResult(
+                    "Debe ingresar el nombre del producto o servicio.",
+                    new[] { nameof(Nombre) });
+            }
+            else if (Nombre.Length > 120)
+            {
+                yield return new ValidationResult(
+                    "El nombre no puede exceder 120 caracteres.",
+                    new[] { nameof(Nombre) });
+            }
+
+            if (!string.IsNullOrWhiteSpace(CodigoPrincipal) && CodigoPrincipal.Length > 50)
+            {
+                yield return new ValidationResult(
+                    "El código no puede exceder 50 caracteres.",
+                    new[] { nameof(CodigoPrincipal) });
+            }
+
+            if (!ValorUnitario.HasValue)
+            {
+                yield return new ValidationResult(
+                    "Debe ingresar el precio base.",
+                    new[] { nameof(ValorUnitario) });
+            }
+
+            if (Idsucursal is <= 0)
+            {
+                yield return new ValidationResult(
+                    "Debe seleccionar la sucursal del producto.",
+                    new[] { nameof(Idsucursal) });
+            }
+
+            if (ValorUnitario.HasValue && ValorUnitario < 0)
+            {
+                yield return new ValidationResult(
+                    "El precio 1 no puede ser menor a 0.",
+                    new[] { nameof(ValorUnitario) });
+            }
+
+            if (Precio2.HasValue && Precio2 < 0)
+            {
+                yield return new ValidationResult(
+                    "El precio 2 no puede ser menor a 0.",
+                    new[] { nameof(Precio2) });
+            }
+
+            if (Precio3.HasValue && Precio3 < 0)
+            {
+                yield return new ValidationResult(
+                    "El precio 3 no puede ser menor a 0.",
+                    new[] { nameof(Precio3) });
+            }
+
+            if (!string.IsNullOrWhiteSpace(TipoCompravena) &&
+                TipoCompravena != "PRODUCTO" &&
+                TipoCompravena != "SERVICIO")
+            {
+                yield return new ValidationResult(
+                    "Debe elegir PRODUCTO o SERVICIO.",
+                    new[] { nameof(TipoCompravena) });
+            }
+
+            if (Idsubtipo.HasValue && !TipoProducto.HasValue)
+            {
+                yield return new ValidationResult(
+                    "Debe seleccionar una categoría antes de elegir la subcategoría.",
+                    new[] { nameof(Idsubtipo), nameof(TipoProducto) });
+            }
+
+            if (Codigoimpuesto == "2" && string.IsNullOrWhiteSpace(Porcentajeimpuesto))
+            {
+                yield return new ValidationResult(
+                    "Debe seleccionar la tarifa IVA.",
+                    new[] { nameof(Porcentajeimpuesto) });
+            }
+
+            if (!string.IsNullOrWhiteSpace(Observacion) && Observacion.Length > 250)
+            {
+                yield return new ValidationResult(
+                    "La observación no puede exceder 250 caracteres.",
+                    new[] { nameof(Observacion) });
+            }
+        }
+    }
+
+    private Guid formKey = Guid.NewGuid();
+    private List<ProductoDto> productos = new();
+    private string filtro = "";
+    private bool cargando = true;
+    private string? mensaje;
+    private string? mensajeEdicion;
+    private string? mensajeFormularioError;
+    private string? debugError;
+    private bool isSaving;
+    private int pageSize = 10;
+    private int currentPage = 1;
+
+    private ProductoUpsertDto model = new();
+    private bool editando;
+
+    private List<TipoDto> tiposProducto = new();
+    private List<SubtipoDto> subtiposProducto = new();
+    private List<ImpuestoDto> codigosImpuesto = new();
+    private List<IvaDto> porcentajesIva = new();
+    private List<SucursalDto> sucursales = new();
+    private EContaxContextDto? contextoEContax;
+
+    private bool mostrarConfirmacion;
+    private ProductoDto? productoAEliminar;
+    private ProductoDto? productoEnVista;
+    private int camposPrecioVisibles = 1;
+    private bool MostrarPrecio2 => camposPrecioVisibles >= 2;
+    private bool MostrarPrecio3 => camposPrecioVisibles >= 3;
+    private bool PuedeAgregarCampoPrecioAdicional => camposPrecioVisibles < 3;
+    private IEnumerable<SubtipoDto> SubtiposDisponibles =>
+        model.TipoProducto.HasValue
+            ? subtiposProducto.Where(x => x.Idtipoproducto == model.TipoProducto.Value)
+            : Enumerable.Empty<SubtipoDto>();
+
+    private IEnumerable<SubtipoDto> SubcategoriasFiltroDisponibles =>
+        filtroTipo.HasValue
+            ? subtiposProducto.Where(x => x.Idtipoproducto == filtroTipo.Value)
+            : subtiposProducto;
+
+    private int? CategoriaSeleccionada
+    {
+        get => model.TipoProducto;
+        set
+        {
+            model.TipoProducto = value;
+
+            if (!model.Idsubtipo.HasValue)
+            {
+                return;
+            }
+
+            var subtipoPerteneceACategoria = model.TipoProducto.HasValue &&
+                subtiposProducto.Any(s =>
+                    s.Idsubtipo == model.Idsubtipo.Value &&
+                    s.Idtipoproducto == model.TipoProducto.Value);
+
+            if (!subtipoPerteneceACategoria)
+            {
+                model.Idsubtipo = null;
+            }
+        }
+    }
+
+    private int? FiltroCategoriaSeleccionada
+    {
+        get => filtroTipo;
+        set
+        {
+            filtroTipo = value;
+            currentPage = 1;
+
+            if (!filtroSubtipo.HasValue)
+            {
+                return;
+            }
+
+            var subtipoPerteneceACategoria = !filtroTipo.HasValue ||
+                subtiposProducto.Any(s =>
+                    s.Idsubtipo == filtroSubtipo.Value &&
+                    s.Idtipoproducto == filtroTipo.Value);
+
+            if (!subtipoPerteneceACategoria)
+            {
+                filtroSubtipo = null;
+            }
+        }
+    }
+
+    private int? FiltroSubcategoriaSeleccionada
+    {
+        get => filtroSubtipo;
+        set
+        {
+            filtroSubtipo = value;
+            currentPage = 1;
+        }
+    }
+
+    private string FiltroCompraventaSeleccionado
+    {
+        get => filtroCompraventa;
+        set
+        {
+            filtroCompraventa = value;
+            currentPage = 1;
+        }
+    }
+
+    private int? FiltroSucursalSeleccionada
+    {
+        get => filtroSucursal;
+        set
+        {
+            filtroSucursal = value;
+            currentPage = 1;
+
+            if (!editando && contextoEContax?.EsJefeEmpresa == true)
+            {
+                model.Idsucursal = value ?? sucursales.FirstOrDefault()?.IdSucursal;
+            }
+        }
+    }
+
+    private string FiltroBusqueda
+    {
+        get => filtro;
+        set
+        {
+            filtro = value;
+            currentPage = 1;
+        }
+    }
+
+    private int CurrentPageSize
+    {
+        get => pageSize;
+        set
+        {
+            pageSize = value;
+            currentPage = 1;
+            AjustarPaginaActual();
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        Nuevo();
+        filtroSucursal = SucursalId;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (!await ValidarAccesoEContaxAsync(user))
+        {
+            cargando = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        usuarioLogueadoId = ObtenerIdUsuario(user);
+
+        if (usuarioLogueadoId <= 0)
+        {
+            mensaje = "Sesión no válida (no se pudo obtener IdUsuario). Vuelve a iniciar sesión.";
+            cargando = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        await CargarTodo();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (!IsEContaxPath(NavManager.Uri))
+            return true;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);
+
+    private async Task CargarTodo()
+    {
+        cargando = true;
+        try
+        {
+            var respLook = await Http.GetFromJsonAsync<LookupResponse>($"api/e-contax/productos/lookups?userId={usuarioLogueadoId}");
+            if (respLook != null)
+            {
+                tiposProducto = respLook.tipos
+                    .OrderBy(x => x.Descripcion, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                codigosImpuesto = respLook.impuestos;
+                porcentajesIva = respLook.ivas;
+                subtiposProducto = respLook.subtipos
+                    .OrderBy(x => x.Descripcion, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                sucursales = respLook.sucursales
+                    .OrderBy(x => x.Nombre, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                contextoEContax = respLook.contexto;
+
+                if (contextoEContax?.EsJefeEmpresa == true)
+                {
+                    if (filtroSucursal.HasValue && !sucursales.Any(x => x.IdSucursal == filtroSucursal.Value))
+                    {
+                        filtroSucursal = null;
+                    }
+
+                    if (!editando && !model.Idsucursal.HasValue)
+                    {
+                        model.Idsucursal = filtroSucursal ?? sucursales.FirstOrDefault()?.IdSucursal;
+                    }
+                }
+                else
+                {
+                    filtroSucursal = contextoEContax?.IdSucursal;
+                    model.Idsucursal = contextoEContax?.IdSucursal;
+                }
+
+                if (filtroTipo.HasValue && !tiposProducto.Any(x => x.Idtipoproducto == filtroTipo.Value))
+                {
+                    filtroTipo = null;
+                }
+
+                if (filtroSubtipo.HasValue && !subtiposProducto.Any(x => x.Idsubtipo == filtroSubtipo.Value))
+                {
+                    filtroSubtipo = null;
+                }
+            }
+
+            productos = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/e-contax/productos?userId={usuarioLogueadoId}") ?? new();
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+            AjustarPaginaActual();
+        }
+    }
+
+    private IEnumerable<ProductoDto> ProductosFiltrados
+    {
+        get
+        {
+            var activos = productos.Where(p => p.Estado == true);
+
+            if (filtroTipo.HasValue)
+            {
+                activos = activos.Where(p => p.TipoProducto == filtroTipo.Value);
+            }
+
+            if (filtroSubtipo.HasValue)
+            {
+                activos = activos.Where(p => p.Idsubtipo == filtroSubtipo.Value);
+            }
+
+            if (contextoEContax?.EsJefeEmpresa == true && filtroSucursal.HasValue)
+            {
+                activos = activos.Where(p => p.Idsucursal == filtroSucursal.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(filtroCompraventa))
+            {
+                activos = activos.Where(p =>
+                    string.Equals(p.TipoCompravena, filtroCompraventa, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (string.IsNullOrWhiteSpace(filtro))
+            {
+                return OrdenarProductosClasificados(activos);
+            }
+
+            return OrdenarProductosClasificados(activos.Where(p =>
+                (p.Nombre ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (p.CodigoPrincipal ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                GetCategoriaDescripcion(p.TipoProducto).Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                GetSubcategoriaDescripcion(p.Idsubtipo).Contains(filtro, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private IOrderedEnumerable<ProductoDto> OrdenarProductosClasificados(IEnumerable<ProductoDto> query) =>
+        query
+            .OrderBy(p => GetCategoriaDescripcion(p.TipoProducto), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => GetSubcategoriaDescripcion(p.Idsubtipo), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => p.Nombre ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(p => p.Codigo);
+
+    private async Task ExportarProductosCsvAsync()
+    {
+        var productosExportar = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/e-contax/productos?userId={usuarioLogueadoId}") ?? productos;
+
+        if (productosExportar.Count == 0)
+        {
+            mensaje = "No se encontraron productos para exportar.";
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Codigo;Nombre;Tipo;PrecioBase;Precio2;Precio3;Categoria;Subcategoria;Sucursal;AplicaIVA;TarifaIVA;Observacion");
+
+        foreach (var p in OrdenarProductosClasificados(productosExportar))
+        {
+            var codigo = EscapeCsvField(p.CodigoPrincipal ?? string.Empty, forceExcelText: true);
+            var nombre = EscapeCsvField(p.Nombre ?? string.Empty);
+            var tipo = p.TipoCompravena ?? string.Empty;
+            var precioBase = p.ValorUnitario?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            var precio2 = p.Precio2?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            var precio3 = p.Precio3?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            var categoria = EscapeCsvField(GetCategoriaDescripcion(p.TipoProducto));
+            var subcategoria = EscapeCsvField(GetSubcategoriaDescripcion(p.Idsubtipo));
+            var sucursal = EscapeCsvField(!string.IsNullOrWhiteSpace(p.NombreSucursal) ? p.NombreSucursal : GetSucursalDescripcion(p.Idsucursal));
+            var aplicaIva = p.Codigoimpuesto == "2" ? "SI" : "NO";
+            var ivaObj = porcentajesIva.FirstOrDefault(i => i.Codigo == p.Porcentajeimpuesto);
+            var tarifaIva = ivaObj != null ? ivaObj.Valor : (p.Porcentajeimpuesto ?? string.Empty);
+            var observacion = EscapeCsvField(p.Observacion ?? string.Empty);
+
+            sb.AppendLine($"{codigo};{nombre};{tipo};{precioBase};{precio2};{precio3};{categoria};{subcategoria};{sucursal};{aplicaIva};{tarifaIva};{observacion}");
+        }
+
+        await JS.InvokeVoidAsync(
+            "numericaUi.downloadTextFile",
+            $"Productos_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+            "\uFEFF" + sb.ToString(),
+            "text/csv;charset=utf-8");
+    }
+
+    private static string EscapeCsvField(string field, bool forceExcelText = false)
+    {
+        if (string.IsNullOrEmpty(field)) return forceExcelText ? "=\"\"" : string.Empty;
+
+        if (forceExcelText)
+        {
+            var cleanField = field.Replace("\"", "\"\"");
+            return $"=\"{cleanField}\"";
+        }
+
+        if (field.Contains(";") || field.Contains("\"") || field.Contains("\n") || field.Contains("\r"))
+        {
+            return "\"" + field.Replace("\"", "\"\"") + "\"";
+        }
+
+        return field;
+    }
+
+    private IEnumerable<ProductoDto> ProductosPaginados =>
+        ProductosFiltrados
+            .Skip((currentPage - 1) * CurrentPageSize)
+            .Take(CurrentPageSize);
+
+    private int CurrentTotalRecords => ProductosFiltrados.Count();
+    private int CurrentTotalPages => Math.Max(1, (int)Math.Ceiling(CurrentTotalRecords / (double)CurrentPageSize));
+    private int CurrentPageStart => CurrentTotalRecords == 0 ? 0 : ((currentPage - 1) * CurrentPageSize) + 1;
+    private int CurrentPageEnd => CurrentTotalRecords == 0 ? 0 : Math.Min(CurrentTotalRecords, currentPage * CurrentPageSize);
+
+    private void Nuevo()
+    {
+        editando = false;
+        mensaje = null;
+        mensajeEdicion = null;
+        mensajeFormularioError = null;
+        debugError = null;
+        productoEnVista = null;
+
+        model = new ProductoUpsertDto
+        {
+            Estado = true,
+            TipoCompravena = "PRODUCTO",
+            TipoProducto = null,
+            Idsubtipo = null,
+            Codigoimpuesto = "",
+            Porcentajeimpuesto = "",
+            ValorUnitario = null,
+            Precio2 = null,
+            Precio3 = null,
+            Observacion = null,
+            Idsucursal = contextoEContax?.EsJefeEmpresa == true
+                ? filtroSucursal ?? sucursales.FirstOrDefault()?.IdSucursal
+                : contextoEContax?.IdSucursal
+        };
+
+        SincronizarCamposPrecioVisibles();
+        formKey = Guid.NewGuid();
+    }
+
+    private async Task Editar(int codigo)
+    {
+        if (isSaving)
+            return;
+
+        try
+        {
+            mensaje = null;
+            mensajeEdicion = null;
+            mensajeFormularioError = null;
+            debugError = null;
+            productoEnVista = null;
+
+            var item = await Http.GetFromJsonAsync<ProductoDto>($"api/e-contax/productos/{codigo}?userId={usuarioLogueadoId}");
+            if (item != null)
+            {
+                var nombreProducto = string.IsNullOrWhiteSpace(item.Nombre)
+                    ? $"registro #{item.Codigo}"
+                    : item.Nombre;
+
+                model = new ProductoUpsertDto
+                {
+                    Codigo = item.Codigo,
+                    Nombre = item.Nombre,
+                    CodigoPrincipal = item.CodigoPrincipal,
+                    ValorUnitario = item.ValorUnitario,
+                    Precio2 = item.Precio2,
+                    Precio3 = item.Precio3,
+                    TipoCompravena = item.TipoCompravena,
+                    TipoProducto = item.TipoProducto,
+                    Idsubtipo = item.Idsubtipo,
+                    Codigoimpuesto = item.Codigoimpuesto,
+                    Porcentajeimpuesto = item.Porcentajeimpuesto,
+                    Estado = item.Estado,
+                    Observacion = item.Observacion,
+                    Idsucursal = item.Idsucursal
+                };
+
+                editando = true;
+                SincronizarCamposPrecioVisibles();
+                var mensajeCarga = $"Los datos de {nombreProducto} se llevaron al formulario para su edición.";
+                mensajeEdicion = mensajeCarga;
+                formKey = Guid.NewGuid();
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private async Task Guardar()
+    {
+        if (isSaving)
+            return;
+
+        mensaje = null;
+        mensajeEdicion = null;
+        mensajeFormularioError = null;
+        debugError = null;
+
+        model.Nombre = model.Nombre?.Trim();
+        model.CodigoPrincipal = model.CodigoPrincipal?.Trim();
+        model.TipoCompravena = model.TipoCompravena?.Trim().ToUpperInvariant();
+        model.Codigoimpuesto = model.Codigoimpuesto?.Trim();
+        model.Porcentajeimpuesto = model.Porcentajeimpuesto?.Trim();
+        model.Observacion = model.Observacion?.Trim();
+        model.Idsucursal = contextoEContax?.EsJefeEmpresa == true
+            ? model.Idsucursal
+            : contextoEContax?.IdSucursal;
+
+        if (model.Idsucursal is not > 0)
+        {
+            mensajeFormularioError = "Debe seleccionar la sucursal del producto.";
+            return;
+        }
+
+        if (model.TipoProducto.HasValue && model.Idsubtipo.HasValue)
+        {
+            var subtipoOk = subtiposProducto.Any(s =>
+                s.Idsubtipo == model.Idsubtipo.Value &&
+                s.Idtipoproducto == model.TipoProducto.Value);
+
+            if (!subtipoOk)
+            {
+                mensajeFormularioError = "La subcategoría no pertenece a la categoría elegida.";
+                return;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(model.CodigoPrincipal))
+        {
+            var existeCodigoPrincipal = productos.Any(p =>
+                p.Codigo != model.Codigo &&
+                p.Idsucursal == model.Idsucursal &&
+                string.Equals(p.CodigoPrincipal?.Trim(), model.CodigoPrincipal, StringComparison.OrdinalIgnoreCase));
+
+            if (existeCodigoPrincipal)
+            {
+                mensajeFormularioError = "Ya existe un producto con ese código.";
+                return;
+            }
+        }
+
+        var estabaEditando = editando;
+        isSaving = true;
+
+        try
+        {
+            var resp = editando
+                ? await Http.PutAsJsonAsync($"api/e-contax/productos/{model.Codigo}?userId={usuarioLogueadoId}", model)
+                : await Http.PostAsJsonAsync($"api/e-contax/productos?userId={usuarioLogueadoId}", model);
+
+            if (resp.IsSuccessStatusCode)
+            {
+                await CargarTodo();
+                Nuevo();
+                mensaje = estabaEditando
+                    ? "Producto actualizado correctamente."
+                    : "Producto creado correctamente.";
+            }
+            else
+            {
+                debugError = await resp.Content.ReadAsStringAsync();
+                mensaje = "No se pudo guardar el registro.";
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+            mensaje = "Error al guardar el registro.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void ManejarFormularioInvalido(EditContext _)
+    {
+        mensaje = null;
+        mensajeEdicion = null;
+        debugError = null;
+        mensajeFormularioError = "Revisa los campos obligatorios antes de confirmar el producto.";
+    }
+
+    private void OnIvaChanged(ChangeEventArgs e)
+    {
+        var marcado = false;
+
+        if (e.Value is bool b)
+        {
+            marcado = b;
+        }
+        else if (e.Value is string s && bool.TryParse(s, out var parsed))
+        {
+            marcado = parsed;
+        }
+
+        if (marcado)
+        {
+            model.Codigoimpuesto = "2";
+        }
+        else
+        {
+            model.Codigoimpuesto = "";
+            model.Porcentajeimpuesto = "";
+        }
+    }
+
+    private void AgregarCampoPrecioAdicional()
+    {
+        if (camposPrecioVisibles < 3)
+        {
+            camposPrecioVisibles++;
+        }
+    }
+
+    private void EliminarCampoPrecioAdicional(int numeroCampo)
+    {
+        if (numeroCampo == 2)
+        {
+            model.Precio2 = model.Precio3;
+            model.Precio3 = null;
+            camposPrecioVisibles = Math.Max(1, camposPrecioVisibles - 1);
+            return;
+        }
+
+        if (numeroCampo == 3)
+        {
+            model.Precio3 = null;
+            camposPrecioVisibles = Math.Max(1, camposPrecioVisibles - 1);
+        }
+    }
+
+    private void SincronizarCamposPrecioVisibles()
+    {
+        camposPrecioVisibles = 1;
+
+        if (model.Precio2.HasValue || model.Precio3.HasValue)
+        {
+            camposPrecioVisibles = 2;
+        }
+
+        if (model.Precio3.HasValue)
+        {
+            camposPrecioVisibles = 3;
+        }
+    }
+
+    private async Task ConfirmarEliminar(ProductoDto p)
+    {
+        var nombreProducto = string.IsNullOrWhiteSpace(p.Nombre)
+            ? $"el registro #{p.Codigo}"
+            : p.Nombre;
+
+        if (!await JS.ConfirmDeleteAsync("Dar de baja producto", $"Se dara de baja {nombreProducto}.", "Si, dar de baja"))
+        {
+            return;
+        }
+
+        try
+        {
+            var del = await Http.DeleteAsync($"api/e-contax/productos/{p.Codigo}?userId={usuarioLogueadoId}");
+
+            if (del.IsSuccessStatusCode)
+            {
+                await CargarTodo();
+                mensaje = "Registro desactivado con exito.";
+                await JS.ShowToastAsync("Registro dado de baja");
+            }
+            else
+            {
+                debugError = await del.Content.ReadAsStringAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private void VerProducto(ProductoDto producto)
+    {
+        productoEnVista = producto;
+    }
+
+    private void CerrarVistaProducto()
+    {
+        productoEnVista = null;
+    }
+
+    private void ConfirmarEliminarLegacy(ProductoDto p)
+    {
+        productoAEliminar = p;
+        mostrarConfirmacion = true;
+    }
+
+    private void CancelarEliminar()
+    {
+        mostrarConfirmacion = false;
+        productoAEliminar = null;
+    }
+
+    private async Task EliminarConfirmado()
+    {
+        if (productoAEliminar is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var del = await Http.DeleteAsync($"api/e-contax/productos/{productoAEliminar.Codigo}?userId={usuarioLogueadoId}");
+
+            if (del.IsSuccessStatusCode)
+            {
+                await CargarTodo();
+                CancelarEliminar();
+                mensaje = "Registro desactivado con éxito.";
+            }
+            else
+            {
+                debugError = await del.Content.ReadAsStringAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+    }
+
+    private string GetCategoriaDescripcion(int? tipoId) =>
+        tipoId.HasValue
+            ? tiposProducto.FirstOrDefault(t => t.Idtipoproducto == tipoId.Value)?.Descripcion ?? "Sin categoría"
+            : "Sin categoría";
+
+    private string GetSubcategoriaDescripcion(int? subtipoId) =>
+        subtipoId.HasValue
+            ? subtiposProducto.FirstOrDefault(s => s.Idsubtipo == subtipoId.Value)?.Descripcion ?? "Sin subcategoría"
+            : "Sin subcategoría";
+
+    private string GetSucursalDescripcion(int? sucursalId) =>
+        sucursalId.HasValue
+            ? sucursales.FirstOrDefault(s => s.IdSucursal == sucursalId.Value)?.Nombre ?? "Sucursal no asignada"
+            : "Sucursal no asignada";
+
+    private string GetTarifaDescripcion(string? codigo) =>
+        string.IsNullOrWhiteSpace(codigo)
+            ? "Sin tarifa"
+            : porcentajesIva.FirstOrDefault(i => i.Codigo == codigo)?.Descripcion ?? codigo;
+
+    private string GetImpuestoDescripcion(string? codigo) =>
+        string.IsNullOrWhiteSpace(codigo)
+            ? "Sin impuesto"
+            : codigosImpuesto.FirstOrDefault(i => i.Codigo == codigo)?.Descripcion ?? codigo;
+
+    private static string GetEstadoProductoDescripcion(bool? estado) => estado == true ? "Activo" : "Inactivo";
+
+    private void AjustarPaginaActual()
+    {
+        currentPage = Math.Min(Math.Max(1, currentPage), CurrentTotalPages);
+    }
+
+    private void PaginaAnterior()
+    {
+        if (currentPage > 1)
+        {
+            currentPage--;
+        }
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (currentPage < CurrentTotalPages)
+        {
+            currentPage++;
+        }
+    }
+
+    private static string FormatCurrency(decimal? value) => value?.ToString("C2") ?? "-";
+}

@@ -1,0 +1,862 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.DTOs
+@using Simetric.Models
+@using Simetric.Services
+@using System.Security.Claims
+@using System.Text.Json
+@implements IAsyncDisposable
+@inject SolicitudService SolicitudService
+@inject DashboardService DashboardService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@if (panelAbierto)
+{
+    <div class="solicitud-notification-backdrop" @onclick="CerrarPanel"></div>
+}
+<div class="solicitud-notification-shell" @ref="notificationShell">
+    <button type="button"
+            class="solicitud-notification-trigger @(TieneAvisos ? "has-alerts" : string.Empty)"
+            aria-label="Notificaciones de solicitud"
+            @onclick="TogglePanel">
+        <i class="bi bi-bell"></i>
+        @if (TieneAvisos)
+        {
+            <span class="solicitud-notification-badge">@GetBadgeText()</span>
+        }
+    </button>
+
+    @if (panelAbierto)
+    {
+        <div class="solicitud-notification-panel">
+            <div class="solicitud-notification-head">
+                <span>Notificaciones</span>
+                <div>
+                    <strong>@TotalAvisos aviso(s)</strong>
+                    @if (TieneElementosVisibles)
+                    {
+                        <button type="button" class="solicitud-notification-clear" @onclick="BorrarTodoAsync">
+                            Borrar todo
+                        </button>
+                    }
+                    <button type="button" class="solicitud-notification-close" @onclick="CerrarPanel" aria-label="Cerrar notificaciones">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            </div>
+
+            @if (TieneElementosVisibles)
+            {
+                <div class="solicitud-notification-list">
+                    @if (FacturasPendientesReenvio.Count > 0)
+                    {
+                        <div class="@GetFacturaPendienteItemClass()">
+                            <button type="button"
+                                    class="solicitud-notification-main"
+                                    @onclick="IrAFacturasPendientesAsync">
+                                <span class="solicitud-notification-icon is-pending">
+                                    <i class="bi bi-exclamation-triangle-fill"></i>
+                                </span>
+                                <span class="solicitud-notification-copy">
+                                    <span class="solicitud-notification-title-row">
+                                        <strong>@GetTituloFacturasPendientes()</strong>
+                                        <span class="solicitud-notification-flag">Nueva</span>
+                                    </span>
+                                    <small>Haz clic para abrir Mis facturas y reenviar manualmente.</small>
+                                    <em>@GetMetaFacturasPendientes()</em>
+                                </span>
+                            </button>
+                            <button type="button"
+                                    class="solicitud-notification-delete"
+                                    @onclick="BorrarFacturasPendientesAsync"
+                                    aria-label="Borrar notificaciÃ³n">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    }
+                    @foreach (var documento in DocumentosAutorizadosVisibles)
+                    {
+                        <div class="@GetDocumentoItemClass(documento)">
+                            <button type="button"
+                                    class="solicitud-notification-main"
+                                    @onclick="() => IrADocumentoAutorizado(documento)">
+                                <span class="solicitud-notification-icon @GetDocumentoIconClass(documento)">
+                                    <i class="@GetDocumentoIcon(documento)"></i>
+                                </span>
+                                <span class="solicitud-notification-copy">
+                                    <span class="solicitud-notification-title-row">
+                                        <strong>@documento.Titulo</strong>
+                                        @if (!EsAutorizacionVista(documento))
+                                        {
+                                            <span class="solicitud-notification-flag">Nueva</span>
+                                        }
+                                    </span>
+                                    <small>@documento.NumeroDocumento</small>
+                                    <em>@GetMetaDocumentoAutorizado(documento)</em>
+                                </span>
+                            </button>
+                            <button type="button"
+                                    class="solicitud-notification-delete"
+                                    @onclick="() => BorrarDocumentoAsync(documento)"
+                                    aria-label="Borrar notificación">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    }
+                    @foreach (var recarga in RecargasDocumentosVisibles)
+                    {
+                        <div class="solicitud-notification-item is-unread">
+                            <button type="button"
+                                    class="solicitud-notification-main"
+                                    @onclick="() => IrARecargaDocumentos(recarga)">
+                                <span class="solicitud-notification-icon @(EsRecargaAprobada(recarga) ? "is-approved" : "is-rejected")">
+                                    <i class="bi @(EsRecargaAprobada(recarga) ? "bi-check-circle-fill" : "bi-x-circle-fill")"></i>
+                                </span>
+                                <span class="solicitud-notification-copy">
+                                    <span class="solicitud-notification-title-row">
+                                        <strong>@(EsRecargaAprobada(recarga) ? "Recarga aprobada" : "Recarga rechazada")</strong>
+                                        <span class="solicitud-notification-flag">Nueva</span>
+                                    </span>
+                                    <small>@recarga.Descripcion</small>
+                                    <em>@recarga.Fecha.ToString("dd/MM/yyyy HH:mm")</em>
+                                </span>
+                            </button>
+                            <button type="button"
+                                    class="solicitud-notification-delete"
+                                    @onclick="() => BorrarRecargaDocumentosAsync(recarga)"
+                                    aria-label="Borrar notificaciÃ³n">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    }
+                    @foreach (var solicitudDocumentos in SolicitudesDocumentosBackOfficeVisibles)
+                    {
+                        <div class="solicitud-notification-item is-unread">
+                            <button type="button"
+                                    class="solicitud-notification-main"
+                                    @onclick="() => IrASolicitudDocumentosBackOffice(solicitudDocumentos)">
+                                <span class="solicitud-notification-icon is-pending">
+                                    <i class="bi bi-bank2"></i>
+                                </span>
+                                <span class="solicitud-notification-copy">
+                                    <span class="solicitud-notification-title-row">
+                                        <strong>Solicitud de documentos</strong>
+                                        <span class="solicitud-notification-flag">Nueva</span>
+                                    </span>
+                                    <small>@GetSolicitudDocumentosDetalle(solicitudDocumentos)</small>
+                                    <em>@solicitudDocumentos.Fecha.ToString("dd/MM/yyyy HH:mm")</em>
+                                </span>
+                            </button>
+                            <button type="button"
+                                    class="solicitud-notification-delete"
+                                    @onclick="() => BorrarSolicitudDocumentosBackOfficeAsync(solicitudDocumentos)"
+                                    aria-label="Borrar notificación">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    }
+                    @foreach (var notificacion in NotificacionesVisibles)
+                    {
+                        <div class="solicitud-notification-item is-unread">
+                            <button type="button"
+                                    class="solicitud-notification-main"
+                                    @onclick="() => IrANotificacionAsync(notificacion)">
+                                <span class="solicitud-notification-icon @GetTipoClass(notificacion.ObsTipo)">
+                                    <i class="@GetTipoIcon(notificacion.ObsTipo)"></i>
+                                </span>
+
+                                <span class="solicitud-notification-copy">
+                                    <span class="solicitud-notification-title-row">
+                                        <strong>@GetTipoLabel(notificacion)</strong>
+                                        <span class="solicitud-notification-flag">Nueva</span>
+                                    </span>
+                                    <small>@GetDetalleNotificacion(notificacion)</small>
+                                    <em>@GetMetaNotificacion(notificacion)</em>
+                                </span>
+                            </button>
+                            <button type="button"
+                                    class="solicitud-notification-delete"
+                                    @onclick="() => BorrarNotificacionAsync(notificacion)"
+                                    aria-label="Borrar notificación">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="solicitud-notification-empty">
+                    <span><i class="bi bi-bell-slash"></i></span>
+                    <strong>Sin avisos pendientes</strong>
+                    <small>Cuando haya una autorizacion SRI, solicitud o respuesta nueva aparecera aqui.</small>
+                </div>
+            }
+
+        </div>
+    }
+</div>
+
+@code {
+    private List<SolicitudNotificacionDto> notificaciones = new();
+    private List<DashboardAuthorizedDocumentDto> documentosAutorizados = new();
+    private List<CompraDocumentosHistorialItem> recargasDocumentos = new();
+    private List<ReporteVentaBackOffice> solicitudesDocumentosBackOffice = new();
+    private HashSet<string> autorizacionesVistas = new(StringComparer.Ordinal);
+    private HashSet<string> notificacionesOcultas = new(StringComparer.Ordinal);
+    private bool panelAbierto;
+    private int usuarioIdActual;
+    private bool esUsuarioBackOffice;
+    private bool autorizacionesVistasInicializadas;
+    private bool notificacionesOcultasInicializadas;
+    private CancellationTokenSource? refreshCancellation;
+    private Task? refreshTask;
+    private ElementReference notificationShell;
+    private DotNetObjectReference<SolicitudNotifications>? selfReference;
+    private string AuthorizationReadStorageKey => $"numerica:authorized-documents-read-v2:{usuarioIdActual}";
+    private string HiddenNotificationsStorageKey => $"numerica:hidden-notifications-v1:{usuarioIdActual}";
+    private IEnumerable<DashboardAuthorizedDocumentDto> DocumentosAutorizadosVisibles =>
+        documentosAutorizados.Where(documento =>
+            !notificacionesOcultas.Contains(GetDocumentoKey(documento)) &&
+            !(documento.EsPendienteAutorizacion && string.Equals(documento.Ruta, "/facturas", StringComparison.OrdinalIgnoreCase)));
+    private List<DashboardAuthorizedDocumentDto> FacturasPendientesReenvio =>
+        documentosAutorizados
+            .Where(documento =>
+                !notificacionesOcultas.Contains(GetDocumentoKey(documento)) &&
+                documento.EsPendienteAutorizacion &&
+                string.Equals(documento.Ruta, "/facturas", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    private IEnumerable<SolicitudNotificacionDto> NotificacionesVisibles =>
+        notificaciones.Where(notificacion => !notificacionesOcultas.Contains(GetNotificacionKey(notificacion)));
+    private IEnumerable<CompraDocumentosHistorialItem> RecargasDocumentosVisibles =>
+        recargasDocumentos.Where(recarga => !notificacionesOcultas.Contains(GetRecargaDocumentosKey(recarga)));
+    private IEnumerable<ReporteVentaBackOffice> SolicitudesDocumentosBackOfficeVisibles =>
+        solicitudesDocumentosBackOffice.Where(solicitud => !notificacionesOcultas.Contains(GetSolicitudDocumentosBackOfficeKey(solicitud)));
+    private int AutorizacionesNoVistas => DocumentosAutorizadosVisibles.Count(documento => !EsAutorizacionVista(documento)) + (FacturasPendientesReenvio.Count > 0 ? 1 : 0);
+    private int TotalAvisos => NotificacionesVisibles.Count() + RecargasDocumentosVisibles.Count() + SolicitudesDocumentosBackOfficeVisibles.Count() + AutorizacionesNoVistas;
+    private bool TieneAvisos => TotalAvisos > 0;
+    private bool TieneElementosVisibles => DocumentosAutorizadosVisibles.Any() || FacturasPendientesReenvio.Count > 0 || RecargasDocumentosVisibles.Any() || SolicitudesDocumentosBackOfficeVisibles.Any() || NotificacionesVisibles.Any();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        usuarioIdActual = ObtenerUsuarioId(authState.User);
+        esUsuarioBackOffice = EsBackOffice(authState.User);
+
+        await CargarNotificacionesAsync();
+        await CargarRecargasDocumentosAsync();
+        await CargarSolicitudesDocumentosBackOfficeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        await CargarNotificacionesOcultasAsync();
+        await CargarAutorizacionesAsync();
+        selfReference = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync(
+            "numericaUi.registerOutsideClick",
+            "solicitud-notifications",
+            notificationShell,
+            selfReference,
+            nameof(CloseFromOutsideAsync));
+        refreshCancellation = new CancellationTokenSource();
+        refreshTask = MonitorAutorizacionesAsync(refreshCancellation.Token);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task TogglePanel()
+    {
+        if (!panelAbierto)
+        {
+            await CargarNotificacionesAsync();
+            await CargarRecargasDocumentosAsync();
+            await CargarSolicitudesDocumentosBackOfficeAsync();
+            await CargarAutorizacionesAsync();
+        }
+
+        panelAbierto = !panelAbierto;
+    }
+
+    private async Task CargarNotificacionesAsync()
+    {
+        if (usuarioIdActual <= 0)
+        {
+            notificaciones = new List<SolicitudNotificacionDto>();
+            return;
+        }
+
+        var notificacionesCliente = await SolicitudService.ObtenerNotificacionesPendientesClienteAsync(usuarioIdActual, 10);
+        var notificacionesFirma = await SolicitudService.ObtenerEntregasFirmaPendientesClienteAsync(usuarioIdActual, 10);
+        var notificacionesSoporte = await SolicitudService.ObtenerRespuestasPendientesSoporteAsync(usuarioIdActual, 10);
+
+        notificaciones = notificacionesCliente
+            .Concat(notificacionesFirma)
+            .Concat(notificacionesSoporte)
+            .OrderByDescending(notificacion => notificacion.ObsFechaObservacion)
+            .Take(12)
+            .ToList();
+    }
+
+    private async Task CargarRecargasDocumentosAsync()
+    {
+        if (usuarioIdActual <= 0)
+        {
+            recargasDocumentos = new List<CompraDocumentosHistorialItem>();
+            return;
+        }
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuario = await context.Usuarios
+                .AsNoTracking()
+                .Where(item => item.IdUsuario == usuarioIdActual)
+                .Select(item => new { item.HistorialComprasDocumentosJson })
+                .FirstOrDefaultAsync();
+
+            recargasDocumentos = LeerHistorialRecargas(usuario?.HistorialComprasDocumentosJson)
+                .Where(item =>
+                    item.Fecha >= DateTime.Now.AddDays(-7) &&
+                    !string.IsNullOrWhiteSpace(item.Reference) &&
+                    item.Reference.StartsWith("BO-", StringComparison.OrdinalIgnoreCase) &&
+                    (EsRecargaAprobada(item) || EsRecargaRechazada(item)))
+                .OrderByDescending(item => item.Fecha)
+                .Take(4)
+                .ToList();
+        }
+        catch
+        {
+            recargasDocumentos = new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private async Task CargarSolicitudesDocumentosBackOfficeAsync()
+    {
+        if (!esUsuarioBackOffice)
+        {
+            solicitudesDocumentosBackOffice = new List<ReporteVentaBackOffice>();
+            return;
+        }
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            solicitudesDocumentosBackOffice = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(item =>
+                    item.Estado == "pendiente" &&
+                    item.Producto == "e-fact" &&
+                    item.Canal != null &&
+                    item.Canal.Contains("Transferencia Web") &&
+                    item.Observacion != null &&
+                    item.Observacion.Contains("[CompraDocs:"))
+                .OrderByDescending(item => item.Fecha)
+                .Take(8)
+                .ToListAsync();
+        }
+        catch
+        {
+            solicitudesDocumentosBackOffice = new List<ReporteVentaBackOffice>();
+        }
+    }
+
+    private async Task CargarAutorizacionesAsync()
+    {
+        if (usuarioIdActual <= 0)
+        {
+            documentosAutorizados = new List<DashboardAuthorizedDocumentDto>();
+            return;
+        }
+
+        try
+        {
+            documentosAutorizados = await DashboardService.GetRecentAuthorizedDocumentsAsync(usuarioIdActual, 12);
+            await InicializarAutorizacionesVistasAsync();
+        }
+        catch
+        {
+            documentosAutorizados = new List<DashboardAuthorizedDocumentDto>();
+        }
+    }
+
+    private async Task MonitorAutorizacionesAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await InvokeAsync(async () =>
+                {
+                    await CargarAutorizacionesAsync();
+                    await CargarRecargasDocumentosAsync();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task IrADocumentoAutorizado(DashboardAuthorizedDocumentDto documento)
+    {
+        autorizacionesVistas.Add(documento.Clave);
+        await PersistirAutorizacionesVistasAsync();
+        panelAbierto = false;
+        Navigation.NavigateTo(documento.Ruta);
+    }
+
+    private async Task InicializarAutorizacionesVistasAsync()
+    {
+        if (autorizacionesVistasInicializadas)
+        {
+            return;
+        }
+
+        try
+        {
+            var storedValue = await JS.InvokeAsync<string?>("localStorage.getItem", AuthorizationReadStorageKey);
+            if (string.IsNullOrWhiteSpace(storedValue))
+            {
+                autorizacionesVistas.UnionWith(documentosAutorizados
+                    .Where(documento => !documento.EsPendienteAutorizacion)
+                    .Select(documento => documento.Clave));
+                await PersistirAutorizacionesVistasAsync();
+            }
+            else
+            {
+                autorizacionesVistas = System.Text.Json.JsonSerializer.Deserialize<HashSet<string>>(storedValue)
+                    ?? new HashSet<string>(StringComparer.Ordinal);
+            }
+        }
+        catch
+        {
+            autorizacionesVistas = new HashSet<string>(StringComparer.Ordinal);
+        }
+        finally
+        {
+            autorizacionesVistasInicializadas = true;
+        }
+    }
+
+    private async Task PersistirAutorizacionesVistasAsync()
+    {
+        try
+        {
+            var value = System.Text.Json.JsonSerializer.Serialize(autorizacionesVistas);
+            await JS.InvokeVoidAsync("localStorage.setItem", AuthorizationReadStorageKey, value);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task CargarNotificacionesOcultasAsync()
+    {
+        if (notificacionesOcultasInicializadas)
+        {
+            return;
+        }
+
+        try
+        {
+            var storedValue = await JS.InvokeAsync<string?>("localStorage.getItem", HiddenNotificationsStorageKey);
+            notificacionesOcultas = string.IsNullOrWhiteSpace(storedValue)
+                ? new HashSet<string>(StringComparer.Ordinal)
+                : System.Text.Json.JsonSerializer.Deserialize<HashSet<string>>(storedValue)
+                    ?? new HashSet<string>(StringComparer.Ordinal);
+        }
+        catch
+        {
+            notificacionesOcultas = new HashSet<string>(StringComparer.Ordinal);
+        }
+        finally
+        {
+            notificacionesOcultasInicializadas = true;
+        }
+    }
+
+    private async Task PersistirNotificacionesOcultasAsync()
+    {
+        try
+        {
+            var value = System.Text.Json.JsonSerializer.Serialize(notificacionesOcultas);
+            await JS.InvokeVoidAsync("localStorage.setItem", HiddenNotificationsStorageKey, value);
+        }
+        catch
+        {
+        }
+    }
+
+    private bool EsAutorizacionVista(DashboardAuthorizedDocumentDto documento) =>
+        autorizacionesVistas.Contains(documento.Clave);
+
+    private async Task BorrarDocumentoAsync(DashboardAuthorizedDocumentDto documento)
+    {
+        autorizacionesVistas.Add(documento.Clave);
+        notificacionesOcultas.Add(GetDocumentoKey(documento));
+        await PersistirAutorizacionesVistasAsync();
+        await PersistirNotificacionesOcultasAsync();
+    }
+
+    private async Task BorrarFacturasPendientesAsync()
+    {
+        foreach (var documento in FacturasPendientesReenvio)
+        {
+            autorizacionesVistas.Add(documento.Clave);
+            notificacionesOcultas.Add(GetDocumentoKey(documento));
+        }
+
+        await PersistirAutorizacionesVistasAsync();
+        await PersistirNotificacionesOcultasAsync();
+    }
+
+    private async Task BorrarNotificacionAsync(SolicitudNotificacionDto notificacion)
+    {
+        notificacionesOcultas.Add(GetNotificacionKey(notificacion));
+        await PersistirNotificacionesOcultasAsync();
+    }
+
+    private async Task BorrarRecargaDocumentosAsync(CompraDocumentosHistorialItem recarga)
+    {
+        notificacionesOcultas.Add(GetRecargaDocumentosKey(recarga));
+        await PersistirNotificacionesOcultasAsync();
+    }
+
+    private async Task BorrarSolicitudDocumentosBackOfficeAsync(ReporteVentaBackOffice solicitud)
+    {
+        notificacionesOcultas.Add(GetSolicitudDocumentosBackOfficeKey(solicitud));
+        await PersistirNotificacionesOcultasAsync();
+    }
+
+    private async Task BorrarTodoAsync()
+    {
+        foreach (var documento in DocumentosAutorizadosVisibles.ToList())
+        {
+            autorizacionesVistas.Add(documento.Clave);
+            notificacionesOcultas.Add(GetDocumentoKey(documento));
+        }
+
+        foreach (var documento in FacturasPendientesReenvio)
+        {
+            autorizacionesVistas.Add(documento.Clave);
+            notificacionesOcultas.Add(GetDocumentoKey(documento));
+        }
+
+        foreach (var notificacion in NotificacionesVisibles.ToList())
+        {
+            notificacionesOcultas.Add(GetNotificacionKey(notificacion));
+        }
+
+        foreach (var recarga in RecargasDocumentosVisibles.ToList())
+        {
+            notificacionesOcultas.Add(GetRecargaDocumentosKey(recarga));
+        }
+
+        foreach (var solicitud in SolicitudesDocumentosBackOfficeVisibles.ToList())
+        {
+            notificacionesOcultas.Add(GetSolicitudDocumentosBackOfficeKey(solicitud));
+        }
+
+        await PersistirAutorizacionesVistasAsync();
+        await PersistirNotificacionesOcultasAsync();
+    }
+
+    private async Task IrANotificacionAsync(SolicitudNotificacionDto notificacion)
+    {
+        panelAbierto = false;
+
+        if (EsDestinoSoporte(notificacion))
+        {
+            await SolicitudService.MarcarRespuestaSoporteVistaAsync(notificacion.ObsId, usuarioIdActual);
+            Navigation.NavigateTo($"/soporte/solicitud/{notificacion.SolId}");
+            return;
+        }
+
+        if (EsDestinoFirma(notificacion))
+        {
+            await SolicitudService.MarcarEntregaFirmaVistaAsync(notificacion.ObsId, usuarioIdActual);
+            Navigation.NavigateTo($"/solicitud/pagos?firma={notificacion.SolId}");
+            return;
+        }
+
+        Navigation.NavigateTo("/solicitud/pagos");
+    }
+
+    private void IrARecargaDocumentos(CompraDocumentosHistorialItem recarga)
+    {
+        notificacionesOcultas.Add(GetRecargaDocumentosKey(recarga));
+        _ = PersistirNotificacionesOcultasAsync();
+        panelAbierto = false;
+        Navigation.NavigateTo("/compra-documentos");
+    }
+
+    private void IrASolicitudDocumentosBackOffice(ReporteVentaBackOffice solicitud)
+    {
+        notificacionesOcultas.Add(GetSolicitudDocumentosBackOfficeKey(solicitud));
+        _ = PersistirNotificacionesOcultasAsync();
+        panelAbierto = false;
+        Navigation.NavigateTo("/backoffice/cobros");
+    }
+
+    private async Task IrAFacturasPendientesAsync()
+    {
+        foreach (var documento in FacturasPendientesReenvio)
+            autorizacionesVistas.Add(documento.Clave);
+
+        await PersistirAutorizacionesVistasAsync();
+        panelAbierto = false;
+        Navigation.NavigateTo("/facturas");
+    }
+
+    private string GetBadgeText() =>
+        TotalAvisos > 9 ? "9+" : TotalAvisos.ToString();
+
+    private void CerrarPanel() => panelAbierto = false;
+
+    private static string GetDocumentoKey(DashboardAuthorizedDocumentDto documento) =>
+        $"documento:{documento.Clave}";
+
+    private static string GetNotificacionKey(SolicitudNotificacionDto notificacion) =>
+        $"solicitud:{notificacion.ObsId}";
+
+    private static string GetRecargaDocumentosKey(CompraDocumentosHistorialItem recarga) =>
+        $"recarga-documentos:{recarga.Id}:{recarga.Estado}";
+
+    private static string GetSolicitudDocumentosBackOfficeKey(ReporteVentaBackOffice solicitud) =>
+        $"bo-recarga-documentos:{solicitud.IdReporte}:{solicitud.Estado}";
+
+    [JSInvokable]
+    public Task CloseFromOutsideAsync()
+    {
+        return InvokeAsync(() =>
+        {
+            if (!panelAbierto)
+            {
+                return;
+            }
+
+            panelAbierto = false;
+            StateHasChanged();
+        });
+    }
+
+    private static int ObtenerUsuarioId(ClaimsPrincipal user)
+    {
+        var idClaim = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(idClaim, out var parsedId) ? parsedId : 0;
+    }
+
+    private static bool EsBackOffice(ClaimsPrincipal user)
+    {
+        var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(ClaimTypes.Role)?.Value;
+        return string.Equals(role, "2", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(role, "7", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetSolicitudDocumentosDetalle(ReporteVentaBackOffice solicitud)
+    {
+        var cliente = string.IsNullOrWhiteSpace(solicitud.Cliente)
+            ? "Usuario"
+            : solicitud.Cliente.Split('|')[0].Trim();
+
+        return $"{cliente} solicita validar una transferencia por $ {solicitud.Valor:N2}.";
+    }
+
+    private static List<CompraDocumentosHistorialItem> LeerHistorialRecargas(string? historialJson)
+    {
+        if (string.IsNullOrWhiteSpace(historialJson))
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(
+                historialJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new List<CompraDocumentosHistorialItem>();
+        }
+        catch
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private static bool EsRecargaAprobada(CompraDocumentosHistorialItem recarga) =>
+        recarga.Estado?.Contains("aprob", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool EsRecargaRechazada(CompraDocumentosHistorialItem recarga) =>
+        recarga.Estado?.Contains("rech", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string GetTipoLabel(SolicitudNotificacionDto notificacion)
+    {
+        if (EsDestinoSoporte(notificacion))
+        {
+            return string.Equals(notificacion.ObsTipo, "CODIGO", StringComparison.OrdinalIgnoreCase)
+                ? "Codigo recibido"
+                : $"Correccion recibida: {GetCampoLabel(notificacion.ObsCampoObservado)}";
+        }
+
+        if (EsDestinoFirma(notificacion))
+        {
+            return "Firma lista";
+        }
+
+        return string.Equals(notificacion.ObsTipo, "CODIGO", StringComparison.OrdinalIgnoreCase)
+            ? "Codigo solicitado"
+            : $"Corregir {GetCampoLabel(notificacion.ObsCampoObservado)}";
+    }
+
+    private static string GetDetalleNotificacion(SolicitudNotificacionDto notificacion)
+    {
+        if (EsDestinoSoporte(notificacion) && !string.IsNullOrWhiteSpace(notificacion.ObsRespuestaUsuario))
+        {
+            return notificacion.ObsRespuestaUsuario.Trim();
+        }
+
+        return notificacion.ObsDetalle;
+    }
+
+    private static string GetMetaNotificacion(SolicitudNotificacionDto notificacion)
+    {
+        var titular = GetTitular(notificacion);
+        var fecha = notificacion.ObsFechaObservacion.ToString("dd/MM/yyyy HH:mm");
+        return string.IsNullOrWhiteSpace(titular)
+            ? $"Solicitud #{notificacion.SolId} - {fecha}"
+            : $"Solicitud #{notificacion.SolId} - {titular} - {fecha}";
+    }
+
+    private static string GetMetaDocumentoAutorizado(DashboardAuthorizedDocumentDto documento)
+    {
+        if (documento.EsPendienteAutorizacion)
+        {
+            return documento.FechaAutorizacion.HasValue
+                ? $"Pendiente de autorizacion SRI - emitida {documento.FechaAutorizacion.Value:dd/MM/yyyy HH:mm}"
+                : "Pendiente de autorizacion SRI";
+        }
+
+        return documento.FechaAutorizacion.HasValue
+            ? $"Autorizacion SRI - {documento.FechaAutorizacion.Value:dd/MM/yyyy HH:mm}"
+            : "Autorizacion SRI confirmada";
+    }
+
+    private static string GetDocumentoIconClass(DashboardAuthorizedDocumentDto documento) =>
+        documento.EsPendienteAutorizacion ? "is-pending" : "is-authorized";
+
+    private string GetDocumentoItemClass(DashboardAuthorizedDocumentDto documento)
+    {
+        var estado = EsAutorizacionVista(documento) ? "is-read" : "is-unread";
+        var tipo = documento.EsPendienteAutorizacion ? "is-pending-document" : "is-authorized-document";
+        return $"solicitud-notification-item {estado} {tipo}";
+    }
+
+    private static string GetDocumentoIcon(DashboardAuthorizedDocumentDto documento) =>
+        documento.EsPendienteAutorizacion ? "bi bi-exclamation-triangle-fill" : "bi bi-patch-check-fill";
+
+    private string GetFacturaPendienteItemClass() =>
+        "solicitud-notification-item is-unread is-pending-document";
+
+    private string GetTituloFacturasPendientes() =>
+        FacturasPendientesReenvio.Count == 1
+            ? "Tiene 1 factura pendiente"
+            : $"Tiene {FacturasPendientesReenvio.Count} facturas pendientes";
+
+    private string GetMetaFacturasPendientes()
+    {
+        var fecha = FacturasPendientesReenvio
+            .Select(documento => documento.FechaAutorizacion)
+            .Where(fecha => fecha.HasValue)
+            .Select(fecha => fecha!.Value)
+            .OrderByDescending(fecha => fecha)
+            .FirstOrDefault();
+
+        return fecha == default
+            ? "Se alcanzaron 3 reintentos automaticos hoy"
+            : $"Se alcanzaron 3 reintentos automaticos hoy - ultima emision {fecha:dd/MM/yyyy HH:mm}";
+    }
+
+    private static string GetTitular(SolicitudNotificacionDto notificacion)
+    {
+        var nombre = GetPrimerSegmento(notificacion.SolNombres);
+        var apellido = GetPrimerSegmento(string.IsNullOrWhiteSpace(notificacion.SolPrimerApellido)
+            ? notificacion.SolSegundoApellido
+            : notificacion.SolPrimerApellido);
+
+        return string.Join(" ", new[] { nombre, apellido }.Where(parte => !string.IsNullOrWhiteSpace(parte)));
+    }
+
+    private static string GetPrimerSegmento(string? valor) =>
+        string.IsNullOrWhiteSpace(valor)
+            ? string.Empty
+            : valor.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+
+    private static string GetCampoLabel(string? campo) =>
+        string.IsNullOrWhiteSpace(campo)
+            ? "datos"
+            : campo.Replace("SOL_", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("_", " ").ToLowerInvariant();
+
+    private static string GetTipoClass(string? tipo)
+    {
+        if (string.Equals(tipo, "CODIGO", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-code";
+        }
+
+        if (string.Equals(tipo, "FIRMA_P12", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-firma";
+        }
+
+        return "is-field";
+    }
+
+    private static string GetTipoIcon(string? tipo)
+    {
+        if (string.Equals(tipo, "CODIGO", StringComparison.OrdinalIgnoreCase))
+        {
+            return "bi bi-key";
+        }
+
+        if (string.Equals(tipo, "FIRMA_P12", StringComparison.OrdinalIgnoreCase))
+        {
+            return "bi bi-file-earmark-lock";
+        }
+
+        return "bi bi-ui-checks";
+    }
+
+    private static bool EsDestinoSoporte(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.Destino, "SOPORTE", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsDestinoFirma(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.Destino, "FIRMA", StringComparison.OrdinalIgnoreCase);
+
+    public async ValueTask DisposeAsync()
+    {
+        refreshCancellation?.Cancel();
+        refreshCancellation?.Dispose();
+
+        try
+        {
+            await JS.InvokeVoidAsync("numericaUi.unregisterOutsideClick", "solicitud-notifications");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        selfReference?.Dispose();
+    }
+}

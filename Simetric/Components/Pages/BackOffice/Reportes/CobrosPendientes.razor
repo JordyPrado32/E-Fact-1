@@ -1,0 +1,319 @@
+@page "/backoffice/reportes/cobros-pendientes"
+@namespace Simetric.Components.Pages.BackOffice
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.DTOs
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+
+<PageTitle>Cobros Pendientes - BackOffice</PageTitle>
+
+<link href="css/reportes-compartido.css" rel="stylesheet" />
+
+<div class="reports-container">
+    <div class="report-header-card no-print animate__animated animate__fadeIn">
+        <div class="report-header-top">
+            <h2 class="report-page-title">
+                <i class="bi bi-hourglass-split"></i> Reporte Cobros Pendientes
+            </h2>
+            <button type="button" class="btn-export" @onclick="DescargarReportePdf">
+                <i class="bi bi-file-earmark-pdf-fill"></i> Descargar PDF Directo
+            </button>
+        </div>
+        <div class="report-header-filters">
+            <div class="filter-group">
+                <span class="filter-label">Desde:</span>
+                <input type="date" @bind="fechaInicio" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Hasta:</span>
+                <input type="date" @bind="fechaFin" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este Mes</button>
+                <button type="button" class="btn-preset @(presetActivo == "trimestre" ? "active" : "")" @onclick='() => AplicarPreset("trimestre")'>Últimos 90 Días</button>
+                <button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este Año</button>
+                <button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sliding Viewport Container -->
+    <div class="reports-viewport printable-report" id="report-view-area">
+        <div class="report-slide report-slide-active">
+            <div class="visual-header">
+                <h3 class="visual-title">Reporte de Cobros Pendientes</h3>
+                <p class="visual-subtitle">Cartera vencida, cuentas por cobrar e ingresos pendientes de liquidación.</p>
+            </div>
+
+            @if (loading)
+            {
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando datos...</span>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpis-grid">
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-orange"><i class="bi bi-hourglass-split"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Por Cobrar</span>
+                            <strong class="kpi-card-value">$ @totalCobrosPendientes.ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-down">Cartera activa</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-red"><i class="bi bi-exclamation-triangle-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Docs Vencidos</span>
+                            <strong class="kpi-card-value">@cobrosPendientesList.Count</strong>
+                            <span class="kpi-card-trend trend-down">Facturas pendientes</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-calendar-x-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Atraso Promedio</span>
+                            <strong class="kpi-card-value">@atrasoPromedioDias días</strong>
+                            <span class="kpi-card-trend trend-neutral">Periodo medio</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-blue"><i class="bi bi-envelope-check-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Con credito activo</span>
+                            <strong class="kpi-card-value">@cobrosPendientesList.Count(c => (c.Tiempocredito ?? 0) > 0)</strong>
+                            <span class="kpi-card-trend trend-neutral">Cobranza activa</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-visual-card">
+                    <div class="visual-header">
+                        <h4 class="visual-title">Antigüedad de Cartera por Cobrar</h4>
+                        <p class="visual-subtitle">Distribución del monto por cobrar acumulado según los días de vencimiento.</p>
+                    </div>
+                    <div class="chart-container">
+                        @if (cobrosPendientesChartData.Any())
+                        {
+                            <svg class="svg-chart" viewBox="0 0 800 300" preserveAspectRatio="none">
+                                <!-- Grid Lines -->
+                                @for (int i = 0; i <= 5; i++)
+                                {
+                                    var y = 30 + i * 44;
+                                    <line class="chart-grid-line" x1="50" y1="@y" x2="750" y2="@y" />
+                                    var val = Math.Round((double)maxCobrosPendientesChart * (5 - i) / 5.0);
+                                    <g><text class="chart-axis-text" x="15" y="@(y + 4)">$@val.ToString("N0")</text></g>
+                                }
+
+                                <!-- X Axis Labels -->
+                                @for (int i = 0; i < cobrosPendientesChartData.Count; i++)
+                                {
+                                    var x = 120 + i * (560.0 / Math.Max(1, cobrosPendientesChartData.Count - 1));
+                                    <g><text class="chart-axis-text" x="@x" y="275" text-anchor="middle">@cobrosPendientesChartData[i].Etiqueta</text></g>
+                                    <line class="chart-axis-line" x1="@x" y1="250" x2="@x" y2="255" />
+                                }
+
+                                <!-- Bars -->
+                                @for (int i = 0; i < cobrosPendientesChartData.Count; i++)
+                                {
+                                    var item = cobrosPendientesChartData[i];
+                                    var x = 90 + i * (560.0 / Math.Max(1, cobrosPendientesChartData.Count - 1));
+                                    var barHeight = maxCobrosPendientesChart > 0 ? (double)(item.Valor / maxCobrosPendientesChart) * 220.0 : 0.0;
+                                    var y = 250 - barHeight;
+                                    <rect class="chart-bar" x="@x" y="@y" width="60" height="@barHeight" rx="6" fill="#c2410c" />
+                                }
+                            </svg>
+                        }
+                    </div>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row">
+                        <h4 class="table-title">Detalle de Cuentas por Cobrar</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead>
+                            <tr>
+                                <th>Factura #</th>
+                                <th>Cliente</th>
+                                <th>Fecha Emisión</th>
+                                <th>Crédito</th>
+                                <th>Atraso</th>
+                                <th>Monto Vencido</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (cobrosPendientesPaginados.Any())
+                            {
+                                @foreach (var c in cobrosPendientesPaginados)
+                                {
+                                    var diasAtraso = (DateTime.Now - (c.Fechaentrega ?? DateTime.Now)).Days;
+                                    <tr>
+                                        <td><strong>@c.Serie-@c.Numfactura</strong></td>
+                                        <td>@(c.CodclientesNavigation?.Nombrerazonsocial ?? c.CodclientesNavigation?.Nombres ?? "Cliente General")</td>
+                                        <td>@c.Fechaentrega?.ToString("dd/MM/yyyy")</td>
+                                        <td>@(c.Tiempocredito ?? 0) días</td>
+                                        <td class="text-danger"><strong>@diasAtraso días</strong></td>
+                                        <td><strong class="text-danger">$ @(c.Valortotal?.ToString("N2") ?? "0.00")</strong></td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">No hay facturas con cobros pendientes de pago.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="pagination-controls">
+                        <span class="page-indicator">Página @(pageCobros + 1) de @MaxPaginaCobros</span>
+                        <div class="pagination-btn-group">
+                            <button type="button" class="btn-pagination" disabled="@(pageCobros == 0)" @onclick="() => CambiarPaginaCobros(-1)">
+                                <i class="bi bi-chevron-left"></i> Ant.
+                            </button>
+                            <button type="button" class="btn-pagination" disabled="@(pageCobros >= MaxPaginaCobros - 1)" @onclick="() => CambiarPaginaCobros(1)">
+                                Sig. <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private DateTime fechaInicio = DateTime.Now.AddMonths(-3);
+    private DateTime fechaFin = DateTime.Now;
+    private string presetActivo = "trimestre";
+    private bool loading = true;
+
+    private decimal totalCobrosPendientes = 0;
+    private int atrasoPromedioDias = 0;
+
+    private List<Factura> cobrosPendientesList = new();
+    private List<ChartItemDto> cobrosPendientesChartData = new();
+    private decimal maxCobrosPendientesChart = 100;
+
+    private int pageCobros = 0;
+    private const int PageSize = 10;
+    private int MaxPaginaCobros => Math.Max(1, (int)Math.Ceiling(cobrosPendientesList.Count / (double)PageSize));
+    private List<Factura> cobrosPendientesPaginados => cobrosPendientesList.Skip(pageCobros * PageSize).Take(PageSize).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AplicarPreset("trimestre");
+    }
+
+    private async Task OnDatesChanged()
+    {
+        presetActivo = "";
+        await CargarDatosReportesAsync();
+    }
+
+    private void AplicarPreset(string preset)
+    {
+        presetActivo = preset;
+        var hoy = DateTime.Now;
+        if (preset == "mes")
+        {
+            fechaInicio = new DateTime(hoy.Year, hoy.Month, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "trimestre")
+        {
+            fechaInicio = hoy.AddDays(-90);
+            fechaFin = hoy;
+        }
+        else if (preset == "anio")
+        {
+            fechaInicio = new DateTime(hoy.Year, 1, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "todo")
+        {
+            fechaInicio = new DateTime(2020, 1, 1);
+            fechaFin = hoy;
+        }
+        _ = CargarDatosReportesAsync();
+    }
+
+    private async Task CargarDatosReportesAsync()
+    {
+        loading = true;
+        StateHasChanged();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            cobrosPendientesList = await context.Facturas
+                .AsNoTracking()
+                .Include(f => f.CodclientesNavigation)
+                .Where(f => f.Estadopago == "PENDIENTE" || f.Estadopago == "DEBE")
+                .OrderBy(f => f.Fechaentrega)
+                .ToListAsync();
+
+            totalCobrosPendientes = (decimal)cobrosPendientesList.Sum(f => f.Valortotal ?? 0m);
+
+            if (cobrosPendientesList.Any())
+            {
+                var sumAtrasos = cobrosPendientesList.Sum(c => (DateTime.Now - (c.Fechaentrega ?? DateTime.Now)).Days);
+                atrasoPromedioDias = sumAtrasos / cobrosPendientesList.Count;
+
+                var bucket1 = cobrosPendientesList.Where(f => (DateTime.Now - (f.Fechaentrega ?? DateTime.Now)).Days <= 30).Sum(f => f.Valortotal ?? 0m);
+                var bucket2 = cobrosPendientesList.Where(f => {
+                    var d = (DateTime.Now - (f.Fechaentrega ?? DateTime.Now)).Days;
+                    return d > 30 && d <= 60;
+                }).Sum(f => f.Valortotal ?? 0m);
+                var bucket3 = cobrosPendientesList.Where(f => (DateTime.Now - (f.Fechaentrega ?? DateTime.Now)).Days > 60).Sum(f => f.Valortotal ?? 0m);
+
+                cobrosPendientesChartData = new List<ChartItemDto>
+                {
+                    new() { Etiqueta = "1-30 días", Valor = (decimal)bucket1 },
+                    new() { Etiqueta = "31-60 días", Valor = (decimal)bucket2 },
+                    new() { Etiqueta = "Más de 60 días", Valor = (decimal)bucket3 }
+                };
+
+                maxCobrosPendientesChart = cobrosPendientesChartData.Any() ? cobrosPendientesChartData.Max(x => x.Valor) : 100;
+                if (maxCobrosPendientesChart <= 0) maxCobrosPendientesChart = 100;
+            }
+            else
+            {
+                atrasoPromedioDias = 0;
+                cobrosPendientesChartData = new List<ChartItemDto>();
+                maxCobrosPendientesChart = 100;
+            }
+        }
+        catch (Exception)
+        {
+            // Fail silent
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CambiarPaginaCobros(int step)
+    {
+        pageCobros += step;
+        if (pageCobros < 0) pageCobros = 0;
+        if (pageCobros >= MaxPaginaCobros) pageCobros = MaxPaginaCobros - 1;
+    }
+
+    private async Task DescargarReportePdf()
+    {
+        var filename = $"Reporte_Cobros_Pendientes_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
+        await JS.InvokeVoidAsync("window.downloadPdfReport", "report-view-area", filename);
+    }
+}

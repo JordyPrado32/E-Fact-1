@@ -1,0 +1,1890 @@
+@page "/e-contax/facturacion/nueva"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using Simetric.DTOs
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using System.Globalization
+@using System.Security.Claims
+@using Microsoft.JSInterop
+@inject AuthenticationStateProvider AuthStateProvider
+@inject EContaxFacturacionService EContaxFacturacionService
+@inject CedulaLookupService CedulaLookupService
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IJSRuntime JS
+
+<PageTitle>Facturacion | Numerica E-Contax</PageTitle>
+
+<InitialSequenceModal Visible="@mostrarModalSecuenciaInicial"
+                      Title="Configuracion inicial de secuencia"
+                      Description="Antes de emitir facturas desde E-Contax, confirma si ya venias facturando. Esta configuracion se comparte con E-FACT."
+                      QuestionLabel="Ya habias generado facturas antes?"
+                      SequenceLabel="Ingresa la ultima secuencia emitida"
+                      SequencePlaceholder="Ej: 000000025"
+                      SequenceHint="Si te quedaste en la 25, la siguiente sera la 26."
+                      HadPreviousDocuments="@usuarioYaFacturoAntes"
+                      HadPreviousDocumentsChanged="OnCambioRespuestaSecuencia"
+                      PreviousSequence="@secuenciaAnteriorManual"
+                      PreviousSequenceChanged="OnSecuenciaAnteriorManualChanged"
+                      ErrorMessage="@errorSecuenciaInicial"
+                      OnDismiss="@(() => mostrarModalSecuenciaInicial = false)"
+                      OnConfirm="ConfirmarSecuenciaInicialAsync" />
+
+<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern docs-unified-page econtax-factura-page" data-tour="econtax.facturacion.page">
+    @if (!string.IsNullOrWhiteSpace(errorCarga))
+    {
+        <section class="n-card">
+            <div class="n-card-body">
+                <div class="alert alert-danger border-0 rounded-3 mb-0">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    @errorCarga
+                </div>
+            </div>
+        </section>
+    }
+    else
+    {
+        <section class="docs-form-hero" data-tour="invoice.hero">
+            <div class="docs-form-hero-body">
+                <div class="docs-form-hero-copy">
+                    <span class="docs-form-kicker">Documento de venta</span>
+                    <h2 class="docs-form-title">Nueva factura</h2>
+                    <p class="docs-form-text">
+                        Completa cliente, emisor, detalle y cobro desde E-Contax usando la misma secuencia compartida de E-FACT.
+                    </p>
+                </div>
+
+                <div class="docs-form-toolbar">
+                    <button type="button" class="n-btn n-btn-secondary" @onclick="LimpiarFormularioAsync" disabled="@isSaving">
+                        <i class="bi bi-arrow-clockwise me-2"></i> Limpiar pantalla
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        @if (sinCaja)
+        {
+            <div class="alert alert-warning border-0 rounded-3 mb-3 d-flex align-items-center justify-content-between gap-3">
+                <div>
+                    <strong>No puedes facturar.</strong> Primero configura un punto de emision para compartir la secuencia.
+                </div>
+                <button type="button" class="n-btn-primary" @onclick="IrAPuntosEmision">Configurar</button>
+            </div>
+        }
+        else if (!emisores.Any())
+        {
+            <div class="alert alert-warning border-0 rounded-3 mb-3 d-flex align-items-center justify-content-between gap-3">
+                <div>
+                    <strong>No tienes emisores activos.</strong> Registra un emisor con certificado antes de emitir comprobantes.
+                </div>
+                <button type="button" class="n-btn-primary" @onclick="IrAEmisor">Ir a emisor</button>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(mensajeEstado) && mensajeEstadoEsError)
+        {
+            <div class="alert alert-danger border-0 rounded-3 mb-3">
+                <i class="bi bi-x-circle me-2"></i>
+                @mensajeEstado
+            </div>
+        }
+
+        <div class="n-card mb-4" data-tour="invoice.client-section">
+            <div class="n-card-header">
+                <h5><i class="bi bi-person-vcard me-2"></i> Informacion del Cliente</h5>
+                <small class="d-none d-sm-flex"><i class="bi bi-arrow-repeat me-1"></i> Los datos se actualizaran automaticamente</small>
+            </div>
+
+            <div class="n-card-body">
+                <div class="row g-4 mb-4">
+                    <div class="col-md-3 position-relative">
+                        <label class="n-label">Numero Identificacion</label>
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-upc-scan n-input-icon"></i>
+                            <input type="text"
+                                   class="n-input n-input-with-icon"
+                                   value="@cliente.Numeroidentificacion"
+                                   @oninput="OnInputBusquedaIdentificacion"
+                                   @onkeydown="OnKeyDownBusquedaIdentificacion"
+                                   @onblur="OnBlurIdentificacion"
+                                   maxlength="13"
+                                   placeholder="Ej: 1700000000"
+                                   autocomplete="off"
+                                   disabled="@isSaving" />
+                        </div>
+                        @if (sugerenciasIdentificacion != null && sugerenciasIdentificacion.Any())
+                        {
+                            <ul class="n-suggestions">
+                                @foreach (var c in sugerenciasIdentificacion)
+                                {
+                                    <li @onmousedown="PrepararSeleccionCliente"
+                                        @onclick="() => SeleccionarClienteAsync(c)">
+                                        <strong>@c.Numeroidentificacion</strong><br />
+                                        <small>@ObtenerNombreClienteVisual(c)</small>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="n-label">Buscar por Nombre / Razon Social</label>
+                        <div class="n-client-search-layout">
+                            <div class="n-client-search-input position-relative">
+                                <div class="n-input-wrapper">
+                                    <i class="bi bi-person-search n-input-icon"></i>
+                                    <input type="text"
+                                           class="n-input n-input-with-icon"
+                                           value="@textoBusquedaCliente"
+                                           @oninput="OnInputBusquedaCliente"
+                                           @onkeydown="OnKeyDownBusquedaNombre"
+                                           @onblur="OnBlurBusquedaCliente"
+                                           placeholder="Escriba al menos 3 letras..."
+                                           autocomplete="off"
+                                           disabled="@isSaving" />
+                                </div>
+                                @if (sugerencias != null && sugerencias.Any())
+                                {
+                                    <ul class="n-suggestions">
+                                        @foreach (var c in sugerencias)
+                                        {
+                                            <li @onmousedown="PrepararSeleccionCliente"
+                                                @onclick="() => SeleccionarClienteAsync(c)">
+                                                <strong>@ObtenerNombreClienteVisual(c)</strong><br />
+                                                <small>@c.Numeroidentificacion</small>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-4 pb-4">
+                    <div class="col-md-3">
+                        <label class="n-label">Tipo Identificacion</label>
+                        <select class="n-select" @bind="cliente.Tipoidentificacion" disabled="@isSaving">
+                            <option value="">-- Seleccione --</option>
+                            @foreach (var item in identificaciones)
+                            {
+                                <option value="@item.IdeCodigo">@item.IdeDescripcion</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="n-label">Tipo Cliente</label>
+                        <select class="n-select"
+                                @bind="cliente.TipoCliente"
+                                @bind:after="OnTipoClienteFacturaChanged"
+                                disabled="@isSaving">
+                            <option value="">-- Seleccione --</option>
+                            @foreach (var tipo in tiposCliente)
+                            {
+                                <option value="@tipo.TclCodigo">@GetTipoClienteEtiqueta(tipo.TclDescripcion)</option>
+                            }
+                        </select>
+                    </div>
+
+                    @if (EsPersonaPorTipoCliente())
+                    {
+                        <div class="col-md-3">
+                            <label class="n-label">Nombres</label>
+                            <input type="text"
+                                   class="n-input"
+                                   @bind="cliente.Nombres"
+                                   @onblur="SincronizarNombres"
+                                   maxlength="100"
+                                   disabled="@isSaving" />
+                        </div>
+
+                        <div class="col-md-3">
+                            <label class="n-label">Apellidos</label>
+                            <input type="text"
+                                   class="n-input"
+                                   @bind="cliente.Apellidos"
+                                   @onblur="SincronizarNombres"
+                                   maxlength="100"
+                                   disabled="@isSaving" />
+                        </div>
+                    }
+
+                    @if (EsEmpresaPorTipoCliente())
+                    {
+                        <div class="col-md-3">
+                            <label class="n-label">Nombre Comercial</label>
+                            <input type="text" class="n-input" @bind="cliente.Nombrecomercial" maxlength="100" disabled="@isSaving" />
+                        </div>
+
+                        <div class="col-md-3">
+                            <label class="n-label">Razon Social</label>
+                            <input type="text" class="n-input" @bind="cliente.Nombrerazonsocial" maxlength="100" disabled="@isSaving" />
+                        </div>
+                    }
+                </div>
+
+                <hr class="text-muted opacity-25 my-4" />
+
+                <div class="row g-4 mb-4">
+                    <div class="col-md-4">
+                        <label class="n-label">Pais</label>
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-globe n-input-icon"></i>
+                            <select class="n-select n-input-with-icon" @onchange="OnPaisChanged" value="@(cliente.Pais?.ToString() ?? "0")" disabled="@isSaving">
+                                <option value="0">-- Seleccione Pais --</option>
+                                @foreach (var pais in listaPaises)
+                                {
+                                    <option value="@pais.IdPais">@pais.Descripcion</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="col-md-4">
+                        <label class="n-label">Provincia</label>
+                        <select class="n-select" @onchange="OnProvinciaChanged" value="@(cliente.Provincia?.ToString() ?? "0")" disabled="@isSaving">
+                            <option value="0">-- Seleccione Provincia --</option>
+                            @foreach (var provincia in listaProvincias)
+                            {
+                                <option value="@provincia.IdProvincia">@provincia.Descripcion</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="col-md-4">
+                        <label class="n-label">Ciudad</label>
+                        <select class="n-select" @bind="cliente.Ciudad" disabled="@isSaving">
+                            <option value="0">-- Seleccione Ciudad --</option>
+                            @foreach (var ciudad in listaCiudades)
+                            {
+                                <option value="@ciudad.IdCiudad">@ciudad.Descripcion</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row g-4 mb-4">
+                    <div class="col-md-4">
+                        <label class="n-label">Telf. Convencional</label>
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-telephone n-input-icon"></i>
+                            <input type="text"
+                                   class="n-input n-input-with-icon"
+                                   @bind="cliente.Telefonoconvencional"
+                                   maxlength="10"
+                                   placeholder="022345678"
+                                   disabled="@isSaving" />
+                        </div>
+                    </div>
+
+                    <div class="col-md-4">
+                        <label class="n-label">Celular </label>
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-phone n-input-icon"></i>
+                            <input type="text"
+                                   class="n-input n-input-with-icon"
+                                   @bind="cliente.Celular"
+                                   maxlength="10"
+                                   placeholder="0991234567"
+                                   disabled="@isSaving" />
+                        </div>
+                    </div>
+
+                    <div class="col-md-4">
+                        <label class="n-label">Correo Electronico</label>
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-envelope n-input-icon"></i>
+                            <input type="email"
+                                   class="n-input n-input-with-icon"
+                                   @bind="cliente.Correo"
+                                   placeholder="cliente@ejemplo.com"
+                                   disabled="@isSaving" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-4 mb-4">
+                    <div class="col-12">
+                        <div class="n-section n-email-section">
+                            <div class="n-email-header">
+                                <div>
+                                    <label class="n-label mb-1">Correos adicionales</label>
+                                    <p class="n-email-helper mb-0">Tambien reciben esta factura.</p>
+                                </div>
+                                <button type="button"
+                                        class="btn btn-outline-primary btn-sm"
+                                        @onclick="AgregarCorreoOpcionalFactura"
+                                        disabled="@(isSaving || correosOpcionalesFactura.Count >= MaxCorreosOpcionalesFactura)">
+                                    <i class="bi bi-plus-lg me-1"></i>Agregar
+                                </button>
+                            </div>
+
+                            @if (correosOpcionalesFactura.Any())
+                            {
+                                @for (int i = 0; i < correosOpcionalesFactura.Count; i++)
+                                {
+                                    var index = i;
+                                    <div class="n-email-row">
+                                        <div class="row g-3 align-items-end">
+                                            <div class="col-lg-7">
+                                                <label class="n-label">Correo @(index + 1)</label>
+                                                <div class="n-input-wrapper">
+                                                    <i class="bi bi-envelope-paper n-input-icon"></i>
+                                                    <input type="email"
+                                                           class="n-input n-input-with-icon"
+                                                           @bind="correosOpcionalesFactura[index].Correo"
+                                                           placeholder="correo@ejemplo.com"
+                                                           disabled="@isSaving" />
+                                                </div>
+                                            </div>
+
+                                            <div class="col-lg-3">
+                                                @if (correosOpcionalesFactura[index].EsPersistidoCliente)
+                                                {
+                                                    <span class="n-email-pill">Guardado en cliente</span>
+                                                }
+                                                else
+                                                {
+                                                    <div class="form-check n-email-check">
+                                                        <input class="form-check-input"
+                                                               type="checkbox"
+                                                               id="@($"econtax-guardar-correo-{index}")"
+                                                               @bind="correosOpcionalesFactura[index].GuardarEnCliente"
+                                                               disabled="@isSaving" />
+                                                        <label class="form-check-label" for="@($"econtax-guardar-correo-{index}")">
+                                                            Guardar en cliente
+                                                        </label>
+                                                    </div>
+                                                }
+                                            </div>
+
+                                            <div class="col-lg-2">
+                                                <button type="button"
+                                                        class="btn btn-outline-danger btn-sm w-100"
+                                                        @onclick="() => EliminarCorreoOpcionalFactura(index)"
+                                                        disabled="@isSaving">
+                                                    <i class="bi bi-trash3 me-1"></i>Quitar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <div class="n-email-empty">Sin correos adicionales.</div>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-4 mb-4">
+                    <div class="col-12">
+                        <label class="n-label">Direccion (Max 100)</label>
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-geo-alt n-input-icon"></i>
+                            <input type="text"
+                                   class="n-input n-input-with-icon"
+                                   @bind="cliente.Direccion"
+                                   maxlength="100"
+                                   placeholder="Av. Principal y Calle Secundaria..."
+                                   disabled="@isSaving" />
+                        </div>
+
+                        <div class="n-card n-payment-card n-payment-card-inline" data-tour="invoice.payment-section">
+                            <div class="n-card-body">
+                                <div class="n-payment-layout">
+                                    <div class="n-payment-copy">
+                                        <span class="n-payment-kicker">Cierre de cobro</span>
+                                        <h6>Forma de pago del comprobante</h6>
+                                        <p>
+                                            Selecciona como se registra esta factura ante el SRI.
+                                        </p>
+                                    </div>
+
+                                    <div class="n-payment-control">
+                                        <label class="n-label">
+                                            <i class="bi bi-credit-card me-2"></i>Forma de pago (SRI)
+                                        </label>
+                                        <select @bind="formaPagoSeleccionada" class="n-select n-payment-select" disabled="@isSaving">
+                                            @if (!FormasPagoVisibles.Any())
+                                            {
+                                                <option value="">Cargando formas de pago...</option>
+                                            }
+                                            else
+                                            {
+                                                <option value="">-- Seleccione --</option>
+                                                @foreach (var forma in FormasPagoVisibles)
+                                                {
+                                                    <option value="@forma.Codigo">@GetFormaPagoNombre(forma)</option>
+                                                }
+                                            }
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-4 mb-2">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-end mb-2">
+                            <label class="n-label mb-0">Referencia (Max 100 palabras)</label>
+                            <span class="n-word-count">Palabras: @ContarPalabras(cliente.Referencia) / 100</span>
+                        </div>
+                        <textarea class="n-textarea"
+                                  @bind="cliente.Referencia"
+                                  placeholder="Ingrese la referencia del cliente aqui..."
+                                  rows="4"
+                                  disabled="@isSaving"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="n-card mb-4" data-tour="invoice.header-section">
+            <div class="n-card-header n-header-dark">
+                <div class="n-invoice-header-row">
+                    <h5><i class="bi bi-receipt-cutoff me-2"></i> Datos de Factura</h5>
+                </div>
+            </div>
+
+            <div class="n-card-body">
+                <div class="row g-4">
+                    <div class="col-md-2">
+                        <label class="n-label">Serie</label>
+                        <input type="text" class="n-input text-center fw-bold bg-light border-0" value="@serieVisual" readonly />
+                    </div>
+
+                    <div class="col-md-2">
+                        <label class="n-label">Numero de factura</label>
+                        <input type="text" class="n-input text-center fw-bold bg-light border-0" value="@factura.Numfactura" readonly />
+                    </div>
+
+                    <div class="col-md-8">
+                        <label class="n-label">Seleccionar Emisor</label>
+                        <select class="n-select"
+                                value="@(factura.Codemisor?.ToString() ?? string.Empty)"
+                                @onchange="OnEmisorChanged"
+                                disabled="@(!emisores.Any() || sinCaja || isSaving)">
+                            <option value="">-- Seleccione emisor --</option>
+                            @foreach (var emisor in emisores)
+                            {
+                                <option value="@emisor.Codigo">@GetEmisorNombre(emisor)</option>
+                            }
+                        </select>
+                        <span class="n-inline-helper">
+                            @(factura.Codemisor is > 0 ? $"Emisor activo: {GetEmisorActivoNombre()}" : "Elige el emisor que emitira este comprobante.")
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="n-card mb-4" data-tour="invoice.detail-section">
+            <div class="n-card-header n-header-dark">
+                <div class="invoice-detail-head">
+                    <h5 class="mb-0"><i class="bi bi-cart4 me-2"></i> Detalle de Factura</h5>
+
+                    <button type="button"
+                            class="n-btn-primary n-detail-product-trigger"
+                            @onclick="IrAProductos"
+                            disabled="@isSaving">
+                        <i class="bi bi-plus-circle"></i>
+                        <span>Agregar nuevo producto</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="n-card-body">
+                @if (!string.IsNullOrWhiteSpace(productoAviso))
+                {
+                    <div class="alert @(productoSeleccionado is null ? "alert-warning" : "alert-success") border-0 rounded-3 py-2 mb-3">
+                        @productoAviso
+                    </div>
+                }
+
+                <div class="row g-3 align-items-end mb-4">
+                    <div class="col-12 position-relative n-product-search-col">
+                        <label class="n-label">Buscar o escanear producto</label>
+                        <div class="n-product-search-panel">
+                            <div class="n-input-wrapper n-product-search-wrapper">
+                                <i class="bi bi-search n-input-icon"></i>
+                                <input class="n-input n-input-with-icon n-product-search-input"
+                                       value="@productoBusqueda"
+                                       @oninput="OnInputBusquedaProducto"
+                                       @onfocus="MostrarSugerenciasProductosAsync"
+                                       @onblur="OnProductoBlur"
+                                       @onkeyup="OnProductoKeyUp"
+                                       placeholder="Escribe codigo o nombre"
+                                       disabled="@isSaving" />
+                                <span class="n-product-search-shortcut">Enter</span>
+                            </div>
+                        </div>
+
+                        @if (sugerenciasProductos != null && sugerenciasProductos.Any())
+                        {
+                            <ul class="n-suggestions">
+                                @foreach (var producto in sugerenciasProductos)
+                                {
+                                    <li @onmousedown="PrepararSeleccionProducto"
+                                        @onclick="async () => await SeleccionarProductoDesdeListaAsync(producto)">
+                                        <strong>@producto.Descripcion</strong><br />
+                                        <small>Cod: @producto.Codprincipal | PVP: @FormatMoney(producto.PrecioUnitario)</small>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+
+                @if (productoSeleccionado is not null)
+                {
+                    <div class="n-section n-product-quick-editor">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-lg-5">
+                                <label class="n-label">Producto seleccionado</label>
+                                <input class="n-input" value="@ProductoDescripcionActual" readonly />
+                            </div>
+
+                            <div class="col-md-2 col-lg-1">
+                                <label class="n-label">Cant.</label>
+                                <input class="n-input text-center fw-bold" type="number" min="1" step="1" @bind="cantidadProducto" @bind:event="oninput" disabled="@isSaving" />
+                            </div>
+
+                            <div class="col-md-3 col-lg-2">
+                                <label class="n-label">Precio</label>
+                                <input class="n-input text-end" type="number" min="0" step="0.01" @bind="precioProducto" @bind:event="oninput" disabled="@isSaving" />
+                            </div>
+
+                            <div class="col-md-3 col-lg-1">
+                                <label class="n-label">IVA</label>
+                                <select class="n-select" @bind="tarifaProducto" disabled="@isSaving">
+                                    @foreach (var tarifa in tarifasIva)
+                                    {
+                                        <option value="@tarifa">@tarifa%</option>
+                                    }
+                                </select>
+                            </div>
+
+                            <div class="col-md-3 col-lg-2">
+                                <label class="n-label">Desc %</label>
+                                <input class="n-input text-end" type="number" min="0" max="100" step="0.01" @bind="descuentoProducto" @bind:event="oninput" disabled="@isSaving" />
+                            </div>
+
+                            <div class="col-md-3 col-lg-1">
+                                <button type="button" class="n-btn-primary w-100" @onclick="AgregarDetalleAsync" disabled="@isSaving">
+                                    <i class="bi bi-plus-circle"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                <div class="table-responsive n-table-container">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="n-table-header bg-light">
+                            <tr>
+                                <th style="width: 80px;">Cod.</th>
+                                <th>Descripcion</th>
+                                <th class="text-center" style="width: 80px;">Cant.</th>
+                                <th class="text-end" style="width: 100px;">Precio</th>
+                                <th class="text-center" style="width: 100px;">Desc %</th>
+                                <th class="text-end" style="width: 90px;">Desc $</th>
+                                <th class="text-end" style="width: 100px;">Base Imp.</th>
+                                <th class="text-end" style="width: 120px;">IVA</th>
+                                <th class="text-end" style="width: 110px;">Total</th>
+                                <th class="text-center" style="width: 40px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!lineas.Any())
+                            {
+                                <tr>
+                                    <td colspan="10" class="text-center py-5 text-muted bg-white">
+                                        <i class="bi bi-basket fs-1 d-block mb-3 opacity-25"></i>
+                                        No hay productos agregados a la factura.
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var linea in lineas)
+                                {
+                                    <tr>
+                                        <td class="text-muted small fw-bold">@linea.Codprincipal</td>
+                                        <td class="text-truncate" style="max-width: 220px;" title="@linea.Descripcion">@linea.Descripcion</td>
+                                        <td>
+                                            <input type="number"
+                                                   class="n-line-input text-center fw-bold"
+                                                   min="1"
+                                                   step="1"
+                                                   @bind="linea.Cantidad"
+                                                   @bind:event="oninput"
+                                                   disabled="@isSaving" />
+                                        </td>
+                                        <td>
+                                            <input type="number"
+                                                   class="n-line-input text-end"
+                                                   min="0"
+                                                   step="0.01"
+                                                   @bind="linea.Precio"
+                                                   @bind:event="oninput"
+                                                   disabled="@isSaving" />
+                                        </td>
+                                        <td>
+                                            <div class="n-percent-input">
+                                                <input type="number"
+                                                       class="n-line-input text-end"
+                                                       min="0"
+                                                       max="100"
+                                                       step="0.01"
+                                                       @bind="linea.PorcentajeDescuento"
+                                                       @bind:event="oninput"
+                                                       disabled="@isSaving" />
+                                                <span>%</span>
+                                            </div>
+                                        </td>
+                                        <td class="text-end text-danger">@FormatMoney(linea.Descuento)</td>
+                                        <td class="text-end fw-medium text-dark">@FormatMoney(linea.BaseImponible)</td>
+                                        <td>
+                                            <select class="n-line-select"
+                                                    @bind="linea.Tarifa"
+                                                    disabled="@isSaving">
+                                                @foreach (var tarifa in tarifasIva)
+                                                {
+                                                    <option value="@tarifa">@tarifa%</option>
+                                                }
+                                            </select>
+                                        </td>
+                                        <td class="text-end fw-bold" style="color: var(--ec-primary);">@FormatMoney(linea.Total)</td>
+                                        <td class="text-center">
+                                            <button type="button"
+                                                    class="n-btn-primary p-0 d-flex justify-content-center align-items-center mx-auto"
+                                                    style="height: 30px; width: 30px; border-radius: 6px;"
+                                                    title="Quitar"
+                                                    @onclick="() => QuitarDetalle(linea)"
+                                                    disabled="@isSaving">
+                                                <i class="bi bi-trash3"></i>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="row mt-4">
+                    <div class="col-lg-7 mb-3">
+                        @if (productoSeleccionado is null && lineas.Any())
+                        {
+                            <div class="alert alert-info py-2 px-3 small d-inline-flex align-items-center gap-2 border-0 rounded-3 mt-3">
+                                <i class="bi bi-info-circle-fill fs-5"></i>
+                                <div>Busca otro producto para seguir agregando items al comprobante.</div>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="col-lg-5">
+                        <div class="docs-total-card" data-tour="invoice.totals-section">
+                            <div class="docs-total-card-header">
+                                <span>Resumen</span>
+                                <h6>Totales del comprobante</h6>
+                            </div>
+
+                            <div class="d-flex justify-content-between mb-2">
+                                <span class="text-muted fw-medium">Subtotal Bruto</span>
+                                <span class="fw-bold">@FormatMoney(SubtotalBruto)</span>
+                            </div>
+
+                            <div class="d-flex justify-content-between align-items-center mb-3 pb-3 border-bottom">
+                                <span class="text-danger fw-bold">(-) Descuento Global</span>
+                                <div class="n-input-wrapper" style="width: 100px;">
+                                    <input type="number"
+                                           class="n-input text-end border-danger text-danger fw-bold"
+                                           style="height: 32px; padding-right: 25px;"
+                                           min="0"
+                                           max="100"
+                                           step="0.01"
+                                           @bind="descuentoGlobalPorcentaje"
+                                           @bind:event="oninput"
+                                           disabled="@isSaving" />
+                                    <span class="n-percent-suffix">%</span>
+                                </div>
+                            </div>
+
+                            <div class="d-flex justify-content-between mb-2">
+                                <span class="text-danger fw-bold">Descuento Total</span>
+                                <span class="fw-bold text-danger">@FormatMoney(DescuentoTotal)</span>
+                            </div>
+
+                            <div class="d-flex justify-content-between mb-3 pb-2 border-bottom">
+                                <span class="fw-bold text-dark">Base Imponible</span>
+                                <span class="fw-bold text-dark">@FormatMoney(Subtotal)</span>
+                            </div>
+
+                            <div class="d-flex justify-content-between mb-1 text-muted small">
+                                <span>IVA</span>
+                                <span>@FormatMoney(IvaTotal)</span>
+                            </div>
+
+                            <div class="d-flex justify-content-between mt-3 pt-3 border-top align-items-center">
+                                <span class="fs-5 fw-bold text-dark">Total a Pagar</span>
+                                <span class="fs-3 fw-bolder" style="color: var(--ec-primary);">@FormatMoney(Total)</span>
+                            </div>
+                        </div>
+
+                        <div class="d-flex justify-content-end gap-3 mt-4">
+                            <button type="button" class="n-btn-link" @onclick="LimpiarFormularioAsync" disabled="@isSaving">
+                                Cancelar / Limpiar
+                            </button>
+
+                            <button type="button" class="n-btn-primary" @onclick="GuardarFacturaAsync" disabled="@(!PuedeGuardar)">
+                                @if (isSaving)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-2"></span>
+                                    <span>Guardando...</span>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-check2-circle fs-5 me-2"></i>
+                                    <span>Generar Factura</span>
+                                }
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly int[] tarifasIva = new[] { 0, 5, 8, 12, 15 };
+    private readonly List<EContaxFacturaLinea> lineas = new();
+    private List<Emisor> emisores = new();
+    private List<FormasPago> formasPagoLista = new();
+    private IEnumerable<FormasPago> FormasPagoVisibles =>
+        formasPagoLista
+            .Where(x => CodigosFormaPagoVisibles.Contains(x.Codigo ?? string.Empty))
+            .OrderBy(x => Array.IndexOf(CodigosFormaPagoVisibles, x.Codigo));
+    private List<Tipocliente> tiposCliente = new();
+    private List<Identificacion> identificaciones = new();
+    private List<Pais> listaPaises = new();
+    private List<Provincia> listaProvincias = new();
+    private List<Ciudad> listaCiudades = new();
+    private List<Cliente>? sugerencias;
+    private List<Cliente>? sugerenciasIdentificacion;
+    private List<ProductoLookupDetalleDto>? sugerenciasProductos;
+    private List<CorreoOpcionalFacturaInput> correosOpcionalesFactura = new();
+    private List<string> correosPersistidosClienteFactura = new();
+
+    private Factura factura = new();
+    private Cliente cliente = new();
+    private Caja? cajaUsuario;
+    private ProductoLookupDetalleDto? productoSeleccionado;
+
+    private bool isSaving;
+    private bool sinCaja;
+    private bool mostrarModalSecuenciaInicial;
+    private bool? usuarioYaFacturoAntes;
+    private string? errorCarga;
+    private string? mensajeEstado;
+    private string? errorSecuenciaInicial;
+    private string serieVisual = "001-001";
+    private string formaPagoSeleccionada = string.Empty;
+    private string secuenciaAnteriorManual = string.Empty;
+    private string productoBusqueda = string.Empty;
+    private string textoBusquedaCliente = string.Empty;
+    private string? productoAviso;
+    private int currentUserId;
+    private decimal cantidadProducto = 1m;
+    private decimal precioProducto;
+    private decimal descuentoProducto;
+    private decimal descuentoGlobalPorcentaje;
+    private int tarifaProducto = 15;
+    private bool seleccionandoClienteDesdeLista;
+    private bool seleccionandoProductoDesdeLista;
+
+    private bool mensajeEstadoEsError => mensajeEstado?.StartsWith("Error", StringComparison.OrdinalIgnoreCase) == true;
+    private bool PuedeGuardar => !isSaving && !sinCaja && factura.Codemisor is > 0 && lineas.Any() && !mostrarModalSecuenciaInicial;
+    private const int MaxCorreosOpcionalesFactura = 5;
+    private string SerieResumen => sinCaja ? "Sin punto de emision" : $"Serie {serieVisual}";
+    private string NumeroFacturaPreview => string.IsNullOrWhiteSpace(factura.Numfactura) ? "---" : $"{serieVisual}-{factura.Numfactura}";
+    private string ProductoDescripcionActual => productoSeleccionado?.Descripcion ?? "Selecciona un producto o servicio";
+    private decimal DescuentoGlobalPorcentajeSeguro => Math.Clamp(descuentoGlobalPorcentaje, 0m, 100m);
+    private decimal SubtotalBruto => Math.Round(lineas.Sum(x => x.Cantidad * x.Precio), 2);
+    private decimal BaseAntesDescuentoGlobal => Math.Round(lineas.Sum(x => x.BaseImponible), 2);
+    private decimal DescuentoGlobalValor => Math.Round(BaseAntesDescuentoGlobal * (DescuentoGlobalPorcentajeSeguro / 100m), 2);
+    private decimal Subtotal => Math.Round(BaseAntesDescuentoGlobal - DescuentoGlobalValor, 2);
+    private decimal DescuentoTotal => Math.Round(lineas.Sum(x => x.Descuento) + DescuentoGlobalValor, 2);
+    private decimal IvaTotal => Math.Round(lineas.Sum(x => x.GetIvaConDescuentoGlobal(DescuentoGlobalPorcentajeSeguro)), 2);
+    private decimal Total => Math.Round(Subtotal + IvaTotal, 2);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (!await ValidarAccesoEContaxAsync(user))
+            {
+                return;
+            }
+
+            currentUserId = ObtenerIdUsuario(user);
+            InicializarModelos();
+            await CargarCatalogosAsync();
+        }
+        catch (Exception ex)
+        {
+            errorCarga = $"No fue posible cargar facturacion: {ex.Message}";
+        }
+    }
+
+    private async Task CargarCatalogosAsync()
+    {
+        var cajaTask = EContaxFacturacionService.GetCajaUsuarioAsync(currentUserId);
+        var emisoresTask = EContaxFacturacionService.GetEmisoresActivosAsync(currentUserId);
+        var formasPagoTask = EContaxFacturacionService.ObtenerFormasPagoAsync();
+        var tiposClienteTask = EContaxFacturacionService.GetTiposClienteAsync();
+        var identificacionesTask = EContaxFacturacionService.GetIdentificacionesActivasAsync();
+        var paisesTask = EContaxFacturacionService.GetPaisesAsync();
+
+        await Task.WhenAll(cajaTask, emisoresTask, formasPagoTask, tiposClienteTask, identificacionesTask, paisesTask);
+
+        cajaUsuario = await cajaTask;
+        sinCaja = cajaUsuario == null || string.IsNullOrWhiteSpace(cajaUsuario.SerieFactura);
+        if (!sinCaja)
+        {
+            serieVisual = await EContaxFacturacionService.GetSerieFacturaVisualAsync(currentUserId);
+            factura.Serie = serieVisual.Replace("-", string.Empty);
+        }
+
+        emisores = await emisoresTask;
+        formasPagoLista = await formasPagoTask;
+        tiposCliente = await tiposClienteTask;
+        identificaciones = (await identificacionesTask)
+            .Where(x => !string.Equals((x.IdeCodigo ?? string.Empty).Trim(), "07", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        listaPaises = await paisesTask;
+
+        formaPagoSeleccionada = string.Empty;
+        cliente.TipoCliente = tiposCliente.FirstOrDefault()?.TclCodigo;
+        cliente.Tipoidentificacion = identificaciones.FirstOrDefault(x => x.IdeCodigo == "05")?.IdeCodigo
+            ?? identificaciones.FirstOrDefault()?.IdeCodigo
+            ?? "05";
+
+        if (emisores.Any())
+        {
+            factura.Codemisor = emisores.First().Codigo;
+            await AplicarSecuenciaInicialAsync();
+        }
+    }
+
+    private void InicializarModelos()
+    {
+        factura = new Factura
+        {
+            Estado = true,
+            Autorizado = false,
+            Coddocumento = 1,
+            Fechaentrega = DateTime.Now
+        };
+
+        cliente = new Cliente
+        {
+            Estado = true,
+            Usuario = currentUserId,
+            Oblgconta = "NO"
+        };
+    }
+
+    private async Task AplicarSecuenciaInicialAsync()
+    {
+        if (sinCaja || factura.Codemisor is null or <= 0)
+            return;
+
+        var debePreguntar = await EContaxFacturacionService.DebePreguntarSecuenciaInicialAsync(currentUserId, factura.Codemisor);
+        if (debePreguntar)
+        {
+            mostrarModalSecuenciaInicial = true;
+            usuarioYaFacturoAntes = null;
+            secuenciaAnteriorManual = string.Empty;
+            errorSecuenciaInicial = null;
+            factura.Numfactura = "000000001";
+            return;
+        }
+
+        mostrarModalSecuenciaInicial = false;
+        factura.Numfactura = await EContaxFacturacionService.GetNextFacturaNumeroAsync(currentUserId, factura.Codemisor);
+    }
+
+    private async Task OnEmisorChanged(ChangeEventArgs args)
+    {
+        factura.Codemisor = int.TryParse(args.Value?.ToString(), out var cod) ? cod : 0;
+        await AplicarSecuenciaInicialAsync();
+    }
+
+    private async Task ConfirmarSecuenciaInicialAsync()
+    {
+        errorSecuenciaInicial = null;
+
+        if (usuarioYaFacturoAntes is null)
+        {
+            errorSecuenciaInicial = "Debes indicar si ya habias generado facturas antes.";
+            return;
+        }
+
+        try
+        {
+            await EContaxFacturacionService.ConfigurarSecuenciaInicialFacturaAsync(
+                currentUserId,
+                usuarioYaFacturoAntes.Value,
+                secuenciaAnteriorManual,
+                factura.Codemisor);
+
+            mostrarModalSecuenciaInicial = false;
+            factura.Numfactura = await EContaxFacturacionService.GetNextFacturaNumeroAsync(currentUserId, factura.Codemisor);
+        }
+        catch (Exception ex)
+        {
+            errorSecuenciaInicial = ex.Message;
+        }
+    }
+
+    private void OnCambioRespuestaSecuencia(bool? valor)
+    {
+        usuarioYaFacturoAntes = valor;
+        errorSecuenciaInicial = null;
+        if (valor != true)
+            secuenciaAnteriorManual = string.Empty;
+    }
+
+    private void OnSecuenciaAnteriorManualChanged(string valor)
+    {
+        secuenciaAnteriorManual = valor ?? string.Empty;
+        errorSecuenciaInicial = null;
+    }
+
+    private async Task OnInputBusquedaIdentificacion(ChangeEventArgs e)
+    {
+        var identificacionAnterior = cliente.Numeroidentificacion;
+        var valor = new string((e.Value?.ToString() ?? string.Empty).Where(char.IsDigit).ToArray());
+
+        if (cliente.Codcliente > 0 && !string.Equals(identificacionAnterior, valor, StringComparison.Ordinal))
+            LimpiarCorreosOpcionales();
+
+        cliente.Numeroidentificacion = valor;
+
+        sugerenciasIdentificacion = valor.Length >= 1
+            ? await EContaxFacturacionService.BuscarClientesFiltroAsync(currentUserId, valor)
+            : null;
+
+        if ((sugerenciasIdentificacion is null || !sugerenciasIdentificacion.Any()) &&
+            valor.Length is 10 or 13)
+        {
+            await BuscarYAplicarClienteExternoAsync(valor);
+        }
+    }
+
+    private async Task OnBlurIdentificacion()
+    {
+        await Task.Delay(180);
+
+        if (seleccionandoClienteDesdeLista)
+        {
+            seleccionandoClienteDesdeLista = false;
+            return;
+        }
+
+        sugerenciasIdentificacion = null;
+
+        if (!string.IsNullOrWhiteSpace(cliente.Numeroidentificacion))
+            cliente.Tipoidentificacion = InferirTipoIdentificacion(cliente.Numeroidentificacion);
+
+        if (cliente.Codcliente <= 0)
+            await BuscarYAplicarClienteExternoAsync(cliente.Numeroidentificacion);
+    }
+
+    private async Task OnInputBusquedaCliente(ChangeEventArgs e)
+    {
+        textoBusquedaCliente = e.Value?.ToString() ?? string.Empty;
+
+        sugerencias = textoBusquedaCliente.Trim().Length >= 1
+            ? await EContaxFacturacionService.BuscarClientesFiltroAsync(currentUserId, textoBusquedaCliente)
+            : null;
+
+        if ((sugerencias is null || !sugerencias.Any()) &&
+            new string(textoBusquedaCliente.Where(char.IsDigit).ToArray()).Length is 10 or 13)
+        {
+            await BuscarYAplicarClienteExternoAsync(textoBusquedaCliente);
+        }
+    }
+
+    private async Task OnBlurBusquedaCliente()
+    {
+        await Task.Delay(180);
+
+        if (seleccionandoClienteDesdeLista)
+        {
+            seleccionandoClienteDesdeLista = false;
+            return;
+        }
+
+        sugerencias = null;
+
+        if (cliente.Codcliente <= 0)
+            await BuscarYAplicarClienteExternoAsync(textoBusquedaCliente);
+    }
+
+    private void PrepararSeleccionCliente()
+    {
+        seleccionandoClienteDesdeLista = true;
+    }
+
+    private async Task OnKeyDownBusquedaIdentificacion(KeyboardEventArgs args)
+    {
+        if ((args.Key == "Enter" || args.Key == "Tab") &&
+            sugerenciasIdentificacion != null &&
+            sugerenciasIdentificacion.Any())
+        {
+            await SeleccionarClienteAsync(sugerenciasIdentificacion.First());
+        }
+    }
+
+    private async Task OnKeyDownBusquedaNombre(KeyboardEventArgs args)
+    {
+        if ((args.Key == "Enter" || args.Key == "Tab") &&
+            sugerencias != null &&
+            sugerencias.Any())
+        {
+            await SeleccionarClienteAsync(sugerencias.First());
+        }
+    }
+
+    private async Task SeleccionarClienteAsync(Cliente clienteSeleccionado)
+    {
+        seleccionandoClienteDesdeLista = false;
+        cliente = clienteSeleccionado;
+        cliente.Usuario = currentUserId;
+        cliente.Estado = true;
+        textoBusquedaCliente = ObtenerNombreClienteVisual(cliente);
+        sugerencias = null;
+        sugerenciasIdentificacion = null;
+
+        await CargarUbicacionClienteAsync();
+        await CargarCorreosOpcionalesClienteAsync();
+    }
+
+    private async Task BuscarClienteAsync()
+    {
+        mensajeEstado = null;
+        var identificacion = (cliente.Numeroidentificacion ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(identificacion))
+        {
+            mensajeEstado = "Error: Ingresa la identificacion del cliente.";
+            return;
+        }
+
+        var encontrado = await EContaxFacturacionService.GetClienteByIdentificacionAsync(currentUserId, identificacion);
+        if (encontrado is null)
+        {
+            mensajeEstado = "Cliente no encontrado. Puedes completar los datos para crearlo al emitir.";
+            return;
+        }
+
+        cliente = encontrado;
+        cliente.Usuario = currentUserId;
+        cliente.Estado = true;
+        textoBusquedaCliente = ObtenerNombreClienteVisual(cliente);
+        await CargarUbicacionClienteAsync();
+        await CargarCorreosOpcionalesClienteAsync();
+        mensajeEstado = "Cliente cargado correctamente.";
+    }
+
+    private async Task OnPaisChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var idPais))
+        {
+            cliente.Pais = idPais;
+            cliente.Provincia = 0;
+            cliente.Ciudad = 0;
+            listaCiudades.Clear();
+            listaProvincias = idPais > 0
+                ? await EContaxFacturacionService.GetProvinciasByPaisAsync(idPais)
+                : new List<Provincia>();
+        }
+    }
+
+    private async Task OnProvinciaChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var idProvincia))
+        {
+            cliente.Provincia = idProvincia;
+            cliente.Ciudad = 0;
+            listaCiudades = idProvincia > 0
+                ? await EContaxFacturacionService.GetCiudadesByProvinciaAsync(idProvincia)
+                : new List<Ciudad>();
+        }
+    }
+
+    private async Task CargarUbicacionClienteAsync()
+    {
+        listaProvincias = new();
+        listaCiudades = new();
+
+        if (cliente.Pais is > 0)
+            listaProvincias = await EContaxFacturacionService.GetProvinciasByPaisAsync(cliente.Pais.Value);
+
+        if (cliente.Provincia is > 0)
+            listaCiudades = await EContaxFacturacionService.GetCiudadesByProvinciaAsync(cliente.Provincia.Value);
+    }
+
+    private void AgregarCorreoOpcionalFactura()
+    {
+        NormalizarCorreosOpcionalesFactura();
+
+        if (correosOpcionalesFactura.Count >= MaxCorreosOpcionalesFactura)
+            return;
+
+        correosOpcionalesFactura.Add(new CorreoOpcionalFacturaInput());
+    }
+
+    private void EliminarCorreoOpcionalFactura(int index)
+    {
+        if (index < 0 || index >= correosOpcionalesFactura.Count)
+            return;
+
+        var correoRemovido = correosOpcionalesFactura[index];
+        correosOpcionalesFactura.RemoveAt(index);
+
+        if (correoRemovido.EsPersistidoCliente)
+        {
+            correosPersistidosClienteFactura = correosPersistidosClienteFactura
+                .Where(x =>
+                    !string.Equals(
+                        (x ?? string.Empty).Trim(),
+                        (correoRemovido.CorreoOriginal ?? correoRemovido.Correo ?? string.Empty).Trim(),
+                        StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
+
+    private async Task CargarCorreosOpcionalesClienteAsync()
+    {
+        LimpiarCorreosOpcionales();
+
+        if (cliente.Codcliente <= 0)
+            return;
+
+        correosPersistidosClienteFactura = (await EContaxFacturacionService.GetCorreosAdicionalesClienteAsync(currentUserId, cliente.Codcliente))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxCorreosOpcionalesFactura)
+            .ToList();
+
+        foreach (var correo in correosPersistidosClienteFactura)
+        {
+            correosOpcionalesFactura.Add(new CorreoOpcionalFacturaInput
+            {
+                Correo = correo,
+                CorreoOriginal = correo,
+                GuardarEnCliente = true,
+                EsPersistidoCliente = true
+            });
+        }
+    }
+
+    private void LimpiarCorreosOpcionales()
+    {
+        correosOpcionalesFactura = new();
+        correosPersistidosClienteFactura = new();
+    }
+
+    private void NormalizarCorreosOpcionalesFactura()
+    {
+        foreach (var correo in correosOpcionalesFactura)
+            correo.Correo = (correo.Correo ?? string.Empty).Trim();
+    }
+
+    private List<FacturaCorreoDestinoDto> ObtenerCorreosOpcionalesFactura()
+    {
+        NormalizarCorreosOpcionalesFactura();
+
+        return correosOpcionalesFactura
+            .Where(x => !string.IsNullOrWhiteSpace(x.Correo))
+            .Select(x => new FacturaCorreoDestinoDto
+            {
+                Correo = x.Correo,
+                GuardarEnCliente = x.EsPersistidoCliente || x.GuardarEnCliente
+            })
+            .ToList();
+    }
+
+    private async Task OnInputBusquedaProducto(ChangeEventArgs e)
+    {
+        productoBusqueda = e.Value?.ToString() ?? string.Empty;
+        productoSeleccionado = null;
+        productoAviso = null;
+
+        sugerenciasProductos = await EContaxFacturacionService.BuscarProductosFiltroAsync(currentUserId, productoBusqueda);
+    }
+
+    private async Task MostrarSugerenciasProductosAsync(FocusEventArgs _)
+    {
+        sugerenciasProductos = await EContaxFacturacionService.BuscarProductosFiltroAsync(currentUserId, productoBusqueda);
+    }
+
+    private void PrepararSeleccionProducto()
+    {
+        seleccionandoProductoDesdeLista = true;
+    }
+
+    private async Task SeleccionarProductoDesdeListaAsync(ProductoLookupDetalleDto producto)
+    {
+        SeleccionarProducto(producto);
+        seleccionandoProductoDesdeLista = false;
+        await AgregarDetalleAsync();
+    }
+
+    private void SeleccionarProducto(ProductoLookupDetalleDto producto)
+    {
+        productoSeleccionado = producto;
+        productoBusqueda = producto.Codprincipal ?? producto.Codproducto.ToString(CultureInfo.InvariantCulture);
+        precioProducto = producto.PrecioUnitario;
+        tarifaProducto = tarifasIva.Contains(producto.TarifaIva) ? producto.TarifaIva : 15;
+        descuentoProducto = 0m;
+        cantidadProducto = 1m;
+        productoAviso = $"Producto seleccionado: {producto.Descripcion}";
+        sugerenciasProductos = null;
+    }
+
+    private async Task OnProductoKeyUp(KeyboardEventArgs args)
+    {
+        if (args.Key != "Enter")
+            return;
+
+        if (productoSeleccionado is null && sugerenciasProductos != null && sugerenciasProductos.Any())
+            SeleccionarProducto(sugerenciasProductos.First());
+
+        await AgregarDetalleAsync();
+    }
+
+    private async Task OnProductoBlur()
+    {
+        await Task.Delay(150);
+
+        if (seleccionandoProductoDesdeLista)
+        {
+            seleccionandoProductoDesdeLista = false;
+            return;
+        }
+
+        sugerenciasProductos = null;
+    }
+
+    private async Task BuscarProductoAsync()
+    {
+        productoAviso = null;
+        productoSeleccionado = null;
+
+        if (string.IsNullOrWhiteSpace(productoBusqueda))
+        {
+            productoAviso = "Ingresa un codigo o nombre para buscar.";
+            return;
+        }
+
+        productoSeleccionado = await EContaxFacturacionService.BuscarProductoParaDetalleAsync(currentUserId, productoBusqueda);
+        if (productoSeleccionado is null)
+        {
+            productoAviso = "No se encontro un producto o servicio activo con ese criterio.";
+            return;
+        }
+
+        SeleccionarProducto(productoSeleccionado);
+    }
+
+    private async Task AgregarDetalleAsync()
+    {
+        mensajeEstado = null;
+
+        if (productoSeleccionado is null)
+        {
+            await BuscarProductoAsync();
+            if (productoSeleccionado is null)
+                return;
+        }
+
+        if (cantidadProducto <= 0 || cantidadProducto != decimal.Truncate(cantidadProducto))
+        {
+            productoAviso = "La cantidad debe ser un entero mayor a cero.";
+            return;
+        }
+
+        if (precioProducto < 0 || descuentoProducto < 0)
+        {
+            productoAviso = "Precio y descuento no pueden ser negativos.";
+            return;
+        }
+
+        if (descuentoProducto > 100)
+        {
+            productoAviso = "El descuento no puede superar el 100%.";
+            return;
+        }
+
+        lineas.Add(new EContaxFacturaLinea
+        {
+            Codproducto = productoSeleccionado.Codproducto,
+            Codprincipal = productoSeleccionado.Codprincipal,
+            Codauxiliar = productoSeleccionado.Codauxiliar,
+            Descripcion = productoSeleccionado.Descripcion,
+            Cantidad = cantidadProducto,
+            Precio = precioProducto,
+            PorcentajeDescuento = descuentoProducto,
+            Tarifa = tarifaProducto
+        });
+
+        productoSeleccionado = null;
+        productoBusqueda = string.Empty;
+        productoAviso = null;
+        cantidadProducto = 1m;
+        precioProducto = 0m;
+        descuentoProducto = 0m;
+        tarifaProducto = 15;
+    }
+
+    private void QuitarDetalle(EContaxFacturaLinea linea) => lineas.Remove(linea);
+
+    private async Task GuardarFacturaAsync()
+    {
+        if (!PuedeGuardar)
+            return;
+
+        mensajeEstado = null;
+        var validacion = ValidarAntesDeGuardar();
+        if (!string.IsNullOrWhiteSpace(validacion))
+        {
+            mensajeEstado = $"Error: {validacion}";
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            factura.Numfactura = await EContaxFacturacionService.GetNextFacturaNumeroAsync(currentUserId, factura.Codemisor);
+            serieVisual = await EContaxFacturacionService.GetSerieFacturaVisualAsync(currentUserId);
+            factura.Serie = serieVisual.Replace("-", string.Empty);
+            factura.Idusuario = currentUserId;
+            factura.Coddocumento = 1;
+            factura.Fechaentrega = DateTime.Now;
+            factura.Tipopago = formaPagoSeleccionada;
+            factura.Estado = true;
+            factura.Autorizado = false;
+            descuentoGlobalPorcentaje = DescuentoGlobalPorcentajeSeguro;
+            factura.DescuentoGlobalPct = descuentoGlobalPorcentaje;
+            factura.DescuentoGlobalValor = DescuentoGlobalValor;
+            factura.Subtotal = Subtotal;
+            factura.Descuentos = DescuentoTotal;
+            factura.Iva = IvaTotal;
+            factura.Valortotal = Total;
+            factura.Valorapagar = Total;
+
+            cliente.Usuario = currentUserId;
+            cliente.Estado = true;
+            cliente.TipoCliente ??= tiposCliente.FirstOrDefault()?.TclCodigo;
+            cliente.Tipoidentificacion = string.IsNullOrWhiteSpace(cliente.Tipoidentificacion)
+                ? "05"
+                : cliente.Tipoidentificacion.Trim();
+
+            if (EsEmpresaPorTipoCliente())
+            {
+                cliente.Nombres = null;
+                cliente.Apellidos = null;
+            }
+            else
+            {
+                cliente.Nombrecomercial = null;
+                cliente.Nombrerazonsocial = null;
+                SincronizarNombres();
+            }
+
+            cliente.Nombrerazonsocial = cliente.Nombrerazonsocial?.Trim();
+            cliente.Nombrecomercial = cliente.Nombrecomercial?.Trim();
+            cliente.Oblgconta = string.IsNullOrWhiteSpace(cliente.Oblgconta) ? "NO" : cliente.Oblgconta;
+
+            var detalles = lineas.Select(linea => new Detallefactura
+            {
+                Codproducto = linea.Codproducto,
+                Codprincipal = linea.Codprincipal,
+                Codauxiliar = linea.Codauxiliar,
+                Cantproducto = linea.Cantidad,
+                Descripproducto = linea.Descripcion,
+                Precioproducto = linea.Precio,
+                Descuento = linea.Descuento,
+                Tarifa = linea.Tarifa,
+                Valortproducto = linea.BaseImponible,
+                Valoriva = linea.Iva,
+                Valortotal = linea.Total
+            }).ToList();
+
+            var ok = await EContaxFacturacionService.GuardarFacturaCompletaAsync(
+                currentUserId,
+                factura,
+                cliente,
+                detalles,
+                ObtenerCorreosOpcionalesFactura());
+
+            if (!ok)
+            {
+                mensajeEstado = $"Error: {EContaxFacturacionService.UltimoErrorGuardarFactura ?? "No se pudo guardar la factura."}";
+                return;
+            }
+
+            var numeroGenerado = NumeroFacturaPreview;
+            mensajeEstado = null;
+            lineas.Clear();
+            descuentoGlobalPorcentaje = 0m;
+            LimpiarCorreosOpcionales();
+            InicializarModelos();
+            textoBusquedaCliente = string.Empty;
+            if (emisores.Any())
+                factura.Codemisor = emisores.First().Codigo;
+            await AplicarSecuenciaInicialAsync();
+            await JS.InvokeVoidAsync("numericaUi.showAlert", new
+            {
+                title = "Factura emitida",
+                text = $"La factura {numeroGenerado} se emitio correctamente.",
+                icon = "success",
+                confirmButtonText = "Aceptar"
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            mensajeEstado = "Error: La factura tardó demasiado en procesarse. Intenta nuevamente.";
+        }
+        catch (Exception ex)
+        {
+            mensajeEstado = ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("canceled", StringComparison.OrdinalIgnoreCase)
+                ? "Error: La factura tardó demasiado en procesarse. Intenta nuevamente."
+                : $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private string? ValidarAntesDeGuardar()
+    {
+        if (sinCaja)
+            return "Configura el punto de emision antes de facturar.";
+
+        if (factura.Codemisor is null or <= 0)
+            return "Selecciona un emisor.";
+
+        if (string.IsNullOrWhiteSpace(cliente.Numeroidentificacion))
+            return "Ingresa la identificacion del cliente.";
+
+        if (string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial) &&
+            string.IsNullOrWhiteSpace(cliente.Nombres))
+            return "Ingresa el nombre o razon social del cliente.";
+
+        if (string.IsNullOrWhiteSpace(formaPagoSeleccionada))
+            return "Selecciona la forma de pago.";
+
+        if (!lineas.Any())
+            return "Agrega al menos un detalle.";
+
+        if (descuentoGlobalPorcentaje < 0m || descuentoGlobalPorcentaje > 100m)
+            return "El descuento global debe estar entre 0 y 100%.";
+
+        if (lineas.Any(linea => linea.Cantidad <= 0m))
+            return "Todas las cantidades deben ser mayores a cero.";
+
+        if (lineas.Any(linea => linea.Precio < 0m))
+            return "Los precios no pueden ser negativos.";
+
+        if (lineas.Any(linea => linea.PorcentajeDescuento < 0m || linea.PorcentajeDescuento > 100m))
+            return "El descuento de cada producto debe estar entre 0 y 100%.";
+
+        if (lineas.Any(linea => !tarifasIva.Contains(linea.Tarifa)))
+            return "Selecciona una tarifa de IVA valida en todos los productos.";
+
+        if (ContarPalabras(cliente.Referencia) > 100)
+            return "La referencia no puede superar las 100 palabras.";
+
+        return null;
+    }
+
+    private async Task LimpiarFormularioAsync()
+    {
+        lineas.Clear();
+        productoSeleccionado = null;
+        productoBusqueda = string.Empty;
+        textoBusquedaCliente = string.Empty;
+        productoAviso = null;
+        mensajeEstado = null;
+        sugerencias = null;
+        sugerenciasIdentificacion = null;
+        sugerenciasProductos = null;
+        listaProvincias = new();
+        listaCiudades = new();
+        descuentoGlobalPorcentaje = 0m;
+        LimpiarCorreosOpcionales();
+        InicializarModelos();
+        cliente.TipoCliente = tiposCliente.FirstOrDefault()?.TclCodigo;
+        cliente.Tipoidentificacion = identificaciones.FirstOrDefault(x => x.IdeCodigo == "05")?.IdeCodigo
+            ?? identificaciones.FirstOrDefault()?.IdeCodigo
+            ?? "05";
+
+        if (emisores.Any())
+        {
+            factura.Codemisor = emisores.First().Codigo;
+            await AplicarSecuenciaInicialAsync();
+        }
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private void IrAPuntosEmision() => NavManager.NavigateTo(EContaxRoutes.ConfiguracionPuntosEmision);
+    private void IrAEmisor() => NavManager.NavigateTo(EContaxRoutes.Emisor);
+    private void IrAProductos() => NavManager.NavigateTo(EContaxRoutes.Productos);
+
+    private bool EsEmpresaPorTipoCliente()
+    {
+        if (cliente.TipoCliente == null)
+            return false;
+
+        var descripcion = tiposCliente.FirstOrDefault(x => x.TclCodigo == cliente.TipoCliente.Value)?.TclDescripcion ?? string.Empty;
+        return EsTipoClienteJuridico(descripcion);
+    }
+
+    private bool EsPersonaPorTipoCliente()
+    {
+        if (cliente.TipoCliente == null)
+            return false;
+
+        var descripcion = tiposCliente.FirstOrDefault(x => x.TclCodigo == cliente.TipoCliente.Value)?.TclDescripcion ?? string.Empty;
+        return EsTipoClienteNatural(descripcion);
+    }
+
+    private static string GetTipoClienteEtiqueta(string? descripcion)
+        => string.IsNullOrWhiteSpace(descripcion)
+            ? "-- Seleccione --"
+            : TipoClienteClasificacion.ObtenerEtiqueta(descripcion);
+
+    private static bool EsTipoClienteJuridico(string? descripcion) =>
+        TipoClienteClasificacion.EsJuridica(descripcion);
+
+    private static bool EsTipoClienteNatural(string? descripcion) =>
+        TipoClienteClasificacion.EsNatural(descripcion);
+
+    private int ContarPalabras(string? texto)
+        => string.IsNullOrWhiteSpace(texto)
+            ? 0
+            : texto.Split(new[] { ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
+
+    private string InferirTipoIdentificacion(string numero)
+    {
+        numero = (numero ?? string.Empty).Trim();
+        if (numero.Length == 13)
+            return identificaciones.FirstOrDefault(x => x.IdeCodigo == "04")?.IdeCodigo ?? "04";
+
+        return identificaciones.FirstOrDefault(x => x.IdeCodigo == "05")?.IdeCodigo ?? "05";
+    }
+
+    private async Task BuscarYAplicarClienteExternoAsync(string? valor)
+    {
+        var identificacion = new string((valor ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (identificacion.Length is not (10 or 13))
+            return;
+
+        if (cliente.Codcliente > 0 &&
+            string.Equals((cliente.Numeroidentificacion ?? string.Empty).Trim(), identificacion, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var clienteLocal = await EContaxFacturacionService.GetClienteByIdentificacionAsync(currentUserId, identificacion);
+        if (clienteLocal is not null)
+        {
+            await SeleccionarClienteAsync(clienteLocal);
+            return;
+        }
+
+        var lookup = await CedulaLookupService.ConsultarAsync(identificacion);
+        if (!lookup.Success || !lookup.Found)
+            return;
+
+        var clienteExterno = CrearClienteDesdeLookup(lookup, identificacion);
+        var clientePersistido = await EContaxFacturacionService.UpsertClienteAsync(currentUserId, clienteExterno);
+        await SeleccionarClienteAsync(clientePersistido);
+    }
+
+    private Cliente CrearClienteDesdeLookup(CedulaLookupResult lookup, string identificacion)
+    {
+        var clienteLookup = new Cliente
+        {
+            Numeroidentificacion = identificacion,
+            Tipoidentificacion = InferirTipoIdentificacion(identificacion),
+            Oblgconta = NormalizarObligadoContabilidad(lookup.ObligadoLlevarContabilidad),
+            Estado = true,
+            Usuario = currentUserId
+        };
+
+        if (string.Equals(lookup.Tipo, "ruc", StringComparison.OrdinalIgnoreCase))
+        {
+            var esNatural = (lookup.TipoContribuyente ?? string.Empty)
+                .Contains("NATURAL", StringComparison.OrdinalIgnoreCase);
+
+            clienteLookup.TipoCliente = ObtenerTipoClienteDesdeClasificacion(esNatural);
+
+            if (esNatural)
+            {
+                var (apellidos, nombres) = SepararNombreCompleto(lookup.NombreCompleto);
+                clienteLookup.Apellidos = apellidos;
+                clienteLookup.Nombres = nombres;
+            }
+            else
+            {
+                var razonSocial = lookup.RazonSocial?.Trim() ?? lookup.NombreCompleto?.Trim();
+                clienteLookup.Nombrerazonsocial = razonSocial;
+                clienteLookup.Nombrecomercial = razonSocial;
+            }
+
+            return clienteLookup;
+        }
+
+        clienteLookup.TipoCliente = ObtenerTipoClienteDesdeClasificacion(true);
+        var (apellidosCedula, nombresCedula) = SepararNombreCompleto(lookup.NombreCompleto);
+        clienteLookup.Apellidos = apellidosCedula;
+        clienteLookup.Nombres = nombresCedula;
+        return clienteLookup;
+    }
+
+    private int? ObtenerTipoClienteDesdeClasificacion(bool esNatural)
+    {
+        return tiposCliente.FirstOrDefault(x =>
+            esNatural
+                ? EsTipoClienteNatural(x.TclDescripcion)
+                : EsTipoClienteJuridico(x.TclDescripcion))?.TclCodigo;
+    }
+
+    private static (string? Apellidos, string? Nombres) SepararNombreCompleto(string? nombreCompleto)
+    {
+        var partes = (nombreCompleto ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (partes.Length == 2)
+            return (partes[0], partes[1]);
+
+        if (partes.Length == 3)
+            return (string.Join(" ", partes.Take(2)), partes[2]);
+
+        if (partes.Length >= 4)
+            return (string.Join(" ", partes.Take(2)), string.Join(" ", partes.Skip(2)));
+
+        if (partes.Length == 1)
+            return (partes[0], null);
+
+        return (null, null);
+    }
+
+    private static string NormalizarObligadoContabilidad(string? valor)
+    {
+        var normalizado = (valor ?? string.Empty).Trim().ToUpperInvariant();
+        return normalizado is "SI" or "NO" ? normalizado : "NO";
+    }
+
+    private void SincronizarNombres()
+    {
+        var nombreCompleto = $"{cliente.Nombres} {cliente.Apellidos}".Trim();
+        if (string.IsNullOrWhiteSpace(nombreCompleto))
+            return;
+
+        textoBusquedaCliente = nombreCompleto;
+    }
+
+    private void OnTipoClienteFacturaChanged()
+    {
+        if (EsEmpresaPorTipoCliente())
+        {
+            cliente.Nombres = null;
+            cliente.Apellidos = null;
+        }
+        else
+        {
+            cliente.Nombrecomercial = null;
+            cliente.Nombrerazonsocial = null;
+            SincronizarNombres();
+        }
+    }
+
+    private string ObtenerNombreClienteVisual(Cliente? clienteActual, string? fallback = null)
+    {
+        if (clienteActual is null)
+            return string.IsNullOrWhiteSpace(fallback) ? "Cliente seleccionado" : fallback.Trim();
+
+        var nombrePersona = $"{clienteActual.Nombres} {clienteActual.Apellidos}".Trim();
+        var esJuridica = clienteActual.TipoCliente.HasValue &&
+            tiposCliente.Any(x =>
+                x.TclCodigo == clienteActual.TipoCliente.Value &&
+                TipoClienteClasificacion.EsJuridica(x.TclDescripcion));
+
+        if (!esJuridica && !string.IsNullOrWhiteSpace(nombrePersona))
+            return nombrePersona;
+
+        if (!string.IsNullOrWhiteSpace(clienteActual.Nombrerazonsocial))
+            return clienteActual.Nombrerazonsocial.Trim();
+
+        if (!string.IsNullOrWhiteSpace(clienteActual.Nombrecomercial))
+            return clienteActual.Nombrecomercial.Trim();
+
+        if (!string.IsNullOrWhiteSpace(nombrePersona))
+            return nombrePersona;
+
+        if (!string.IsNullOrWhiteSpace(clienteActual.Numeroidentificacion))
+            return $"Cliente {clienteActual.Numeroidentificacion.Trim()}";
+
+        return string.IsNullOrWhiteSpace(fallback) ? "Cliente seleccionado" : fallback.Trim();
+    }
+
+    private string GetEmisorActivoNombre()
+    {
+        var emisor = emisores.FirstOrDefault(x => x.Codigo == factura.Codemisor);
+        return emisor is null ? "Sin emisor" : GetEmisorNombre(emisor);
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private static string FormatearSerie(string? serie)
+    {
+        var digits = new string((serie ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (digits.Length >= 6)
+            return $"{digits[..3]}-{digits.Substring(3, 3)}";
+
+        return "001-001";
+    }
+
+    private static string GetEmisorNombre(Emisor emisor)
+    {
+        var nombre = string.IsNullOrWhiteSpace(emisor.NomComercial)
+            ? emisor.RazonSocial
+            : emisor.NomComercial;
+
+        return $"{nombre} - {emisor.Ruc}".Trim(' ', '-');
+    }
+
+    private static readonly string[] CodigosFormaPagoVisibles = ["19", "20", "01"];
+
+    private static string GetFormaPagoNombre(FormasPago forma)
+        => $"{forma.Codigo} - {(string.IsNullOrWhiteSpace(forma.DescripcionSri) ? forma.Descripcion : forma.DescripcionSri)}";
+
+    private static string FormatMoney(decimal value)
+        => value.ToString("C2", CultureInfo.GetCultureInfo("es-EC"));
+
+    private sealed class EContaxFacturaLinea
+    {
+        private decimal cantidad = 1m;
+        private decimal precio;
+        private decimal porcentajeDescuento;
+        private int tarifa = 15;
+
+        public int Codproducto { get; init; }
+        public string? Codprincipal { get; init; }
+        public string? Codauxiliar { get; init; }
+        public string? Descripcion { get; init; }
+
+        public decimal Cantidad
+        {
+            get => cantidad;
+            set => cantidad = value <= 0m ? 1m : value;
+        }
+
+        public decimal Precio
+        {
+            get => precio;
+            set => precio = Math.Max(0m, value);
+        }
+
+        public decimal PorcentajeDescuento
+        {
+            get => porcentajeDescuento;
+            set => porcentajeDescuento = Math.Clamp(value, 0m, 100m);
+        }
+
+        public int Tarifa
+        {
+            get => tarifa;
+            set => tarifa = Math.Max(0, value);
+        }
+
+        public decimal SubtotalBruto => Math.Round(Cantidad * Precio, 2);
+        public decimal Descuento => Math.Round(SubtotalBruto * (PorcentajeDescuento / 100m), 2);
+        public decimal BaseImponible => Math.Round(Math.Max(0m, SubtotalBruto - Descuento), 2);
+        public decimal Iva => Math.Round(BaseImponible * (Tarifa / 100m), 2);
+        public decimal Total => Math.Round(BaseImponible + Iva, 2);
+
+        public decimal GetIvaConDescuentoGlobal(decimal porcentajeGlobal)
+        {
+            var pct = Math.Clamp(porcentajeGlobal, 0m, 100m) / 100m;
+            var baseConGlobal = Math.Round(BaseImponible * (1m - pct), 2);
+            return Math.Round(baseConGlobal * (Tarifa / 100m), 2);
+        }
+    }
+
+    private sealed class CorreoOpcionalFacturaInput
+    {
+        public string Correo { get; set; } = string.Empty;
+        public string? CorreoOriginal { get; set; }
+        public bool GuardarEnCliente { get; set; } = true;
+        public bool EsPersistidoCliente { get; set; }
+    }
+}

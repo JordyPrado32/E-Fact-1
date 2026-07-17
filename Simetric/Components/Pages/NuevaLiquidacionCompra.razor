@@ -1,0 +1,2694 @@
+@page "/compras/nueva-liquidacion"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using Simetric.Components.Shared
+@implements IDisposable
+@using Simetric.DTOs
+@using Simetric.Services
+@using System.Globalization
+@using System.Security.Claims
+@using System.Text
+@using Simetric.Models.Glogales
+@inject AuthenticationStateProvider AuthStateProvider
+@inject FacturacionService FacturacionService
+@inject ComprasXmlService ComprasXmlService
+@inject InitialSequencePromptService InitialSequencePromptService
+@inject LiquidacionCompraService LiquidacionCompraService
+@inject SweetAlertService AlertService
+@inject EmisionControlService EmisionControlService
+@inject ILiquidacionCompraPdfService LiquidacionCompraPdfService
+@inject IWebHostEnvironment WebHostEnvironment
+@inject NavigationManager NavManager
+
+<PageTitle>Nueva Liquidacion | Numerica e-fact</PageTitle>
+
+<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern compact-liquidacion-page docs-unified-page" data-tour="liquidacion.page">
+    @if (guardando)
+    {
+        <div class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+             style="background: rgba(15, 23, 42, 0.38); z-index: 2000; backdrop-filter: blur(2px);">
+            <div class="bg-white rounded-4 shadow-lg px-4 py-4 text-center" style="width: min(92vw, 420px);">
+                <div class="spinner-border text-primary mb-3" role="status"></div>
+                <div class="fw-semibold fs-5">@TextoGuardandoLiquidacion</div>
+                <div class="text-muted small mt-2">Espera un momento mientras procesamos la liquidacion y su envio al SRI.</div>
+            </div>
+        </div>
+    }
+
+    <DocumentoEmisionToast Message="@mensajeRapidoLiquidacion"
+                           IsError="@mensajeRapidoEsError"
+                           PdfUrl="@liquidacionGeneradaPdfUrl"
+                           OnOpenPdf="AbrirDocumentoGeneradoAsync">
+        <AdditionalActions>
+            @if (!mensajeRapidoEsError && liquidacionGeneradaCodFactura is > 0)
+            {
+                <button type="button" class="documento-emision-accion" @onclick="IrARetencionLiquidacionGenerada">Ir a retencion</button>
+                <button type="button" class="documento-emision-accion" @onclick="NuevaLiquidacionDesdeAvisoAsync">Nueva liquidacion</button>
+            }
+        </AdditionalActions>
+    </DocumentoEmisionToast>
+
+    <InitialSequenceModal Visible="@mostrarModalSecuenciaInicial"
+                          Title="Configuracion inicial de secuencia"
+                          Description="Antes de registrar tu primera liquidacion de compra en este sistema, indicanos si ya habias emitido liquidaciones anteriormente."
+                          QuestionLabel="Ya habias generado liquidaciones antes?"
+                          SequenceLabel="Ingresa la secuencia donde te quedaste"
+                          SequencePlaceholder="Ej: 000000125"
+                          SequenceHint="Si te quedaste en la 125, la siguiente sera la 126."
+                          HadPreviousDocuments="usuarioYaEmitioAntes"
+                          HadPreviousDocumentsChanged="OnCambioRespuestaSecuencia"
+                          PreviousSequence="@secuenciaAnteriorManual"
+                          PreviousSequenceChanged="OnSecuenciaAnteriorManualChanged"
+                          ErrorMessage="@errorSecuenciaInicial"
+                          OnDismiss="@(() => mostrarModalSecuenciaInicial = false)"
+                          OnConfirm="ConfirmarSecuenciaInicialAsync" />
+
+    <section class="docs-form-hero" data-tour="liquidacion.hero">
+        <div class="docs-form-hero-body">
+            <!-- Columna 1: Info (Izquierda) -->
+            <div class="docs-form-hero-copy invoice-heading-card nc-heading-card">
+                <div class="invoice-heading-head nc-heading-head">
+                    <span class="invoice-heading-icon nc-heading-icon"><i class="bi bi-cart3"></i></span>
+                    <span class="docs-form-kicker-blue">Documento de compra</span>
+                </div>
+                <h2 class="docs-form-title" style="font-size: 1.18rem !important; line-height: 1.18 !important;">Nueva liquidacion de compra</h2>
+                <p class="docs-form-text">
+                    Completa proveedor, detalle y forma de pago con una vista mas limpia y con <br />
+                    acceso directo al historial sin salir de esta pantalla.
+                </p>
+                <div class="invoice-heading-meter nc-heading-meter"><span></span></div>
+            </div>
+
+            <!-- Columna 2: Toolbar (Derecha) conteniendo Pills a la izquierda y Botones apilados a la derecha -->
+            <div class="docs-form-toolbar">
+                @if (preview != null)
+                {
+                    <!-- Pills (Centro) -->
+                    <div class="n-invoice-id-strip nc-id-strip" aria-label="Identificadores de la liquidacion de compra">
+                        <div class="n-invoice-id-pill nc-id-pill">
+                            <span>Serie</span>
+                            @if (seriesDocumento.Count > 1)
+                            {
+                                <select class="n-input text-center fw-bold"
+                                        value="@preview.Serie"
+                                        @onchange="OnSerieDocumentoChangedAsync"
+                                        disabled="@guardando"
+                                        aria-label="Seleccionar serie de liquidacion">
+                                    @foreach (var serie in seriesDocumento)
+                                    {
+                                        <option value="@serie.SerieRaw">@serie.SerieVisual</option>
+                                    }
+                                </select>
+                            }
+                            else
+                            {
+                                <strong>@preview.SerieVisual</strong>
+                            }
+                        </div>
+                        <div class="n-invoice-id-pill nc-id-pill">
+                            <span>Liquidación</span>
+                            <strong>@(string.IsNullOrWhiteSpace(preview.Secuencial) ? "-" : preview.Secuencial)</strong>
+                        </div>
+                    </div>
+                }
+
+                <!-- Botones apilados verticalmente -->
+                <div class="nc-toolbar-actions">
+                    <button type="button" class="n-btn n-btn-secondary" @onclick="AbrirHistorialLiquidacionesAsync" disabled="@guardando">
+                        <i class="bi bi-clock-history me-2"></i> Historial
+                    </button>
+
+                    <button type="button" class="n-btn n-btn-secondary" @onclick="ReiniciarFormularioAsync" disabled="@guardando">
+                        <i class="bi bi-arrow-clockwise me-2"></i> Limpiar pantalla
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @if (preview == null)
+    {
+        <div class="n-card">
+            <div class="n-card-body compact-card-body">
+                <div class="d-flex align-items-center gap-3">
+                    <span class="spinner-border spinner-border-sm" role="status"></span>
+                    <span>Cargando configuracion de la liquidacion...</span>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div @key="formKey">
+            @if (datosInicialesCargados && !preview.ExisteEmisor)
+        {
+            <div class="alert alert-danger rounded-3 border-0 shadow-sm">
+                <strong>No se encontro un emisor activo.</strong>
+                Revisa tu configuracion antes de guardar la liquidacion.
+            </div>
+        }
+
+        @if (EsLiquidacionSoloLectura)
+        {
+            <div class="alert alert-info border-0 rounded-3 liquidacion-readonly-notice" role="status">
+                <i class="bi bi-lock-fill me-2"></i>
+                Datos de la liquidacion autorizada. Estos campos son solo de lectura mientras completas la retencion.
+            </div>
+        }
+
+        <fieldset class="liquidacion-readonly-fieldset" disabled="@EsLiquidacionSoloLectura">
+        <section class="n-client-search-strip liquidacion-provider-search-strip" data-tour="liquidacion.provider-search">
+            <div class="n-client-search-strip-copy">
+                <span class="n-client-search-eyebrow">Buscador de proveedor</span>
+                <strong>Encuentra o completa el proveedor de la liquidacion</strong>
+            </div>
+
+            <div class="liquidacion-provider-search-actions">
+                <div class="n-client-search-input position-relative">
+                    <div class="n-input-wrapper">
+                        <i class="bi bi-search n-input-icon"></i>
+                        <input class="n-input n-input-with-icon n-input-with-toggle"
+                               value="@textoBusquedaProveedor"
+                               @oninput="OnBusquedaProveedorInput"
+                               @onblur="OnBusquedaProveedorBlur"
+                               placeholder="Buscar proveedor por identificacion o nombre" />
+                    </div>
+
+                    @if (campoProveedorActivo == "razon" && sugerenciasProveedorBusqueda.Any())
+                    {
+                        <ul class="liquidacion-suggestions liquidacion-provider-suggestions-popup">
+                            @foreach (var proveedor in sugerenciasProveedorBusqueda)
+                            {
+                                <li @onmousedown="() => SeleccionarProveedorSugeridoAsync(proveedor)"
+                                    @onmousedown:preventDefault>
+                                    <strong>@proveedor.RazonSocial</strong><br />
+                                    <small>@proveedor.Identificacion</small>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+
+                <button type="button" class="n-btn n-btn-secondary liquidacion-new-provider-btn" @onclick="AbrirModalNuevoProveedor">
+                    <i class="bi bi-truck me-2"></i> Nuevo Proveedor
+                </button>
+            </div>
+        </section>
+        <div class="n-card mb-4 compact-card manual-entry-card" data-tour="liquidacion.document">
+            <div class="n-card-header n-header-dark">
+                <h5><i class="bi bi-building me-2"></i> Datos del Documento</h5>
+                <small class="d-none d-sm-inline-flex">Datos de proveedor y forma de pago de la liquidacion.</small>
+            </div>
+
+            <div class="n-card-body compact-card-body">
+                <div class="liquidacion-provider-order">
+                    <div class="manual-entry-grid liquidacion-provider-data-grid">
+                        <div class="manual-field manual-span-3">
+                            <label class="n-label">Identificacion</label>
+                            <div class="liquidacion-provider-field">
+                                <input class="n-input"
+                                       maxlength="20"
+                                       value="@preview.IdentificacionProveedor"
+                                       @oninput="OnIdentificacionProveedorInput"
+                                       @onblur="OnProveedorBlurAsync"
+                                       placeholder="Identificacion" />
+
+                                @if (campoProveedorActivo == "identificacion" && sugerenciasProveedorBusqueda.Any())
+                                {
+                                    <ul class="liquidacion-suggestions liquidacion-provider-suggestions-popup">
+                                        @foreach (var proveedor in sugerenciasProveedorBusqueda)
+                                        {
+                                            <li @onmousedown="() => SeleccionarProveedorSugeridoAsync(proveedor)"
+                                                @onmousedown:preventDefault>
+                                                <strong>@proveedor.Identificacion</strong><br />
+                                                <small>@proveedor.RazonSocial</small>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="manual-field manual-span-5">
+                            <label class="n-label">Nombre proveedor</label>
+                            <input class="n-input"
+                                   maxlength="300"
+                                   value="@preview.RazonSocialProveedor"
+                                   @oninput="OnRazonSocialProveedorInput"
+                                   placeholder="Nombre Proveedor" />
+                        </div>
+
+                        <div class="manual-field manual-span-4">
+                            <label class="n-label">Telefono</label>
+                            <input class="n-input" maxlength="20" @bind="preview.TelefonoProveedor" @bind:event="oninput" placeholder="Telefono" />
+                        </div>
+
+                        <div class="manual-field manual-span-6 n-email-main-field">
+                            <label class="n-label">Correo electronico principal</label>
+                            <div class="n-email-primary-row">
+                                <div class="n-input-wrapper">
+                                    <i class="bi bi-envelope n-input-icon"></i>
+                                    <input class="n-input n-input-with-icon" maxlength="120" @bind="preview.EmailProveedor" @bind:event="oninput" placeholder="proveedor@ejemplo.com" />
+                                </div>
+                                <button type="button"
+                                        class="n-email-add-btn"
+                                        title="Agregar correo adicional"
+                                        @onclick="AgregarCorreoOpcionalLiquidacion"
+                                        disabled="@(correosOpcionalesLiquidacion.Count >= MaxCorreosOpcionalesLiquidacion)">
+                                    <i class="bi bi-envelope-plus"></i>
+                                    <span>Agregar correo</span>
+                                </button>
+                            </div>
+
+                            @if (correosOpcionalesLiquidacion.Any())
+                            {
+                                <div class="n-additional-email-area">
+                                    <label class="n-label">Correos adicionales</label>
+                                    <div class="n-email-chip-grid">
+                                        @for (int i = 0; i < correosOpcionalesLiquidacion.Count; i++)
+                                        {
+                                            var index = i;
+                                            <div class="n-email-chip-field">
+                                                <input type="email"
+                                                       class="n-email-chip-input"
+                                                       @bind="correosOpcionalesLiquidacion[index].Correo"
+                                                       @bind:event="oninput"
+                                                       placeholder="correo@ejemplo.com" />
+                                                <button type="button"
+                                                        class="n-email-chip-remove"
+                                                        title="Quitar correo"
+                                                        @onclick="() => EliminarCorreoOpcionalLiquidacion(index)">
+                                                    <i class="bi bi-x-lg"></i>
+                                                </button>
+                                                <label class="n-email-save-mini" for="@($"guardar-correo-liquidacion-{index}")">
+                                                    <input type="checkbox"
+                                                           id="@($"guardar-correo-liquidacion-{index}")"
+                                                           @bind="correosOpcionalesLiquidacion[index].GuardarEnProveedor" />
+                                                    Guardar
+                                                </label>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Direccion</label>
+                            <input class="n-input" maxlength="300" @bind="preview.DireccionProveedor" @bind:event="oninput" placeholder="Direccion" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="manual-entry-grid liquidacion-document-order-grid">
+                    <div class="manual-field manual-span-8">
+                        <label class="n-label">Forma de pago</label>
+                        <select class="n-select" @bind="preview.FormaPago">
+                            <option value="">Seleccionar...</option>
+                            @foreach (var forma in formasPago)
+                            {
+                                <option value="@forma.Codigo">@forma.Descripcion</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="manual-field manual-span-4">
+                        <label class="n-label">Días de crédito</label>
+                        <input class="n-input" type="number" min="0" step="1" placeholder="0" @bind="preview.Plazo" @bind:event="oninput" />
+                    </div>
+
+                </div>
+
+
+            </div>
+        </div>
+
+        <div class="n-card mb-4 compact-card manual-entry-card d-none" data-tour="liquidacion.provider">
+            <div class="n-card-header n-header-dark">
+                <h5><i class="bi bi-person-vcard me-2"></i> Datos del Proveedor</h5>
+                <small class="d-none d-sm-inline-flex">Identificacion, razon social y contacto.</small>
+            </div>
+
+            <div class="n-card-body compact-card-body">
+                <div class="manual-entry-grid liquidacion-main-grid">
+                    <div class="manual-field manual-span-3">
+                        <label class="n-label">Tipo identificacion</label>
+                        <select class="n-input" @bind="preview.TipoIdentificacionProveedor">
+                            @foreach (var tipo in tiposIdentificacion)
+                            {
+                                <option value="@tipo.Codigo">@tipo.Descripcion</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="manual-field manual-span-3">
+                        <label class="n-label">Identificacion</label>
+                        <div class="liquidacion-provider-field">
+                            <input class="n-input"
+                                   maxlength="20"
+                                   value="@preview.IdentificacionProveedor"
+                                   @oninput="OnIdentificacionProveedorInput"
+                                   @onblur="OnProveedorBlurAsync" />
+
+                            @if (campoProveedorActivo == "identificacion" && sugerenciasProveedorBusqueda.Any())
+                            {
+                                <ul class="liquidacion-suggestions liquidacion-provider-suggestions-popup">
+                                    @foreach (var proveedor in sugerenciasProveedorBusqueda)
+                                    {
+                                        <li @onmousedown="() => SeleccionarProveedorSugeridoAsync(proveedor)"
+                                            @onmousedown:preventDefault>
+                                            <strong>@proveedor.Identificacion</strong><br />
+                                            <small>@proveedor.RazonSocial</small>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="manual-field manual-span-6">
+                        <label class="n-label">Razon social / nombres</label>
+                        <div class="liquidacion-provider-field">
+                            <input class="n-input"
+                                   maxlength="300"
+                                   value="@preview.RazonSocialProveedor"
+                                   @oninput="OnRazonSocialProveedorInput" />
+
+                            @if (campoProveedorActivo == "razon" && sugerenciasProveedorBusqueda.Any())
+                            {
+                                <ul class="liquidacion-suggestions liquidacion-provider-suggestions-popup">
+                                    @foreach (var proveedor in sugerenciasProveedorBusqueda)
+                                    {
+                                        <li @onmousedown="() => SeleccionarProveedorSugeridoAsync(proveedor)"
+                                            @onmousedown:preventDefault>
+                                            <strong>@proveedor.RazonSocial</strong><br />
+                                            <small>@proveedor.Identificacion</small>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="manual-field manual-span-12">
+                        <label class="n-label">Direccion</label>
+                        <input class="n-input" maxlength="300" @bind="preview.DireccionProveedor" @bind:event="oninput" />
+                    </div>
+                </div>
+
+                <details class="liquidacion-collapsible mt-3">
+                    <summary>Ver datos de contacto opcionales</summary>
+                    <div class="manual-entry-grid liquidacion-collapsible-grid">
+                        <div class="manual-field manual-span-3">
+                            <label class="n-label">Telefono fijo</label>
+                            <input class="n-input" maxlength="20" @bind="preview.TelefonoFijoProveedor" @bind:event="oninput" />
+                        </div>
+
+                        <div class="manual-field manual-span-3">
+                            <label class="n-label">Telefono movil</label>
+                            <input class="n-input" maxlength="20" @bind="preview.TelefonoProveedor" @bind:event="oninput" />
+                        </div>
+
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Correo</label>
+                            <input class="n-input" maxlength="120" @bind="preview.EmailProveedor" @bind:event="oninput" />
+                        </div>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+        <div class="n-card mb-4 compact-card" data-tour="liquidacion.detail">
+            <div class="n-card-header n-header-dark">
+                <h5><i class="bi bi-box-seam me-2"></i> Detalle de la Liquidacion</h5>
+                <small class="d-none d-sm-inline-flex">Registra los productos o servicios adquiridos.</small>
+            </div>
+
+            <div class="n-card-body compact-card-body">
+                <div class="table-responsive n-table-container liquidacion-detail-table-wrap">
+                    <table class="table table-hover align-middle mb-0 liquidacion-detail-table">
+                        <thead class="n-table-header bg-light">
+                            <tr>
+                                <th style="width: 80px;">Cod.</th>
+                                <th style="min-width: 180px;">Concepto</th>
+                                <th style="min-width: 260px;">Detalle</th>
+                                <th class="text-center" style="width: 80px;">Cant.</th>
+                                <th class="text-end" style="width: 100px;">Precio</th>
+                                <th class="text-center" style="width: 168px;">Descuento</th>
+                                <th class="text-end" style="width: 96px;" title="Descuento aplicado">Desc. apl.</th>
+                                <th class="text-end" style="width: 100px;">Base Imp.</th>
+                                <th class="text-end" style="width: 120px;">IVA</th>
+                                <th class="text-end" style="width: 110px;">Total</th>
+                                <th class="text-center" style="width: 40px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (int i = 0; i < preview.Detalles.Count; i++)
+                            {
+                                var item = preview.Detalles[i];
+                                var indexActual = i;
+                                var descuentoFila = LiquidacionCompraService.ObtenerDescuentoEfectivoDetalle(preview, item);
+                                var baseImp = LiquidacionCompraService.ObtenerBaseImponibleDetalle(preview, item);
+
+                                <tr class="@(EsDetalleVacio(item) ? "n-detail-empty-row" : null)">
+                                    <td>
+                                        <input class="n-input-sm text-center fw-bold"
+                                               maxlength="25"
+                                               @bind="item.CodPrincipal"
+                                               placeholder="Codigo"
+                                               @bind:event="oninput" />
+                                    </td>
+
+                                    <td class="position-relative">
+                                        <input class="n-input-sm n-detail-concept-input"
+                                               maxlength="300"
+                                               @bind="item.Descripcion"
+                                               @bind:after="@(() => OnConceptoDetalleEditadoAsync(item))"
+                                               placeholder="Buscar producto o servicio"
+                                               @bind:event="oninput"
+                                               @onfocus="@(() => MostrarSugerenciasDetalleProductoAsync(item))"
+                                               @onblur="@(() => OcultarSugerenciasDetalleProductoAsync(item))"
+                                               @onkeydown="@((KeyboardEventArgs e) => OnKeyDownConceptoDetalleAsync(item, e))" />
+                                        @if (ReferenceEquals(filaBusquedaProductoActiva, item) && sugerenciasCatalogo != null && sugerenciasCatalogo.Any())
+                                        {
+                                            <ul class="n-suggestions n-suggestions-inline n-detail-suggestions-floating">
+                                                @for (var idx = 0; idx < sugerenciasCatalogo.Count; idx++)
+                                                {
+                                                    var producto = sugerenciasCatalogo[idx];
+                                                    <li @onmousedown="() => PrepararSeleccionProducto()"
+                                                        class="@(indiceSugerenciaProductoActiva == idx ? "is-active" : null)"
+                                                        @onclick="async () => await SeleccionarProductoEnFilaDesdeListaAsync(item, producto)">
+                                                        <strong>@producto.Descripcion</strong><br />
+                                                        <small>Cod: @producto.Codprincipal | @ObtenerResumenProductoBusqueda(producto) | PVP: $@producto.PrecioUnitario.ToString("N2", CultureInfo.InvariantCulture)</small>
+                                                    </li>
+                                                }
+                                            </ul>
+                                        }
+                                    </td>
+
+                                    <td>
+                                        <textarea class="n-input-sm n-detail-extra-input"
+                                                  maxlength="300"
+                                                  rows="2"
+                                                  @bind="item.CodAuxiliar"
+                                                  @bind:after="AsegurarFilaVaciaDespuesDeEdicion"
+                                                  @bind:event="oninput"
+                                                  placeholder="Detalle adicional o concepto extendido"></textarea>
+                                    </td>
+
+                                    <td>
+                                        <input class="n-input-sm text-center fw-bold border-primary"
+                                               type="number"
+                                               step="0.01"
+                                               min="0"
+                                               value="@item.Cantidad.ToString(CultureInfo.InvariantCulture)"
+                                               @oninput="(e) => OnCantidadDetalleChanged(item, e.Value?.ToString())" />
+                                    </td>
+
+                                    <td>
+                                        <input class="n-input-sm text-end bg-white border-0 fw-medium"
+                                               type="number"
+                                               step="0.01"
+                                               min="0"
+                                               value="@item.PrecioUnitario.ToString(CultureInfo.InvariantCulture)"
+                                               @oninput="(e) => OnPrecioDetalleChanged(item, e.Value?.ToString())" />
+                                    </td>
+
+                                    <td>
+                                        <div class="n-discount-editor">
+                                            <div class="n-discount-mode" role="group" aria-label="Modo de descuento del item">
+                                                <button type="button"
+                                                        class="@(GetModoDescuentoDetalle(item) == ModoDescuento.Porcentaje ? "is-active" : string.Empty)"
+                                                        title="Descuento por porcentaje"
+                                                        @onclick="() => CambiarModoDescuentoDetalle(item, ModoDescuento.Porcentaje)">
+                                                    %
+                                                </button>
+                                                <button type="button"
+                                                        class="@(GetModoDescuentoDetalle(item) == ModoDescuento.Moneda ? "is-active" : string.Empty)"
+                                                        title="Descuento por valor"
+                                                        @onclick="() => CambiarModoDescuentoDetalle(item, ModoDescuento.Moneda)">
+                                                    $
+                                                </button>
+                                            </div>
+                                            <div class="n-discount-input-wrap">
+                                                <input type="number"
+                                                       class="n-input-sm text-end"
+                                                       step="0.01"
+                                                       min="0"
+                                                       max="@(GetModoDescuentoDetalle(item) == ModoDescuento.Porcentaje ? "100" : null)"
+                                                       value="@GetDescuentoDetalleVisual(item)"
+                                                       @oninput="(e) => OnDescuentoDetalleInput(item, e.Value?.ToString())" />
+                                                <span>@(GetModoDescuentoDetalle(item) == ModoDescuento.Porcentaje ? "%" : "$")</span>
+                                            </div>
+                                        </div>
+                                     </td>
+
+                                    <td class="text-end text-danger small fw-medium">@descuentoFila.ToString("N2", CultureInfo.InvariantCulture)</td>
+                                    <td class="text-end fw-medium text-dark">@baseImp.ToString("N2", CultureInfo.InvariantCulture)</td>
+
+                                    <td>
+                                        <select class="form-select form-select-sm text-center fw-semibold border-0 bg-white shadow-sm"
+                                                style="min-width: 92px; max-width: 110px;"
+                                                value="@item.CodigoPorcentaje"
+                                                @onchange="(e) => OnImpuestoDetalleChanged(item, e.Value?.ToString())">
+                                            @foreach (var impuesto in impuestosDetalle)
+                                            {
+                                                <option value="@impuesto.Codigo">@impuesto.Descripcion</option>
+                                            }
+                                        </select>
+                                    </td>
+
+                                    <td class="text-end fw-bold liquidacion-table-total">
+                                        @item.ValorTotal.ToString("N2", CultureInfo.InvariantCulture)
+                                    </td>
+
+                                    <td class="text-center">
+                                        <button type="button"
+                                                class="n-btn-primary p-0 d-flex justify-content-center align-items-center mx-auto"
+                                                style="height: 30px; width: 30px; border-radius: 6px;"
+                                                @onclick="() => EliminarDetalleManual(indexActual)">
+                                            <i class="bi bi-trash3"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="n-detail-table-actions liquidacion-detail-actions-outside">
+            <button type="button"
+                    class="n-table-add-product-btn"
+                    @onclick="AbrirCatalogoProductosLiquidacionAsync"
+                    disabled="@guardando">
+                <i class="bi bi-plus-circle"></i>
+                <span>Seleccionar servicio o producto</span>
+            </button>
+            <button type="button"
+                    class="n-detail-product-trigger"
+                    @onclick="AbrirModalProductoLiquidacionAsync"
+                    disabled="@guardando">
+                <i class="bi bi-plus-circle"></i>
+                <span>Registrar nuevo producto</span>
+            </button>
+        </div>
+        </fieldset>
+
+        @if (liquidacionRetencionId is not > 0)
+        {
+        <div class="row mt-4" data-tour="liquidacion.summary">
+            <div class="col-lg-7 ms-auto">
+                <div class="n-summary-column nc-summary-column" style="width: 100%;">
+                    <div class="n-summary-top-grid nc-summary-top-grid">
+                        <div class="docs-total-card nc-total-card" style="width: 100%;" data-tour="liquidacion.totals-section">
+                            @{
+                                var detallesActivos = preview.Detalles.Where(x => !EsDetalleVacio(x)).ToList();
+                                var subtotalBrutoTotal = detallesActivos.Sum(x => LiquidacionCompraService.ObtenerSubtotalBrutoDetalle(x));
+                                var descuentoUnitarioTotal = detallesActivos.Sum(x => LiquidacionCompraService.ObtenerDescuentoUnitarioDetalle(x));
+                            }
+
+                            <div class="docs-total-card-header">
+                                <span>Resumen</span>
+                                <h6></h6>
+                            </div>
+
+                            <div class="docs-total-fiscal-list nc-total-fiscal-list">
+                                <div class="docs-total-fiscal-row">
+                                    <span>SUBTOTAL</span>
+                                    <strong>$ @subtotalBrutoTotal.ToString("N2", CultureInfo.InvariantCulture)</strong>
+                                </div>
+                                
+                                <div class="docs-total-fiscal-row docs-total-fiscal-discount">
+                                    <span>DESCUENTO</span>
+                                    <strong>$ @descuentoUnitarioTotal.ToString("N2", CultureInfo.InvariantCulture)</strong>
+                                </div>
+
+                                <div class="docs-total-fiscal-row">
+                                    <span>BASE IMPONIBLE</span>
+                                    <strong>$ @preview.TotalSinImpuestos.ToString("N2", CultureInfo.InvariantCulture)</strong>
+                                </div>
+
+                                <div class="docs-total-fiscal-row docs-total-fiscal-tax">
+                                    <span>IVA</span>
+                                    <strong>$ @preview.IvaTotal.ToString("N2", CultureInfo.InvariantCulture)</strong>
+                                </div>
+
+                                <div class="docs-total-fiscal-row docs-total-fiscal-total">
+                                    <span>TOTAL</span>
+                                    <strong>$ @preview.ImporteTotal.ToString("N2", CultureInfo.InvariantCulture)</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="nc-detail-actions-row">
+                        @if (liquidacionGeneradaCodFactura is not > 0)
+                        {
+                            <button type="button"
+                                    class="n-btn n-btn-secondary"
+                                    disabled="@(guardando || previsualizandoPdf)"
+                                    @onclick="AbrirVistaPreviaPdfTemporalAsync">
+                                <i class="bi bi-file-earmark-pdf me-2"></i> @(previsualizandoPdf ? "Generando PDF..." : "Previsualizar PDF")
+                            </button>
+
+                                <button type="button"
+                                    class="n-btn n-btn-primary"
+                                    disabled="@(!PuedeIntentarGuardar || guardando)"
+                                    @onclick="GuardarLiquidacionAsync">
+                                <i class="bi bi-check2-circle fs-5 me-2"></i> @(guardando ? TextoGuardandoLiquidacion : "Generar Liquidacion")
+                            </button>
+                        }
+
+                        <button type="button"
+                                class="n-btn n-btn-secondary"
+                                disabled="@guardando"
+                                @onclick="ReiniciarFormularioAsync">
+                            @(liquidacionGeneradaCodFactura is > 0 ? "Nueva liquidacion" : "Cancelar / Limpiar")
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        }
+        </div>
+    }
+</div>
+
+@if (liquidacionRetencionId is > 0)
+{
+    <section id="liquidacion-retencion-integrada" class="liquidacion-retencion-step" aria-label="Retencion de la liquidacion autorizada">
+        <div class="liquidacion-retencion-step-hero">
+            <div class="liquidacion-retencion-step-copy">
+                <span class="liquidacion-step-badge">
+                    <i class="bi bi-check2-circle"></i>
+                    Paso 2
+                </span>
+                <div>
+                    <h2>Retencion de la liquidacion autorizada</h2>
+                    <p>Completa la retencion asociada a esta liquidacion sin salir de la pantalla.</p>
+                </div>
+            </div>
+
+            <div class="liquidacion-retencion-step-status">
+                <span class="liquidacion-retencion-status-icon"><i class="bi bi-receipt-cutoff"></i></span>
+                <div>
+                    <strong>Documento independiente</strong>
+                    <small>Serie, secuencia, XML y PDF propios.</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="liquidacion-retencion-step-body">
+            <ImportarCompraXml @key="liquidacionRetencionId.Value"
+                               LiquidacionInicialId="liquidacionRetencionId"
+                               ModoIntegrado="true" />
+        </div>
+    </section>
+}
+
+<DocumentWorkspaceModal Visible="@mostrarHistorialLiquidaciones"
+                        Eyebrow="Historial"
+                        Title="Liquidaciones de compra generadas"
+                        Description="Consulta tus liquidaciones emitidas y abre XML o PDF sin cambiar de pantalla."
+                        OnClose="CerrarHistorialLiquidacionesAsync">
+    <div class="docs-history-frame">
+        <LiquidacionesCompraGeneradas OnContinuarRetencion="ContinuarRetencionDesdeHistorialAsync" />
+    </div>
+</DocumentWorkspaceModal>
+
+@if (mostrarModalProveedor)
+{
+    <div class="liquidacion-modal-backdrop" @onclick="CerrarModalNuevoProveedor"></div>
+    <div class="liquidacion-provider-modal" role="dialog" aria-modal="true" aria-labelledby="nuevoProveedorTitulo">
+        <div class="liquidacion-provider-modal-content" @onclick:stopPropagation="true">
+            <div class="liquidacion-provider-modal-header">
+                <div>
+                    <span class="modal-kicker">Proveedor</span>
+                    <h3 id="nuevoProveedorTitulo">Nuevo proveedor</h3>
+                </div>
+                <button type="button" class="liquidacion-modal-close" @onclick="CerrarModalNuevoProveedor" aria-label="Cerrar modal">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="liquidacion-provider-modal-body">
+                <p class="liquidacion-required-note">Los campos obligatorios se marcan con un <b>*</b>.</p>
+
+                <div class="liquidacion-modal-sections">
+                    <section class="liquidacion-modal-section">
+                        <div class="liquidacion-modal-section-title">
+                            <span>1</span>
+                            <strong>Informacion basica</strong>
+                        </div>
+
+                        <div class="liquidacion-provider-modal-grid">
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Tipo Persona</label>
+                                <select class="n-input" @bind="proveedorModal.TipoPersona">
+                                    <option value="Natural">Natural</option>
+                                    <option value="Juridica">Juridica</option>
+                                </select>
+                            </div>
+
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Tipo Identificacion</label>
+                                <select class="n-input" @bind="proveedorModal.TipoIdentificacion">
+                                    @foreach (var tipo in tiposIdentificacion)
+                                    {
+                                        <option value="@tipo.Codigo">@tipo.Descripcion</option>
+                                    }
+                                </select>
+                            </div>
+
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Identificacion <span class="required-star">*</span></label>
+                                <input class="n-input" maxlength="20" @bind="proveedorModal.Identificacion" @bind:event="oninput" placeholder="Ingresa identificacion" />
+                            </div>
+
+                            @if (string.Equals(proveedorModal.TipoPersona, "Juridica", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <div class="manual-field manual-span-8">
+                                    <label class="n-label">Razon Social <span class="required-star">*</span></label>
+                                    <input class="n-input" @bind="proveedorModal.RazonSocial" @bind:event="oninput" placeholder="Ingresa razon social o nombre de la empresa" />
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="manual-field manual-span-4">
+                                    <label class="n-label">Apellidos <span class="required-star">*</span></label>
+                                    <input class="n-input" @bind="proveedorModal.Apellidos" @bind:event="oninput" placeholder="Apellidos" />
+                                </div>
+
+                                <div class="manual-field manual-span-4">
+                                    <label class="n-label">Nombres <span class="required-star">*</span></label>
+                                    <input class="n-input" @bind="proveedorModal.Nombres" @bind:event="oninput" placeholder="Nombres" />
+                                </div>
+                            }
+
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Email <span class="required-star">*</span></label>
+                                <input class="n-input" @bind="proveedorModal.Email" @bind:event="oninput" />
+                            </div>
+
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Telefono</label>
+                                <input class="n-input" @bind="proveedorModal.Telefono" @bind:event="oninput" />
+                            </div>
+
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Pais</label>
+                                <input class="n-input" value="ECUADOR" readonly />
+                            </div>
+
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Provincia</label>
+                                <input class="n-input" @bind="proveedorModal.Provincia" @bind:event="oninput" placeholder="Seleccione una provincia" />
+                            </div>
+
+                            <div class="manual-field manual-span-8">
+                                <label class="n-label">Direccion <span class="required-star">*</span></label>
+                                <textarea class="n-input liquidacion-modal-textarea" @bind="proveedorModal.Direccion" @bind:event="oninput"></textarea>
+                            </div>
+
+                            <div class="manual-field manual-span-4">
+                                <label class="n-label">Referencia</label>
+                                <textarea class="n-input liquidacion-modal-textarea" @bind="proveedorModal.Referencia" @bind:event="oninput"></textarea>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="liquidacion-modal-section">
+                        <div class="liquidacion-modal-section-title liquidacion-modal-section-title-toggle">
+                            <div>
+                                <span>2</span>
+                                <strong>Informacion bancaria</strong>
+                            </div>
+                            <label class="liquidacion-provider-bank-toggle">
+                                <input type="checkbox" @bind="proveedorModal.RegistraInformacionBancariaProveedor" />
+                                <span class="liquidacion-toggle-ui"></span>
+                            </label>
+                        </div>
+
+                        @if (proveedorModal.RegistraInformacionBancariaProveedor)
+                        {
+                            <div class="liquidacion-provider-modal-grid">
+                                <div class="manual-field manual-span-4">
+                                    <label class="n-label">Banco <span class="required-star">*</span></label>
+                                    <input class="n-input"
+                                           list="bancosProveedorLiquidacion"
+                                           @bind="proveedorModal.BancoProveedor"
+                                           @bind:event="oninput"
+                                           placeholder="Seleccione o escriba un banco" />
+                                    <datalist id="bancosProveedorLiquidacion">
+                                        @foreach (var banco in bancosProveedorModal)
+                                        {
+                                            <option value="@banco"></option>
+                                        }
+                                    </datalist>
+                                </div>
+
+                                <div class="manual-field manual-span-4">
+                                    <label class="n-label">Tipo de Cuenta <span class="required-star">*</span></label>
+                                    <select class="n-input" @bind="proveedorModal.TipoCuentaProveedor">
+                                        <option value="">Seleccione el tipo de cuenta</option>
+                                        @foreach (var tipoCuenta in tiposCuentaProveedorModal)
+                                        {
+                                            <option value="@tipoCuenta">@tipoCuenta</option>
+                                        }
+                                    </select>
+                                </div>
+
+                                <div class="manual-field manual-span-4">
+                                    <label class="n-label">Numero de Cuenta <span class="required-star">*</span></label>
+                                    <input class="n-input" @bind="proveedorModal.NumeroCuentaProveedor" @bind:event="oninput" />
+                                </div>
+                            </div>
+                        }
+                    </section>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(errorProveedorModal))
+                {
+                    <div class="status-banner status-banner-error mt-3">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <span>@errorProveedorModal</span>
+                    </div>
+                }
+            </div>
+
+            <div class="liquidacion-provider-modal-footer">
+                <button type="button" class="n-btn n-btn-primary" @onclick="AplicarProveedorModal">
+                    <i class="bi bi-save me-2"></i> Guardar
+                </button>
+                <button type="button" class="n-btn n-btn-secondary" @onclick="CerrarModalNuevoProveedor">
+                    <i class="bi bi-x-lg me-2"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (mostrarVistaPreviaPdfTemporal)
+{
+    <div class="n-product-modal-backdrop" style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.44); backdrop-filter: blur(4px); z-index: 2990;" @onclick="CerrarVistaPreviaPdfTemporalAsync"></div>
+    <div class="n-product-modal-shell" style="position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 3000; display: flex; align-items: center; justify-content: center; padding: 2vh 2vw;" @onclick="CerrarVistaPreviaPdfTemporalAsync">
+        <div class="n-modal n-product-modal-content n-pdf-preview-modal" style="width: min(96vw, 1280px); height: min(94vh, 920px); display: flex; flex-direction: column; background: #ffffff; border-radius: 18px; box-shadow: 0 20px 50px rgba(15, 23, 42, 0.15); overflow: hidden; border: 1px solid #dceaf5;" @onclick:stopPropagation>
+            
+            <!-- Header -->
+            <div class="n-modal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; background: linear-gradient(180deg, #ffffff, #f7fbff); border-bottom: 1px solid rgba(15, 23, 42, 0.08); flex-shrink: 0;">
+                <div style="display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;">
+                    <h5 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #0f172a;">Vista previa PDF temporal</h5>
+                    <span style="font-size: 0.72rem; font-weight: 800; color: #006bb5; background: rgba(0, 107, 181, 0.12); padding: 0.25rem 0.75rem; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em;">Temporal</span>
+                    <span style="color: #64748b; font-size: 0.82rem; font-weight: 500;">El PDF se abre en una ventana temporal y se descarta al cerrar.</span>
+                </div>
+                <button type="button" @onclick="CerrarVistaPreviaPdfTemporalAsync" style="background: transparent; border: 0; color: #64748b; font-size: 1.34rem; cursor: pointer; transition: color 0.18s; padding: 0.2rem;" aria-label="Cerrar vista previa" onmouseover="this.style.color='#006bb5'" onmouseout="this.style.color='#64748b'">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <!-- Body with PDF iframe -->
+            <div class="n-modal-body" style="flex: 1 1 auto; min-height: 0; padding: 0; background: #f4f8fc; position: relative;">
+                @if (!string.IsNullOrWhiteSpace(urlPdfTemporal))
+                {
+                    <iframe src="@urlPdfTemporal" style="width: 100%; height: 100%; min-height: 0; border: 0; background: #ffffff;" title="Vista previa PDF temporal"></iframe>
+                }
+                else
+                {
+                    <div style="height: 100%; display: grid; place-items: center; gap: 0.75rem; padding: 2rem; color: #143451;">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <strong>Generando PDF...</strong>
+                    </div>
+                }
+            </div>
+
+            <!-- Footer -->
+            <div class="n-modal-footer" style="display: flex; align-items: center; justify-content: flex-end; padding: 0.8rem 1.5rem; background: #ffffff; border-top: 1px solid rgba(15, 23, 42, 0.08); flex-shrink: 0;">
+                <button type="button" class="secondary-btn secondary-btn-quiet" style="border-radius: 999px; font-weight: 700; padding: 0.5rem 1.5rem;" @onclick="CerrarVistaPreviaPdfTemporalAsync">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+<ProductCatalogModal UserId="@(usuarioActual ?? 0)"
+                     ContextLabel="detalle de liquidacion"
+                     ShowCatalog="@mostrarCatalogoProductosLiquidacion"
+                     ShowCatalogChanged="SetCatalogoProductosLiquidacionVisibleAsync"
+                     ShowCreate="@mostrarModalProductoLiquidacion"
+                     ShowCreateChanged="SetModalProductoLiquidacionVisibleAsync"
+                     ProductSelected="AgregarProductoLiquidacionDesdeCatalogo"
+                     ProductsSelected="AgregarProductosLiquidacionDesdeCatalogo" />
+
+@code {
+    private bool previsualizandoPdf;
+    private bool mostrarVistaPreviaPdfTemporal;
+    private string? urlPdfTemporal;
+    private List<Simetric.Models.Emisor> emisores = new();
+    private int? usuarioActual;
+    private bool guardando;
+    private string textoGuardandoLiquidacion = "Generando...";
+    private string? mensajeRapidoLiquidacion;
+    private bool mensajeRapidoEsError;
+    private int? liquidacionGeneradaCodFactura;
+    private string? liquidacionGeneradaPdfUrl;
+    private int? liquidacionRetencionId;
+    private bool datosInicialesCargados;
+    private int formKey;
+    private EmisionEstado? emisionEstado;
+    private LiquidacionCompraPreviewDto? preview = new();
+    private string secuencialLiquidacionAutomatico = string.Empty;
+    private bool mostrarModalSecuenciaInicial;
+    private bool? usuarioYaEmitioAntes;
+    private string secuenciaAnteriorManual = string.Empty;
+    private string? errorSecuenciaInicial;
+    private bool mostrarHistorialLiquidaciones;
+    private List<LiquidacionCatalogoOptionDto> tiposIdentificacion = new();
+    private List<LiquidacionCatalogoOptionDto> formasPago = new();
+    private string textoBusquedaProducto = "";
+    private string textoBusquedaProveedor = "";
+    private List<ProductoLookupDetalleDto>? sugerenciasCatalogo;
+    private LiquidacionCompraDetalleDto? filaBusquedaProductoActiva;
+    private int indiceSugerenciaProductoActiva = -1;
+    private bool seleccionandoProductoDesdeLista;
+    private bool mostrarCatalogoProductosLiquidacion;
+    private bool mostrarModalProductoLiquidacion;
+    private List<CompraXmlDetalleDto> sugerenciasProveedor = new();
+    private List<LiquidacionProveedorLookupDto> sugerenciasProveedorBusqueda = new();
+    private string campoProveedorActivo = "";
+    private List<CajaSerieResolucion> seriesDocumento = new();
+    private bool mostrarModalProveedor;
+    private ProveedorModalModel proveedorModal = new();
+    private string? errorProveedorModal;
+    private const int MaxCorreosOpcionalesLiquidacion = 4;
+    private List<CorreoOpcionalLiquidacionInput> correosOpcionalesLiquidacion = new();
+    private Dictionary<LiquidacionCompraDetalleDto, ModoDescuento> modosDescuentoDetalle = new();
+
+    private enum ModoDescuento
+    {
+        Porcentaje,
+        Moneda
+    }
+
+    private sealed class CorreoOpcionalLiquidacionInput
+    {
+        public string Correo { get; set; } = string.Empty;
+        public bool GuardarEnProveedor { get; set; }
+    }
+
+    private readonly List<(int Codigo, string Descripcion)> impuestosDetalle = new()
+    {
+        (0, "IVA 0%"),
+        (5, "IVA 5%"),
+        (8, "IVA 8%"),
+        (4, "IVA 15%"),
+        (6, "No objeto de IVA"),
+        (7, "Exento de IVA")
+    };
+
+    private readonly List<string> bancosProveedorModal = new()
+    {
+        "Banco Pichincha",
+        "Banco Internacional",
+        "Banco Guayaquil",
+        "Banco del Pacifico",
+        "Banco Bolivariano",
+        "Produbanco",
+        "Banco del Austro",
+        "Cooperativa JEP",
+        "Cooperativa Policia Nacional",
+        "Banco Solidario"
+    };
+
+    private readonly List<string> tiposCuentaProveedorModal = new()
+    {
+        "Ahorros",
+        "Corriente"
+    };
+
+    private sealed class ProveedorModalModel
+    {
+        public string TipoPersona { get; set; } = "Natural";
+        public string TipoIdentificacion { get; set; } = "05";
+        public string Identificacion { get; set; } = string.Empty;
+        public string Nombres { get; set; } = string.Empty;
+        public string Apellidos { get; set; } = string.Empty;
+        public string RazonSocial { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Telefono { get; set; } = string.Empty;
+        public string Provincia { get; set; } = string.Empty;
+        public string Direccion { get; set; } = string.Empty;
+        public string Referencia { get; set; } = string.Empty;
+        public string CuentaContableProveedor { get; set; } = string.Empty;
+        public string CodigoProveedorInterno { get; set; } = string.Empty;
+        public string CreditoTributarioProveedor { get; set; } = string.Empty;
+        public bool EsSujetoRetencionProveedor { get; set; }
+        public bool RegistraInformacionBancariaProveedor { get; set; }
+        public string BancoProveedor { get; set; } = string.Empty;
+        public string TipoCuentaProveedor { get; set; } = string.Empty;
+        public string NumeroCuentaProveedor { get; set; } = string.Empty;
+    }
+
+    private bool PuedeGuardar =>
+        preview != null &&
+        string.IsNullOrWhiteSpace(ObtenerErrorValidacionLiquidacion());
+
+    private bool PuedeIntentarGuardar =>
+        preview != null &&
+        !BloqueadoPorSaldoDocumentos;
+
+    private bool BloqueadoPorSaldoDocumentos => emisionEstado?.RequiereCompraDocumentos == true;
+    private string MensajeBloqueoDocumentos => emisionEstado?.Mensaje ?? EmisionControlService.MensajeSaldoAgotado;
+    private bool EsLiquidacionSoloLectura => liquidacionRetencionId is > 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        EmisionControlService.Changed += OnEmisionChanged;
+        await CargarUsuarioActualAsync();
+        await CargarEstadoEmisionAsync();
+        await CargarCatalogosAsync();
+        seriesDocumento = await FacturacionService.GetSeriesFacturaHabilitadasAsync(usuarioActual ?? 0);
+        await ReiniciarFormularioAsync();
+
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(NavManager.ToAbsoluteUri(NavManager.Uri).Query);
+        if (query.TryGetValue("retencionLiquidacion", out var liquidacionIdRaw) &&
+            int.TryParse(liquidacionIdRaw.ToString(), out var liquidacionId))
+        {
+            await HabilitarRetencionAsync(liquidacionId);
+        }
+    }
+
+    public void Dispose()
+    {
+        EmisionControlService.Changed -= OnEmisionChanged;
+    }
+
+    private void OnEmisionChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await CargarEstadoEmisionAsync();
+            StateHasChanged();
+        });
+    }
+
+    private Task AbrirHistorialLiquidacionesAsync()
+    {
+        mostrarHistorialLiquidaciones = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private Task CerrarHistorialLiquidacionesAsync()
+    {
+        mostrarHistorialLiquidaciones = false;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CargarUsuarioActualAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+            return;
+
+        var idClaim =
+            user.FindFirst("IdUsuario")?.Value ??
+            user.FindFirst("idUsuario")?.Value ??
+            user.FindFirst("usuario")?.Value ??
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        if (int.TryParse(idClaim, out var id))
+            usuarioActual = id;
+    }
+
+    private async Task CargarCatalogosAsync()
+    {
+        tiposIdentificacion = await LiquidacionCompraService.ObtenerTiposIdentificacionProveedorAsync();
+        formasPago = await LiquidacionCompraService.ObtenerFormasPagoCompraAsync();
+    }
+
+    private async Task ReiniciarFormularioAsync()
+    {
+        await InicializarFormularioAsync();
+        await PrepararSecuenciaInicialAsync();
+    }
+
+    private async Task InicializarFormularioAsync()
+    {
+        datosInicialesCargados = false;
+        mensajeRapidoLiquidacion = null;
+        mensajeRapidoEsError = false;
+        liquidacionGeneradaCodFactura = null;
+        liquidacionGeneradaPdfUrl = null;
+        liquidacionRetencionId = null;
+        preview = await LiquidacionCompraService.CrearPreviewManualAsync(usuarioActual);
+        textoBusquedaProducto = "";
+        textoBusquedaProveedor = "";
+        sugerenciasCatalogo = null;
+        sugerenciasProveedor = new();
+        sugerenciasProveedorBusqueda = new();
+        campoProveedorActivo = "";
+        correosOpcionalesLiquidacion = new();
+        modosDescuentoDetalle = new();
+        formKey++;
+        datosInicialesCargados = true;
+    }
+
+    private async Task PrepararSecuenciaInicialAsync()
+    {
+        if (preview == null)
+            return;
+
+        await ActualizarDatosAsync();
+
+        if (preview == null)
+            return;
+
+        secuencialLiquidacionAutomatico = preview.Secuencial;
+
+        var estado = await InitialSequencePromptService.GetStateAsync(
+            usuarioActual ?? 0,
+            "liquidacion-compra",
+            ObtenerSerieDocumentoActual());
+        if (!estado.Initialized)
+        {
+            mostrarModalSecuenciaInicial = true;
+            preview.Secuencial = string.Empty;
+            return;
+        }
+
+        mostrarModalSecuenciaInicial = false;
+        preview.Secuencial = InitialSequencePromptService.ResolveNextSequence(secuencialLiquidacionAutomatico, estado);
+    }
+
+    private async Task ActualizarDatosAsync()
+    {
+        if (preview == null)
+            return;
+
+        preview.Usuario = usuarioActual;
+        await LiquidacionCompraService.ResolverDatosManualAsync(preview);
+        await CargarSugerenciasProveedorAsync();
+    }
+
+    private async Task OnSerieDocumentoChangedAsync(ChangeEventArgs e)
+    {
+        if (preview == null)
+            return;
+
+        var serieRaw = e.Value?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(serieRaw) ||
+            string.Equals(preview.Serie, serieRaw, StringComparison.Ordinal))
+            return;
+
+        await FacturacionService.SavePreferredSeriesForAllDocumentsAsync(usuarioActual ?? 0, serieRaw);
+
+        if (serieRaw.Length >= 3)
+            preview.Estab = serieRaw[..3];
+
+        if (serieRaw.Length >= 6)
+            preview.PtoEmi = serieRaw.Substring(3, 3);
+
+        usuarioYaEmitioAntes = null;
+        secuenciaAnteriorManual = string.Empty;
+        errorSecuenciaInicial = null;
+        mostrarModalSecuenciaInicial = false;
+        preview.Secuencial = string.Empty;
+        await PrepararSecuenciaInicialAsync();
+    }
+
+    private void OnCambioRespuestaSecuencia(bool? value)
+    {
+        usuarioYaEmitioAntes = value;
+        errorSecuenciaInicial = null;
+
+        if (value != true)
+            secuenciaAnteriorManual = string.Empty;
+    }
+
+    private void OnSecuenciaAnteriorManualChanged(string value)
+    {
+        secuenciaAnteriorManual = value ?? string.Empty;
+        errorSecuenciaInicial = null;
+    }
+
+    private async Task ConfirmarSecuenciaInicialAsync()
+    {
+        errorSecuenciaInicial = null;
+
+        if (preview == null)
+            return;
+
+        if (usuarioYaEmitioAntes == null)
+        {
+            errorSecuenciaInicial = "Debes indicar si ya habias generado liquidaciones antes.";
+            return;
+        }
+
+        var secuenciaNormalizada = string.Empty;
+
+        if (usuarioYaEmitioAntes == true &&
+            !InitialSequencePromptService.TryNormalizeSequence(secuenciaAnteriorManual, out secuenciaNormalizada))
+        {
+            errorSecuenciaInicial = "Ingresa una secuencia valida de hasta 9 digitos.";
+            return;
+        }
+
+        var estado = new InitialSequencePromptState
+        {
+            Initialized = true,
+            HadPreviousDocuments = usuarioYaEmitioAntes.Value,
+            PreviousSequence = usuarioYaEmitioAntes.Value ? secuenciaNormalizada : string.Empty
+        };
+
+        await InitialSequencePromptService.SaveStateAsync(
+            usuarioActual ?? 0,
+            "liquidacion-compra",
+            ObtenerSerieDocumentoActual(),
+            estado);
+
+        secuenciaAnteriorManual = secuenciaNormalizada;
+        mostrarModalSecuenciaInicial = false;
+        preview.Secuencial = usuarioYaEmitioAntes.Value
+            ? InitialSequencePromptService.ResolveNextSequence(secuencialLiquidacionAutomatico, estado)
+            : secuencialLiquidacionAutomatico;
+    }
+
+    private string ObtenerSerieDocumentoActual()
+    {
+        var serieActual = $"{preview?.Estab}{preview?.PtoEmi}";
+        if (!string.IsNullOrWhiteSpace(serieActual))
+            return serieActual;
+
+        return preview?.Serie ?? string.Empty;
+    }
+
+    private void AgregarDetalleManual()
+    {
+        if (preview == null)
+            return;
+
+        preview.Detalles ??= new List<LiquidacionCompraDetalleDto>();
+        preview.Detalles.Add(LiquidacionCompraService.CrearDetalleVacio());
+        RecalcularTotales();
+    }
+
+    private void AsegurarFilaVaciaDetalle()
+    {
+        if (preview == null)
+            return;
+
+        preview.Detalles ??= new List<LiquidacionCompraDetalleDto>();
+
+        if (preview.Detalles.Any(EsDetalleVacio))
+            return;
+
+        var detalleVacio = LiquidacionCompraService.CrearDetalleVacio();
+        preview.Detalles.Add(detalleVacio);
+        modosDescuentoDetalle[detalleVacio] = ModoDescuento.Porcentaje;
+    }
+
+    private void AsegurarFilaVaciaDespuesDeEdicion()
+    {
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private LiquidacionCompraDetalleDto ObtenerFilaDisponibleParaProducto()
+    {
+        preview ??= new LiquidacionCompraPreviewDto();
+        preview.Detalles ??= new List<LiquidacionCompraDetalleDto>();
+
+        var detalleDisponible = preview.Detalles.FirstOrDefault(EsDetalleVacio);
+        if (detalleDisponible is not null)
+            return detalleDisponible;
+
+        var nuevoDetalle = LiquidacionCompraService.CrearDetalleVacio();
+        preview.Detalles.Add(nuevoDetalle);
+        modosDescuentoDetalle[nuevoDetalle] = ModoDescuento.Porcentaje;
+        return nuevoDetalle;
+    }
+
+    private void EliminarDetalleManual(int index)
+    {
+        if (preview?.Detalles == null)
+            return;
+
+        if (index < 0 || index >= preview.Detalles.Count)
+            return;
+
+        preview.Detalles.RemoveAt(index);
+
+        if (!preview.Detalles.Any())
+            preview.Detalles.Add(LiquidacionCompraService.CrearDetalleVacio());
+
+        RecalcularTotales();
+    }
+
+    private void OnCantidadDetalleChanged(LiquidacionCompraDetalleDto item, string? valor)
+    {
+        item.Cantidad = ParseDecimal(valor);
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private void OnPrecioDetalleChanged(LiquidacionCompraDetalleDto item, string? valor)
+    {
+        item.PrecioUnitario = ParseDecimal(valor);
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private void OnPorcentajeDescuentoDetalleChanged(LiquidacionCompraDetalleDto item, string? valor)
+    {
+        if (preview == null)
+            return;
+
+        var porcentaje = Math.Clamp(ParseDecimal(valor), 0m, 100m);
+        item.PorcentajeDescuento = porcentaje;
+        item.Descuento = 0m;
+
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private ModoDescuento GetModoDescuentoDetalle(LiquidacionCompraDetalleDto item)
+    {
+        if (modosDescuentoDetalle.TryGetValue(item, out var modo))
+            return modo;
+
+        return item.Descuento > 0m && item.PorcentajeDescuento <= 0m
+            ? ModoDescuento.Moneda
+            : ModoDescuento.Porcentaje;
+    }
+
+    private string GetDescuentoDetalleVisual(LiquidacionCompraDetalleDto item)
+    {
+        return GetModoDescuentoDetalle(item) == ModoDescuento.Moneda
+            ? item.Descuento.ToString("0.##", CultureInfo.InvariantCulture)
+            : item.PorcentajeDescuento.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private void CambiarModoDescuentoDetalle(LiquidacionCompraDetalleDto item, ModoDescuento modo)
+    {
+        if (preview == null)
+            return;
+
+        if (GetModoDescuentoDetalle(item) == modo)
+            return;
+
+        modosDescuentoDetalle[item] = modo;
+        var bruto = LiquidacionCompraService.ObtenerSubtotalBrutoDetalle(item);
+
+        if (modo == ModoDescuento.Porcentaje)
+        {
+            item.PorcentajeDescuento = bruto > 0m
+                ? Math.Clamp(Math.Round((item.Descuento / bruto) * 100m, 2), 0m, 100m)
+                : 0m;
+            item.Descuento = 0m;
+        }
+        else
+        {
+            item.Descuento = LiquidacionCompraService.ObtenerDescuentoUnitarioDetalle(item);
+            item.PorcentajeDescuento = 0m;
+        }
+
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private void OnDescuentoDetalleInput(LiquidacionCompraDetalleDto item, string? valor)
+    {
+        if (preview == null)
+            return;
+
+        if (GetModoDescuentoDetalle(item) == ModoDescuento.Moneda)
+        {
+            var bruto = LiquidacionCompraService.ObtenerSubtotalBrutoDetalle(item);
+            item.PorcentajeDescuento = 0m;
+            item.Descuento = Math.Clamp(ParseDecimal(valor), 0m, bruto);
+        }
+        else
+        {
+            item.PorcentajeDescuento = Math.Clamp(ParseDecimal(valor), 0m, 100m);
+            item.Descuento = 0m;
+        }
+
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private void OnImpuestoDetalleChanged(LiquidacionCompraDetalleDto item, string? valor)
+    {
+        if (int.TryParse(valor, out var codigo))
+            item.CodigoPorcentaje = codigo;
+        else
+            item.CodigoPorcentaje = 0;
+
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private void OnDireccionEmisorChanged(ChangeEventArgs e)
+    {
+        if (preview == null)
+            return;
+
+        var direccion = e.Value?.ToString() ?? "";
+        preview.DireccionEstablecimiento = direccion;
+        preview.DireccionMatriz = direccion;
+    }
+
+    private void RecalcularTotales()
+    {
+        if (preview == null)
+            return;
+
+        preview.DescuentoGlobalPorcentaje = 0m;
+        LiquidacionCompraService.RecalcularTotalesDesdeDetalles(preview);
+    }
+
+    private async Task OnProveedorBlurAsync()
+    {
+        if (preview == null)
+            return;
+
+        preview.Usuario = usuarioActual;
+        await LiquidacionCompraService.ResolverDatosManualAsync(preview);
+        await CargarSugerenciasProveedorAsync();
+        sugerenciasProveedorBusqueda = new();
+        campoProveedorActivo = "";
+    }
+
+    private async Task OnBusquedaProveedorInput(ChangeEventArgs e)
+    {
+        textoBusquedaProveedor = e.Value?.ToString() ?? "";
+        campoProveedorActivo = "razon";
+        await BuscarProveedorRapidoAsync(textoBusquedaProveedor);
+    }
+
+    private void OnBusquedaProveedorBlur()
+    {
+        sugerenciasProveedorBusqueda = new();
+        campoProveedorActivo = "";
+    }
+
+    private async Task OnIdentificacionProveedorInput(ChangeEventArgs e)
+    {
+        if (preview == null)
+            return;
+
+        preview.IdentificacionProveedor = e.Value?.ToString() ?? "";
+        campoProveedorActivo = "identificacion";
+        await BuscarProveedorRapidoAsync(preview.IdentificacionProveedor);
+    }
+
+    private async Task OnRazonSocialProveedorInput(ChangeEventArgs e)
+    {
+        if (preview == null)
+            return;
+
+        preview.RazonSocialProveedor = e.Value?.ToString() ?? "";
+        campoProveedorActivo = "razon";
+        await BuscarProveedorRapidoAsync(preview.RazonSocialProveedor);
+    }
+
+    private async Task BuscarProveedorRapidoAsync(string? texto)
+    {
+        var filtro = (texto ?? "").Trim();
+        if (filtro.Length < 2)
+        {
+            sugerenciasProveedorBusqueda = new();
+            return;
+        }
+
+        sugerenciasProveedorBusqueda = await LiquidacionCompraService.BuscarProveedoresAsync(filtro, usuarioActual);
+    }
+
+    private async Task SeleccionarProveedorSugeridoAsync(LiquidacionProveedorLookupDto proveedor)
+    {
+        if (preview == null)
+            return;
+
+        preview.CodProveedor = proveedor.CodCliente;
+        preview.IdentificacionProveedor = proveedor.Identificacion;
+        preview.TipoIdentificacionProveedor = string.IsNullOrWhiteSpace(proveedor.TipoIdentificacion)
+            ? preview.TipoIdentificacionProveedor
+            : proveedor.TipoIdentificacion;
+        preview.RazonSocialProveedor = proveedor.RazonSocial;
+        preview.DireccionProveedor = proveedor.Direccion;
+        preview.TelefonoFijoProveedor = proveedor.TelefonoFijo;
+        preview.TelefonoProveedor = proveedor.TelefonoMovil;
+        preview.EmailProveedor = proveedor.Correo;
+        textoBusquedaProveedor = FormatearProveedorBusqueda(proveedor.Identificacion, proveedor.RazonSocial);
+
+        sugerenciasProveedorBusqueda = new();
+        campoProveedorActivo = "";
+
+        await OnProveedorBlurAsync();
+    }
+
+    private void AbrirModalNuevoProveedor()
+    {
+        if (preview == null)
+            return;
+
+        proveedorModal = new ProveedorModalModel
+        {
+            TipoPersona = EsTipoJuridico(preview.TipoIdentificacionProveedor) ? "Juridica" : "Natural",
+            TipoIdentificacion = string.IsNullOrWhiteSpace(preview.TipoIdentificacionProveedor) ? "05" : preview.TipoIdentificacionProveedor,
+            Identificacion = preview.IdentificacionProveedor ?? string.Empty,
+            Email = preview.EmailProveedor ?? string.Empty,
+            Telefono = !string.IsNullOrWhiteSpace(preview.TelefonoProveedor) ? preview.TelefonoProveedor : preview.TelefonoFijoProveedor,
+            Direccion = preview.DireccionProveedor ?? string.Empty,
+            CuentaContableProveedor = string.IsNullOrWhiteSpace(preview.CuentaContableProveedor) ? "21311 - Proveedores" : preview.CuentaContableProveedor,
+            CodigoProveedorInterno = preview.CodigoProveedorInterno ?? string.Empty,
+            CreditoTributarioProveedor = string.IsNullOrWhiteSpace(preview.CreditoTributarioProveedor) ? "01" : preview.CreditoTributarioProveedor,
+            EsSujetoRetencionProveedor = preview.EsSujetoRetencionProveedor,
+            RegistraInformacionBancariaProveedor = preview.RegistraInformacionBancariaProveedor,
+            BancoProveedor = preview.BancoProveedor ?? string.Empty,
+            TipoCuentaProveedor = preview.TipoCuentaProveedor ?? string.Empty,
+            NumeroCuentaProveedor = preview.NumeroCuentaProveedor ?? string.Empty
+        };
+
+        if (string.Equals(proveedorModal.TipoPersona, "Juridica", StringComparison.OrdinalIgnoreCase))
+        {
+            proveedorModal.RazonSocial = preview.RazonSocialProveedor ?? string.Empty;
+        }
+        else
+        {
+            var (apellidos, nombres) = SepararNombreCompleto(preview.RazonSocialProveedor);
+            proveedorModal.Apellidos = apellidos ?? string.Empty;
+            proveedorModal.Nombres = nombres ?? string.Empty;
+        }
+
+        errorProveedorModal = null;
+        mostrarModalProveedor = true;
+    }
+
+    private void CerrarModalNuevoProveedor()
+    {
+        mostrarModalProveedor = false;
+        errorProveedorModal = null;
+    }
+
+    private void AplicarProveedorModal()
+    {
+        if (preview == null)
+            return;
+
+        AsegurarDatosProveedorModalPorDefecto();
+        errorProveedorModal = ValidarProveedorModal();
+        if (!string.IsNullOrWhiteSpace(errorProveedorModal))
+            return;
+
+        preview.TipoIdentificacionProveedor = proveedorModal.TipoIdentificacion?.Trim() ?? "05";
+        preview.IdentificacionProveedor = proveedorModal.Identificacion?.Trim() ?? string.Empty;
+        preview.RazonSocialProveedor = ConstruirNombreProveedorModal();
+        preview.EmailProveedor = proveedorModal.Email?.Trim() ?? string.Empty;
+        preview.TelefonoProveedor = proveedorModal.Telefono?.Trim() ?? string.Empty;
+        preview.TelefonoFijoProveedor = proveedorModal.Telefono?.Trim() ?? string.Empty;
+        preview.DireccionProveedor = proveedorModal.Direccion?.Trim() ?? string.Empty;
+        preview.EsClienteProveedor = false;
+        preview.EsProveedorProveedor = true;
+        preview.CuentaContableProveedor = proveedorModal.CuentaContableProveedor?.Trim() ?? "21311 - Proveedores";
+        preview.CodigoProveedorInterno = proveedorModal.CodigoProveedorInterno?.Trim() ?? string.Empty;
+        preview.CreditoTributarioProveedor = proveedorModal.CreditoTributarioProveedor?.Trim() ?? "01";
+        preview.EsSujetoRetencionProveedor = proveedorModal.EsSujetoRetencionProveedor;
+        preview.RegistraInformacionBancariaProveedor = proveedorModal.RegistraInformacionBancariaProveedor;
+        preview.BancoProveedor = proveedorModal.BancoProveedor?.Trim() ?? string.Empty;
+        preview.TipoCuentaProveedor = proveedorModal.TipoCuentaProveedor?.Trim() ?? string.Empty;
+        preview.NumeroCuentaProveedor = proveedorModal.NumeroCuentaProveedor?.Trim() ?? string.Empty;
+        textoBusquedaProveedor = FormatearProveedorBusqueda(preview.IdentificacionProveedor, preview.RazonSocialProveedor);
+
+        mostrarModalProveedor = false;
+        campoProveedorActivo = string.Empty;
+        sugerenciasProveedorBusqueda = new();
+    }
+
+    private string? ValidarProveedorModal()
+    {
+        if (string.IsNullOrWhiteSpace(proveedorModal.Identificacion))
+            return "La identificacion del proveedor es obligatoria.";
+
+        if (string.Equals(proveedorModal.TipoPersona, "Juridica", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(proveedorModal.RazonSocial))
+                return "La razon social es obligatoria.";
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(proveedorModal.Apellidos))
+                return "Los apellidos son obligatorios.";
+            if (string.IsNullOrWhiteSpace(proveedorModal.Nombres))
+                return "Los nombres son obligatorios.";
+        }
+
+        if (string.IsNullOrWhiteSpace(proveedorModal.Email))
+            return "El email del proveedor es obligatorio.";
+
+        if (string.IsNullOrWhiteSpace(proveedorModal.Direccion))
+            return "La direccion del proveedor es obligatoria.";
+
+        if (proveedorModal.RegistraInformacionBancariaProveedor)
+        {
+            if (string.IsNullOrWhiteSpace(proveedorModal.BancoProveedor))
+                return "El banco del proveedor es obligatorio.";
+
+            if (string.IsNullOrWhiteSpace(proveedorModal.TipoCuentaProveedor))
+                return "El tipo de cuenta del proveedor es obligatorio.";
+
+            if (string.IsNullOrWhiteSpace(proveedorModal.NumeroCuentaProveedor))
+                return "El numero de cuenta del proveedor es obligatorio.";
+        }
+
+        return null;
+    }
+
+    private void AsegurarDatosProveedorModalPorDefecto()
+    {
+        proveedorModal.CuentaContableProveedor = string.IsNullOrWhiteSpace(proveedorModal.CuentaContableProveedor)
+            ? "21311 - Proveedores"
+            : proveedorModal.CuentaContableProveedor.Trim();
+        proveedorModal.CreditoTributarioProveedor = string.IsNullOrWhiteSpace(proveedorModal.CreditoTributarioProveedor)
+            ? "01"
+            : proveedorModal.CreditoTributarioProveedor.Trim();
+    }
+
+    private string ConstruirNombreProveedorModal()
+    {
+        if (string.Equals(proveedorModal.TipoPersona, "Juridica", StringComparison.OrdinalIgnoreCase))
+        {
+            return (proveedorModal.RazonSocial ?? string.Empty).Trim();
+        }
+
+        return string.Join(" ", new[]
+        {
+            proveedorModal.Apellidos,
+            proveedorModal.Nombres
+        }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+    }
+
+    private static bool EsTipoJuridico(string? tipoIdentificacion) =>
+        string.Equals(tipoIdentificacion?.Trim(), "04", StringComparison.OrdinalIgnoreCase);
+
+    private static (string? Apellidos, string? Nombres) SepararNombreCompleto(string? nombreCompleto)
+    {
+        var partes = (nombreCompleto ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (partes.Length == 2)
+            return (partes[0], partes[1]);
+
+        if (partes.Length == 3)
+            return (string.Join(" ", partes.Take(2)), partes[2]);
+
+        if (partes.Length >= 4)
+            return (string.Join(" ", partes.Take(2)), string.Join(" ", partes.Skip(2)));
+
+        if (partes.Length == 1)
+            return (partes[0], null);
+
+        return (null, null);
+    }
+
+    private static string FormatearProveedorBusqueda(string? identificacion, string? razonSocial)
+    {
+        var id = (identificacion ?? string.Empty).Trim();
+        var nombre = (razonSocial ?? string.Empty).Trim();
+
+        if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(nombre))
+            return $"{id} - {nombre}";
+
+        return !string.IsNullOrWhiteSpace(nombre) ? nombre : id;
+    }
+
+    private async Task OnInputBusquedaProducto(ChangeEventArgs e)
+    {
+        textoBusquedaProducto = e.Value?.ToString() ?? "";
+
+        if (!usuarioActual.HasValue)
+        {
+            sugerenciasCatalogo = null;
+            return;
+        }
+
+        sugerenciasCatalogo = await FacturacionService.BuscarProductosFiltroAsync(usuarioActual.Value, textoBusquedaProducto.Trim());
+    }
+
+    private async Task MostrarSugerenciasCatalogoAsync(FocusEventArgs _)
+    {
+        if (!usuarioActual.HasValue)
+            return;
+
+        sugerenciasCatalogo = await FacturacionService.BuscarProductosFiltroAsync(usuarioActual.Value, textoBusquedaProducto.Trim());
+    }
+
+    private async Task BuscarProductoExactoAsync()
+    {
+        if (!usuarioActual.HasValue || string.IsNullOrWhiteSpace(textoBusquedaProducto))
+            return;
+
+        var filtro = textoBusquedaProducto.Trim();
+        var producto = await FacturacionService.BuscarProductoParaDetalleAsync(usuarioActual.Value, filtro);
+
+        if (producto != null)
+        {
+            AgregarProductoCatalogo(producto);
+            return;
+        }
+
+        var sugerencias = sugerenciasCatalogo;
+        if (sugerencias == null || !sugerencias.Any())
+        {
+            sugerencias = await FacturacionService.BuscarProductosFiltroAsync(usuarioActual.Value, filtro);
+        }
+
+        if (sugerencias != null && sugerencias.Any())
+        {
+            AgregarProductoCatalogo(sugerencias.First());
+            return;
+        }
+
+        await AlertService.ShowInfoAsync("No se encontro un producto del catalogo con ese criterio.", "Producto no encontrado");
+    }
+
+    private async Task OnKeyDownBusquedaProducto(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await BuscarProductoExactoAsync();
+        }
+    }
+
+    private async Task CargarSugerenciasProveedorAsync()
+    {
+        sugerenciasProveedor = new();
+
+        if (preview == null)
+            return;
+
+        var identificacion = (preview.IdentificacionProveedor ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return;
+
+        sugerenciasProveedor = (await ComprasXmlService.ObtenerProductosSugeridosPorProveedorAsync(identificacion))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Descripcion))
+            .Take(8)
+            .ToList();
+    }
+
+    private void AgregarProductoCatalogo(ProductoLookupDetalleDto producto)
+    {
+        var detalle = ObtenerFilaDisponibleParaProducto();
+        CargarProductoEnDetalle(detalle, producto);
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+        LimpiarBusquedaProducto();
+    }
+
+    private void CargarProductoEnDetalle(LiquidacionCompraDetalleDto detalle, ProductoLookupDetalleDto producto)
+    {
+        detalle.CodProducto = producto.Codproducto;
+        detalle.CodPrincipal = producto.Codprincipal ?? producto.Codproducto.ToString(CultureInfo.InvariantCulture);
+        detalle.CodAuxiliar = producto.Codauxiliar ?? "";
+        detalle.Descripcion = producto.Descripcion ?? "";
+        detalle.Cantidad = 1m;
+        detalle.PrecioUnitario = producto.PrecioUnitario;
+        detalle.PorcentajeDescuento = 0m;
+        detalle.Descuento = 0m;
+        detalle.CodigoPorcentaje = MapearCodigoPorcentajeDesdeTarifa(producto.TarifaIva);
+        detalle.Tarifa = NormalizarTarifaProducto(producto.TarifaIva);
+        modosDescuentoDetalle[detalle] = ModoDescuento.Porcentaje;
+
+        LiquidacionCompraService.RecalcularDetalle(detalle);
+    }
+
+    private async Task AbrirCatalogoProductosLiquidacionAsync()
+    {
+        mostrarCatalogoProductosLiquidacion = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task AbrirModalProductoLiquidacionAsync()
+    {
+        mostrarModalProductoLiquidacion = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetCatalogoProductosLiquidacionVisibleAsync(bool visible)
+    {
+        mostrarCatalogoProductosLiquidacion = visible;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetModalProductoLiquidacionVisibleAsync(bool visible)
+    {
+        mostrarModalProductoLiquidacion = visible;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void AgregarProductoLiquidacionDesdeCatalogo(ProductoLookupDetalleDto producto)
+    {
+        AgregarProductoCatalogo(producto);
+    }
+
+    private void AgregarProductosLiquidacionDesdeCatalogo(IReadOnlyList<ProductoLookupDetalleDto> productos)
+    {
+        foreach (var producto in productos)
+            AgregarProductoCatalogo(producto);
+    }
+
+    private void AgregarProductoManualComoDetalle(LiquidacionCompraDetalleDto item)
+    {
+        if (EsDetalleVacio(item))
+            return;
+
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+    }
+
+    private async Task OnConceptoDetalleEditadoAsync(LiquidacionCompraDetalleDto item)
+    {
+        AgregarProductoManualComoDetalle(item);
+
+        if (!usuarioActual.HasValue)
+            return;
+
+        filaBusquedaProductoActiva = item;
+        var filtro = (item.Descripcion ?? string.Empty).Trim();
+        sugerenciasCatalogo = await FacturacionService.BuscarProductosFiltroAsync(usuarioActual.Value, filtro);
+        indiceSugerenciaProductoActiva = ObtenerIndiceInicial(sugerenciasCatalogo);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task MostrarSugerenciasDetalleProductoAsync(LiquidacionCompraDetalleDto item)
+    {
+        if (!usuarioActual.HasValue)
+            return;
+
+        filaBusquedaProductoActiva = item;
+        var filtro = (item.Descripcion ?? string.Empty).Trim();
+        sugerenciasCatalogo = await FacturacionService.BuscarProductosFiltroAsync(usuarioActual.Value, filtro);
+        indiceSugerenciaProductoActiva = ObtenerIndiceInicial(sugerenciasCatalogo);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OcultarSugerenciasDetalleProductoAsync(LiquidacionCompraDetalleDto item)
+    {
+        await Task.Delay(150);
+
+        if (seleccionandoProductoDesdeLista)
+            return;
+
+        if (ReferenceEquals(filaBusquedaProductoActiva, item))
+        {
+            filaBusquedaProductoActiva = null;
+            sugerenciasCatalogo = null;
+            indiceSugerenciaProductoActiva = -1;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task OnKeyDownConceptoDetalleAsync(LiquidacionCompraDetalleDto item, KeyboardEventArgs e)
+    {
+        if (!usuarioActual.HasValue)
+            return;
+
+        if (e.Key == "ArrowDown")
+        {
+            if (!ReferenceEquals(filaBusquedaProductoActiva, item) || sugerenciasCatalogo == null || !sugerenciasCatalogo.Any())
+            {
+                await MostrarSugerenciasDetalleProductoAsync(item);
+                indiceSugerenciaProductoActiva = ObtenerIndiceInicial(sugerenciasCatalogo);
+                return;
+            }
+
+            indiceSugerenciaProductoActiva = MoverIndiceCircular(indiceSugerenciaProductoActiva, 1, sugerenciasCatalogo.Count);
+            return;
+        }
+
+        if (e.Key == "ArrowUp")
+        {
+            if (!ReferenceEquals(filaBusquedaProductoActiva, item) || sugerenciasCatalogo == null || !sugerenciasCatalogo.Any())
+            {
+                await MostrarSugerenciasDetalleProductoAsync(item);
+                indiceSugerenciaProductoActiva = sugerenciasCatalogo?.Count > 0 ? sugerenciasCatalogo.Count - 1 : -1;
+                return;
+            }
+
+            indiceSugerenciaProductoActiva = MoverIndiceCircular(indiceSugerenciaProductoActiva, -1, sugerenciasCatalogo.Count);
+            return;
+        }
+
+        if (e.Key == "Escape")
+        {
+            filaBusquedaProductoActiva = null;
+            sugerenciasCatalogo = null;
+            indiceSugerenciaProductoActiva = -1;
+            return;
+        }
+
+        if ((e.Key == "Enter" || e.Key == "Tab") &&
+            ReferenceEquals(filaBusquedaProductoActiva, item) &&
+            sugerenciasCatalogo != null &&
+            sugerenciasCatalogo.Any())
+        {
+            var indice = indiceSugerenciaProductoActiva >= 0 &&
+                         indiceSugerenciaProductoActiva < sugerenciasCatalogo.Count
+                ? indiceSugerenciaProductoActiva
+                : 0;
+
+            await SeleccionarProductoEnFilaDesdeListaAsync(item, sugerenciasCatalogo[indice]);
+        }
+    }
+
+    private async Task SeleccionarProductoEnFilaDesdeListaAsync(LiquidacionCompraDetalleDto item, ProductoLookupDetalleDto producto)
+    {
+        CargarProductoEnDetalle(item, producto);
+        filaBusquedaProductoActiva = null;
+        seleccionandoProductoDesdeLista = false;
+        sugerenciasCatalogo = null;
+        indiceSugerenciaProductoActiva = -1;
+        AsegurarFilaVaciaDetalle();
+        RecalcularTotales();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void PrepararSeleccionProducto()
+    {
+        seleccionandoProductoDesdeLista = true;
+    }
+
+    private static int ObtenerIndiceInicial<T>(ICollection<T>? items) =>
+        items is { Count: > 0 } ? 0 : -1;
+
+    private static int MoverIndiceCircular(int indiceActual, int desplazamiento, int total)
+    {
+        if (total <= 0)
+            return -1;
+
+        if (indiceActual < 0 || indiceActual >= total)
+            return desplazamiento >= 0 ? 0 : total - 1;
+
+        var siguiente = (indiceActual + desplazamiento) % total;
+        return siguiente < 0 ? siguiente + total : siguiente;
+    }
+
+    private static string ObtenerResumenProductoBusqueda(ProductoLookupDetalleDto producto)
+    {
+        var partes = new[] { producto.Categoria, producto.Subcategoria }
+            .Where(x => !string.IsNullOrWhiteSpace(x));
+
+        var resumen = string.Join(" | ", partes);
+        return string.IsNullOrWhiteSpace(resumen) ? "Producto" : resumen;
+    }
+
+    private LiquidacionCompraDetalleDto CrearDetalleDesdeProducto(ProductoLookupDetalleDto producto)
+    {
+        var detalle = new LiquidacionCompraDetalleDto
+        {
+            CodProducto = producto.Codproducto,
+            CodPrincipal = producto.Codprincipal ?? producto.Codproducto.ToString(CultureInfo.InvariantCulture),
+            CodAuxiliar = producto.Codauxiliar ?? "",
+            Descripcion = producto.Descripcion ?? "",
+            Cantidad = 1m,
+            PrecioUnitario = producto.PrecioUnitario,
+            PorcentajeDescuento = 0m,
+            Descuento = 0m,
+            CodigoPorcentaje = MapearCodigoPorcentajeDesdeTarifa(producto.TarifaIva),
+            Tarifa = NormalizarTarifaProducto(producto.TarifaIva)
+        };
+
+        LiquidacionCompraService.RecalcularDetalle(detalle);
+        return detalle;
+    }
+
+    private void AgregarDetalleSugerido(CompraXmlDetalleDto sugerido)
+    {
+        var detalle = new LiquidacionCompraDetalleDto
+        {
+            CodPrincipal = sugerido.CodPrincipal,
+            CodAuxiliar = sugerido.CodAuxiliar,
+            Descripcion = sugerido.Descripcion,
+            Cantidad = 1m,
+            PrecioUnitario = sugerido.PrecioUnitario,
+            PorcentajeDescuento = 0m,
+            Descuento = 0m,
+            CodigoPorcentaje = NormalizarCodigoPorcentaje(sugerido.PorImp, sugerido.Tarifa),
+            Tarifa = NormalizarTarifaProducto(sugerido.Tarifa)
+        };
+
+        LiquidacionCompraService.RecalcularDetalle(detalle);
+        AgregarDetalleALista(detalle);
+    }
+
+    private void AgregarDetalleALista(LiquidacionCompraDetalleDto detalle)
+    {
+        if (preview == null)
+            return;
+
+        preview.Detalles ??= new List<LiquidacionCompraDetalleDto>();
+
+        var indiceVacio = preview.Detalles.FindIndex(EsDetalleVacio);
+        if (indiceVacio >= 0)
+            preview.Detalles[indiceVacio] = detalle;
+        else
+            preview.Detalles.Add(detalle);
+
+        RecalcularTotales();
+    }
+
+    private void LimpiarBusquedaProducto()
+    {
+        textoBusquedaProducto = "";
+        sugerenciasCatalogo = null;
+    }
+
+    private async Task OnBusquedaProductoBlur()
+    {
+        await Task.Delay(350);
+        sugerenciasCatalogo = null;
+    }
+
+    private async Task AbrirVistaPreviaPdfTemporalAsync()
+    {
+        if (previsualizandoPdf)
+            return;
+
+        AplicarCorreosOpcionalesLiquidacion();
+        var error = ObtenerErrorValidacionLiquidacion();
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            await AlertService.ShowWarningAsync(error);
+            return;
+        }
+
+        previsualizandoPdf = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var rutaPdf = await LiquidacionCompraPdfService.GenerarPdfLiquidacionAsync(preview);
+            
+            var webRoot = string.IsNullOrWhiteSpace(WebHostEnvironment.WebRootPath) 
+                ? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot") 
+                : WebHostEnvironment.WebRootPath;
+            
+            var relativePath = Path.GetRelativePath(webRoot, rutaPdf).Replace(Path.DirectorySeparatorChar, '/');
+            urlPdfTemporal = "/" + relativePath + "?v=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            mostrarVistaPreviaPdfTemporal = true;
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync($"No se pudo generar la vista previa del PDF: {ex.Message}", "Error");
+        }
+        finally
+        {
+            previsualizandoPdf = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CerrarVistaPreviaPdfTemporalAsync()
+    {
+        mostrarVistaPreviaPdfTemporal = false;
+        urlPdfTemporal = null;
+    }
+
+    private async Task GuardarLiquidacionAsync()
+    {
+        if (preview == null)
+            return;
+
+        guardando = true;
+        textoGuardandoLiquidacion = "Generando liquidacion...";
+        liquidacionGeneradaCodFactura = null;
+        liquidacionGeneradaPdfUrl = null;
+
+        try
+        {
+            preview.Usuario = usuarioActual;
+            AplicarCorreosOpcionalesLiquidacion();
+            await LiquidacionCompraService.ResolverDatosManualAsync(preview);
+
+            var errorValidacion = ObtenerErrorValidacionLiquidacion();
+            if (!string.IsNullOrWhiteSpace(errorValidacion))
+            {
+                MostrarAvisoRapidoLiquidacion(errorValidacion, esError: true);
+                return;
+            }
+
+            preview.ClaveAcceso = LiquidacionCompraService.GenerarClaveAccesoTemporal(preview);
+
+            var resultado = await LiquidacionCompraService.GuardarLiquidacionConArchivosAsync(preview);
+            await InitialSequencePromptService.UpdateLastSequenceAsync(
+                usuarioActual ?? 0,
+                "liquidacion-compra",
+                preview.Secuencial,
+                preview.Serie);
+            liquidacionGeneradaCodFactura = resultado.CodFactura;
+            liquidacionGeneradaPdfUrl = NormalizarUrlDocumentoGenerado(resultado.PdfUrl);
+
+            textoGuardandoLiquidacion = "Emitiendo en el SRI...";
+            StateHasChanged();
+
+            var respuestaSri = await LiquidacionCompraService.EmitirLiquidacionSriAsync(
+                resultado.CodFactura,
+                usuarioActual,
+                intentarEnviarCorreo: true);
+
+            if (usuarioActual is > 0)
+            {
+                var pdfActualizado = await LiquidacionCompraService.AsegurarPdfLiquidacionUsuarioAsync(resultado.CodFactura, usuarioActual.Value);
+                liquidacionGeneradaPdfUrl = NormalizarUrlDocumentoGenerado(string.IsNullOrWhiteSpace(pdfActualizado) ? resultado.PdfUrl : pdfActualizado);
+            }
+
+            var observaciones = new List<string>();
+            if (resultado.ProblemasArchivos.Any())
+                observaciones.AddRange(resultado.ProblemasArchivos);
+
+            var estadoSri = (respuestaSri?.estado ?? string.Empty).Trim();
+            var mensajeSri = (respuestaSri?.mensaje ?? string.Empty).Trim();
+            var autorizada = string.Equals(estadoSri, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrWhiteSpace(respuestaSri?.autorizacion);
+
+            string mensajeResultado;
+            bool esErrorResultado = false;
+
+            if (autorizada)
+            {
+                liquidacionRetencionId = resultado.CodFactura;
+                mensajeResultado = $"Liquidacion #{resultado.CodFactura} emitida correctamente al SRI.";
+                if (observaciones.Any())
+                    mensajeResultado += $" Observaciones: {string.Join(" | ", observaciones)}";
+            }
+            else if (string.Equals(estadoSri, "ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                mensajeResultado = $"Liquidacion #{resultado.CodFactura} guardada, pero no se pudo emitir al SRI. {mensajeSri}";
+                if (observaciones.Any())
+                    mensajeResultado += $" Observaciones: {string.Join(" | ", observaciones)}";
+                esErrorResultado = true;
+            }
+            else
+            {
+                mensajeResultado = $"Liquidacion #{resultado.CodFactura} guardada y enviada al SRI con estado {estadoSri}.";
+                if (!string.IsNullOrWhiteSpace(mensajeSri))
+                    mensajeResultado += $" {mensajeSri}";
+                if (observaciones.Any())
+                    mensajeResultado += $" Observaciones: {string.Join(" | ", observaciones)}";
+            }
+
+            MostrarAvisoRapidoLiquidacion(mensajeResultado, esErrorResultado);
+            EmisionControlService.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            MostrarAvisoRapidoLiquidacion(ex.Message, esError: true);
+        }
+        finally
+        {
+            guardando = false;
+            textoGuardandoLiquidacion = "Generando...";
+        }
+    }
+
+    private string TextoGuardandoLiquidacion => textoGuardandoLiquidacion;
+
+    private Task AbrirDocumentoGeneradoAsync()
+    {
+        if (string.IsNullOrWhiteSpace(liquidacionGeneradaPdfUrl))
+            return Task.CompletedTask;
+
+        urlPdfTemporal = liquidacionGeneradaPdfUrl;
+        mostrarVistaPreviaPdfTemporal = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task IrARetencionLiquidacionGenerada()
+    {
+        if (liquidacionGeneradaCodFactura is not > 0)
+            return;
+
+        await HabilitarRetencionAsync(liquidacionGeneradaCodFactura.Value);
+    }
+
+    private async Task ContinuarRetencionDesdeHistorialAsync(int codFactura)
+    {
+        mostrarHistorialLiquidaciones = false;
+        await HabilitarRetencionAsync(codFactura);
+    }
+
+    private async Task HabilitarRetencionAsync(int codFactura)
+    {
+        if (usuarioActual is not > 0 || codFactura <= 0)
+            return;
+
+        var liquidacion = (await LiquidacionCompraService.ListarLiquidacionesUsuarioAsync(usuarioActual.Value))
+            .FirstOrDefault(x => x.CodFactura == codFactura);
+
+        if (liquidacion == null)
+        {
+            await AlertService.ShowWarningAsync("No se encontro la liquidacion seleccionada.");
+            return;
+        }
+
+        if (!DocumentoAutorizacionHelper.EstaAutorizado(liquidacion.Autorizado, liquidacion.EstadoSri))
+        {
+            await AlertService.ShowWarningAsync("La liquidacion debe estar autorizada por el SRI antes de generar la retencion.");
+            return;
+        }
+
+        if (liquidacion.TieneRetencion)
+        {
+            await AlertService.ShowWarningAsync("La liquidacion seleccionada ya tiene una retencion registrada.");
+            return;
+        }
+
+        var detalle = await LiquidacionCompraService.GetLiquidacionDetalleUsuarioAsync(codFactura, usuarioActual.Value);
+        if (detalle?.Preview == null)
+        {
+            await AlertService.ShowWarningAsync("No se pudieron cargar los datos de la liquidacion seleccionada.");
+            return;
+        }
+
+        preview = detalle.Preview;
+        preview.Usuario = usuarioActual;
+        textoBusquedaProveedor = preview.RazonSocialProveedor ?? string.Empty;
+        liquidacionGeneradaPdfUrl = NormalizarUrlDocumentoGenerado(detalle.PdfUrl);
+        liquidacionGeneradaCodFactura = codFactura;
+        liquidacionRetencionId = codFactura;
+        datosInicialesCargados = true;
+        formKey++;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task NuevaLiquidacionDesdeAvisoAsync()
+    {
+        await ReiniciarFormularioAsync();
+    }
+
+    private string? NormalizarUrlDocumentoGenerado(string? pdfUrl)
+    {
+        if (string.IsNullOrWhiteSpace(pdfUrl))
+            return null;
+
+        if (pdfUrl.StartsWith("/", StringComparison.Ordinal) || Uri.TryCreate(pdfUrl, UriKind.Absolute, out _))
+            return $"{pdfUrl}?v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+
+        if (Path.IsPathRooted(pdfUrl))
+        {
+            var webRoot = string.IsNullOrWhiteSpace(WebHostEnvironment.WebRootPath)
+                ? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot")
+                : WebHostEnvironment.WebRootPath;
+
+            var relativePath = Path.GetRelativePath(webRoot, pdfUrl).Replace(Path.DirectorySeparatorChar, '/');
+            return "/" + relativePath + "?v=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+
+        return "/" + pdfUrl.TrimStart('/', '\\').Replace('\\', '/') + "?v=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
+
+    private void MostrarAvisoRapidoLiquidacion(string mensaje, bool esError = false)
+    {
+        mensajeRapidoLiquidacion = mensaje;
+        mensajeRapidoEsError = esError;
+        StateHasChanged();
+    }
+
+    private string ObtenerClaveTemporalPreview()
+    {
+        if (preview == null || string.IsNullOrWhiteSpace(preview.RucEmisor))
+            return "Se generara al guardar";
+
+        try
+        {
+            return LiquidacionCompraService.GenerarClaveAccesoTemporal(preview);
+        }
+        catch
+        {
+            return "Se generara al guardar";
+        }
+    }
+
+    private static decimal ParseDecimal(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return 0m;
+
+        valor = valor.Replace(",", ".");
+        decimal.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out var resultado);
+        return resultado;
+    }
+
+    private static string FormatearMoneda(decimal valor) =>
+        valor.ToString("N2", CultureInfo.GetCultureInfo("es-EC"));
+
+    private static string GetPorcentajeDescuentoVisual(LiquidacionCompraDetalleDto item) =>
+        item.PorcentajeDescuento.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private void AgregarCorreoOpcionalLiquidacion()
+    {
+        NormalizarCorreosOpcionalesLiquidacion();
+        if (correosOpcionalesLiquidacion.Count >= MaxCorreosOpcionalesLiquidacion)
+            return;
+
+        correosOpcionalesLiquidacion.Add(new CorreoOpcionalLiquidacionInput());
+    }
+
+    private void EliminarCorreoOpcionalLiquidacion(int index)
+    {
+        if (index < 0 || index >= correosOpcionalesLiquidacion.Count)
+            return;
+
+        correosOpcionalesLiquidacion.RemoveAt(index);
+    }
+
+    private void NormalizarCorreosOpcionalesLiquidacion()
+    {
+        foreach (var correo in correosOpcionalesLiquidacion)
+            correo.Correo = (correo.Correo ?? string.Empty).Trim();
+    }
+
+    private List<string> ObtenerCorreosOpcionalesLiquidacion()
+    {
+        NormalizarCorreosOpcionalesLiquidacion();
+
+        return correosOpcionalesLiquidacion
+            .Select(x => x.Correo)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxCorreosOpcionalesLiquidacion)
+            .ToList();
+    }
+
+    private void AplicarCorreosOpcionalesLiquidacion()
+    {
+        if (preview == null)
+            return;
+
+        var correos = correosOpcionalesLiquidacion
+            .Select(x => new
+            {
+                Correo = (x.Correo ?? string.Empty).Trim(),
+                x.GuardarEnProveedor
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(x.Correo))
+            .GroupBy(x => x.Correo, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .Take(MaxCorreosOpcionalesLiquidacion)
+            .ToList();
+
+        preview.CorreosAdicionalesProveedor = correos.Select(x => x.Correo).ToList();
+        preview.CorreosAdicionalesProveedorGuardar = correos
+            .Where(x => x.GuardarEnProveedor)
+            .Select(x => x.Correo)
+            .ToList();
+    }
+
+    private static bool EsDetalleVacio(LiquidacionCompraDetalleDto item)
+    {
+        return item != null &&
+               string.IsNullOrWhiteSpace(item.CodPrincipal) &&
+               string.IsNullOrWhiteSpace(item.CodAuxiliar) &&
+               string.IsNullOrWhiteSpace(item.Descripcion) &&
+               item.PrecioUnitario <= 0m &&
+               item.PorcentajeDescuento <= 0m &&
+               item.Descuento <= 0m;
+    }
+
+    private static int MapearCodigoPorcentajeDesdeTarifa(int tarifa)
+    {
+        return tarifa switch
+        {
+            5 => 5,
+            8 => 8,
+            15 => 4,
+            _ => 0
+        };
+    }
+
+    private static int NormalizarTarifaProducto(int tarifa)
+    {
+        return tarifa switch
+        {
+            5 => 5,
+            8 => 8,
+            15 => 15,
+            _ => 0
+        };
+    }
+
+    private static int NormalizarCodigoPorcentaje(int codigoPorcentaje, int tarifa)
+    {
+        if (codigoPorcentaje is 0 or 4 or 5 or 6 or 7 or 8)
+            return codigoPorcentaje;
+
+        return MapearCodigoPorcentajeDesdeTarifa(tarifa);
+    }
+
+    private string? ObtenerErrorValidacionLiquidacion()
+    {
+        if (preview == null)
+            return "No hay una liquidación cargada.";
+
+        if (!usuarioActual.HasValue || usuarioActual.Value <= 0)
+            return "No se pudo identificar al usuario actual.";
+
+        if (BloqueadoPorSaldoDocumentos)
+            return MensajeBloqueoDocumentos;
+
+        if (!preview.ExisteEmisor)
+            return "No se encontró un emisor activo para la liquidación.";
+
+        if (preview.FechaEmision == null)
+            return "Debes seleccionar la fecha de emisión.";
+
+        if (preview.FechaEmision.Value.Date > DateTime.Today)
+            return "La fecha de emisión no puede ser futura.";
+
+        if (string.IsNullOrWhiteSpace(preview.FormaPago) ||
+            !formasPago.Any(x => string.Equals(x.Codigo, preview.FormaPago, StringComparison.OrdinalIgnoreCase)))
+            return "Debes seleccionar una forma de pago válida.";
+
+        preview.RucEmisor = SoloDigitos(preview.RucEmisor);
+        if (preview.RucEmisor.Length != 13)
+            return "El RUC del emisor debe tener 13 dígitos.";
+
+        preview.DireccionEstablecimiento = (preview.DireccionEstablecimiento ?? string.Empty).Trim();
+        preview.DireccionMatriz = preview.DireccionEstablecimiento;
+        if (string.IsNullOrWhiteSpace(preview.DireccionEstablecimiento))
+            return "Debes ingresar la dirección del emisor.";
+
+        if (preview.ObligadoContabilidad is not ("SI" or "NO"))
+            return "Debes indicar si el emisor está obligado a llevar contabilidad.";
+
+        preview.TipoIdentificacionProveedor = (preview.TipoIdentificacionProveedor ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(preview.TipoIdentificacionProveedor))
+            return "Debes seleccionar el tipo de identificación del proveedor.";
+
+        preview.IdentificacionProveedor = (preview.IdentificacionProveedor ?? string.Empty).Trim();
+        if (!EsIdentificacionValida(preview.TipoIdentificacionProveedor, preview.IdentificacionProveedor))
+            return "La identificación del proveedor no tiene un formato válido para el tipo seleccionado.";
+
+        preview.RazonSocialProveedor = (preview.RazonSocialProveedor ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(preview.RazonSocialProveedor))
+            return "Debes ingresar la razón social del proveedor.";
+
+        preview.DireccionProveedor = (preview.DireccionProveedor ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(preview.DireccionProveedor))
+            return "Debes ingresar la dirección del proveedor.";
+
+        preview.TelefonoFijoProveedor = (preview.TelefonoFijoProveedor ?? string.Empty).Trim();
+
+        preview.TelefonoProveedor = (preview.TelefonoProveedor ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(preview.TelefonoProveedor) &&
+            !EsTelefonoValido(preview.TelefonoProveedor))
+            return "El teléfono móvil del proveedor debe tener entre 7 y 15 dígitos.";
+
+        preview.EmailProveedor = (preview.EmailProveedor ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(preview.EmailProveedor) &&
+            !EsCorreoValido(preview.EmailProveedor))
+            return "El correo del proveedor no tiene un formato válido.";
+
+        var correosUsados = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(preview.EmailProveedor))
+            correosUsados.Add(preview.EmailProveedor);
+
+        for (var i = 0; i < correosOpcionalesLiquidacion.Count; i++)
+        {
+            var correoExtra = (correosOpcionalesLiquidacion[i].Correo ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(correoExtra))
+                continue;
+
+            if (!EsCorreoValido(correoExtra))
+                return $"El correo adicional #{i + 1} no tiene un formato válido.";
+
+            if (!correosUsados.Add(correoExtra))
+                return $"El correo {correoExtra} está repetido entre los destinatarios de la liquidación.";
+        }
+
+        var detallesActivos = (preview.Detalles ?? new List<LiquidacionCompraDetalleDto>())
+            .Where(x => !EsDetalleVacio(x))
+            .ToList();
+
+        if (!detallesActivos.Any())
+            return "Debes agregar al menos un detalle a la liquidación.";
+
+        for (int i = 0; i < detallesActivos.Count; i++)
+        {
+            var item = detallesActivos[i];
+            item.CodPrincipal = (item.CodPrincipal ?? string.Empty).Trim();
+            item.Descripcion = (item.Descripcion ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(item.Descripcion))
+                return $"En el detalle #{i + 1} la descripción es obligatoria.";
+
+            if (item.Cantidad <= 0m)
+                return $"En el detalle #{i + 1} la cantidad debe ser mayor a cero.";
+
+            if (item.PrecioUnitario <= 0m)
+                return $"En el detalle #{i + 1} el precio unitario debe ser mayor a cero.";
+
+            if (item.PorcentajeDescuento < 0m || item.PorcentajeDescuento > 100m)
+                return $"En el detalle #{i + 1} el descuento porcentual debe estar entre 0 y 100.";
+
+            if (item.Descuento < 0m)
+                return $"En el detalle #{i + 1} el descuento no puede ser negativo.";
+
+            var subtotalBruto = item.Cantidad * item.PrecioUnitario;
+            var descuentoEfectivo = LiquidacionCompraService.ObtenerDescuentoEfectivoDetalle(preview, item);
+            if (descuentoEfectivo > subtotalBruto)
+                return $"En el detalle #{i + 1} el descuento no puede ser mayor al subtotal bruto.";
+
+            if (!impuestosDetalle.Any(x => x.Codigo == item.CodigoPorcentaje))
+                return $"En el detalle #{i + 1} debes seleccionar un IVA válido.";
+        }
+
+        return null;
+    }
+
+    private static string SoloDigitos(string? valor) =>
+        new string((valor ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private static bool EsTelefonoValido(string telefono)
+    {
+        var digitos = SoloDigitos(telefono);
+        return digitos.Length is >= 7 and <= 15;
+    }
+
+    private static bool EsCorreoValido(string correo)
+    {
+        try
+        {
+            _ = new System.Net.Mail.MailAddress(correo);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool EsIdentificacionValida(string tipo, string identificacion)
+    {
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return false;
+
+        var valor = identificacion.Trim();
+        return tipo switch
+        {
+            "04" => valor.Length == 13 && valor.All(char.IsDigit),
+            "05" => valor.Length == 10 && valor.All(char.IsDigit),
+            "06" => valor.Length is >= 3 and <= 20 &&
+                    valor.All(ch => char.IsLetterOrDigit(ch) || ch == '-'),
+            _ => valor.Length is >= 3 and <= 20
+        };
+    }
+
+    private async Task CargarEstadoEmisionAsync()
+    {
+        emisionEstado = await EmisionControlService.ObtenerEstadoAsync(usuarioActual);
+    }
+
+    private string? FormaPagoSeleccionadaDescripcion =>
+        formasPago
+            .FirstOrDefault(x => string.Equals(x.Codigo, preview?.FormaPago, StringComparison.OrdinalIgnoreCase))
+            ?.Descripcion;
+
+    public async Task<mensajeSRI> EnviarXmlAApiFrameworkAsync(string rutaArchivoxml, string rutaFirma, string password)
+    {
+        try
+        {
+            string apiUrl = "http://localhost:8090/api/xml/process"; //produccion
+            //string apiUrl = "https://localhost:44372/api/xml/process"; //pruebas
+
+            if (!File.Exists(rutaArchivoxml))
+            {
+                throw new FileNotFoundException($"No se encontró el archivo XML en la ruta: {rutaArchivoxml}");
+            }
+            if (!File.Exists(rutaFirma))
+            {
+                throw new FileNotFoundException($"No se encontró el archivo de firma (.p12) en la ruta: {rutaFirma}");
+            }
+
+            rutaFirma = Path.Combine(Directory.GetCurrentDirectory(), "App_Data\\certs", "path\\" + Path.GetFileName(rutaFirma));
+            var solicitudData = new
+            {
+                RutaXml = rutaArchivoxml,
+                RutaFirma = rutaFirma,
+                PasswordFirma = password
+            };
+
+            string jsonPayload = System.Text.Json.JsonSerializer.Serialize(solicitudData);
+            var jsonContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+            var request = new HttpRequestMessage(HttpMethod.Post, apiUrl)
+            {
+                Content = jsonContent
+            };
+
+            request.Headers.Add("X-Api-Key", "E-factSimetricNumericaKey2026*#");
+            request.Headers.UserAgent.ParseAdd("NumericaSoftwareClient/1.0");
+
+            var handler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+            };
+
+            using (var client = new HttpClient(handler))
+            {
+                client.Timeout = TimeSpan.FromSeconds(80);
+                HttpResponseMessage response = await client.SendAsync(request).ConfigureAwait(false);
+                string xmlRespuesta = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    // 2. DESERIALIZAR la respuesta XML recibida al objeto mensajeSRI
+                    var serializer = new System.Xml.Serialization.XmlSerializer(typeof(mensajeSRI));
+                    using (var reader = new System.IO.StringReader(xmlRespuesta))
+                    {
+                        return (mensajeSRI)serializer.Deserialize(reader);
+                    }
+                }
+                else
+                {
+                    // Si la API responde un error controlado (400, 404, 500)
+                    throw new Exception($"Respuesta de error de la API: {xmlRespuesta}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // 3. En caso de error, mapeamos la excepción a un objeto mensajeSRI de error
+            // Reemplaza "xml" o las propiedades según cómo se llamen en tu clase real
+            return new mensajeSRI
+            {
+                xml = $"<error><tipo>ExcepcionBlazor</tipo><mensaje>{ex.Message}</mensaje></error>"
+                // Si tienes propiedades como 'estado' o 'mensaje', inicialízalas aquí
+            };
+        }
+    }
+}

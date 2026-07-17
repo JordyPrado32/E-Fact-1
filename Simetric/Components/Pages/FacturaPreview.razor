@@ -1,0 +1,578 @@
+@using Simetric.DTOs
+@using Simetric.Models
+@using Simetric.Services
+@using System.Globalization
+@using Microsoft.AspNetCore.Components
+
+@if (Model == null)
+{
+    <div class="alert alert-warning">
+        No se pudo cargar la factura.
+    </div>
+}
+else
+{
+    var f = Model.Factura;
+    var cli = Model.Cliente;
+    var emi = Model.Emisor;
+    var detalles = Model.Detalles ?? new List<Detallefactura>();
+
+    // =========================================================
+    // ✅ RUTAS DE IMÁGENES (AJUSTA A TU PROYECTO)
+    // =========================================================
+    // Logo actual del sistema
+    string logoSistemaUrl = "/images/LogoPrincipal.svg";
+
+    // Logo de la empresa emisora de la factura
+    string? logoEmisorUrl = NormalizeLogoSrc(emi?.LogoImagen);
+
+    decimal descGlobalPct = NormalizarPorcentajeSeguro(f?.DescuentoGlobalPct);
+
+    var lineas = detalles.Select(d =>
+    {
+        decimal cant = d.Cantproducto;
+        decimal punit = d.Precioproducto;
+        decimal bruto = cant * punit;
+
+        decimal descUnitVal = Math.Max(0m, d.Descuento ?? 0m);
+        decimal descUnitPct = bruto > 0m ? descUnitVal / bruto : 0m;
+        decimal baseAntesGlobal = Math.Max(0m, bruto - descUnitVal);
+
+        decimal ivaRate = ObtenerTarifaPorcentajeReal(d.Tarifa) / 100m;
+        decimal baseDespuesGlobal = Math.Max(0m, d.Valortproducto);
+        decimal ivaCalc = Math.Max(0m, d.Valoriva);
+        decimal totalCalc = Math.Max(0m, d.Valortotal);
+
+        return new
+        {
+            D = d,
+            Cant = cant,
+            PUnit = punit,
+            Bruto = bruto,
+            DescUnitPct = descUnitPct,
+            DescUnitVal = descUnitVal,
+            BaseAntesGlobal = baseAntesGlobal,
+            BaseImp = baseDespuesGlobal,
+            IvaRate = ivaRate,
+            Iva = ivaCalc,
+            Total = totalCalc
+        };
+    }).ToList();
+
+    decimal subtotalBruto = lineas.Sum(x => x.Bruto);
+    decimal subtotalBaseLineas = lineas.Sum(x => x.BaseImp);
+    decimal descuentosLineas = lineas.Sum(x => x.DescUnitVal);
+    decimal valorDescGlobal = Math.Max(0m, f?.DescuentoGlobalValor ?? 0m);
+    decimal descuentoTotal = Math.Max(0m, f?.Descuentos ?? descuentosLineas);
+    decimal descuentoUnitario = Math.Max(0m, descuentoTotal - valorDescGlobal);
+    decimal baseImponible = Math.Max(0m, f?.Subtotal ?? subtotalBaseLineas);
+    decimal totalIva = Math.Max(0m, f?.Iva ?? lineas.Sum(x => x.Iva));
+    decimal totalPagar = Math.Max(0m, f?.Valortotal ?? (baseImponible + totalIva));
+    decimal subtotalBaseGravada = Math.Max(0m, f?.Subtotal12 ?? f?.Subdocetotal ?? 0m);
+    decimal subtotalBaseCero = Math.Max(0m, f?.Subtotal0 ?? f?.Subcerototal ?? 0m);
+    decimal subtotalNoObjetoIva = Math.Max(0m, f?.Noimp ?? f?.Subnoimptotal ?? 0m);
+    decimal subtotalExentoIva = Math.Max(0m, f?.Exiva ?? f?.Subexivatotal ?? 0m);
+    decimal subtotalConDescuento = baseImponible;
+    decimal valorIce = Math.Max(0m, f?.Valorice ?? 0m);
+    decimal valorIrbpnr = Math.Max(0m, f?.ValorbiIrbpnr ?? 0m);
+    decimal valorServicio = 0m;
+    var tarifasIva = lineas
+        .Where(x => x.IvaRate > 0m && x.Iva > 0m)
+        .GroupBy(x => x.IvaRate)
+        .Select(g => new
+        {
+            Tarifa = g.Key * 100m,
+            Iva = g.Sum(x => x.Iva)
+        })
+        .OrderBy(x => x.Tarifa)
+        .ToList();
+    var estaAutorizada = DocumentoAutorizacionHelper.EstaAutorizado(f?.Autorizado, f?.Estadoenviosri);
+    var estadoAutorizacion = CapitalizarPrimeraLetra(DocumentoAutorizacionHelper.ObtenerEstadoVisual(f?.Estadoenviosri, estaAutorizada));
+    var numeroAutorizacion = DocumentoAutorizacionHelper.ObtenerNumeroAutorizacionVisual(
+        f?.Estadoenviosri,
+        estaAutorizada,
+        f?.Numautorizacion);
+
+    <div class="fp-wrap">
+        <div class="fp-sheet">
+
+            <!-- ✅ MARCA DE AGUA (LOGO CLIENTE) -->
+            <!-- Requiere el CSS: .fp-watermark (en FacturaPreview.razor.css) -->
+            <div class="fp-watermark" style="--wm:url('/img/logo-cliente.png')"></div>
+
+            <!-- HEADER PRO -->
+            <div class="fp-header">
+                <div class="fp-brand">
+
+                    <div class="fp-brand-logos">
+                        @if (!string.IsNullOrWhiteSpace(logoEmisorUrl))
+                        {
+                            <img class="fp-logo-img fp-logo-emisor"
+                                 src="@logoEmisorUrl"
+                                 alt="@($"Logo de {(emi?.NomComercial ?? emi?.RazonSocial ?? "la empresa")}")" />
+                        }
+                        else
+                        {
+                            <div class="fp-logo-emisor-placeholder fp-no-logo-centered">
+                                <span class="fp-no-logo-text">NO TIENE LOGO</span>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="fp-brand-info">
+                        <div class="fp-emisor-title">@FormatearTextoCasing(emi?.RazonSocial ?? "Emisor")</div>
+
+                        <div class="fp-meta-row">
+                            <span class="fp-chip">RUC: <b>@(emi?.Ruc ?? "-")</b></span>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(emi?.DireccionMatriz))
+                        {
+                            <div class="fp-sub"><b>Matriz:</b> @FormatearTextoCasing(emi!.DireccionMatriz)</div>
+                        }
+
+                        <div class="fp-sub"><b>Fecha emisión:</b> @ObtenerFechaEmisionVisual(f)</div>
+                    </div>
+                </div>
+
+                <div class="fp-doc">
+                    <div class="fp-doc-title">FACTURA</div>
+
+                    <div class="fp-doc-num">
+                        <span>N°</span>
+                        <span class="fp-doc-numv">@(f?.Numfactura ?? "-")</span>
+                    </div>
+
+                    <div class="fp-doc-mini">
+                        <div class="k"><span>Ambiente:</span><span>@ObtenerAmbienteVisual(f?.Ambiente, emi?.TipoAmbiente)</span></div>
+                        <div class="k"><span>Tipo emisión:</span><span>@ObtenerTipoEmisionVisual(emi?.TipoEmision)</span></div>
+                        <div class="k"><span>Estado del documento:</span><span>@estadoAutorizacion</span></div>
+                        <div class="k k-box">
+                            <span>Numero de autorización</span>
+                            <span>@numeroAutorizacion</span>
+                        </div>
+                        <div class="k k-box">
+                            <span>Clave de acceso</span>
+                            <span>@(string.IsNullOrWhiteSpace(f?.Codclave) ? "-" : f.Codclave)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CLIENTE + RESUMEN -->
+            <div class="fp-section">
+                <div class="fp-card">
+                    <div class="fp-card-title">Cliente</div>
+
+                    <div class="fp-client-name">@GetClienteNombre(cli)</div>
+
+                    <div class="fp-row">
+                        <span class="label">Tipo identificación</span>
+                        <span class="val">@ObtenerTipoIdentificacionVisual(cli?.Tipoidentificacion, cli?.Numeroidentificacion)</span>
+                    </div>
+
+                    <div class="fp-row">
+                        <span class="label">Identificación</span>
+                        <span class="val">@(cli?.Numeroidentificacion ?? "-")</span>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(cli?.Direccion))
+                    {
+                        <div class="fp-row">
+                            <span class="label">Dirección</span>
+                            <span class="val">@FormatearTextoCasing(cli!.Direccion)</span>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(cli?.Telefonoconvencional))
+                    {
+                        <div class="fp-row">
+                            <span class="label">Teléfono fijo</span>
+                            <span class="val">@cli!.Telefonoconvencional</span>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(cli?.Celular))
+                    {
+                        <div class="fp-row">
+                            <span class="label">Celular</span>
+                            <span class="val">@cli!.Celular</span>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(cli?.Correo))
+                    {
+                        <div class="fp-row">
+                            <span class="label">Correo</span>
+                            <span class="val">@cli!.Correo</span>
+                        </div>
+                    }
+
+                    @if (cli?.DiasCredito is > 0)
+                    {
+                        <div class="fp-row">
+                            <span class="label">Días de crédito</span>
+                            <span class="val">@cli!.DiasCredito</span>
+                        </div>
+                    }
+                </div>
+
+            </div>
+
+            <!-- DETALLE -->
+            <div class="fp-detail">
+                <div class="fp-card">
+                    <div class="fp-card-title">Detalle</div>
+
+                    <div class="fp-table-wrap">
+                        <div class="fp-table-scroll">
+                            <table class="fp-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:50px;">#</th>
+                                        <th style="width:120px;">Código</th>
+                                        <th style="width:250px;">Descripción</th>
+                                        <th style="width:80px;" class="fp-num">Cant</th>
+                                        <th style="width:100px;" class="fp-num">P. Unit</th>
+                                        <th style="width:100px;" class="fp-num">Desc</th>
+                                        <th style="width:100px;" class="fp-num">IVA</th>
+                                        <th style="width:120px;" class="fp-num">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @if (lineas.Count == 0)
+                                    {
+                                        <tr>
+                                            <td colspan="8" style="padding:12px; color:rgba(35,31,32,.65);">
+                                                No hay detalles registrados.
+                                            </td>
+                                        </tr>
+                                    }
+                                    else
+                                    {
+                                        var i = 1;
+                                        foreach (var x in lineas)
+                                        {
+                                            var d = x.D;
+                                            <tr>
+                                                <td data-label="#" style="color:rgba(35,31,32,.70);">@i</td>
+                                                <td data-label="Código">
+                                                    <span class="fp-code">
+                                                        @(string.IsNullOrWhiteSpace(d.Codprincipal) ? $"PROD-{d.Codproducto}" : d.Codprincipal)
+                                                    </span>
+                                                </td>
+                                                <td data-label="Descripción">
+                                                    <span>@FormatearTextoCasing(d.Descripproducto ?? "Producto / servicio")</span>
+                                                </td>
+                                                <td data-label="Cant" class="fp-num">@x.Cant.ToString("0.##", CultureInfo.InvariantCulture)</td>
+                                                <td data-label="P. Unit" class="fp-num">@FmtMoney(x.PUnit)</td>
+                                                <td data-label="Desc" class="fp-num">@FmtMoney(x.DescUnitVal)</td>
+                                                <td data-label="IVA" class="fp-num">@FmtMoney(x.Iva)</td>
+                                                <td data-label="Total" class="fp-num" style="font-weight:700;">@FmtMoney(x.Total)</td>
+                                            </tr>
+                                            i++;
+                                        }
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="fp-summary-bottom">
+                <!-- ✅ CARD FORMA DE PAGO E INFORMACIÓN ADICIONAL -->
+                <div class="fp-card fp-payment">
+                    <div class="fp-card-title">Forma de pago</div>
+                    <div class="fp-row">
+                        <span class="label">Método de pago</span>
+                        <span class="val">@ObtenerFormaPagoVisualFactura(Model)</span>
+                    </div>
+                    <div class="fp-row">
+                        <span class="label">Plazo (Días)</span>
+                        <span class="val">@(f?.Tiempocredito ?? 0)</span>
+                    </div>
+                    
+                    @if (ObtenerNotasAdicionalesList(Model).Any())
+                    {
+                        <div class="fp-payment-subtitle">Información adicional</div>
+                        @foreach (var nota in ObtenerNotasAdicionalesList(Model))
+                        {
+                            <div class="fp-row-note">• @nota</div>
+                        }
+                    }
+
+                </div>
+
+                <div class="fp-card fp-sum">
+                    <div class="fp-card-title">Totales</div>
+
+                    <div class="fp-row">
+                        <span class="label">Subtotal base gravada</span>
+                        <span class="val">@FmtMoney(subtotalBaseGravada)</span>
+                    </div>
+
+                    <div class="fp-row">
+                        <span class="label">Subtotal base 0%</span>
+                        <span class="val">@FmtMoney(subtotalBaseCero)</span>
+                    </div>
+
+                    <div class="fp-row">
+                        <span class="label">Subtotal no objeto IVA</span>
+                        <span class="val">@FmtMoney(subtotalNoObjetoIva)</span>
+                    </div>
+
+                    <div class="fp-row">
+                        <span class="label">Subtotal exento IVA</span>
+                        <span class="val">@FmtMoney(subtotalExentoIva)</span>
+                    </div>
+
+                    <div class="fp-row neg">
+                        <span class="label">Descuento</span>
+                        <span class="val">@FmtMoney(descuentoTotal)</span>
+                    </div>
+
+                    <div class="fp-row">
+                        <span class="label">Subtotal con descuento</span>
+                        <span class="val">@FmtMoney(subtotalConDescuento)</span>
+                    </div>
+
+                    <div class="fp-row">
+                        <span class="label">ICE</span>
+                        <span class="val">@FmtMoney(valorIce)</span>
+                    </div>
+
+                    @foreach (var item in tarifasIva)
+                    {
+                        <div class="fp-row">
+                            <span class="label">IVA tarifa @item.Tarifa.ToString("0.##", CultureInfo.InvariantCulture)%</span>
+                            <span class="val">@FmtMoney(item.Iva)</span>
+                        </div>
+                    }
+
+                    <div class="fp-row">
+                        <span class="label">Servicio 10%</span>
+                        <span class="val">@FmtMoney(valorServicio)</span>
+                    </div>
+
+                    <div class="fp-row">
+                        <span class="label">IRBPNR</span>
+                        <span class="val">@FmtMoney(valorIrbpnr)</span>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(f?.Guiaremision))
+                    {
+                        <div class="fp-linked-doc-title">Documento relacionado</div>
+                        <div class="fp-row fp-guide-row">
+                            <span class="label">Guía remisión</span>
+                            <span class="val">@f!.Guiaremision</span>
+                        </div>
+                    }
+
+                    <div class="fp-total">
+                        <span>Total</span>
+                        <b>@FmtMoney(totalPagar)</b>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public FacturaViewDto? Model { get; set; }
+
+    private static string FmtMoney(decimal? v)
+        => (v ?? 0m).ToString("0.00", new CultureInfo("es-EC"));
+
+    private static string FmtMoney(decimal v)
+        => v.ToString("0.00", new CultureInfo("es-EC"));
+
+    private static string FmtPct(decimal v)
+        => (NormalizarPorcentajeSeguro(v) * 100m).ToString("0.##", new CultureInfo("es-EC")) + "%";
+
+    private static decimal ObtenerTarifaPorcentajeReal(int tarifa)
+        => tarifa switch
+        {
+            0 => 0m,
+            2 => 12m,
+            3 => 14m,
+            4 => 15m,
+            5 => 5m,
+            6 => 0m,
+            7 => 0m,
+            8 => 8m,
+            10 => 13m,
+            12 => 12m,
+            13 => 10m,
+            14 => 3m,
+            15 => 15m,
+            _ => Math.Max(0m, tarifa)
+        };
+
+    private static decimal Dec(decimal v) => v;
+    private static decimal Dec(decimal? v) => v ?? 0m;
+
+    private static decimal NormalizarPorcentajeSeguro(decimal? v)
+    {
+        var valor = v ?? 0m;
+        if (valor <= 0m)
+            return 0m;
+
+        return valor > 1m ? valor / 100m : valor;
+    }
+
+    private static string ObtenerAmbienteVisual(int? ambiente, string? ambienteEmisor)
+        => int.TryParse(ambienteEmisor, out var ambienteConfig)
+            ? ambienteConfig == 1 ? "Pruebas" : ambienteConfig == 2 ? "Producción" : "-"
+            : ambiente == 1 ? "Pruebas" : ambiente == 2 ? "Producción" : "-";
+
+    private static string ObtenerTipoEmisionVisual(string? tipoEmision)
+    {
+        if (string.IsNullOrWhiteSpace(tipoEmision))
+            return "Normal";
+        var t = tipoEmision.Trim();
+        if (t.Equals("NORMAL", StringComparison.OrdinalIgnoreCase))
+            return "Normal";
+        return t;
+    }
+
+    private static string ObtenerFechaEmisionVisual(Factura? factura)
+        => (factura?.Fechaentrega ?? factura?.Fchautorizacion ?? DateTime.Now).ToString("dd/MM/yyyy");
+
+    private static string ObtenerTipoIdentificacionVisual(string? codigo, string? numeroIdentificacion)
+    {
+        var identificacion = new string((numeroIdentificacion ?? string.Empty).Where(char.IsDigit).ToArray());
+        var codigoLimpio = (codigo ?? string.Empty).Trim();
+
+        if (codigoLimpio == "07" || identificacion == "9999999999999")
+            return "Consumidor final";
+
+        if (identificacion.Length == 13)
+            return "RUC";
+
+        if (identificacion.Length == 10)
+            return "Cedula";
+
+        return codigoLimpio switch
+        {
+            "04" => "RUC",
+            "05" => "Cedula",
+            "06" => "Pasaporte",
+            "08" => "Identificacion del exterior",
+            _ => string.IsNullOrWhiteSpace(codigoLimpio) ? "-" : codigoLimpio
+        };
+    }
+
+    private static string GetClienteNombre(Cliente? c)
+    {
+        if (c == null) return "-";
+
+        if (!string.IsNullOrWhiteSpace(c.Nombrerazonsocial))
+            return FormatearTextoCasing(c.Nombrerazonsocial);
+
+        var nombre = $"{c.Nombres} {c.Apellidos}".Trim();
+        if (!string.IsNullOrWhiteSpace(nombre))
+            return FormatearTextoCasing(nombre);
+
+        if (!string.IsNullOrWhiteSpace(c.Nombrecomercial))
+            return FormatearTextoCasing(c.Nombrecomercial);
+
+        return "-";
+    }
+
+    private static string? NormalizeLogoSrc(string? logo)
+    {
+        if (string.IsNullOrWhiteSpace(logo))
+            return null;
+
+        return logo.Trim();
+    }
+
+    private static string FormatearTextoCasing(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return "-";
+
+        var trim = valor.Trim();
+        bool tieneMinusculas = trim.Any(char.IsLower);
+        if (tieneMinusculas)
+        {
+            return trim;
+        }
+
+        var palabras = trim.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var palabrasCapitalizadas = palabras.Select(p => p.Length == 1 ? p.ToUpperInvariant() : char.ToUpperInvariant(p[0]) + p[1..]);
+        return string.Join(' ', palabrasCapitalizadas);
+    }
+
+    private static string CapitalizarPrimeraLetra(string? texto)
+    {
+        if (string.IsNullOrWhiteSpace(texto))
+            return "-";
+
+        texto = texto.Trim();
+        if (texto.Equals("NO AUTORIZADO", StringComparison.OrdinalIgnoreCase))
+            return "No autorizado";
+
+        return char.ToUpperInvariant(texto[0]) + texto[1..].ToLowerInvariant();
+    }
+
+    private static string ObtenerFormaPagoVisual(string? codigo)
+        => string.IsNullOrWhiteSpace(codigo)
+            ? "-"
+            : codigo.Trim() switch
+            {
+                "01" => "01 - Sin utilización del sistema financiero",
+                "19" => "19 - Tarjeta de crédito",
+                "20" => "20 - Otros con utilización del sistema financiero",
+                _ => codigo.Trim()
+            };
+
+    private static string ObtenerFormaPagoVisualFactura(FacturaViewDto? model)
+    {
+        var nombre = model?.FormaPagoNombre?.Trim();
+        if (!string.IsNullOrWhiteSpace(nombre))
+            return nombre;
+
+        var codigo = model?.Factura?.Tipopago?.Trim();
+        if (string.IsNullOrWhiteSpace(codigo))
+            return "-";
+
+        return codigo switch
+        {
+            "01" => "Sin utilizacion del sistema financiero",
+            "19" => "Tarjeta de credito",
+            "20" => "Otros con utilizacion del sistema financiero",
+            _ => codigo
+        };
+    }
+
+    private static List<string> ObtenerNotasAdicionalesList(FacturaViewDto? model)
+    {
+        var notas = new List<string>();
+        if (model == null) return notas;
+
+        var factura = model.Factura;
+        var cliente = model.Cliente;
+        if (factura == null) return notas;
+
+        if (!string.IsNullOrWhiteSpace(cliente?.Referencia))
+            notas.Add(FormatearTextoCasing(cliente.Referencia));
+
+        if (!string.IsNullOrWhiteSpace(factura.Detalleextra))
+            notas.Add(FormatearTextoCasing(factura.Detalleextra));
+
+        if (!string.IsNullOrWhiteSpace(factura.Piepagina))
+            notas.Add(FormatearTextoCasing(factura.Piepagina));
+
+        if (!string.IsNullOrWhiteSpace(cliente?.Observaciones))
+            notas.Add(FormatearTextoCasing(cliente.Observaciones));
+
+        if (!string.IsNullOrWhiteSpace(factura.Correoad))
+            notas.Add($"Correo adicional: {factura.Correoad.Trim()}");
+
+        return notas;
+    }
+}

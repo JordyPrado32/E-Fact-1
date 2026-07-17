@@ -1,0 +1,736 @@
+@using System.Globalization
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+@if (Visible && Definition is not null && Definition.Steps.Count > 0 && CurrentStep is not null)
+{
+    <div class="tutorial-overlay" role="dialog" aria-modal="true" aria-labelledby="tutorialOverlayTitle">
+        @if (_currentTarget is null)
+        {
+            <div class="tutorial-overlay-backdrop" @onclick="OmitirAsync" @onwheel:preventDefault></div>
+        }
+        else
+        {
+            <div class="tutorial-overlay-backdrop tutorial-overlay-backdrop-segment"
+                 style="@GetBackdropTopStyle(_currentTarget)"
+                 @onclick="OmitirAsync"
+                 @onwheel:preventDefault></div>
+            <div class="tutorial-overlay-backdrop tutorial-overlay-backdrop-segment"
+                 style="@GetBackdropLeftStyle(_currentTarget)"
+                 @onclick="OmitirAsync"
+                 @onwheel:preventDefault></div>
+            <div class="tutorial-overlay-backdrop tutorial-overlay-backdrop-segment"
+                 style="@GetBackdropRightStyle(_currentTarget)"
+                 @onclick="OmitirAsync"
+                 @onwheel:preventDefault></div>
+            <div class="tutorial-overlay-backdrop tutorial-overlay-backdrop-segment"
+                 style="@GetBackdropBottomStyle(_currentTarget)"
+                 @onclick="OmitirAsync"
+                 @onwheel:preventDefault></div>
+
+            <div class="tutorial-spotlight @(_currentTarget.Shape == "circle" ? "is-circle" : "is-rounded")"
+                 style="@GetSpotlightStyle(_currentTarget)"
+                 @onclick:stopPropagation="true"
+                 @onwheel:preventDefault></div>
+        }
+
+        @if (ShouldRenderCard)
+        {
+            <aside class="tutorial-card"
+                   style="@GetCardStyle(_currentTarget, CurrentStep)"
+                   @onclick:stopPropagation="true">
+                <div class="tutorial-card-head">
+                    <div>
+                        <span class="tutorial-kicker">Tutorial guiado</span>
+                        <h3 id="tutorialOverlayTitle">@CurrentStep.Title</h3>
+                    </div>
+
+                    <button type="button" class="tutorial-close" @onclick="OmitirAsync" aria-label="Cerrar tutorial">
+                        <i class="ri-close-line"></i>
+                    </button>
+                </div>
+
+                <div class="tutorial-card-body">
+                    <div class="tutorial-progress-row">
+                        <span class="tutorial-progress-pill">Paso @(_displayedStepIndex + 1) de @Definition.Steps.Count</span>
+                        <strong>@Definition.Title</strong>
+                    </div>
+
+                    @if (IsPreparingStep)
+                    {
+                        <div class="tutorial-inline-note tutorial-inline-note-loading">
+                            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                            <span>Preparando este paso y ubicando el elemento en pantalla.</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <p>@CurrentStep.Description</p>
+                    }
+
+                    @if (!IsPreparingStep &&
+                         _isRecoveringTarget &&
+                         _currentTarget is null)
+                    {
+                        <div class="tutorial-inline-note tutorial-inline-note-loading">
+                            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                            <span>Ajustando este paso y esperando a que la vista termine de cargar.</span>
+                        </div>
+                    }
+
+                    @if (!IsPreparingStep &&
+                         !_isRecoveringTarget &&
+                         HasTargetSelector(CurrentStep) &&
+                         _currentTarget is null &&
+                         !_isMeasuring &&
+                         !_pendingMeasurement)
+                    {
+                        <div class="tutorial-inline-note">
+                            <i class="ri-information-line"></i>
+                            <span>No se encontro el elemento resaltado en esta vista. Puedes continuar con el siguiente paso.</span>
+                        </div>
+                    }
+                </div>
+
+                <div class="tutorial-card-footer">
+                    <div class="tutorial-actions">
+                        <button type="button"
+                                class="tutorial-btn tutorial-btn-secondary"
+                                @onclick="AnteriorAsync"
+                                disabled="@(_displayedStepIndex == 0 || _isMeasuring || _pendingMeasurement)">
+                            Anterior
+                        </button>
+
+                        <button type="button"
+                                class="tutorial-btn tutorial-btn-ghost"
+                                @onclick="OmitirAsync">
+                            Omitir
+                        </button>
+
+                        @if (_displayedStepIndex < Definition.Steps.Count - 1)
+                        {
+                            <button type="button"
+                                    class="tutorial-btn tutorial-btn-primary"
+                                    @onclick="SiguienteAsync"
+                                    disabled="@(_isMeasuring || _pendingMeasurement)">
+                                Siguiente
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button"
+                                    class="tutorial-btn tutorial-btn-primary"
+                                    @onclick="FinalizarAsync"
+                                    disabled="@(_isMeasuring || _pendingMeasurement)">
+                                Finalizar
+                            </button>
+                        }
+                    </div>
+                </div>
+            </aside>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public TutorialDefinition? Definition { get; set; }
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<TutorialCloseResult> OnClosed { get; set; }
+
+    private int _displayedStepIndex;
+    private int _pendingStepIndex = -1;
+    private bool _disableAutoShow;
+    private bool _isMeasuring;
+    private bool _isStepReady;
+    private bool _wasVisible;
+    private bool _pendingMeasurement;
+    private bool _isRecoveringTarget;
+    private long _measurementVersion;
+    private TutorialTargetMetrics? _currentTarget;
+    private bool IsPreparingStep => CurrentStep is not null && (_pendingMeasurement || _isMeasuring) && _currentTarget is null;
+    private bool ShouldRenderCard => CurrentStep is not null && (_isStepReady || _currentTarget is not null || IsPreparingStep);
+    private TutorialStep? CurrentStep =>
+        Definition is null || Definition.Steps.Count == 0 || _displayedStepIndex < 0 || _displayedStepIndex >= Definition.Steps.Count
+            ? null
+            : Definition.Steps[_displayedStepIndex];
+    private TutorialStep? PendingStep =>
+        Definition is null || Definition.Steps.Count == 0 || _pendingStepIndex < 0 || _pendingStepIndex >= Definition.Steps.Count
+            ? null
+            : Definition.Steps[_pendingStepIndex];
+
+    protected override Task OnParametersSetAsync()
+    {
+        if (Visible && !_wasVisible)
+        {
+            _measurementVersion++;
+            _displayedStepIndex = 0;
+            _pendingStepIndex = Definition is not null && Definition.Steps.Count > 0 ? 0 : -1;
+            _disableAutoShow = false;
+            _isMeasuring = false;
+            _isStepReady = Definition is not null &&
+                           Definition.Steps.Count > 0 &&
+                           !HasTargetSelector(Definition.Steps[0]);
+            _currentTarget = null;
+            _isRecoveringTarget = false;
+            _pendingMeasurement = _pendingStepIndex >= 0;
+        }
+        else if (!Visible && _wasVisible)
+        {
+            _measurementVersion++;
+            _isMeasuring = false;
+            _isStepReady = false;
+            _currentTarget = null;
+            _isRecoveringTarget = false;
+            _pendingStepIndex = -1;
+            _pendingMeasurement = false;
+        }
+
+        _wasVisible = Visible;
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!Visible || !_pendingMeasurement || PendingStep is null || _pendingStepIndex < 0)
+            return;
+
+        _pendingMeasurement = false;
+        _isRecoveringTarget = false;
+        _isMeasuring = true;
+        var measurementVersion = _measurementVersion;
+        await MedirPasoActualAsync(_pendingStepIndex, PendingStep, measurementVersion);
+
+        if (measurementVersion == _measurementVersion)
+        {
+            _isMeasuring = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private async Task MedirPasoActualAsync(int stepIndex, TutorialStep step, long measurementVersion)
+    {
+        TutorialTargetMetrics? targetMetrics = null;
+
+        if (!HasTargetSelector(step))
+        {
+            if (measurementVersion == _measurementVersion)
+            {
+                _displayedStepIndex = stepIndex;
+                _pendingStepIndex = -1;
+                _currentTarget = null;
+                _isRecoveringTarget = false;
+                _isStepReady = true;
+                await InvokeAsync(StateHasChanged);
+            }
+
+            return;
+        }
+
+        for (var attempt = 0; attempt < 3 && measurementVersion == _measurementVersion; attempt++)
+        {
+            var measurement = await TryMeasureStepTargetAsync(step, waitTimeoutMs: 240);
+            targetMetrics = measurement.Metrics;
+
+            if (targetMetrics is not null)
+            {
+                _isRecoveringTarget = !measurement.UsesPreferredTarget;
+                break;
+            }
+
+            await Task.Delay(70);
+        }
+
+        if (measurementVersion == _measurementVersion)
+        {
+            _displayedStepIndex = stepIndex;
+            _pendingStepIndex = -1;
+            _currentTarget = ApplyStepOffsets(targetMetrics, step);
+            _isStepReady = true;
+            await InvokeAsync(StateHasChanged);
+
+            if ((targetMetrics is null || _isRecoveringTarget) &&
+                !string.IsNullOrWhiteSpace(step.TargetSelector))
+            {
+                _ = ReintentarMedicionTardiaAsync(stepIndex, step, measurementVersion);
+            }
+        }
+    }
+
+    private async Task AnteriorAsync()
+    {
+        if (_displayedStepIndex == 0 || _isMeasuring || _pendingMeasurement)
+            return;
+
+        await NavegarPasoAsync(_displayedStepIndex - 1);
+    }
+
+    private async Task SiguienteAsync()
+    {
+        if (Definition is null || _displayedStepIndex >= Definition.Steps.Count - 1 || _isMeasuring || _pendingMeasurement)
+            return;
+
+        await NavegarPasoAsync(_displayedStepIndex + 1);
+    }
+
+    private async Task NavegarPasoAsync(int nextStepIndex)
+    {
+        if (Definition is null || nextStepIndex < 0 || nextStepIndex >= Definition.Steps.Count)
+            return;
+
+        _measurementVersion++;
+        _pendingStepIndex = nextStepIndex;
+        _isRecoveringTarget = false;
+        _pendingMeasurement = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private Task OmitirAsync() => CerrarAsync(completed: false);
+
+    private Task FinalizarAsync() => CerrarAsync(completed: true);
+
+    private async Task CerrarAsync(bool completed)
+    {
+        if (Definition is null)
+            return;
+
+        _measurementVersion++;
+        _isMeasuring = false;
+        _isStepReady = false;
+        _wasVisible = false;
+        _currentTarget = null;
+        _isRecoveringTarget = false;
+        _pendingStepIndex = -1;
+        _pendingMeasurement = false;
+
+        if (OnClosed.HasDelegate)
+        {
+            await OnClosed.InvokeAsync(new TutorialCloseResult
+            {
+                TutorialId = Definition.Id,
+                Completed = completed,
+                AutoShowDisabled = _disableAutoShow,
+                LastStepIndex = _displayedStepIndex
+            });
+        }
+    }
+
+    private static string GetSpotlightStyle(TutorialTargetMetrics metrics) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"top:{metrics.Top:0.##}px;left:{metrics.Left:0.##}px;width:{metrics.Width:0.##}px;height:{metrics.Height:0.##}px;");
+
+    private static string GetBackdropTopStyle(TutorialTargetMetrics metrics) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"top:0;left:0;width:{metrics.ViewportWidth:0.##}px;height:{Math.Max(0, metrics.Top):0.##}px;");
+
+    private static string GetBackdropLeftStyle(TutorialTargetMetrics metrics) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"top:{metrics.Top:0.##}px;left:0;width:{Math.Max(0, metrics.Left):0.##}px;height:{metrics.Height:0.##}px;");
+
+    private static string GetBackdropRightStyle(TutorialTargetMetrics metrics)
+    {
+        var rightStart = metrics.Left + metrics.Width;
+        var rightWidth = Math.Max(0, metrics.ViewportWidth - rightStart);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"top:{metrics.Top:0.##}px;left:{rightStart:0.##}px;width:{rightWidth:0.##}px;height:{metrics.Height:0.##}px;");
+    }
+
+    private static string GetBackdropBottomStyle(TutorialTargetMetrics metrics)
+    {
+        var bottomStart = metrics.Top + metrics.Height;
+        var bottomHeight = Math.Max(0, metrics.ViewportHeight - bottomStart);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"top:{bottomStart:0.##}px;left:0;width:{metrics.ViewportWidth:0.##}px;height:{bottomHeight:0.##}px;");
+    }
+
+    private static TutorialTargetMetrics? ApplyStepOffsets(TutorialTargetMetrics? metrics, TutorialStep step)
+    {
+        if (metrics is null || (step.OffsetX == 0 && step.OffsetY == 0))
+            return metrics;
+
+        var viewportPadding = 8d;
+        var maxLeft = Math.Max(viewportPadding, metrics.ViewportWidth - metrics.Width - viewportPadding);
+        var maxTop = Math.Max(viewportPadding, metrics.ViewportHeight - metrics.Height - viewportPadding);
+
+        metrics.Left = Clamp(metrics.Left + step.OffsetX, viewportPadding, maxLeft);
+        metrics.Top = Clamp(metrics.Top + step.OffsetY, viewportPadding, maxTop);
+
+        return metrics;
+    }
+
+    private bool HasTargetSelector(TutorialStep step) =>
+        !string.IsNullOrWhiteSpace(step.TargetSelector) ||
+        !string.IsNullOrWhiteSpace(step.FallbackTargetSelector) ||
+        !string.IsNullOrWhiteSpace(Definition?.DefaultTargetSelector);
+
+    private IEnumerable<(string Selector, bool IsPreferredTarget)> GetTargetSelectors(TutorialStep step)
+    {
+        var seenSelectors = new HashSet<string>(StringComparer.Ordinal);
+
+        if (!string.IsNullOrWhiteSpace(step.TargetSelector))
+        {
+            var selector = step.TargetSelector.Trim();
+            if (seenSelectors.Add(selector))
+            {
+                yield return (selector, true);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(step.FallbackTargetSelector) &&
+            !string.Equals(step.TargetSelector, step.FallbackTargetSelector, StringComparison.Ordinal))
+        {
+            var selector = step.FallbackTargetSelector.Trim();
+            if (seenSelectors.Add(selector))
+            {
+                yield return (selector, false);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(Definition?.DefaultTargetSelector))
+        {
+            var selector = Definition.DefaultTargetSelector.Trim();
+            if (seenSelectors.Add(selector))
+            {
+                yield return (selector, false);
+            }
+        }
+    }
+
+    private async Task<TargetMeasurementResult> TryMeasureStepTargetAsync(TutorialStep step, int waitTimeoutMs)
+    {
+        foreach (var candidate in GetTargetSelectors(step))
+        {
+            try
+            {
+                var targetMetrics = await JS.InvokeAsync<TutorialTargetMetrics?>(
+                    "numericaUi.measureTutorialTarget",
+                    candidate.Selector,
+                    step.Padding,
+                    step.Shape);
+
+                if (targetMetrics is not null)
+                {
+                    return new TargetMeasurementResult(targetMetrics, candidate.IsPreferredTarget);
+                }
+            }
+            catch (JSDisconnectedException)
+            {
+                return TargetMeasurementResult.Empty;
+            }
+            catch (InvalidOperationException)
+            {
+                return TargetMeasurementResult.Empty;
+            }
+        }
+
+        if (waitTimeoutMs <= 0)
+        {
+            return TargetMeasurementResult.Empty;
+        }
+
+        foreach (var candidate in GetTargetSelectors(step))
+        {
+            try
+            {
+                var targetReady = await JS.InvokeAsync<bool>(
+                    "numericaUi.waitForTutorialTarget",
+                    candidate.Selector,
+                    waitTimeoutMs);
+
+                if (!targetReady)
+                {
+                    continue;
+                }
+
+                var targetMetrics = await JS.InvokeAsync<TutorialTargetMetrics?>(
+                    "numericaUi.measureTutorialTarget",
+                    candidate.Selector,
+                    step.Padding,
+                    step.Shape);
+
+                if (targetMetrics is not null)
+                {
+                    return new TargetMeasurementResult(targetMetrics, candidate.IsPreferredTarget);
+                }
+            }
+            catch (JSDisconnectedException)
+            {
+                return TargetMeasurementResult.Empty;
+            }
+            catch (InvalidOperationException)
+            {
+                return TargetMeasurementResult.Empty;
+            }
+        }
+
+        return TargetMeasurementResult.Empty;
+    }
+
+    private async Task<TutorialTargetMetrics?> TryMeasurePreferredStepTargetAsync(TutorialStep step)
+    {
+        if (string.IsNullOrWhiteSpace(step.TargetSelector))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await JS.InvokeAsync<TutorialTargetMetrics?>(
+                "numericaUi.measureTutorialTarget",
+                step.TargetSelector,
+                step.Padding,
+                step.Shape);
+        }
+        catch (JSDisconnectedException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private async Task ReintentarMedicionTardiaAsync(int stepIndex, TutorialStep step, long measurementVersion)
+    {
+        for (var attempt = 0; attempt < 24; attempt++)
+        {
+            if (measurementVersion != _measurementVersion ||
+                !Visible ||
+                _displayedStepIndex != stepIndex ||
+                !_isRecoveringTarget)
+            {
+                return;
+            }
+
+            await Task.Delay(160);
+
+            var measurement = await TryMeasureStepTargetAsync(step, waitTimeoutMs: 0);
+            var targetMetrics = measurement.Metrics;
+
+            if (targetMetrics is null)
+            {
+                continue;
+            }
+
+            if (measurementVersion != _measurementVersion ||
+                !Visible ||
+                _displayedStepIndex != stepIndex)
+            {
+                return;
+            }
+
+            _currentTarget = ApplyStepOffsets(targetMetrics, step);
+            _isRecoveringTarget = !measurement.UsesPreferredTarget;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        if (measurementVersion == _measurementVersion &&
+            Visible &&
+            _displayedStepIndex == stepIndex)
+        {
+            _isRecoveringTarget = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private sealed record TargetMeasurementResult(TutorialTargetMetrics? Metrics, bool UsesPreferredTarget)
+    {
+        public static TargetMeasurementResult Empty { get; } = new(null, false);
+    }
+
+    private static string GetCardStyle(TutorialTargetMetrics? metrics, TutorialStep? step)
+    {
+        const double margin = 24;
+        const double gap = 18;
+        const double maxCardWidth = 430;
+        const double estimatedCardHeight = 340;
+
+        if (metrics is null || metrics.ViewportWidth <= 0 || metrics.ViewportHeight <= 0)
+        {
+            return "right:24px;bottom:24px;";
+        }
+
+        var viewportWidth = metrics.ViewportWidth;
+        var viewportHeight = metrics.ViewportHeight;
+        var cardWidth = Math.Min(maxCardWidth, Math.Max(280, viewportWidth - (margin * 2)));
+        var cardHeight = Math.Min(estimatedCardHeight, Math.Max(280, viewportHeight - (margin * 2)));
+        var targetRight = metrics.Left + metrics.Width;
+        var targetBottom = metrics.Top + metrics.Height;
+        var targetCenterX = metrics.Left + (metrics.Width / 2);
+        var targetCenterY = metrics.Top + (metrics.Height / 2);
+
+        var placementOrder = GetPlacementOrder(step, metrics, targetCenterX, targetCenterY);
+
+        foreach (var placement in placementOrder)
+        {
+            if (TryResolveCardPosition(
+                placement,
+                metrics.Left,
+                metrics.Top,
+                targetRight,
+                targetBottom,
+                targetCenterX,
+                targetCenterY,
+                viewportWidth,
+                viewportHeight,
+                cardWidth,
+                cardHeight,
+                margin,
+                gap,
+                out var left,
+                out var top))
+            {
+                return string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"left:{left:0.##}px;top:{top:0.##}px;width:{cardWidth:0.##}px;");
+            }
+        }
+
+        var fallbackLeft = Clamp(viewportWidth - cardWidth - margin, margin, viewportWidth - cardWidth - margin);
+        var fallbackTop = Clamp(viewportHeight - cardHeight - margin, margin, viewportHeight - cardHeight - margin);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"left:{fallbackLeft:0.##}px;top:{fallbackTop:0.##}px;width:{cardWidth:0.##}px;");
+    }
+
+    private static IReadOnlyList<string> GetPlacementOrder(TutorialStep? step, TutorialTargetMetrics metrics, double targetCenterX, double targetCenterY)
+    {
+        var orderedPlacements = new List<string>(4);
+        AppendPlacement(orderedPlacements, step?.CardPlacement);
+
+        foreach (var placement in GetSuggestedPlacements(metrics, targetCenterX, targetCenterY))
+        {
+            AppendPlacement(orderedPlacements, placement);
+        }
+
+        return orderedPlacements;
+    }
+
+    private static IReadOnlyList<string> GetSuggestedPlacements(TutorialTargetMetrics metrics, double targetCenterX, double targetCenterY)
+    {
+        var isWideTarget = metrics.Width >= metrics.ViewportWidth * 0.55;
+        var isLeftSide = targetCenterX < metrics.ViewportWidth * 0.45;
+        var isRightSide = targetCenterX > metrics.ViewportWidth * 0.55;
+        var isUpperHalf = targetCenterY < metrics.ViewportHeight * 0.5;
+
+        if (isWideTarget)
+        {
+            return isUpperHalf
+                ? ["bottom", "top", "right", "left"]
+                : ["top", "bottom", "right", "left"];
+        }
+
+        if (isLeftSide)
+        {
+            return isUpperHalf
+                ? ["right", "bottom", "top", "left"]
+                : ["right", "top", "bottom", "left"];
+        }
+
+        if (isRightSide)
+        {
+            return isUpperHalf
+                ? ["left", "bottom", "top", "right"]
+                : ["left", "top", "bottom", "right"];
+        }
+
+        return isUpperHalf
+            ? ["bottom", "right", "left", "top"]
+            : ["top", "right", "left", "bottom"];
+    }
+
+    private static void AppendPlacement(List<string> orderedPlacements, string? placement)
+    {
+        if (string.IsNullOrWhiteSpace(placement))
+            return;
+
+        var normalizedPlacement = placement.Trim().ToLowerInvariant();
+
+        if (normalizedPlacement is not ("top" or "right" or "bottom" or "left"))
+            return;
+
+        if (orderedPlacements.Any(existing => string.Equals(existing, normalizedPlacement, StringComparison.Ordinal)))
+            return;
+
+        orderedPlacements.Add(normalizedPlacement);
+    }
+
+    private static bool TryResolveCardPosition(
+        string placement,
+        double targetLeft,
+        double targetTop,
+        double targetRight,
+        double targetBottom,
+        double targetCenterX,
+        double targetCenterY,
+        double viewportWidth,
+        double viewportHeight,
+        double cardWidth,
+        double cardHeight,
+        double margin,
+        double gap,
+        out double left,
+        out double top)
+    {
+        left = 0;
+        top = 0;
+
+        switch (placement)
+        {
+            case "right":
+                left = targetRight + gap;
+                if (left + cardWidth > viewportWidth - margin)
+                    return false;
+
+                top = Clamp(targetCenterY - (cardHeight / 2), margin, viewportHeight - cardHeight - margin);
+                return true;
+
+            case "left":
+                left = targetLeft - cardWidth - gap;
+                if (left < margin)
+                    return false;
+
+                top = Clamp(targetCenterY - (cardHeight / 2), margin, viewportHeight - cardHeight - margin);
+                return true;
+
+            case "bottom":
+                top = targetBottom + gap;
+                if (top + cardHeight > viewportHeight - margin)
+                    return false;
+
+                left = Clamp(targetCenterX - (cardWidth / 2), margin, viewportWidth - cardWidth - margin);
+                return true;
+
+            case "top":
+                top = targetTop - cardHeight - gap;
+                if (top < margin)
+                    return false;
+
+                left = Clamp(targetCenterX - (cardWidth / 2), margin, viewportWidth - cardWidth - margin);
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static double Clamp(double value, double min, double max)
+    {
+        if (max < min)
+            return min;
+
+        return Math.Min(Math.Max(value, min), max);
+    }
+}

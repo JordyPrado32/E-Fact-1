@@ -1,0 +1,996 @@
+@page "/e-sign/mis-firmas"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using System.Net.Http.Json
+@using Simetric.Data
+@using Simetric.DTOs.ESign
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.ESign
+@using System.Text
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject PagoService PagoService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject HttpClient Http
+
+<PageTitle>Mis Firmas Electrónicas | E-Sign</PageTitle>
+
+<div class="esign-shell">
+    @if (cargando)
+    {
+        <section class="state-card">
+            <div class="state-icon">
+                <span class="spinner-border" role="status"></span>
+            </div>
+            <h3>Cargando firmas</h3>
+            <p>Estamos consultando tus solicitudes, el estado BES y la disponibilidad del certificado.</p>
+        </section>
+    }
+    else
+    {
+        <section class="esign-hero">
+            <div class="hero-copy">
+                <span class="hero-eyebrow">Panel de control</span>
+                <h2>Mis firmas con estado, descarga y seguimiento centralizado</h2>
+                <p>Consulta el avance operativo de cada solicitud, revisa la gestión con BES/Uanataca y descarga tu archivo `.P12` cuando esté listo.</p>
+            </div>
+
+            <div class="hero-summary">
+                <article class="summary-card summary-card-primary">
+                    <span class="summary-label">Solicitudes activas</span>
+                    <strong>@solicitudesAprobadas.Count</strong>
+                    <small>Solicitudes emitidas o con pago confirmado</small>
+                </article>
+                <article class="summary-card">
+                    <span class="summary-label">En gestión BES</span>
+                    <strong>@ContarSolicitudesEnGestion()</strong>
+                    <small>Solicitudes ya enviadas o pendientes de respuesta</small>
+                </article>
+                <article class="summary-card">
+                    <span class="summary-label">Listas para descarga</span>
+                    <strong>@ContarSolicitudesConArchivo()</strong>
+                    <small>Certificados `.P12` disponibles en el módulo</small>
+                </article>
+            </div>
+        </section>
+
+        <section class="toolbar-card">
+            <div class="toolbar-copy">
+                <span class="toolbar-kicker">Operación E-Sign</span>
+                <h3>Seguimiento de solicitudes</h3>
+                <p>El flujo de renovación y validaciones contables sigue siendo manual. Desde aquí controlas el estado real y la descarga del certificado.</p>
+            </div>
+
+            <div class="toolbar-actions">
+                <button class="refresh-btn" type="button" @onclick="CargarDatosAsync">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    <span>Actualizar panel</span>
+                </button>
+                <button class="report-btn" type="button" @onclick="ComprarFirma">
+                    <i class="bi bi-cart-plus"></i>
+                    <span>Comprar firma</span>
+                </button>
+                <button class="filter-reset-btn" type="button" @onclick="IrAlInicio">
+                    <i class="bi bi-house-door"></i>
+                    <span>Ir al inicio</span>
+                </button>
+            </div>
+        </section>
+
+        @if (!string.IsNullOrWhiteSpace(successMensaje))
+        {
+            <div class="alert alert-success d-flex align-items-center gap-2 animate__animated animate__fadeIn" role="alert">
+                <i class="bi bi-check-circle-fill"></i>
+                <div>@successMensaje</div>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(errorMensaje))
+        {
+            <div class="alert alert-danger d-flex align-items-center gap-2 animate__animated animate__fadeIn" role="alert">
+                <i class="bi bi-exclamation-triangle-fill"></i>
+                <div>@errorMensaje</div>
+            </div>
+        }
+
+        @if (!solicitudesAprobadas.Any())
+        {
+            <section class="state-card state-card-empty">
+                <div class="state-icon">
+                    <i class="bi bi-shield-lock"></i>
+                </div>
+                <h3>No tienes firmas electrónicas</h3>
+                <p>Aún no has solicitado o completado el pago de ninguna firma electrónica en este portal.</p>
+                <div class="state-actions">
+                    <button type="button" class="report-btn" @onclick="ComprarFirma">
+                        <i class="bi bi-cart-plus"></i>
+                        <span>Comprar firma</span>
+                    </button>
+                </div>
+            </section>
+        }
+        else
+        {
+            <section class="table-card">
+                <div class="table-card-head">
+                    <div>
+                        <span class="table-kicker">Listado activo</span>
+                        <h3>Firmas electrónicas</h3>
+                        <p>Revisa vigencia, estado BES y acciones disponibles desde una sola tabla.</p>
+                    </div>
+                </div>
+
+                <div class="table-wrap firmas-table-wrap">
+                    <table class="table table-hover align-middle mb-0 firmas-table responsive-list-table">
+                        <thead>
+                            <tr>
+                                <th style="min-width: 260px;">Firmante</th>
+                                <th style="width: 120px;">Vigencia</th>
+                                <th style="width: 115px;">Emisión</th>
+                                <th style="width: 115px;">Expiración</th>
+                                <th style="width: 140px;">Estado firma</th>
+                                <th style="min-width: 220px;">Estado BES</th>
+                                <th style="min-width: 220px;">Estado operativo</th>
+                                <th class="text-end" style="width: 180px;">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var sol in solicitudesAprobadas)
+                            {
+                                var expiracion = CalcularExpiracion(sol);
+                                var diasRestantes = (expiracion - DateTime.Today).Days;
+                                var estado = ObtenerEstadoFirma(expiracion);
+                                var estadoSolicitud = ObtenerEstadoSolicitud(sol);
+
+                                <tr>
+                                    <td data-label="Firmante">
+                                        <div class="table-person-cell">
+                                            <i class="bi bi-patch-check-fill cert-icon"></i>
+                                            <div>
+                                                <strong>@($"{sol.SolNombres} {sol.SolPrimerApellido} {sol.SolSegundoApellido ?? ""}".Trim())</strong>
+                                                <span>RUC/Cédula: @(sol.SolNroRuc ?? sol.SolIdentificacion)</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td data-label="Vigencia"><strong>@sol.SolVigencia</strong></td>
+                                    <td data-label="Emisión">@((sol.SolFechaAprobacion ?? sol.SolFechaSolicitud).ToString("dd/MM/yyyy"))</td>
+                                    <td data-label="Expiración">@expiracion.ToString("dd/MM/yyyy")</td>
+                                    <td data-label="Estado firma">
+                                        <span class="status-badge @GetBadgeClass(estado)">
+                                            <i class="bi @GetBadgeIcon(estado)"></i>
+                                            @GetStatusText(estado, diasRestantes)
+                                        </span>
+                                    </td>
+                                    <td data-label="Estado BES">
+                                        <div class="table-status-stack">
+                                            <strong>@(string.IsNullOrWhiteSpace(sol.SolUanatacaStatusText) ? "Pendiente de sincronización" : sol.SolUanatacaStatusText)</strong>
+                                            <span>@(string.IsNullOrWhiteSpace(sol.SolUanatacaStatus) ? "Sin registro" : sol.SolUanatacaStatus)</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Estado operativo">
+                                        <div class="table-status-stack">
+                                            <strong>@estadoSolicitud</strong>
+                                            <span>Compatibilidad óptima con Uanataca</span>
+                                        </div>
+                                    </td>
+                                    <td class="text-end" data-label="Acciones">
+                                        <div class="table-actions">
+                                            <button type="button" class="action-btn btn-status" @onclick="() => AbrirEstado(sol)">
+                                                <i class="bi bi-activity"></i>
+                                                <span>Estado</span>
+                                            </button>
+                                            <button type="button" class="action-btn btn-download" @onclick="() => DescargarFirma(sol)" disabled="@(sol.SolArchivoP12 is null || sol.SolArchivoP12.Length == 0)">
+                                                <i class="bi bi-cloud-arrow-down-fill"></i>
+                                                <span>Descargar P12</span>
+                                            </button>
+                                            <button type="button" class="action-btn btn-renew" @onclick="() => IniciarRenovacion(sol)">
+                                                <i class="bi bi-arrow-repeat"></i>
+                                                <span>Renovación</span>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="notes-grid">
+                <article class="note-card">
+                    <div class="note-icon"><i class="bi bi-shield-check"></i></div>
+                    <div>
+                        <strong>Renovación</strong>
+                        <p>Se coordina fuera de la API con validación operativa y control de contabilidad.</p>
+                    </div>
+                </article>
+                <article class="note-card">
+                    <div class="note-icon"><i class="bi bi-person-badge"></i></div>
+                    <div>
+                        <strong>Compatibilidad</strong>
+                        <p>El módulo está optimizado para certificados emitidos por Uanataca.</p>
+                    </div>
+                </article>
+                <article class="note-card">
+                    <div class="note-icon"><i class="bi bi-cash-coin"></i></div>
+                    <div>
+                        <strong>Precio al cliente</strong>
+                        <p>El valor mostrado en E-Sign incluye nuestro servicio y valor agregado.</p>
+                    </div>
+                </article>
+            </section>
+        }
+
+        <!-- MODAL INFORMATIVO DE RENOVACIÓN -->
+        @if (mostrarModalRenovacion && firmaA_Renovar is not null)
+        {
+            <div class="esign-modal-overlay">
+                <div class="esign-modal-content animate__animated animate__zoomIn">
+                    <div class="modal-header-row">
+                        <h2>Renovación de Firma Electrónica</h2>
+                        <button class="btn-close-modal" @onclick="CerrarModalRenovacion">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="modal-body-content">
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle-fill"></i>
+                            <span>La renovación del certificado de <strong>@firmaA_Renovar.SolNombres @firmaA_Renovar.SolPrimerApellido</strong> no se procesa de forma automática desde esta API.</span>
+                        </div>
+
+                        <div class="price-breakdown-box">
+                            <div class="price-row">
+                                <span>Validez del certificado:</span>
+                                <strong>Depende del certificado digital emitido</strong>
+                            </div>
+                            <div class="price-row">
+                                <span>Renovación:</span>
+                                <strong>Gestionada por la entidad emisora</strong>
+                            </div>
+                            <div class="price-row">
+                                <span>Recargas/validaciones:</span>
+                                <strong>Proceso manual con contabilidad</strong>
+                            </div>
+                            <hr />
+                            <div class="price-row total-row">
+                                <span>Compatibilidad recomendada:</span>
+                                <strong>Uanataca</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-footer-row">
+                        <button type="button" class="esign-btn-secondary" @onclick="CerrarModalRenovacion">Cerrar</button>
+                        <button type="button" class="esign-btn-primary" @onclick='() => NavManager.NavigateTo("/e-sign/soporte")'>
+                            <i class="bi bi-life-preserver"></i>
+                            <span>Ir a soporte</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @if (mostrarModalEstado && firmaEstadoActual is not null)
+        {
+            var solicitudEstado = ObtenerEstadoSolicitud(firmaEstadoActual);
+            var detallesEstado = ConstruirDetalleEstado(firmaEstadoActual);
+
+            <div class="esign-modal-overlay">
+                <div class="esign-modal-content esign-status-modal animate__animated animate__zoomIn">
+                    <div class="modal-header-row">
+                        <div>
+                            <h2>Estado de la solicitud</h2>
+                            <p class="status-modal-subtitle">@($"{firmaEstadoActual.SolNombres} {firmaEstadoActual.SolPrimerApellido} {firmaEstadoActual.SolSegundoApellido ?? ""}".Trim())</p>
+                        </div>
+                        <button class="btn-close-modal" @onclick="CerrarModalEstado">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+
+                    <div class="modal-body-content">
+                        @if (!string.IsNullOrWhiteSpace(mensajeEstadoOperacion))
+                        {
+                            <div class="alert @(estadoOperacionExitosa ? "alert-success" : "alert-warning") d-flex align-items-center gap-2" role="alert">
+                                <i class="bi @(estadoOperacionExitosa ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+                                <div>@mensajeEstadoOperacion</div>
+                            </div>
+                        }
+
+                        <div class="status-summary-card">
+                            <div>
+                                <span class="info-label">Estado actual</span>
+                                <strong class="status-summary-value">@solicitudEstado</strong>
+                            </div>
+                            <div>
+                                <span class="info-label">UUID BES</span>
+                                <strong class="status-summary-value">@(string.IsNullOrWhiteSpace(firmaEstadoActual.SolUanatacaUuid) ? "Aun no generado" : firmaEstadoActual.SolUanatacaUuid)</strong>
+                            </div>
+                        </div>
+
+                        <div class="status-steps">
+                            @foreach (var paso in detallesEstado)
+                            {
+                                <div class="status-step @paso.CssClass">
+                                    <div class="status-step-icon">
+                                        <i class="bi @paso.Icon"></i>
+                                    </div>
+                                    <div class="status-step-content">
+                                        <strong>@paso.Title</strong>
+                                        <span>@paso.Description</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+
+                        <div class="price-breakdown-box">
+                            <div class="price-row">
+                                <span>Código interno BES:</span>
+                                <strong>@(string.IsNullOrWhiteSpace(firmaEstadoActual.SolUanatacaStatus) ? "Sin registro" : firmaEstadoActual.SolUanatacaStatus)</strong>
+                            </div>
+                            <div class="price-row">
+                                <span>Estado BES:</span>
+                                <strong>@(string.IsNullOrWhiteSpace(firmaEstadoActual.SolUanatacaStatusText) ? "Pendiente de sincronización" : firmaEstadoActual.SolUanatacaStatusText)</strong>
+                            </div>
+                            <div class="price-row">
+                                <span>Última actualización:</span>
+                                <strong>@((firmaEstadoActual.SolFechaActualizacion ?? firmaEstadoActual.SolFechaSolicitud).ToString("dd/MM/yyyy HH:mm"))</strong>
+                            </div>
+                            <div class="price-row">
+                                <span>Observación:</span>
+                                <strong>@(string.IsNullOrWhiteSpace(firmaEstadoActual.SolUanatacaComments) ? "Sin novedades reportadas." : firmaEstadoActual.SolUanatacaComments)</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-footer-row">
+                        <button type="button" class="esign-btn-secondary" @onclick="CerrarModalEstado">Cerrar</button>
+                        <button type="button" class="esign-btn-primary" @onclick="SincronizarEstadoActual" disabled="@sincronizandoEstado">
+                            <i class="bi @(sincronizandoEstado ? "bi-arrow-repeat" : "bi-arrow-clockwise")"></i>
+                            <span>@(sincronizandoEstado ? "Consultando BES..." : "Actualizar estado BES")</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private enum EstadoFirma { Activa, ProximaAVencer, Expirada }
+    private enum EstadoPasoFlujo { Pendiente, EnProceso, Completado }
+
+    private sealed class PasoEstadoSolicitud
+    {
+        public string Title { get; init; } = string.Empty;
+        public string Description { get; init; } = string.Empty;
+        public string Icon { get; init; } = "bi-circle";
+        public string CssClass { get; init; } = "step-pending";
+    }
+
+    private bool cargando = true;
+    private int usuarioId;
+    private Usuario? usuarioObj;
+    private List<UsuSolicitudFirma> solicitudesAprobadas = new();
+    private List<EsignTarjeta> tarjetasEsign = new();
+
+    private string? successMensaje;
+    private string? errorMensaje;
+
+    // Control de Modal Renovación
+    private bool mostrarModalRenovacion;
+    private UsuSolicitudFirma? firmaA_Renovar;
+    private bool mostrarModalEstado;
+    private UsuSolicitudFirma? firmaEstadoActual;
+    private bool sincronizandoEstado;
+    private string? mensajeEstadoOperacion;
+    private bool estadoOperacionExitosa;
+    private string periodoVigenciaSeleccionado = "1 año";
+    private string tokenTarjetaSeleccionado = string.Empty;
+    private bool procesandoCobro;
+    private bool procesandoAccion;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        usuarioId = userId;
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, ESignRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+
+        await CargarDatosAsync();
+
+        // Procesar QueryString de retorno de Pagomedios
+        var uri = NavManager.ToAbsoluteUri(NavManager.Uri);
+        if (Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query).TryGetValue("registro", out var registroVal))
+        {
+            if (string.Equals(registroVal, "exito", StringComparison.OrdinalIgnoreCase))
+            {
+                successMensaje = "¡Tarjeta registrada exitosamente para tus firmas!";
+            }
+            else
+            {
+                errorMensaje = "Hubo un inconveniente al asociar tu tarjeta de crédito.";
+            }
+        }
+
+        cargando = false;
+    }
+
+    private async Task CargarDatosAsync()
+    {
+        await using var context = await DbFactory.CreateDbContextAsync();
+        
+        usuarioObj = await context.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == usuarioId);
+
+        // Traer solicitudes aprobadas (3 = EMITIDO, o las pagadas exitosamente)
+        solicitudesAprobadas = await context.Set<UsuSolicitudFirma>()
+            .Where(s => s.SolIdUsuarioCliente == usuarioId && s.SolActivo && (s.SolIdEstadoNumerica == 3 || s.SolPagoExitoso == true))
+            .OrderByDescending(s => s.SolFechaSolicitud)
+            .ToListAsync();
+
+        // Traer tarjetas tokenizadas asociadas
+        tarjetasEsign = await context.Set<EsignTarjeta>()
+            .Where(t => t.IdUsuario == usuarioId && t.Estado)
+            .OrderByDescending(t => t.FechaRegistro)
+            .ToListAsync();
+
+        if (tarjetasEsign.Any() && string.IsNullOrWhiteSpace(tokenTarjetaSeleccionado))
+        {
+            tokenTarjetaSeleccionado = tarjetasEsign.First().Token;
+        }
+    }
+
+    private DateTime CalcularExpiracion(UsuSolicitudFirma sol)
+    {
+        var baseDate = sol.SolFechaAprobacion ?? sol.SolFechaSolicitud;
+        var vigencia = sol.SolVigencia?.ToLowerInvariant() ?? "";
+        if (vigencia.Contains("30") || vigencia.Contains("mes"))
+            return baseDate.AddDays(30);
+        if (vigencia.Contains("2"))
+            return baseDate.AddYears(2);
+        if (vigencia.Contains("3"))
+            return baseDate.AddYears(3);
+        if (vigencia.Contains("4"))
+            return baseDate.AddYears(4);
+        if (vigencia.Contains("5"))
+            return baseDate.AddYears(5);
+        return baseDate.AddYears(1); // Por defecto 1 año
+    }
+
+    private EstadoFirma ObtenerEstadoFirma(DateTime expiracion)
+    {
+        if (expiracion < DateTime.Today)
+            return EstadoFirma.Expirada;
+        if (expiracion <= DateTime.Today.AddDays(30))
+            return EstadoFirma.ProximaAVencer;
+        return EstadoFirma.Activa;
+    }
+
+    private string GetStatusText(EstadoFirma estado, int diasRestantes)
+    {
+        return estado switch
+        {
+            EstadoFirma.Activa => "Activa",
+            EstadoFirma.ProximaAVencer => $"Vence en {diasRestantes} días",
+            EstadoFirma.Expirada => "Expirada",
+            _ => "Desconocido"
+        };
+    }
+
+    private string GetBadgeClass(EstadoFirma estado)
+    {
+        return estado switch
+        {
+            EstadoFirma.Activa => "status-active",
+            EstadoFirma.ProximaAVencer => "status-warning",
+            EstadoFirma.Expirada => "status-inactive",
+            _ => ""
+        };
+    }
+
+    private string GetBadgeIcon(EstadoFirma estado)
+    {
+        return estado switch
+        {
+            EstadoFirma.Activa => "bi-check-circle-fill",
+            EstadoFirma.ProximaAVencer => "bi-exclamation-triangle-fill",
+            EstadoFirma.Expirada => "bi-x-circle-fill",
+            _ => "bi-question-circle"
+        };
+    }
+
+    private decimal ObtenerSubtotalVigencia()
+    {
+        return periodoVigenciaSeleccionado switch
+        {
+            "30 días" => 12.29m,
+            "1 año" => 21.91m,
+            "2 años" => 34.60m,
+            _ => 21.91m
+        };
+    }
+
+    private decimal ObtenerIvaVigencia() => Math.Round(ObtenerSubtotalVigencia() * 0.15m, 2);
+    private decimal ObtenerTotalVigencia() => ObtenerSubtotalVigencia() + ObtenerIvaVigencia();
+
+    private void IrAlInicio() => NavManager.NavigateTo("/e-sign");
+    private void ComprarFirma() => NavManager.NavigateTo("/solicitud/nueva");
+
+    private async Task DescargarFirma(UsuSolicitudFirma sol)
+    {
+        errorMensaje = null;
+        successMensaje = null;
+        try
+        {
+            if (sol.SolArchivoP12 is null || sol.SolArchivoP12.Length == 0)
+            {
+                errorMensaje = "Todavía no existe un archivo .P12 entregado para esta solicitud.";
+                return;
+            }
+
+            NavManager.NavigateTo($"/api/solicitudes/{sol.SolId}/firma-p12", forceLoad: true);
+            successMensaje = "Se inició la descarga del archivo .P12 real asociado a tu solicitud.";
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error al descargar archivo de firma: {ex.Message}";
+        }
+    }
+
+    private void IniciarRenovacion(UsuSolicitudFirma sol)
+    {
+        firmaA_Renovar = sol;
+        periodoVigenciaSeleccionado = "1 año";
+        mostrarModalRenovacion = true;
+    }
+
+    private void CerrarModalRenovacion()
+    {
+        mostrarModalRenovacion = false;
+        firmaA_Renovar = null;
+    }
+
+    private void AbrirEstado(UsuSolicitudFirma sol)
+    {
+        firmaEstadoActual = sol;
+        mostrarModalEstado = true;
+        mensajeEstadoOperacion = null;
+        estadoOperacionExitosa = false;
+    }
+
+    private void CerrarModalEstado()
+    {
+        mostrarModalEstado = false;
+        firmaEstadoActual = null;
+        mensajeEstadoOperacion = null;
+        estadoOperacionExitosa = false;
+    }
+
+    private async Task SincronizarEstadoActual()
+    {
+        if (firmaEstadoActual is null)
+        {
+            return;
+        }
+
+        sincronizandoEstado = true;
+        mensajeEstadoOperacion = null;
+
+        try
+        {
+            var response = await Http.PostAsync($"api/e-sign/bes/solicitudes/{firmaEstadoActual.SolId}/sincronizar", content: null);
+            var resultado = await response.Content.ReadFromJsonAsync<BesSolicitudOperacionResultadoDto>();
+
+            estadoOperacionExitosa = response.IsSuccessStatusCode && resultado?.Success == true;
+            mensajeEstadoOperacion = resultado?.Message
+                ?? (response.IsSuccessStatusCode
+                    ? "La consulta de estado finalizó correctamente."
+                    : "No se pudo consultar el estado de la solicitud en BES.");
+
+            await CargarDatosAsync();
+            firmaEstadoActual = solicitudesAprobadas.FirstOrDefault(s => s.SolId == firmaEstadoActual.SolId);
+        }
+        catch (Exception ex)
+        {
+            estadoOperacionExitosa = false;
+            mensajeEstadoOperacion = $"Error al consultar el estado BES: {ex.Message}";
+        }
+        finally
+        {
+            sincronizandoEstado = false;
+        }
+    }
+
+    private string ObtenerEstadoSolicitud(UsuSolicitudFirma solicitud)
+    {
+        if (solicitud.SolArchivoP12 is { Length: > 0 })
+        {
+            return "Emitida y lista para descarga";
+        }
+
+        if (string.Equals(solicitud.SolUanatacaStatus, "APPROVED", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Aprobada por BES, pendiente de entrega del archivo";
+        }
+
+        if (!string.IsNullOrWhiteSpace(solicitud.SolUanatacaUuid))
+        {
+            return "En gestión con BES/Uanataca";
+        }
+
+        if (solicitud.SolPagoExitoso == true)
+        {
+            return "Pago aprobado, pendiente de sincronización";
+        }
+
+        return "Pendiente de pago";
+    }
+
+    private List<PasoEstadoSolicitud> ConstruirDetalleEstado(UsuSolicitudFirma solicitud)
+    {
+        var tienePago = solicitud.SolPagoExitoso == true;
+        var enviadaBes = !string.IsNullOrWhiteSpace(solicitud.SolUanatacaUuid);
+        var aprobadaBes = string.Equals(solicitud.SolUanatacaStatus, "APPROVED", StringComparison.OrdinalIgnoreCase);
+        var tieneArchivo = solicitud.SolArchivoP12 is { Length: > 0 };
+
+        return new List<PasoEstadoSolicitud>
+        {
+            CrearPasoEstado(
+                "Solicitud registrada",
+                $"Tu solicitud quedó creada el {(solicitud.SolFechaSolicitud).ToString("dd/MM/yyyy HH:mm")}.",
+                EstadoPasoFlujo.Completado),
+            CrearPasoEstado(
+                "Pago recibido",
+                tienePago
+                    ? "El pago fue aprobado y ya puede continuar el flujo de precompra."
+                    : "Aún no existe un pago aprobado para enviar la solicitud a BES.",
+                tienePago ? EstadoPasoFlujo.Completado : EstadoPasoFlujo.Pendiente),
+            CrearPasoEstado(
+                "Envío a BES / Uanataca",
+                enviadaBes
+                    ? $"La solicitud fue enviada al proveedor con UUID {solicitud.SolUanatacaUuid}."
+                    : "Todavía no se ha generado el registro remoto en BES.",
+                enviadaBes ? EstadoPasoFlujo.Completado : (tienePago ? EstadoPasoFlujo.EnProceso : EstadoPasoFlujo.Pendiente)),
+            CrearPasoEstado(
+                "Validación del proveedor",
+                aprobadaBes
+                    ? "BES/Uanataca ya reporta la solicitud como aprobada."
+                    : $"Estado actual del proveedor: {solicitud.SolUanatacaStatusText ?? "Pendiente de sincronización"}.",
+                aprobadaBes ? EstadoPasoFlujo.Completado : (enviadaBes ? EstadoPasoFlujo.EnProceso : EstadoPasoFlujo.Pendiente)),
+            CrearPasoEstado(
+                "Entrega del certificado",
+                tieneArchivo
+                    ? "El archivo .P12 ya está disponible para descarga desde este módulo."
+                    : "El archivo .P12 aún no ha sido cargado o entregado en el sistema.",
+                tieneArchivo ? EstadoPasoFlujo.Completado : (aprobadaBes ? EstadoPasoFlujo.EnProceso : EstadoPasoFlujo.Pendiente))
+        };
+    }
+
+    private static PasoEstadoSolicitud CrearPasoEstado(string title, string description, EstadoPasoFlujo estado)
+    {
+        return estado switch
+        {
+            EstadoPasoFlujo.Completado => new PasoEstadoSolicitud
+            {
+                Title = title,
+                Description = description,
+                Icon = "bi-check-circle-fill",
+                CssClass = "step-completed"
+            },
+            EstadoPasoFlujo.EnProceso => new PasoEstadoSolicitud
+            {
+                Title = title,
+                Description = description,
+                Icon = "bi-hourglass-split",
+                CssClass = "step-progress"
+            },
+            _ => new PasoEstadoSolicitud
+            {
+                Title = title,
+                Description = description,
+                Icon = "bi-circle",
+                CssClass = "step-pending"
+            }
+        };
+    }
+
+    private int ContarSolicitudesEnGestion()
+        => solicitudesAprobadas.Count(s =>
+            !string.IsNullOrWhiteSpace(s.SolUanatacaUuid) &&
+            (s.SolArchivoP12 is null || s.SolArchivoP12.Length == 0));
+
+    private int ContarSolicitudesConArchivo()
+        => solicitudesAprobadas.Count(s => s.SolArchivoP12 is { Length: > 0 });
+
+    private async Task RegistrarTarjetaPago()
+    {
+        if (usuarioObj is null || string.IsNullOrWhiteSpace(usuarioObj.Identificacion))
+        {
+            errorMensaje = "No se puede iniciar el registro sin la identificación del perfil.";
+            return;
+        }
+
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            var documentSanitized = new string((usuarioObj.Identificacion ?? "").Where(char.IsLetterOrDigit).ToArray());
+            var notifyUrl = NavManager.ToAbsoluteUri("/api/pagomedios/notificacion-registro-tarjeta-esign").ToString();
+
+            var request = new
+            {
+                integration = true,
+                third = new
+                {
+                    document = documentSanitized,
+                    document_type = documentSanitized.Length == 13 ? "04" : "05",
+                    name = usuarioObj.NombreCompleto,
+                    email = usuarioObj.Email,
+                    phones = string.IsNullOrWhiteSpace(usuarioObj.Celular) ? "0999999999" : usuarioObj.Celular,
+                    address = string.IsNullOrWhiteSpace(usuarioObj.DireccionEmpresa) ? "Quito" : usuarioObj.DireccionEmpresa,
+                    type = "Individual"
+                },
+                generate_invoice = 0,
+                description = "Registro de Tarjeta - Configuración E-SIGN",
+                amount = 1.15m,
+                amount_with_tax = 1.00m,
+                amount_without_tax = 0.00m,
+                tax_value = 0.15m,
+                notify_url = notifyUrl,
+                custom_value = $"user-{usuarioId}-plan-esign-ciclo-anual"
+            };
+
+            var result = await PagoService.RegistrarTarjetaSuscripcion(request);
+            if (result.IsSuccess && !string.IsNullOrWhiteSpace(result.PaymentUrl))
+            {
+                NavManager.NavigateTo(result.PaymentUrl, forceLoad: true);
+            }
+            else
+            {
+                errorMensaje = $"Error al iniciar el registro de tarjeta: {result.ErrorMessage ?? "Error en el servidor de pagos."}";
+                procesandoAccion = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error: {ex.Message}";
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task SimularTarjetaPruebaRapida()
+    {
+        if (usuarioObj is null) return;
+
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            var fakeToken = "esign_test_" + Guid.NewGuid().ToString("N")[..16];
+            var nuevaTarjeta = new EsignTarjeta
+            {
+                IdUsuario = usuarioId,
+                Documento = usuarioObj.Identificacion ?? "9999999999",
+                Token = fakeToken,
+                MarcaTarjeta = "Visa Test (Simulada)",
+                NumeroMascara = "411111******1111",
+                FechaRegistro = DateTime.Now,
+                Estado = true
+            };
+
+            context.Set<EsignTarjeta>().Add(nuevaTarjeta);
+            await context.SaveChangesAsync();
+
+            successMensaje = "¡Tarjeta de prueba rápida simulada y registrada con éxito!";
+            await CargarDatosAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error al simular tarjeta: {ex.Message}";
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task EliminarTarjetaAsync(EsignTarjeta tarjeta)
+    {
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var dbTarjeta = await context.Set<EsignTarjeta>().FirstOrDefaultAsync(t => t.IdTarjeta == tarjeta.IdTarjeta);
+            if (dbTarjeta is not null)
+            {
+                context.Set<EsignTarjeta>().Remove(dbTarjeta);
+                await context.SaveChangesAsync();
+                successMensaje = "Tarjeta eliminada con éxito.";
+                await CargarDatosAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error al eliminar tarjeta: {ex.Message}";
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task ProcesarCobroYRenovacion()
+    {
+        if (firmaA_Renovar is null || string.IsNullOrWhiteSpace(tokenTarjetaSeleccionado)) return;
+
+        procesandoCobro = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            decimal subtotal = ObtenerSubtotalVigencia();
+            decimal iva = ObtenerIvaVigencia();
+            decimal total = ObtenerTotalVigencia();
+
+            var documentSanitized = new string((firmaA_Renovar.SolIdentificacion ?? "").Where(char.IsLetterOrDigit).ToArray());
+            var reference = $"RENEW{firmaA_Renovar.SolId}{DateTime.Now:yyyyMMddHHmmss}";
+
+            var request = new
+            {
+                integration = true,
+                document = documentSanitized,
+                token = tokenTarjetaSeleccionado,
+                reference = reference,
+                description = $"Renovacion de Firma E-Sign ({periodoVigenciaSeleccionado})",
+                amount = total,
+                amount_with_tax = subtotal,
+                amount_without_tax = 0.00m,
+                tax_value = iva,
+                generate_invoice = 0
+            };
+
+            // Intentar cobro con tarjeta tokenizada de prueba (Pagomedios API real o simulada)
+            var chargeResult = await PagoService.CobrarTarjetaTokenizada(request);
+
+            // Aceptamos el cobro si es exitoso o si es un token simulado de prueba rápida
+            bool esTransaccionAprobada = chargeResult.IsSuccess || tokenTarjetaSeleccionado.StartsWith("esign_test_");
+
+            if (esTransaccionAprobada)
+            {
+                // Crear un nuevo registro de solicitud de firma para mantener historial de renovación
+                await using var context = await DbFactory.CreateDbContextAsync();
+
+                var nuevaRenovacion = new UsuSolicitudFirma
+                {
+                    SolIdUsuarioCliente = firmaA_Renovar.SolIdUsuarioCliente,
+                    SolIdEstadoNumerica = 3, // Aprobado / Emitido
+                    SolIdEstadoUanataca = firmaA_Renovar.SolIdEstadoUanataca,
+                    SolTipoIdentificacion = firmaA_Renovar.SolTipoIdentificacion,
+                    SolIdentificacion = firmaA_Renovar.SolIdentificacion,
+                    SolCodigoDactilar = firmaA_Renovar.SolCodigoDactilar,
+                    SolNombres = firmaA_Renovar.SolNombres,
+                    SolPrimerApellido = firmaA_Renovar.SolPrimerApellido,
+                    SolSegundoApellido = firmaA_Renovar.SolSegundoApellido,
+                    SolFechaNacimiento = firmaA_Renovar.SolFechaNacimiento,
+                    SolNacionalidad = firmaA_Renovar.SolNacionalidad,
+                    SolSexo = firmaA_Renovar.SolSexo,
+                    SolTelefono1 = firmaA_Renovar.SolTelefono1,
+                    SolTelefono2 = firmaA_Renovar.SolTelefono2,
+                    SolCorreo1 = firmaA_Renovar.SolCorreo1,
+                    SolCorreo2 = firmaA_Renovar.SolCorreo2,
+                    SolTieneRuc = firmaA_Renovar.SolTieneRuc,
+                    SolNroRuc = firmaA_Renovar.SolNroRuc,
+                    SolProvincia = firmaA_Renovar.SolProvincia,
+                    SolCanton = firmaA_Renovar.SolCanton,
+                    SolDireccion = firmaA_Renovar.SolDireccion,
+                    SolRequiereValidacion = false,
+                    SolEsMayor65 = firmaA_Renovar.SolEsMayor65,
+                    SolFormatoFirma = firmaA_Renovar.SolFormatoFirma,
+                    SolVigencia = periodoVigenciaSeleccionado,
+                    SolFechaSolicitud = DateTime.Now,
+                    SolFechaAprobacion = DateTime.Now,
+                    SolPagoExitoso = true,
+                    SolTipoPersona = firmaA_Renovar.SolTipoPersona,
+                    SolActivo = true,
+                    SolMontoPago = subtotal,
+                    SolObservacionGeneral = $"Renovación exitosa Ref: {reference}. Tarjeta Tokenizada."
+                };
+
+                // Desactivar la solicitud anterior para que no aparezca duplicada como activa
+                var anterior = await context.Set<UsuSolicitudFirma>().FirstOrDefaultAsync(s => s.SolId == firmaA_Renovar.SolId);
+                if (anterior is not null)
+                {
+                    anterior.SolActivo = false;
+                }
+
+                context.Set<UsuSolicitudFirma>().Add(nuevaRenovacion);
+
+                // Registrar venta automatica de renovacion en BackOffice de forma atomica
+                context.Set<ReporteVentaBackOffice>().Add(new ReporteVentaBackOffice
+                {
+                    Cliente = TruncateStr($"{nuevaRenovacion.SolNombres} {nuevaRenovacion.SolPrimerApellido} | {nuevaRenovacion.SolCorreo1}", 150),
+                    Producto = "e-sign",
+                    PlanPaquete = TruncateStr(nuevaRenovacion.SolVigencia switch
+                    {
+                        "1 AÑO" => "1 año",
+                        "2 AÑOS" => "2 años",
+                        "3 AÑOS" => "3 años",
+                        "4 AÑOS" => "4 años",
+                        _ => nuevaRenovacion.SolVigencia ?? "1 año"
+                    }, 100),
+                    Valor = nuevaRenovacion.SolMontoPago ?? 0m,
+                    Fecha = DateTime.Now,
+                    Canal = "Web",
+                    Vendedor = null,
+                    Estado = "pagada",
+                    FormaPago = TruncateStr("Tarjeta de Crédito", 50),
+                    Observacion = TruncateStr(nuevaRenovacion.SolObservacionGeneral ?? "Renovación automática vía Tarjeta Tokenizada.", 500)
+                });
+
+                await context.SaveChangesAsync();
+
+                successMensaje = $"¡Firma electrónica renovada exitosamente por {periodoVigenciaSeleccionado}!";
+                mostrarModalRenovacion = false;
+                await CargarDatosAsync();
+            }
+            else
+            {
+                errorMensaje = $"El banco declinó la transacción: {chargeResult.ErrorMessage ?? "Fondos insuficientes o error del emisor."}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error al procesar renovación: {ex.Message}";
+        }
+        finally
+        {
+            procesandoCobro = false;
+        }
+    }
+
+    private static string TruncateStr(string? value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Length <= maxLength ? value : value[..maxLength];
+    }
+}

@@ -1,0 +1,1372 @@
+@page "/facturas"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.DTOs
+@using Simetric.Services
+@using System.Text.Json
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject FacturacionService FacturacionService
+@inject IFacturasExcelService FacturasExcelService
+@inject NotaCreditoService NotaCreditoService
+@inject SweetAlertService AlertService
+@inject IJSRuntime JS
+@using System.Text
+@using Simetric.Models.Glogales
+<PageTitle>Facturas | Numerica e-fact</PageTitle>
+
+@{
+    var facturasFiltradas = FacturasFiltradas;
+    var facturasPaginaActual = FacturasPaginaActual;
+    var montoVisible = facturasPaginaActual.Sum(x => x.Total ?? 0m);
+    var montoFiltrado = facturasFiltradas.Sum(x => x.Total ?? 0m);
+    //var facturasAutorizadas = facturasFiltradas.Count(x => TieneEstadoAutorizado(x.EstadoSri));
+    var facturasAutorizadas = facturasFiltradas.Count(x => x.Autorizado ?? false);
+    var facturasPendientes = facturasFiltradas.Count - facturasAutorizadas;
+}
+<style>
+    .row-action-danger:hover {
+        background-color: #dc3545 !important;
+        color: white !important;
+    }
+</style>
+<div class="facturas-shell" data-tour="facturas.page">
+    @if (idDocumentoMenuAbierto.HasValue)
+    {
+        <div class="row-menu-backdrop" @onclick="CerrarMenus"></div>
+    }
+
+    @if (procesandoReenvio)
+    {
+        <div class="facturas-inline-overlay">
+            <div class="facturas-inline-overlay-card">
+                <span class="spinner-border spinner-border-sm" role="status"></span>
+                <div>
+                    <strong>Reenviando factura</strong>
+                    <span>Estamos regenerando los adjuntos y enviando el correo.</span>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (mostrarResultadoOverlay)
+    {
+        <div class="facturas-inline-overlay" @onclick="CerrarResultadoOverlay">
+            <div class="facturas-inline-overlay-card facturas-inline-overlay-card-result is-error" @onclick:stopPropagation>
+                <div class="overlay-result-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <div>
+                    <strong>@tituloResultadoOverlay</strong>
+                    <span>@detalleResultadoOverlay</span>
+                </div>
+                <button type="button" class="overlay-close-btn" @onclick="CerrarResultadoOverlay">Cerrar</button>
+            </div>
+        </div>
+    }
+
+    <section class="facturas-hero" data-tour="facturas.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Panel comercial</span>
+            <h2>Mis facturas con filtros, reporte y acciones unificadas</h2>
+            <p>
+                Filtra por cliente, identificacion o numero, revisa el estado del SRI y exporta la
+                consulta visible sin salir del panel.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Facturas filtradas</span>
+                <strong>@facturasFiltradas.Count</strong>
+                <small>@ResumenRangoFechas</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Monto filtrado</span>
+                <strong>$ @montoFiltrado.ToString("N2")</strong>
+                <small>Base de calculo para tu reporte actual.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Autorizadas</span>
+                <strong>@facturasAutorizadas</strong>
+                <small>Pendientes o sin estado: @facturasPendientes</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card" data-tour="facturas.toolbar">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Busqueda y control</span>
+            <h3>Facturas generadas</h3>
+            <p>Combina texto y rango de fechas para ubicar cualquier comprobante emitido en segundos.</p>
+        </div>
+
+        <div class="toolbar-actions toolbar-actions-expanded">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+
+                <input class="search-input"
+                       placeholder="Buscar por numero, cliente o identificacion"
+                       @bind="Filtro"
+                       @bind:event="oninput" />
+
+                @if (!string.IsNullOrWhiteSpace(Filtro))
+                {
+                    <button class="search-clear" type="button" @onclick="LimpiarTexto" aria-label="Limpiar busqueda">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                }
+            </div>
+
+            <div class="date-filter-group">
+                <label class="date-filter-box">
+                    <span>Desde</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaDesde" />
+                </label>
+
+                <label class="date-filter-box">
+                    <span>Hasta</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaHasta" />
+                </label>
+            </div>
+
+            <button class="report-btn" type="button" @onclick="DescargarReporteAsync">
+                <i class="bi bi-file-earmark-spreadsheet"></i>
+                <span>Descargar Excel</span>
+            </button>
+
+            <button class="refresh-btn" type="button" @onclick="Recargar">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>Refrescar</span>
+            </button>
+
+            @if (HayFiltrosActivos)
+            {
+                <button class="filter-reset-btn" type="button" @onclick="LimpiarFiltros">
+                    <i class="bi bi-eraser"></i>
+                    <span>Limpiar filtros</span>
+                </button>
+            }
+        </div>
+    </section>
+
+    @if (cargando)
+    {
+        <section class="state-card">
+            <div class="state-icon">
+                <span class="spinner-border" role="status"></span>
+            </div>
+            <h3>Cargando facturas</h3>
+            <p>Estamos consultando tus comprobantes para mostrar el historial mas reciente.</p>
+        </section>
+    }
+    else if (facturasFiltradas.Count == 0)
+    {
+        <section class="state-card state-card-empty">
+            <div class="state-icon">
+                <i class="bi bi-inbox"></i>
+            </div>
+            <h3>No hay resultados</h3>
+            <p>
+                @(HayFiltrosActivos
+                    ? "No encontramos facturas con los filtros aplicados. Ajusta el texto o el rango de fechas."
+                    : "Todavia no hay facturas disponibles para mostrar en este panel.")
+            </p>
+        </section>
+    }
+    else
+    {
+        <section class="table-card" data-tour="facturas.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>Facturas</h3>
+                    <p>Consulta cliente, estado y total en una sola tabla.</p>
+                </div>
+
+                <div class="table-head-actions">
+                    <label class="page-size-box" for="pageSizeSelect">
+                        <span>Ver</span>
+                        <select id="pageSizeSelect" class="page-size-select" @bind="RegistrosPorPagina">
+                            @foreach (var opcion in pageSizeOptions)
+                            {
+                                <option value="@opcion">@opcion</option>
+                            }
+                        </select>
+                        <span>registros</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="table-wrap list-table-wrap">
+                <table class="table table-hover align-middle mb-0 facturas-table responsive-list-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 104px;">Fecha</th>
+                            <th style="width: 164px;">Numero</th>
+                            <th style="min-width: 290px;">Cliente</th>
+                            <th style="width: 230px;">Autorizacion</th>
+                            <th class="text-center" style="width: 110px;">Total</th>
+                            <th style="width: 150px;">Estado SRI</th>
+                            <th class="text-end actions-header-facturas">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var facturaEntry in facturasPaginaActual.Select((factura, index) => new { Factura = factura, Index = index }))
+                        {
+                            var f = facturaEntry.Factura;
+                            var esAutorizado = DocumentoAutorizacionHelper.EstaAutorizado(f.Autorizado, f.EstadoSri);
+                            var esAnulada = (f.Estado == false);
+                            var openUp = (facturaEntry.Index >= facturasPaginaActual.Count - 2 && facturasPaginaActual.Count > 2);
+                            <tr>
+                                <td data-label="Fecha">
+                                    <span class="invoice-date">
+                                        @(f.FechaEmision?.ToString("dd/MM/yyyy") ?? "-")
+                                    </span>
+                                </td>
+
+                                <td data-label="Numero">
+                                    <span class="invoice-pill">
+                                        @f.NumeroCompleto
+                                    </span>
+                                </td>
+                                  
+                                <td data-label="Cliente">
+                                    <div class="client-cell">
+                                        <strong>@(string.IsNullOrWhiteSpace(f.Cliente) ? "-" : f.Cliente)</strong>
+                                        <span>@(string.IsNullOrWhiteSpace(f.IdentificacionCliente) ? "Sin identificacion" : f.IdentificacionCliente)</span>
+                                    </div>
+                                </td>
+
+                                 <td data-label="Autorizacion">
+                                     <span class="text-muted small authorization-text" title="@ObtenerNumeroAutorizacionTexto(f)">
+                                         @ObtenerNumeroAutorizacionTexto(f)
+                                     </span>
+                                 </td>
+
+                                <td class="text-center" data-label="Total">
+                                    <span class="amount-pill">
+                                        $ @((f.Total ?? 0m).ToString("N2"))
+                                    </span>
+                                    @if (!string.IsNullOrWhiteSpace(f.Tipopago))
+                                    {
+                                        <div style="font-size: 0.70rem; color: #111; margin-top: 3px; line-height: 1.2;">
+                                            @ObtenerFormaPagoNombre(f.Tipopago)
+                                        </div>
+                                    }
+                                </td>
+
+                                <td data-label="Estado SRI">
+                                    <div class="d-flex flex-column gap-1 align-items-start">
+                                        @if (esAnulada)
+                                        {
+                                            @* El texto siempre cambia a ANULADA *@
+                                            <span class="status-pill status-pill-danger fw-bold" style="background-color: #f8d7da; color: #842029; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem;">
+                                                ANULADA
+                                            </span>
+
+                                            @* EVALUACIÓN: Si estaba AUTORIZADA, le advertimos que debe gestionarlo en el SRI *@
+                                            @if (esAutorizado)
+                                            {
+                                                <small class="text-danger d-block mt-1" style="font-size: 0.72rem; line-height: 1.2;">
+                                                    <i class="bi bi-exclamation-triangle-fill"></i> Recuerde anular este comprobante en el portal del SRI.
+                                                </small>
+                                            }
+                                            @* Si f.Autorizado era false o nulo (Pendiente), entra aquí y no muestra ningún mensaje adicional *@
+                                        }
+                                        else if (esAutorizado)
+                                        {
+                                            <span class="status-pill status-pill-success">
+                                                AUTORIZADO
+                                            </span>
+                                        }
+                                        else if (EsNoAutorizada(f))
+                                        {
+                                            <span class="status-with-info">
+                                                <span class="status-pill status-pill-danger">
+                                                    @ObtenerEstadoSriTexto(f.EstadoSri)
+                                                </span>
+                                                <button class="status-info-btn"
+                                                        type="button"
+                                                        title="@ObtenerErrorSriTexto(f)"
+                                                        @onclick="() => MostrarErrorSriFactura(f)">
+                                                    <i class="bi bi-info-circle-fill"></i>
+                                                </button>
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="status-pill status-pill-warning text-dark">
+                                                PENDIENTE
+                                            </span>
+                                            <button class="btn btn-sm btn-outline-warning mt-1 py-0 px-2"
+                                                    style="font-size: 0.75rem; border-radius: 20px;"
+                                                    disabled="@(procesandoReenvio || procesandoAnulacion)"
+                                                    @onclick="() => ReenviarAlSriAsync(f)">
+                                                <i class="bi bi-send-fill me-1"></i> Reenviar
+                                            </button>
+                                        }
+                                    </div>
+                                </td>
+
+                                 <td class="text-end" data-label="Acciones">
+                                     <!-- Desktop: Inline summarized compact icon buttons -->
+                                     <div class="actions-desktop-inline gap-1 justify-content-end row-actions-inline-desktop">
+                                         <button class="row-action-btn row-action-view"
+                                                 type="button"
+                                                 title="Ver"
+                                                 @onclick="() => VerFacturaAsync(f.Codfactura)">
+                                             <i class="bi bi-eye"></i>
+                                         </button>
+
+                                         <button class="row-action-btn row-action-xml"
+                                                 type="button"
+                                                 title="Descargar XML"
+                                                 @onclick="() => AbrirXmlAsync(f.Codfactura)">
+                                             <i class="bi bi-filetype-xml"></i>
+                                         </button>
+
+                                         <button class="row-action-btn row-action-pdf"
+                                                 type="button"
+                                                 title="Descargar PDF"
+                                                 @onclick="() => AbrirPdfAsync(f.Codfactura)">
+                                             <i class="bi bi-file-earmark-pdf"></i>
+                                         </button>
+
+                                         <button class="row-action-btn row-action-mail"
+                                                 type="button"
+                                                 title="Enviar Correo"
+                                                 disabled="@(esAnulada || procesandoReenvio || procesandoAnulacion || procesandoNotaCreditoAutomatica)"
+                                                 @onclick="() => ReenviarCorreoFacturaAsync(f)">
+                                             <i class="bi bi-envelope-arrow-up"></i>
+                                         </button>
+
+                                         @if (PuedeGenerarNotaCreditoAutomatica(f))
+                                         {
+                                             <button class="row-action-btn row-action-nc"
+                                                     type="button"
+                                                     title="NC Automática"
+                                                     disabled="@(procesandoNotaCreditoAutomatica || procesandoAnulacion || procesandoReenvio)"
+                                                     @onclick="() => ConfirmarGenerarNotaCreditoAutomaticaAsync(f)">
+                                                 <i class="bi bi-arrow-repeat"></i>
+                                             </button>
+                                         }
+
+                                         @if (!esAnulada)
+                                         {
+                                             <button class="row-action-btn row-action-danger"
+                                                     type="button"
+                                                     title="Anular Factura"
+                                                     disabled="@(procesandoAnulacion || procesandoReenvio || procesandoNotaCreditoAutomatica)"
+                                                     @onclick="() => ConfirmarAnularFacturaSweetAsync(f)">
+                                                 <i class="bi bi-trash3"></i>
+                                             </button>
+                                         }
+                                     </div>
+
+                                     <!-- Mobile: Dropdown -->
+                                     <div class="actions-mobile-dropdown actions-dropdown @(openUp ? "dropdown-open-up" : "")">
+                                         <button class="actions-dropdown-btn" type="button" data-tour="@(facturaEntry.Index == 0 ? "facturas.row-action" : null)">
+                                             <i class="bi bi-three-dots"></i>
+                                         </button>
+                                         <div class="actions-dropdown-content">
+                                             <button class="actions-dropdown-item item-view" type="button"
+                                                     @onclick="() => VerFacturaAsync(f.Codfactura)">
+                                                 <i class="bi bi-eye"></i>
+                                                 <span>Ver</span>
+                                             </button>
+
+                                             <button class="actions-dropdown-item item-xml" type="button"
+                                                     @onclick="() => AbrirXmlAsync(f.Codfactura)">
+                                                 <i class="bi bi-filetype-xml"></i>
+                                                 <span>Descargar XML</span>
+                                             </button>
+
+                                             <button class="actions-dropdown-item item-pdf" type="button"
+                                                     @onclick="() => AbrirPdfAsync(f.Codfactura)">
+                                                 <i class="bi bi-file-earmark-pdf"></i>
+                                                 <span>Descargar PDF</span>
+                                             </button>
+
+                                             <button class="actions-dropdown-item item-mail" type="button"
+                                                     disabled="@(esAnulada || procesandoReenvio || procesandoAnulacion || procesandoNotaCreditoAutomatica)"
+                                                     @onclick="() => ReenviarCorreoFacturaAsync(f)">
+                                                 <i class="bi bi-envelope-arrow-up"></i>
+                                                 <span>Enviar Correo</span>
+                                             </button>
+
+                                             @if (PuedeGenerarNotaCreditoAutomatica(f))
+                                             {
+                                                 <button class="actions-dropdown-item item-nc" type="button"
+                                                         disabled="@(procesandoNotaCreditoAutomatica || procesandoAnulacion || procesandoReenvio)"
+                                                         @onclick="() => ConfirmarGenerarNotaCreditoAutomaticaAsync(f)">
+                                                     <i class="bi bi-arrow-repeat"></i>
+                                                     <span>NC Automática</span>
+                                                 </button>
+                                             }
+
+                                             @if (!esAnulada)
+                                             {
+                                                 <button class="actions-dropdown-item item-cancel" type="button"
+                                                         disabled="@(procesandoAnulacion || procesandoReenvio || procesandoNotaCreditoAutomatica)"
+                                                         @onclick="() => ConfirmarAnularFacturaSweetAsync(f)">
+                                                     <i class="bi bi-trash3"></i>
+                                                     <span>Anular Factura</span>
+                                                 </button>
+                                             }
+                                         </div>
+                                     </div>
+                                 </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-footer" data-tour="facturas.footer">
+                <div class="footer-metrics">
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados visibles</span>
+                        <strong>@facturasPaginaActual.Count</strong>
+                    </div>
+
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados filtrados</span>
+                        <strong>@facturasFiltradas.Count</strong>
+                    </div>
+
+                    <div class="footer-metric footer-metric-highlight">
+                        <span class="footer-label">Monto visible</span>
+                        <strong>$ @montoVisible.ToString("N2")</strong>
+                    </div>
+                </div>
+
+                @if (TotalPaginas > 1)
+                {
+                    <nav class="pagination-nav" aria-label="Paginacion de facturas">
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaAnterior"
+                                disabled="@(PaginaActualSegura == 1)">
+                            <i class="bi bi-chevron-left"></i>
+                            <span>Anterior</span>
+                        </button>
+
+                        @foreach (var pagina in PaginasVisibles)
+                        {
+                            var paginaLocal = pagina;
+
+                            <button class="pagination-btn @(paginaLocal == PaginaActualSegura ? "is-active" : null)"
+                                    @onclick="() => IrAPagina(paginaLocal)">
+                                @paginaLocal
+                            </button>
+                        }
+
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaSiguiente"
+                                disabled="@(PaginaActualSegura == TotalPaginas)">
+                            <span>Siguiente</span>
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </nav>
+                }
+            </div>
+        </section>
+    }
+</div>
+
+@if (mostrarModal && facturaSeleccionada != null)
+{
+    <div class="factura-modal-backdrop" @onclick="CerrarModal"></div>
+    <div class="modal fade show d-block factura-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable factura-modal-dialog">
+            <div class="modal-content factura-modal-content">
+                <div class="modal-header factura-modal-header">
+                    <div>
+                        <span class="modal-kicker">Vista detallada</span>
+                        <h5 class="modal-title mb-0">
+                            Factura @facturaSeleccionada.Factura.Numfactura
+                        </h5>
+                    </div>
+
+                    <button type="button" class="btn-close" @onclick="CerrarModal"></button>
+                </div>
+
+                <div class="modal-body factura-modal-body">
+                    <FacturaPreview Model="facturaSeleccionada" />
+                </div>
+
+                <div class="modal-footer factura-modal-footer">
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirXmlAsync(facturaSeleccionada.Factura.Codfactura)">
+                        Abrir XML
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(facturaSeleccionada.Factura.Codfactura)">
+                        Abrir PDF A4
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(facturaSeleccionada.Factura.Codfactura, FormatoImpresionDocumento.Termica80mm)">
+                        Termica 80mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(facturaSeleccionada.Factura.Codfactura, FormatoImpresionDocumento.Termica50mm)">
+                        Termica 50mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private int? idDocumentoMenuAbierto;
+
+    private void ToggleMenu(int id)
+    {
+        if (idDocumentoMenuAbierto == id)
+            idDocumentoMenuAbierto = null;
+        else
+            idDocumentoMenuAbierto = id;
+    }
+
+    private void CerrarMenus()
+    {
+        idDocumentoMenuAbierto = null;
+    }
+
+
+    private int currentUserId;
+    private bool cargando = true;
+    private bool procesandoReenvio = false; // Bandera para evitar doble clic en el proceso del SRI
+    private bool procesandoNotaCreditoAutomatica = false;
+    private readonly List<FacturaListDto> facturas = new();
+    private readonly int[] pageSizeOptions = new[] { 5, 10, 20, 50 };
+    private bool mostrarModal;
+    private FacturaViewDto? facturaSeleccionada;
+    private string filtro = "";
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+    private int paginaActual = 1;
+    private int registrosPorPagina = 5;
+    private bool procesandoAnulacion = false;
+    private bool mostrarResultadoOverlay;
+    private string tituloResultadoOverlay = string.Empty;
+    private string detalleResultadoOverlay = string.Empty;
+    private string Filtro
+    {
+        get => filtro;
+        set
+        {
+            if (filtro == value)
+                return;
+
+            filtro = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaDesde
+    {
+        get => fechaDesde;
+        set
+        {
+            if (fechaDesde == value)
+                return;
+
+            fechaDesde = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaHasta
+    {
+        get => fechaHasta;
+        set
+        {
+            if (fechaHasta == value)
+                return;
+
+            fechaHasta = value;
+            paginaActual = 1;
+        }
+    }
+
+    private int RegistrosPorPagina
+    {
+        get => registrosPorPagina;
+        set
+        {
+            if (registrosPorPagina == value)
+                return;
+
+            registrosPorPagina = value;
+            paginaActual = 1;
+        }
+    }
+
+    private bool HayFiltrosActivos =>
+        !string.IsNullOrWhiteSpace(Filtro) || FechaDesde.HasValue || FechaHasta.HasValue;
+
+    private string ResumenRangoFechas
+    {
+        get
+        {
+            if (FechaDesde.HasValue && FechaHasta.HasValue)
+                return $"{FechaDesde.Value:dd/MM/yyyy} al {FechaHasta.Value:dd/MM/yyyy}";
+
+            if (FechaDesde.HasValue)
+                return $"Desde {FechaDesde.Value:dd/MM/yyyy}";
+
+            if (FechaHasta.HasValue)
+                return $"Hasta {FechaHasta.Value:dd/MM/yyyy}";
+
+            return "Todas las fechas";
+        }
+    }
+
+    private List<FacturaListDto> FacturasFiltradas =>
+        facturas
+            .Where(CumpleFiltroFactura)
+            .ToList();
+
+    private List<FacturaListDto> FacturasPaginaActual =>
+        FacturasFiltradas
+            .Skip((PaginaActualSegura - 1) * RegistrosPorPagina)
+            .Take(RegistrosPorPagina)
+            .ToList();
+
+    private int TotalPaginas =>
+        FacturasFiltradas.Count == 0
+            ? 0
+            : (int)Math.Ceiling(FacturasFiltradas.Count / (double)RegistrosPorPagina);
+
+    private int PaginaActualSegura =>
+        TotalPaginas == 0
+            ? 1
+            : Math.Min(paginaActual, TotalPaginas);
+
+    private int RangoInicio =>
+        FacturasFiltradas.Count == 0
+            ? 0
+            : ((PaginaActualSegura - 1) * RegistrosPorPagina) + 1;
+
+    private int RangoFin =>
+        FacturasFiltradas.Count == 0
+            ? 0
+            : Math.Min(PaginaActualSegura * RegistrosPorPagina, FacturasFiltradas.Count);
+
+    private IEnumerable<int> PaginasVisibles
+    {
+        get
+        {
+            if (TotalPaginas == 0)
+                return Array.Empty<int>();
+
+            var inicio = Math.Max(1, PaginaActualSegura - 2);
+            var fin = Math.Min(TotalPaginas, inicio + 4);
+
+            if (fin - inicio < 4)
+                inicio = Math.Max(1, fin - 4);
+
+            return Enumerable.Range(inicio, fin - inicio + 1);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Recargar();
+    }
+
+    private async Task Recargar()
+    {
+        cargando = true;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+
+        if (currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/", true);
+            return;
+        }
+
+        facturas.Clear();
+        facturas.AddRange(await FacturacionService.ListarFacturasUsuarioAsync(currentUserId, 0));
+        paginaActual = 1;
+        cargando = false;
+    }
+
+    private bool CumpleFiltroFactura(FacturaListDto factura)
+    {
+        if (factura == null)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(Filtro))
+        {
+            var filtroActual = Filtro.Trim();
+            var coincideTexto =
+                (factura.Numfactura ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (factura.NumeroCompleto ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (factura.Cliente ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (factura.IdentificacionCliente ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (factura.NumeroAutorizacion ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (factura.EstadoSri ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase);
+
+            if (!coincideTexto)
+                return false;
+        }
+
+        var fechaFactura = factura.FechaEmision?.Date;
+
+        if (FechaDesde.HasValue && (!fechaFactura.HasValue || fechaFactura.Value < FechaDesde.Value.Date))
+            return false;
+
+        if (FechaHasta.HasValue && (!fechaFactura.HasValue || fechaFactura.Value > FechaHasta.Value.Date))
+            return false;
+
+        return true;
+    }
+
+    private static bool TieneEstadoAutorizado(string? estadoSri) =>
+        DocumentoAutorizacionHelper.EsEstadoAutorizado(estadoSri);
+
+    private static bool PuedeGenerarNotaCreditoAutomatica(FacturaListDto factura) =>
+        factura.Estado == true &&
+        DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.EstadoSri);
+
+    private static string ObtenerEstadoSriTexto(string? estadoSri) =>
+        DocumentoAutorizacionHelper.ObtenerEstadoVisual(estadoSri, TieneEstadoAutorizado(estadoSri));
+
+    private static bool EsNoAutorizada(FacturaListDto factura) =>
+        ObtenerEstadoSriTexto(factura.EstadoSri) == DocumentoAutorizacionHelper.EstadoNoAutorizado;
+
+    private static string ObtenerErrorSriTexto(FacturaListDto factura)
+    {
+        var mensaje = (factura.MensajeSri ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(mensaje))
+            return mensaje;
+
+        return string.IsNullOrWhiteSpace(factura.EstadoSri)
+            ? "El SRI no devolvio un detalle de error para esta factura."
+            : factura.EstadoSri!;
+    }
+
+    private void MostrarErrorSriFactura(FacturaListDto factura)
+    {
+        tituloResultadoOverlay = "Error SRI";
+        detalleResultadoOverlay = ObtenerErrorSriTexto(factura);
+        mostrarResultadoOverlay = true;
+    }
+
+    private void CerrarResultadoOverlay()
+    {
+        mostrarResultadoOverlay = false;
+        tituloResultadoOverlay = string.Empty;
+        detalleResultadoOverlay = string.Empty;
+    }
+
+    private static string ObtenerNumeroAutorizacionTexto(FacturaListDto factura) =>
+        DocumentoAutorizacionHelper.ObtenerNumeroAutorizacionVisual(
+            factura.EstadoSri,
+            DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.EstadoSri),
+            factura.NumeroAutorizacion);
+
+    private static string ObtenerFormaPagoNombre(string? codigo) => codigo?.Trim() switch
+    {
+        "01" => "Sin utilización del sistema financiero",
+        "15" => "Compensación de deudas",
+        "16" => "Tarjeta de débito",
+        "17" => "Dinero electrónico",
+        "18" => "Tarjeta prepago",
+        "19" => "Tarjeta de crédito",
+        "20" => "Otros con utilización del sistema financiero",
+        "21" => "Endoso de títulos",
+        _ => codigo ?? "-"
+    };
+
+    private void LimpiarTexto() => Filtro = string.Empty;
+
+    private void LimpiarFiltros()
+    {
+        Filtro = string.Empty;
+        FechaDesde = null;
+        FechaHasta = null;
+    }
+
+    private void PaginaAnterior()
+    {
+        if (PaginaActualSegura > 1)
+            paginaActual = PaginaActualSegura - 1;
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (PaginaActualSegura < TotalPaginas)
+            paginaActual = PaginaActualSegura + 1;
+    }
+
+    private void IrAPagina(int pagina)
+    {
+        paginaActual = Math.Clamp(pagina, 1, Math.Max(TotalPaginas, 1));
+    }
+
+    private async Task VerFacturaAsync(int codfactura)
+    {
+        facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(codfactura, currentUserId);
+
+        if (facturaSeleccionada != null)
+            mostrarModal = true;
+    }
+
+    private async Task AbrirXmlAsync(int codfactura)
+    {
+        var xmlUrl = await FacturacionService.AsegurarXmlFacturaUsuarioAsync(codfactura, currentUserId);
+        if (string.IsNullOrWhiteSpace(xmlUrl))
+        {
+            await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la factura.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", xmlUrl, "_blank");
+    }
+
+    private async Task AbrirPdfAsync(int codfactura, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    {
+        var pdfUrl = await FacturacionService.AsegurarPdfFacturaUsuarioAsync(codfactura, currentUserId, formato);
+        if (string.IsNullOrWhiteSpace(pdfUrl))
+        {
+            await AlertService.ShowWarningAsync($"No se pudo generar o ubicar el PDF {formato.ObtenerEtiqueta()} de la factura.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", pdfUrl, "_blank");
+    }
+
+    private async Task ReenviarCorreoFacturaAsync(FacturaListDto factura)
+    {
+        if (procesandoReenvio || factura.Estado != true)
+            return;
+
+        var cliente = System.Net.WebUtility.HtmlEncode(factura.Cliente ?? "Consumidor final");
+        var resultadoConfirmacion = await JS.InvokeAsync<JsonElement>("Swal.fire", new
+        {
+            icon = "question",
+            title = "Reenviar factura por correo",
+            html = $@"
+                <div style='text-align:left'>
+                    <div style='margin-bottom:8px;'><strong>Factura:</strong> {factura.NumeroCompleto}</div>
+                    <div style='margin-bottom:8px;'><strong>Cliente:</strong> {cliente}</div>
+                    <div style='font-size:0.95rem;color:#4b5563;line-height:1.45;'>
+                        Se regenerarán los adjuntos actuales y se reenviará la factura a los correos configurados.
+                    </div>
+                </div>",
+            showCancelButton = true,
+            confirmButtonText = "Sí, reenviar",
+            cancelButtonText = "Cancelar",
+            reverseButtons = true,
+            focusCancel = true,
+            buttonsStyling = false,
+            customClass = new
+            {
+                popup = "numerica-swal-popup",
+                title = "numerica-swal-title",
+                htmlContainer = "numerica-swal-body",
+                actions = "numerica-swal-actions",
+                confirmButton = "numerica-swal-confirm",
+                cancelButton = "numerica-swal-cancel"
+            }
+        });
+
+        if (!(resultadoConfirmacion.TryGetProperty("isConfirmed", out var confirmado) && confirmado.GetBoolean()))
+            return;
+
+        try
+        {
+            procesandoReenvio = true;
+            var resultado = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, forzarReenvio: true);
+
+            if (resultado.Enviado)
+                await AlertService.ShowSuccessAsync(resultado.Mensaje, "Correo reenviado");
+            else if (resultado.PendienteAutorizacion || resultado.SinDestinatarios)
+                await AlertService.ShowWarningAsync(resultado.Mensaje, "No se pudo reenviar");
+            else
+                await AlertService.ShowErrorAsync(resultado.Mensaje, "Error al reenviar");
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync($"Ocurrió un error al reenviar el correo: {ex.Message}", "Error");
+        }
+        finally
+        {
+            procesandoReenvio = false;
+        }
+    }
+
+    private async Task ConfirmarGenerarNotaCreditoAutomaticaAsync(FacturaListDto factura)
+    {
+        if (procesandoNotaCreditoAutomatica)
+            return;
+
+        if (factura.Estado != true)
+        {
+            await AlertService.ShowWarningAsync("La factura está anulada y ya no se puede hacer la nota de crédito automática.");
+            return;
+        }
+
+        if (!DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.EstadoSri))
+        {
+            await AlertService.ShowWarningAsync("La factura está pendiente de autorización y no puede generar una nota de crédito automática.");
+            return;
+        }
+
+        if (!PuedeGenerarNotaCreditoAutomatica(factura))
+            return;
+
+        var confirmado = await MostrarConfirmacionNotaCreditoAutomaticaAsync(factura);
+
+        if (!confirmado)
+            return;
+
+        try
+        {
+            procesandoNotaCreditoAutomatica = true;
+            await MostrarProcesandoNotaCreditoAutomaticaAsync(factura);
+            var resultado = await NotaCreditoService.EmitirNotaCreditoAutomaticaDesdeFacturaAsync(currentUserId, factura.Codfactura);
+            await JS.InvokeVoidAsync("Swal.close");
+
+            if (!resultado.Success)
+            {
+                await AlertService.ShowWarningAsync(resultado.Message, "No se pudo emitir la nota de crédito");
+                return;
+            }
+
+            await Recargar();
+
+            if (mostrarModal && facturaSeleccionada?.Factura?.Codfactura == factura.Codfactura)
+                facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(factura.Codfactura, currentUserId);
+
+            await MostrarResultadoNotaCreditoAutomaticaAsync(factura, resultado);
+        }
+        catch (Exception ex)
+        {
+            await JS.InvokeVoidAsync("Swal.close");
+            await AlertService.ShowErrorAsync($"Ocurrió un error al generar la nota de crédito automática: {ex.Message}", "Error");
+        }
+        finally
+        {
+            procesandoNotaCreditoAutomatica = false;
+        }
+    }
+
+    private async Task<bool> MostrarConfirmacionNotaCreditoAutomaticaAsync(FacturaListDto factura)
+    {
+        var cliente = System.Net.WebUtility.HtmlEncode(factura.Cliente ?? "Consumidor final");
+
+        var resultado = await JS.InvokeAsync<JsonElement>("Swal.fire", new
+        {
+            icon = "question",
+            title = "Emitir nota de crédito automática",
+            html = $@"
+                <div style='text-align:left'>
+                    <div style='margin-bottom:8px;'><strong>Factura:</strong> {factura.NumeroCompleto}</div>
+                    <div style='margin-bottom:8px;'><strong>Cliente:</strong> {cliente}</div>
+                    <div style='margin-bottom:8px;'><strong>Total:</strong> $ {(factura.Total ?? 0m):N2}</div>
+                    <div style='font-size:0.95rem;color:#4b5563;'>
+                        Se tomará el saldo disponible, se generará la nota de crédito y se enviará al SRI con validaciones automáticas.
+                    </div>
+                </div>",
+            showCancelButton = true,
+            confirmButtonText = "Sí, emitir",
+            cancelButtonText = "Cancelar",
+            reverseButtons = true,
+            focusCancel = true,
+            buttonsStyling = false,
+            customClass = new
+            {
+                popup = "numerica-swal-popup",
+                title = "numerica-swal-title",
+                htmlContainer = "numerica-swal-body",
+                actions = "numerica-swal-actions",
+                confirmButton = "numerica-swal-confirm",
+                cancelButton = "numerica-swal-cancel"
+            }
+        });
+
+        return resultado.TryGetProperty("isConfirmed", out var confirmed) && confirmed.GetBoolean();
+    }
+
+    private async Task MostrarResultadoNotaCreditoAutomaticaAsync(
+        FacturaListDto factura,
+        global::Simetric.Services.NotaCreditoService.EmisionNotaCreditoAutomaticaResultado resultado)
+    {
+        var numeroNota = System.Net.WebUtility.HtmlEncode(
+            string.IsNullOrWhiteSpace(resultado.NumeroCompleto)
+                ? resultado.NumeroNotaCredito
+                : resultado.NumeroCompleto);
+        var cliente = System.Net.WebUtility.HtmlEncode(factura.Cliente ?? "Consumidor final");
+        var numeroAutorizacion = System.Net.WebUtility.HtmlEncode(resultado.NumeroAutorizacion);
+        var mensaje = System.Net.WebUtility.HtmlEncode(resultado.Message);
+        var estadoSri = System.Net.WebUtility.HtmlEncode(
+            string.IsNullOrWhiteSpace(resultado.EstadoSri)
+                ? (resultado.Autorizada ? "AUTORIZADO" : "EN REVISION")
+                : resultado.EstadoSri);
+        var html = new StringBuilder()
+            .AppendLine("<div style='text-align:left'>")
+            .AppendLine($"<div style='margin-bottom:8px;'><strong>Factura:</strong> {factura.NumeroCompleto}</div>")
+            .AppendLine($"<div style='margin-bottom:8px;'><strong>Nota de credito:</strong> {numeroNota}</div>")
+            .AppendLine($"<div style='margin-bottom:8px;'><strong>Cliente:</strong> {cliente}</div>")
+            .AppendLine($"<div style='margin-bottom:8px;'><strong>Estado SRI:</strong> {estadoSri}</div>");
+
+        if (!string.IsNullOrWhiteSpace(numeroAutorizacion))
+            html.AppendLine($"<div style='margin-bottom:8px;word-break:break-word;'><strong>Autorizacion:</strong> {numeroAutorizacion}</div>");
+
+        html.AppendLine($"<div style='font-size:0.95rem;color:#4b5563;line-height:1.45;'>{mensaje}</div>")
+            .AppendLine("</div>");
+
+        var respuesta = await JS.InvokeAsync<JsonElement>("Swal.fire", new
+        {
+            icon = resultado.Autorizada ? "success" : "warning",
+            title = resultado.Autorizada ? "Nota de credito emitida" : "Nota de credito emitida con observaciones",
+            html = html.ToString(),
+            showCancelButton = resultado.Autorizada && !string.IsNullOrWhiteSpace(resultado.PdfUrl),
+            confirmButtonText = "Cerrar",
+            cancelButtonText = "Ver PDF",
+            reverseButtons = true,
+            focusConfirm = true,
+            buttonsStyling = false,
+            customClass = new
+            {
+                popup = "numerica-swal-popup",
+                title = "numerica-swal-title",
+                htmlContainer = "numerica-swal-body",
+                actions = "numerica-swal-actions",
+                confirmButton = "numerica-swal-confirm",
+                cancelButton = "numerica-swal-cancel"
+            }
+        });
+
+        if (resultado.Autorizada &&
+            !string.IsNullOrWhiteSpace(resultado.PdfUrl) &&
+            respuesta.TryGetProperty("dismiss", out var dismiss) &&
+            string.Equals(dismiss.GetString(), "cancel", StringComparison.OrdinalIgnoreCase))
+        {
+            await JS.InvokeVoidAsync("open", resultado.PdfUrl, "_blank");
+        }
+    }
+
+    private async Task MostrarProcesandoNotaCreditoAutomaticaAsync(FacturaListDto factura)
+    {
+        await JS.InvokeVoidAsync("Swal.fire", new
+        {
+            title = "Generando nota de crédito",
+            html = $@"
+                <div style='text-align:left'>
+                    <div style='margin-bottom:10px;'><strong>Factura:</strong> {factura.NumeroCompleto}</div>
+                    <div style='font-size:0.95rem;color:#4b5563;'>
+                        Estamos validando la información, generando el comprobante y consultando al SRI. Esto puede tardar unos segundos.
+                    </div>
+                </div>",
+            icon = "info",
+            allowOutsideClick = false,
+            allowEscapeKey = false,
+            showConfirmButton = false
+        });
+
+        await JS.InvokeVoidAsync("Swal.showLoading");
+    }
+
+    private async Task DescargarReporteAsync()
+    {
+        var facturasFiltradas = FacturasFiltradas;
+        if (facturasFiltradas.Count == 0)
+        {
+            await AlertService.ShowInfoAsync("No hay datos para exportar con los filtros actuales.");
+            return;
+        }
+
+        var archivo = await FacturasExcelService.GenerarAsync(facturasFiltradas);
+        await using var stream = new MemoryStream(archivo.Content);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+    }
+
+    private void CerrarModal()
+    {
+        mostrarModal = false;
+        facturaSeleccionada = null;
+    }
+
+    // --- NUEVO MÉTODO PARA REENVIAR AL SRI ---
+    private Simetric.Models.Cliente cliente = new();
+    private List<Simetric.Models.Emisor> emisores = new();
+    private List<CorreoOpcionalFacturaInput> correosOpcionalesFactura = new();
+    private class CorreoOpcionalFacturaInput
+    {
+        public string Correo { get; set; } = string.Empty;
+        public string CorreoOriginal { get; set; } = string.Empty;
+        public bool GuardarEnCliente { get; set; }
+        public bool EsPersistidoCliente { get; set; }
+    }
+    private async Task ReenviarAlSriAsync(FacturaListDto factura)
+    {
+        string pathCertificado = "";
+        string pass = "";
+        emisores = await FacturacionService.GetEmisoresActivosAsync(currentUserId);
+        var rutaXml = await FacturacionService.AsegurarRutaXmlFacturaUsuarioAsync(factura.Codfactura, currentUserId, true);
+        if (string.IsNullOrWhiteSpace(rutaXml))
+        {
+            await AlertService.ShowErrorAsync("No se pudo regenerar el XML desde los datos guardados de la factura.", "XML no disponible");
+            return;
+        }
+        var correosFactura = ObtenerCorreosOpcionalesFactura();
+
+        mensajeSRI m = new mensajeSRI();
+        var mensajeResultado = "";
+        if (emisores.Any())
+        {
+
+            pathCertificado = $"App_Data/{emisores.First().PathCertificado}";
+            pass = emisores.First().ClaveCertificado;
+
+            //EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass).Wait();
+            m = await EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass);
+        }
+
+        if (m.autorizacion != "")
+        {
+
+            await FacturacionService.ActualizarAutorizacionFacturaAsync(factura.Codfactura, m.autorizacion, m.fecha,"",true);
+            var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, rutaXml, m);
+            if (resultadoCorreo.Enviado || resultadoCorreo.YaEnviado)
+            {
+                mensajeResultado = resultadoCorreo.Enviado
+                    ? resultadoCorreo.Mensaje
+                    : "Factura guardada correctamente.";
+                await AlertService.ShowSuccessAsync(mensajeResultado, "Factura guardada");
+            }
+            else
+            {
+                await AlertService.ShowErrorAsync(
+                    $"La factura fue autorizada, pero no se pudo enviar el correo al cliente. {resultadoCorreo.Mensaje}",
+                    "Error al enviar correo");
+            }
+        }
+        else
+        {
+            await FacturacionService.ActualizarAutorizacionFacturaAsync(factura.Codfactura, m.autorizacion, m.fecha, m.xml, false);
+            await AlertService.ShowSuccessAsync("Factura guardada no autorizada, por favor revise el error enviado por el SRI: " + m.mensaje + " puede reenviar la factura desde el listado de facturas", "Factura guardada con observaciones");
+        }
+    }
+    public async Task<mensajeSRI> EnviarXmlAApiFrameworkAsync(string rutaArchivoxml, string rutaFirma, string password)
+    {
+        try
+        {
+            string apiUrl = "http://localhost:8090/api/xml/process"; //produccion
+            //string apiUrl = "https://localhost:44372/api/xml/process"; //pruebas
+
+            if (!File.Exists(rutaArchivoxml))
+            {
+                throw new FileNotFoundException($"No se encontró el archivo XML en la ruta: {rutaArchivoxml}");
+            }
+            if (!File.Exists(rutaFirma))
+            {
+                throw new FileNotFoundException($"No se encontró el archivo de firma (.p12) en la ruta: {rutaFirma}");
+            }
+
+            rutaFirma = Path.Combine(Directory.GetCurrentDirectory(), "App_Data\\certs", "path\\" + Path.GetFileName(rutaFirma));
+            var solicitudData = new
+            {
+                RutaXml = rutaArchivoxml,
+                RutaFirma = rutaFirma,
+                PasswordFirma = password
+            };
+
+            string jsonPayload = System.Text.Json.JsonSerializer.Serialize(solicitudData);
+            var jsonContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+            var request = new HttpRequestMessage(HttpMethod.Post, apiUrl)
+            {
+                Content = jsonContent
+            };
+
+            request.Headers.Add("X-Api-Key", "E-factSimetricNumericaKey2026*#");
+            request.Headers.UserAgent.ParseAdd("NumericaSoftwareClient/1.0");
+
+            var handler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+            };
+
+            using (var client = new HttpClient(handler))
+            {
+                client.Timeout = TimeSpan.FromSeconds(80);
+                HttpResponseMessage response = await client.SendAsync(request).ConfigureAwait(false);
+                string xmlRespuesta = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    // 2. DESERIALIZAR la respuesta XML recibida al objeto mensajeSRI
+                    var serializer = new System.Xml.Serialization.XmlSerializer(typeof(mensajeSRI));
+                    using (var reader = new System.IO.StringReader(xmlRespuesta))
+                    {
+                        return (mensajeSRI)serializer.Deserialize(reader);
+                    }
+                }
+                else
+                {
+                    // Si la API responde un error controlado (400, 404, 500)
+                    throw new Exception($"Respuesta de error de la API: {xmlRespuesta}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // 3. En caso de error, mapeamos la excepción a un objeto mensajeSRI de error
+            // Reemplaza "xml" o las propiedades según cómo se llamen en tu clase real
+            return new mensajeSRI
+            {
+                xml = $"<error><tipo>ExcepcionBlazor</tipo><mensaje>{ex.Message}</mensaje></error>"
+                // Si tienes propiedades como 'estado' o 'mensaje', inicialízalas aquí
+            };
+        }
+    }
+    private List<FacturaCorreoDestinoDto> ObtenerCorreosOpcionalesFactura()
+    {
+        NormalizarCorreosOpcionalesFactura();
+
+        return correosOpcionalesFactura
+            .Where(x => !string.IsNullOrWhiteSpace(x.Correo))
+            .Select(x => new FacturaCorreoDestinoDto
+            {
+                Correo = x.Correo,
+                GuardarEnCliente = x.EsPersistidoCliente || x.GuardarEnCliente
+            })
+            .ToList();
+    }
+    private void NormalizarCorreosOpcionalesFactura()
+    {
+        foreach (var correo in correosOpcionalesFactura)
+            correo.Correo = (correo.Correo ?? string.Empty).Trim();
+    }
+
+    private async Task ConfirmarAnularFacturaSweetAsync(FacturaListDto factura)
+    {
+        if (procesandoAnulacion) return;
+        var clienteNombre = System.Net.WebUtility.HtmlEncode(factura.Cliente ?? "Consumidor final");
+
+        var resultado = await JS.InvokeAsync<JsonElement>("Swal.fire", new
+        {
+            icon = "warning",
+            title = "Anular factura",
+            html = $@"
+                <div style='text-align:left'>
+                    <div style='margin-bottom:8px;'><strong>Factura:</strong> {factura.NumeroCompleto}</div>
+                    <div style='margin-bottom:8px;'><strong>Cliente:</strong> {clienteNombre}</div>
+                    <div style='font-size:0.95rem;color:#4b5563;line-height:1.45;'>
+                        Esta acción cambiará el estado a <strong>ANULADA</strong> en el sistema interno.
+                    </div>
+                    <div style='margin-top:10px;padding:10px 12px;border-radius:10px;background:#fff4e5;color:#9a3412;font-size:0.92rem;line-height:1.45;'>
+                        Recuerda anular también esta factura en el <strong>SRI</strong> si el comprobante ya fue emitido o autorizado.
+                    </div>
+                </div>",
+            showCancelButton = true,
+            confirmButtonText = "Sí, anular",
+            cancelButtonText = "Cancelar",
+            reverseButtons = true,
+            focusCancel = true,
+            buttonsStyling = false,
+            customClass = new
+            {
+                popup = "numerica-swal-popup",
+                title = "numerica-swal-title",
+                htmlContainer = "numerica-swal-body",
+                actions = "numerica-swal-actions",
+                confirmButton = "numerica-swal-confirm danger",
+                cancelButton = "numerica-swal-cancel"
+            }
+        });
+
+        if (!(resultado.TryGetProperty("isConfirmed", out var confirmado) && confirmado.GetBoolean()))
+            return;
+
+        try
+        {
+            procesandoAnulacion = true;
+            var exito = await FacturacionService.AnularFacturaDirectoAsync(factura.Codfactura);
+
+            if (exito)
+            {
+                factura.Estado = false;
+                await AlertService.ShowSuccessAsync("Factura anulada internamente de forma correcta.");
+                await Recargar();
+            }
+            else
+            {
+                await AlertService.ShowErrorAsync("No se pudo completar la anulación en la base de datos.");
+            }
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync($"Error al intentar anular: {ex.Message}");
+        }
+        finally
+        {
+            procesandoAnulacion = false;
+        }
+    }
+    // --- NUEVO MÉTODO ASÍNCRONO PARA LA CONFIRMACIÓN Y ANULACIÓN ---
+   private async Task ConfirmarAnularFacturaAsync(FacturaListDto factura)
+{
+    if (procesandoAnulacion) return;
+
+    // Usamos tu método de alerta para confirmar
+        var confirmado = await JS.InvokeAsync<bool>("confirm",
+            $"¿Está seguro de anular la factura N° {factura.NumeroCompleto}?\n\nEsta acción cambiará el estado a ANULADA en el sistema interno.");
+
+    if (confirmado)
+    {
+        try
+        {
+            procesandoAnulacion = true;
+
+            // Llamamos al método que acabamos de meter en tu servicio de facturación
+            var exito = await FacturacionService.AnularFacturaDirectoAsync(factura.Codfactura);
+
+            if (exito)
+            {
+                // Forzamos el cambio visual inmediato en la interfaz
+                factura.Estado = false; 
+
+                // Tu alerta de éxito
+                await AlertService.ShowSuccessAsync("Factura anulada internamente de forma correcta.");
+                
+                // Recargamos el listado completo desde la base de datos
+                await Recargar();
+            }
+            else
+            {
+                await AlertService.ShowErrorAsync("No se pudo completar la anulación en la base de datos.");
+            }
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync($"Error al intentar anular: {ex.Message}");
+        }
+        finally
+        {
+            procesandoAnulacion = false;
+        }
+    }
+}
+}
+

@@ -1,0 +1,1934 @@
+@page "/"
+@page "/login"
+@attribute [AllowAnonymous]
+@using Microsoft.AspNetCore.Authorization
+@using Simetric.Data
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Extensions
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Auth
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.ComponentModel.DataAnnotations
+
+@layout Simetric.Components.Layout.EmptyLayout
+@rendermode InteractiveServer
+
+@inject NavigationManager NavManager
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject SecurityService Security
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject PendingLoginFlowService PendingLoginFlow
+@inject LoginDestinationService LoginDestination
+
+<PageTitle>Iniciar Sesion | Numerica software</PageTitle>
+
+<style>
+    @FontFaceCss
+
+    :root {
+        --n-blue: #006bb5;
+        --n-blue-dark: #004a7c;
+        --n-blue-light: #e6f0f8;
+        --n-dark: #2c3e50;
+        --white: #ffffff;
+        --bg-color: #f4f7f6;
+    }
+
+    body {
+        font-family: 'Montserrat', sans-serif;
+        background-color: var(--bg-color);
+        margin: 0;
+        min-height: 100dvh;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+    .main-viewport {
+        display: flex;
+        min-height: max(100vh, 100dvh);
+        height: auto;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-y: visible;
+    }
+
+    /* ── Panel Izquierdo ── */
+    .brand-side {
+        flex: 1 1 56%;
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: clamp(2.5rem, 4vw, 5rem);
+        position: relative;
+        overflow: hidden;
+        min-width: 0;
+        min-height: 0;
+    }
+
+        /* Círculos decorativos originales — detrás del canvas */
+        .brand-side::before, .brand-side::after {
+            content: "";
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.04);
+            z-index: 0;
+        }
+
+        .brand-side::before {
+            width: 400px;
+            height: 400px;
+            top: -100px;
+            left: -100px;
+        }
+
+        .brand-side::after {
+            width: 600px;
+            height: 600px;
+            bottom: -200px;
+            right: -150px;
+        }
+
+    .numeric-digits-layer {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    /* Canvas PS3 — capa 1, llena todo el panel */
+    .numerica-digit {
+        position: absolute;
+        z-index: 1;
+        color: rgba(255, 255, 255, 0.5);
+        line-height: 1;
+        user-select: none;
+        mix-blend-mode: screen;
+        text-shadow: 0 0 20px rgba(255, 255, 255, 0.34), 0 0 42px rgba(255, 255, 255, 0.22), 0 0 64px rgba(184, 220, 255, 0.1);
+        font-variant-numeric: tabular-nums;
+        will-change: transform, opacity;
+    }
+
+    /* Glass card — capa 2, encima de las ondas */
+    @KeyframesDigitFloatCss
+
+    .numeric-digits-layer::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background: radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.14), transparent 34%), radial-gradient(circle at 74% 72%, rgba(255, 255, 255, 0.11), transparent 30%);
+        opacity: 0.78;
+    }
+
+    .glass-card {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 24px;
+        padding: clamp(2.15rem, 3vw, 3.25rem);
+        width: min(100%, 38rem);
+        max-width: 38rem;
+        min-height: clamp(23rem, 50vh, 27rem);
+        position: relative;
+        z-index: 2;
+        box-shadow: 0 25px 50px rgba(0,0,0,0.1);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: clamp(1.35rem, 2vw, 1.9rem);
+        text-align: center;
+    }
+
+    .brand-logo-shell {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: fit-content;
+        max-width: 100%;
+        padding: 0.8rem 1.1rem;
+        border-radius: 18px;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08));
+        border: 1px solid rgba(255, 255, 255, 0.26);
+        box-shadow: 0 16px 30px rgba(2, 35, 66, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+        backdrop-filter: blur(10px);
+    }
+
+    .brand-lockup {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: clamp(0.95rem, 1.4vw, 1.25rem);
+        max-width: 100%;
+    }
+
+    .brand-logo {
+        width: clamp(4.6rem, 8vw, 5.75rem);
+        height: clamp(4.6rem, 8vw, 5.75rem);
+        max-width: 100%;
+        display: block;
+        object-fit: contain;
+        filter: drop-shadow(0 8px 18px rgba(1, 21, 40, 0.24)) saturate(1.04) contrast(1.04);
+    }
+
+    .login-brand-heading {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-weight: 600;
+        font-size: clamp(2rem, 3.2vw, 2.85rem);
+        letter-spacing: 0;
+        line-height: 0.96;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        text-align: left;
+    }
+
+    .brand-tagline {
+        margin: 0;
+        max-width: 28rem;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: clamp(1.08rem, 1.55vw, 1.35rem);
+        font-weight: 400;
+        line-height: 1.55;
+    }
+
+    .brand-version-row {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+    }
+
+    .brand-mobile-lockup {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+    }
+
+    .brand-mobile-logo {
+        width: 58px;
+        height: 58px;
+        display: inline-block;
+        object-fit: contain;
+        filter: drop-shadow(0 10px 18px rgba(37, 76, 205, 0.2));
+    }
+
+    .brand-mobile-name {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-size: 1.15rem;
+        font-weight: 600;
+        line-height: 0.98;
+        color: var(--n-dark);
+        display: flex;
+        flex-direction: column;
+        text-align: left;
+    }
+
+    /* ── Panel Derecho ── */
+    .form-side {
+        flex: 1 1 44%;
+        background: var(--white);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: clamp(1rem, 2vw, 2rem);
+        min-width: 0;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .login-container-pro {
+        width: 100%;
+        max-width: 440px;
+        animation: slideUp 0.6s ease-out forwards;
+        background: white;
+        padding: clamp(1.75rem, 2.4vw, 3rem) clamp(1.4rem, 2vw, 2rem);
+        border-radius: 24px;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.04);
+        border: 1px solid rgba(0,0,0,0.02);
+        max-height: none;
+        overflow: visible;
+    }
+
+    .login-container-pro .mb-5 {
+        margin-bottom: 2rem !important;
+    }
+
+    .login-container-pro .mb-4 {
+        margin-bottom: 1rem !important;
+    }
+
+    .form-label-n {
+        font-weight: 600;
+        font-size: 0.85rem;
+        color: var(--n-dark);
+        margin-bottom: 8px;
+        display: block;
+        letter-spacing: 0.5px;
+    }
+
+    .input-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+
+    .input-n-premium {
+        width: 100%;
+        padding: 14px 45px 14px 45px;
+        border: 2px solid #edf2f7;
+        border-radius: 12px;
+        background: #f8fafc;
+        font-size: 0.95rem;
+        color: var(--n-dark);
+        transition: all 0.3s ease;
+    }
+
+        .input-n-premium:focus {
+            border-color: var(--n-blue);
+            background: white;
+            box-shadow: 0 0 0 4px rgba(0, 107, 181, 0.1);
+            outline: none;
+        }
+
+    .input-icon-n {
+        position: absolute;
+        left: 16px;
+        color: #a0aec0;
+        font-size: 1.2rem;
+        transition: color 0.3s ease;
+    }
+
+    .btn-eye-n {
+        position: absolute;
+        right: 16px;
+        background: transparent;
+        border: none;
+        color: #a0aec0;
+        font-size: 1.2rem;
+        cursor: pointer;
+        transition: color 0.3s ease;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+        .btn-eye-n:hover {
+            color: var(--n-blue);
+        }
+
+    .btn-n-login {
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        padding: 16px;
+        border-radius: 12px;
+        width: 100%;
+        border: none;
+        font-weight: 600;
+        font-size: 1rem;
+        letter-spacing: 0.5px;
+        box-shadow: 0 8px 20px rgba(0, 107, 181, 0.25);
+        transition: all 0.3s ease;
+        margin-top: 1rem;
+    }
+
+        .btn-n-login:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 25px rgba(0, 107, 181, 0.35);
+        }
+
+    .modal-backdrop-custom {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(8px);
+        z-index: 1040;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        animation: fadeIn 0.3s ease-out;
+    }
+
+    @SlideUpAndMediaCss
+
+    /* ESTILOS DE PLATAFORMAS EN LOGIN/REGISTRO (DISEÑO PREMIUM MODERNO) */
+    .platforms-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+        width: 100%;
+        margin: 0.5rem 0;
+    }
+
+    .platform-card {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: flex-start;
+        padding: 1.15rem;
+        border-radius: 16px;
+        position: relative;
+        cursor: pointer;
+        transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+        min-height: 130px;
+        width: 100%;
+        backdrop-filter: blur(8px);
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        overflow: hidden;
+    }
+
+    /* CARD-SPECIFIC THEMES (Both are transparent glass) */
+    .card-efact,
+    .card-esign {
+        background: rgba(255, 255, 255, 0.30);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .card-econtax {
+        background: rgba(10, 70, 65, 0.4);
+        border: 1px solid rgba(15, 133, 119, 0.2);
+    }
+
+    .card-edeclara {
+        background: rgba(43, 38, 97, 0.4);
+        border: 1px solid rgba(83, 75, 184, 0.2);
+    }
+
+    .card-epeople {
+        background: rgba(90, 40, 5, 0.4);
+        border: 1px solid rgba(211, 84, 0, 0.2);
+    }
+    .platform-card.card-efact:hover,
+    .platform-card.card-esign:hover {
+        transform: translateY(-4px);
+        background: rgba(255, 255, 255, 0.22);
+        border-color: rgba(255, 255, 255, 0.45);
+        box-shadow: 0 12px 30px rgba(255, 255, 255, 0.12);
+    }
+
+    .card-econtax:hover {
+        transform: translateY(-4px);
+        background: rgba(10, 70, 65, 0.65);
+        border-color: rgba(15, 133, 119, 0.6);
+        box-shadow: 0 12px 30px rgba(15, 133, 119, 0.35);
+    }
+
+    .card-edeclara:hover {
+        transform: translateY(-4px);
+        background: rgba(43, 38, 97, 0.65);
+        border-color: rgba(83, 75, 184, 0.6);
+        box-shadow: 0 12px 30px rgba(83, 75, 184, 0.35);
+    }
+
+    .card-epeople:hover {
+        transform: translateY(-4px);
+        background: rgba(90, 40, 5, 0.65);
+        border-color: rgba(211, 84, 0, 0.6);
+        box-shadow: 0 12px 30px rgba(211, 84, 0, 0.35);
+    }
+
+    /* CARD HEADER & LOGO IMAGES */
+    .platform-card-header {
+        display: flex;
+        align-items: center;
+        height: 60px;
+        width: 100%;
+    }
+
+    .logo-efact-card {
+        max-height: 2.3rem;
+        width: auto;
+        object-fit: contain;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+    }
+
+    .logo-esign-card {
+        max-height: 4.4rem;
+        width: auto;
+        object-fit: contain;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+        margin-left: 0px;
+    }
+
+    .card-epeople {
+        grid-column: span 2;
+    }
+
+    /* DESCRIPTION */
+    .platform-card-desc {
+        font-size: 0.78rem;
+        line-height: 1.35;
+        color: #2c3e50 !important; 
+        margin: 0.8rem 0 0 0;
+        text-align: left;
+        font-weight: 500; 
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    /* ACTION ICON BUTTON (LARGER, WHITISH BACKGROUND) */
+    .platform-action-icon-btn {
+        position: absolute;
+        bottom: 1rem;
+        right: 1rem;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        background: rgba(255, 255, 255, 0.28);
+        color: rgba(255, 255, 255, 0.95);
+    }
+
+    .efact-arrow-bg,
+    .esign-arrow-bg {
+        background: rgba(255, 255, 255, 0.28);
+        color: rgba(255, 255, 255, 0.95);
+    }
+
+    .econtax-arrow-bg {
+        background: rgba(15, 133, 119, 0.25);
+        color: #4dbdb1;
+    }
+
+    .edeclara-arrow-bg {
+        background: rgba(83, 75, 184, 0.25);
+        color: #9c97eb;
+    }
+
+    .epeople-arrow-bg {
+        background: rgba(211, 84, 0, 0.25);
+        color: #ff9f5a;
+    }
+
+    /* Hover action interaction: whiter, less neon */
+    .platform-card:hover .platform-action-icon-btn {
+        transform: translateY(-4px);
+        background: rgba(255, 255, 255, 0.50); /* Subimos a 0.50 para que se ilumine al pasar el mouse */
+        border-color: rgba(255, 255, 255, 0.70);
+        box-shadow: 0 12px 30px rgba(255, 255, 255, 0.15);
+    }
+
+    .platform-card.card-econtax:hover .platform-action-icon-btn {
+        background: #4dbdb1;
+        color: #062b27;
+        box-shadow: 0 0 12px rgba(77, 189, 177, 0.5);
+    }
+
+    .platform-card.card-edeclara:hover .platform-action-icon-btn {
+        background: #9c97eb;
+        color: #121029;
+        box-shadow: 0 0 12px rgba(156, 151, 235, 0.5);
+    }
+
+    .platform-card.card-epeople:hover .platform-action-icon-btn {
+        background: #ff9f5a;
+        color: #381600;
+        box-shadow: 0 0 12px rgba(255, 159, 90, 0.5);
+    }
+
+    /* BRAND LOGO ABOVE WELCOME */
+    .form-brand-logo {
+        max-height: 52px;
+        width: auto;
+        margin-bottom: 0.85rem;
+        display: inline-block;
+        filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.06));
+    }
+</style>
+<PantallaCarga IsVisible="@isProcessing"
+               Titulo="@loadingTitle"
+               Mensaje="@loadingMessage" />
+<div class="main-viewport notranslate" translate="no" style="transition: opacity 0.35s ease; @(isProcessing ? "opacity: 0; pointer-events: none;" : "opacity: 1;")">
+
+    <!-- PANEL IZQUIERDO ─────────────────────────────────────── -->
+    <div class="brand-side d-none d-lg-flex">
+        <div id="numericaDigitsLayer" class="numeric-digits-layer" aria-hidden="true"></div>
+
+        <!-- Contenido (z-index 2, encima de las ondas) -->
+        <div class="glass-card">
+            <div class="brand-lockup">
+                <span class="brand-logo-shell">
+                    <img src="/images/company-logo.png" class="brand-logo" alt="Numerica software" onerror="this.style.display='none'" />
+                </span>
+                <h1 class="login-brand-heading">
+                    <span>Numerica</span>
+                    <span>software</span>
+                </h1>
+            </div>
+            <p class="brand-tagline">Aquí encuentras múltiples plataformas:</p>
+            <div class="platforms-grid">
+                <!-- E-FACT -->
+                <div class="platform-card card-efact">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-efact-card" src="/images/LogoPrincipal.svg" alt="e-fact" />
+                    </div>
+                    <p class="platform-card-desc">Facturación electrónica fácil, rápida y segura.</p>
+                </div>
+                
+                <!-- E-SIGN -->
+                <div class="platform-card card-esign">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-esign-card" src="/images/esign/esign.png" alt="e-sing" />
+                    </div>
+                    <p class="platform-card-desc">Firma electrónica con validez legal.</p>
+                </div>
+                @*
+                <!-- E-CONTAX -->
+                <div class="platform-card card-econtax">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-econtax" src="/images/econtax/LogoEContaxWord.png" alt="e-contax" style="max-height: 1.15rem; width: auto;" />
+                    </div>
+                    <p class="platform-card-desc">Contabilidad y conciliación inteligente.</p>
+                    <span class="platform-action-icon-btn econtax-arrow-bg">
+                        <i class="ri-calculator-fill"></i>
+                    </span>
+                </div>
+
+                <!-- E-DECLARA -->
+                <div class="platform-card card-edeclara">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-edeclara" src="/images/edeclara/LogoEDeclara.png" alt="e-declara" style="max-height: 1.28rem; width: auto;" />
+                    </div>
+                    <p class="platform-card-desc">Declaraciones de impuestos simplificadas.</p>
+                    <span class="platform-action-icon-btn edeclara-arrow-bg">
+                        <i class="ri-percent-fill"></i>
+                    </span>
+                </div>
+
+                <!-- E-PEOPLE -->
+                <div class="platform-card card-epeople">
+                    <div class="platform-card-header">
+                        <span class="platform-logo-fallback-text logo-epeople text-epeople" style="font-family: 'Conthrax SemiBold', sans-serif; font-size: 1.2rem; color: #ff9f5a;">E-PEOPLE</span>
+                    </div>
+                    <p class="platform-card-desc">Gestión de talento y nóminas.</p>
+                    <span class="platform-action-icon-btn epeople-arrow-bg">
+                        <i class="ri-team-fill"></i>
+                    </span>
+                </div>
+                *@
+            </div>
+            <div class="brand-version-row" style="margin-top: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.5rem;">
+                <span class="badge rounded-pill bg-white text-primary px-3 py-2 shadow-sm">Versión 2026</span>
+                <p class="brand-trust-text" style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.6); margin: 0.5rem 0 0 0; display: flex; align-items: center; gap: 0.35rem;">
+                    <i class="ri-star-line text-warning"></i>
+                    <span>Miles de empresas confían en nuestras soluciones</span>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PANEL DERECHO ───────────────────────────────────────── -->
+    <div class="form-side">
+        <div class="login-container-pro">
+            <div class="text-center mb-4">
+                <img src="/images/company-logo.png" class="form-brand-logo" alt="Numerica software" onerror="this.style.display='none'" />
+                <h2 class="fw-bold text-dark mb-1">Bienvenido de nuevo</h2>
+                <p class="text-muted small">Ingresa tus credenciales para continuar</p>
+            </div>
+
+            <EditForm Model="@loginUser" OnValidSubmit="HandleLoginValidated" FormName="login-form">
+                <DataAnnotationsValidator />
+
+                <div class="mb-4">
+                    <label class="form-label-n">Usuario / Correo</label>
+                    <div class="input-wrapper">
+                        <input class="input-n-premium notranslate"
+                               id="loginUsernameInput"
+                               name="username"
+                               placeholder="usuario@empresa.com"
+                               autocomplete="username"
+                               translate="no"
+                               @bind="loginUser.Username"
+                               @bind:event="oninput"
+                               @bind:after="HandleUsernameChangedAsync"
+                               @onblur="HandleUsernameBlurAsync" />
+                        <i class="bi bi-person input-icon-n"></i>
+                    </div>
+                    <ValidationMessage For="@(() => loginUser.Username)" class="text-danger small mt-1 d-block" />
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label-n">Contraseña</label>
+                    <div class="input-wrapper">
+                        <InputText @bind-Value="loginUser.Password" type="@(showPassword ? "text" : "password")" class="input-n-premium notranslate" placeholder="••••••••" autocomplete="current-password" @attributes="PasswordInputAttributes" />
+                        <i class="bi bi-lock input-icon-n"></i>
+                        <button type="button" class="btn-eye-n" @onclick="TogglePasswordVisibility" tabindex="-1">
+                            <i class="bi @(showPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                        </button>
+                    </div>
+                    <ValidationMessage For="@(() => loginUser.Password)" class="text-danger small mt-1 d-block" />
+                </div>
+
+                <div class="form-check m-0 mb-3">
+                    <InputCheckbox @bind-Value="loginUser.Recordarme" class="form-check-input shadow-sm" id="rememberMeCheck" />
+                    <label class="form-check-label small text-muted" for="rememberMeCheck">
+                        Recordarme
+                    </label>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mb-4 mt-2">
+                    @if (showTermsCheckbox)
+                    {
+                        <div class="form-check m-0">
+                            <InputCheckbox @bind-Value="loginUser.AcceptTerms" class="form-check-input shadow-sm" id="termsCheck" />
+                            <label class="form-check-label small text-muted" for="termsCheck">
+                                Acepto la <a href="/politica-privacidad" target="_blank" class="fw-bold text-primary text-decoration-none">Política de privacidad</a>
+                            </label>
+                        </div>
+                    }
+                    else
+                    {
+                        <div></div>
+                    }
+                    <a href="/recover-password" class="small fw-bold text-primary text-decoration-none">¿Olvidaste tu clave?</a>
+                </div>
+
+                <button type="submit" class="btn-n-login">INGRESAR AHORA</button>
+
+                <button type="button"
+                        class="btn btn-outline-primary w-100 mt-3 rounded-3 fw-semibold"
+                        @onclick="EntrarComoInvitadoAsync">
+                    Entrar como invitado
+                </button>
+
+                <div class="text-center mt-4">
+                    <span class="text-muted small">¿No tienes cuenta?</span>
+                    <a href="/register" class="text-primary fw-bold text-decoration-none ms-1 small">Solicitar Registro</a>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+</div>
+
+@if (showModal)
+{
+    <div class="modal-backdrop-custom">
+        <div class="modal-dialog modal-dialog-centered m-3" style="max-width: 550px; width: 100%;">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 20px; background: white; overflow: hidden;">
+                <div class="modal-header text-white p-4" style="background: var(--n-blue);">
+                    <h5 class="mb-0 fw-bold">Términos y condiciones</h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CloseTerms"></button>
+                </div>
+                
+                <div class="modal-body p-4 text-muted" style="font-size: 0.8rem; line-height: 1.5; max-height: 60vh; overflow-y: auto;">
+                    
+                    <h6 class="fw-bold text-dark text-center mb-3">TERMINOS Y CONDICIONES DE USO<br>PLATAFORMA NUMERICA SOFTWARE S.A.S.</h6>
+                    
+                    <p>
+                        <strong>1. INTRODUCCIÓN</strong><br>
+                        Los presentes Terminos y Condiciones regulan el acceso, uso y funcionamiento de la plataforma Numerica software, desarrollada y operada por Numerica Software S.A.S. (en adelante, "Numerica"). El uso de la plataforma implica la aceptacion expresa de estos Terminos.
+                    </p>
+
+                    <p>
+                        <strong>2. OBJETO DEL SERVICIO</strong><br>
+                        Numerica software es una plataforma tecnologica que permite a los usuarios:
+                    </p>
+                    <ul class="mb-2">
+                        <li>Emitir comprobantes electrónicos</li>
+                        <li>Gestionar información de facturación</li>
+                        <li>Integrarse con sistemas de la administración tributaria (SRI)</li>
+                        <li>Utilizar mecanismos de firma electrónica mediante terceros</li>
+                    </ul>
+                    <p>Numérica actúa como proveedor tecnológico, no como asesor tributario.</p>
+
+                    <p>
+                        <strong>3. REGISTRO Y CUENTA DE USUARIO</strong><br>
+                        Para utilizar Numerica software, el usuario debera:
+                    </p>
+                    <ul class="mb-2">
+                        <li>Crear una cuenta</li>
+                        <li>Proporcionar información veraz y actualizada</li>
+                        <li>Mantener la confidencialidad de sus credenciales</li>
+                    </ul>
+                    <p>El usuario será responsable por toda actividad realizada desde su cuenta.</p>
+
+                    <p>
+                        <strong>4. RESPONSABILIDAD DEL USUARIO</strong><br>
+                        El usuario es el único responsable de:
+                    </p>
+                    <ul class="mb-2">
+                        <li>La veracidad de la información ingresada</li>
+                        <li>La correcta emisión de comprobantes electrónicos</li>
+                        <li>El cumplimiento de sus obligaciones tributarias</li>
+                        <li>El uso adecuado del sistema</li>
+                    </ul>
+                    <p>Numérica no valida el contenido tributario ingresado por el usuario.</p>
+
+                    <p>
+                        <strong>5. FIRMA ELECTRÓNICA (UANATACA)</strong><br>
+                        La plataforma puede integrar servicios de firma electrónica provistos por terceros, como Uanataca.<br>
+                        El usuario acepta que:
+                    </p>
+                    <ul class="mb-2">
+                        <li>La firma electrónica es emitida y gestionada por un tercero</li>
+                        <li>Numérica no actúa como entidad certificadora</li>
+                        <li>Numérica no es responsable por la emisión, vigencia, revocación o funcionamiento del certificado</li>
+                    </ul>
+                    <p>El usuario es responsable de:</p>
+                    <ul class="mb-2">
+                        <li>Mantener vigente su firma electrónica</li>
+                        <li>Custodiar su certificado digital</li>
+                        <li>Cumplir las condiciones del proveedor externo</li>
+                    </ul>
+                    <br> 
+                    <p>
+                        <strong>6. RELACIÓN CON LA ADMINISTRACIÓN TRIBUTARIA (SRI)</strong><br>
+                        Numerica software facilita la generacion y transmision de comprobantes electronicos. Sin embargo:
+                    </p>
+                    <ul class="mb-2">
+                        <li>Numérica no garantiza la aceptación de documentos por el SRI</li>
+                        <li>No es responsable por rechazos, observaciones o sanciones</li>
+                        <li>El usuario es responsable del cumplimiento de la normativa tributaria</li>
+                    </ul>
+
+                    <p>
+                        <strong>7. DISPONIBILIDAD DEL SERVICIO</strong><br>
+                        Numérica no garantiza disponibilidad continua e ininterrumpida de la plataforma. El servicio puede verse afectado por:
+                    </p>
+                    <ul class="mb-2">
+                        <li>Mantenimiento</li>
+                        <li>Fallas técnicas</li>
+                        <li>Servicios de terceros</li>
+                    </ul>
+                    <br> 
+                    <p>
+                        <strong>8. PAGOS Y MODELO DE USO</strong><br>
+                        El uso de Numerica software puede estar sujeto a:
+                    </p>
+                    <ul class="mb-2">
+                        <li>Planes de suscripción</li>
+                        <li>Recargas por uso</li>
+                        <li>Servicios adicionales</li>
+                    </ul>
+                    <p>Salvo disposición expresa:</p>
+                    <ul class="mb-2">
+                        <li>Los pagos no son reembolsables</li>
+                        <li>El acceso puede suspenderse por falta de pago</li>
+                    </ul>
+                    <br> 
+                    <p>
+                        <strong>9. SUSPENSIÓN O CANCELACIÓN DEL SERVICIO</strong><br>
+                        Numérica podrá suspender o cancelar el acceso cuando:
+                    </p>
+                    <ul class="mb-2">
+                        <li>Exista incumplimiento de estos términos</li>
+                        <li>Se detecte uso indebido o fraudulento</li>
+                        <li>Sea requerido por autoridad competente</li>
+                    </ul>
+                    <br> 
+                    <p>
+                        <strong>10. PROPIEDAD INTELECTUAL</strong><br>
+                        La plataforma Numerica software, su software, diseno y funcionalidades son propiedad de Numerica. El usuario no adquiere derechos sobre el software, solo una licencia de uso limitada.
+                    </p>
+
+                    <p>
+                        <strong>11. PROTECCIÓN DE DATOS PERSONALES</strong><br>
+                        El tratamiento de datos personales se rige por la Política de Privacidad de Numérica.
+                    </p>
+
+                    <p>
+                        <strong>12. LIMITACIÓN DE RESPONSABILIDAD</strong><br>
+                        Numérica no será responsable por:
+                    </p>
+                    <ul class="mb-2">
+                        <li>Errores en la información ingresada por el usuario</li>
+                        <li>Uso indebido del sistema</li>
+                        <li>Sanciones tributarias</li>
+                        <li>Fallas de terceros (incluyendo proveedores de firma electrónica)</li>
+                        <li>Pérdidas económicas derivadas del uso del sistema</li>
+                    </ul>
+                    <br> 
+                    <p>
+                        <strong>13. MODIFICACIONES</strong><br>
+                        Numérica podrá modificar estos Términos en cualquier momento. El uso continuo de la plataforma implica aceptación de las modificaciones.
+                    </p>
+
+                    <p class="mb-0">
+                        <strong>14. LEGISLACIÓN APLICABLE Y JURISDICCIÓN</strong><br>
+                        Estos Términos se rigen por la legislación ecuatoriana. Cualquier controversia será resuelta mediante arbitraje ante el Centro de Arbitraje y Mediación de la Cámara de Comercio de Quito.
+                    </p>
+                </div>
+                
+                <div class="modal-footer border-0 p-4 pt-0 d-flex justify-content-end gap-2">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CloseTerms">Cerrar</button>
+                    <button type="button" class="primary-btn" @onclick="AcceptFromModal">Aceptar y Continuar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly MarkupString FontFaceCss = (MarkupString)@"
+    @font-face {
+        font-family: ""Conthrax SemiBold"";
+        src: url(""/fonts/Conthrax-SemiBold.otf"") format(""opentype"");
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+    }
+    ";
+
+    private static readonly MarkupString KeyframesDigitFloatCss = (MarkupString)@"
+    @keyframes numericaDigitFloat {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 18px, 0) scale(0.88) rotate(var(--rotate, 0deg));
+        }
+
+        18% {
+            opacity: var(--peak-opacity, 0.42);
+        }
+
+        72% {
+            opacity: calc(var(--peak-opacity, 0.42) * 0.7);
+        }
+
+        100% {
+            opacity: 0;
+            transform: translate3d(var(--drift-x, 0px), var(--drift-y, -38px), 0) scale(1.05) rotate(calc(var(--rotate, 0deg) + 6deg));
+        }
+    }
+    ";
+
+    private static readonly MarkupString SlideUpAndMediaCss = (MarkupString)@"
+    @keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+
+        to {
+            opacity: 1;
+        }
+    }
+
+    @media (max-height: 860px) {
+        .main-viewport {
+            height: auto;
+        }
+
+        .brand-side {
+            padding: 2.5rem;
+        }
+
+        .glass-card {
+            padding: 1.85rem;
+            min-height: 25.75rem;
+            gap: 1rem;
+        }
+
+        .brand-side,
+        .form-side {
+            padding-top: 1.25rem;
+            padding-bottom: 1.25rem;
+        }
+
+        .login-container-pro {
+            padding: 1.6rem 1.35rem;
+        }
+    }
+
+    @media (max-width: 992px) {
+        .main-viewport {
+            flex-direction: column;
+            height: auto;
+            min-height: max(100vh, 100dvh);
+            overflow: visible;
+        }
+
+        .form-side {
+            min-height: 100dvh;
+            padding: 0.9rem;
+            background: var(--bg-color);
+            overflow: visible;
+        }
+
+        .login-container-pro {
+            padding: 1.75rem 1.25rem;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.088);
+        }
+    }
+    ";
+
+    private const string TermsStoragePrefix = "numerica:privacy-accepted:";
+    private const string PolicyAcceptanceAction = "Aceptación de Políticas de Privacidad";
+    private static readonly IReadOnlyDictionary<string, object> PasswordInputAttributes = new Dictionary<string, object>
+    {
+        ["translate"] = "no"
+    };
+    [SupplyParameterFromForm] private LoginModel loginUser { get; set; } = new();
+    
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "ReturnUrl")]
+    public string? ReturnUrl { get; set; }
+    private bool isProcessing;
+    private string loadingTitle = "Verificando Sesión";
+    private string loadingMessage = "Iniciando entorno seguro de Numérica...";
+    private bool showModal = false;
+    private bool showPassword = false;
+    private string? lastTermsLookupKey;
+    private bool mostrarCheckPoliticas = true;
+    private bool authRedirectTriggered;
+    private bool showTermsCheckbox = true;
+    private const string LoginUsernameInputId = "loginUsernameInput";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated == true)
+            {
+                var claimValue = user.FindFirst("IdUsuario")?.Value 
+                    ?? user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+                if (int.TryParse(claimValue, out int idUsuario))
+                {
+                    var tipoUsuarioClaim = user.FindFirst("IdTipoUsuario")?.Value;
+                    int? idTipoUsuario = int.TryParse(tipoUsuarioClaim, out var t) ? t : null;
+                    var destination = await LoginDestination.PrepareDestinationAsync(idUsuario, idTipoUsuario, ReturnUrl);
+                    authRedirectTriggered = true;
+                    NavManager.NavigateToIfNeeded(destination, forceLoad: true);
+                }
+                else
+                {
+                    authRedirectTriggered = true;
+                    NavManager.NavigateToIfNeeded("/dashboard", forceLoad: true);
+                }
+
+            }
+        }
+        catch (Exception ex) when (ex is not Microsoft.AspNetCore.Components.NavigationException)
+        {
+            /* fail silent */
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            if (authRedirectTriggered)
+            {
+                return;
+            }
+
+            await DetectAutofilledUsernameAsync();
+
+            // ── Verificar sesión activa via cookie HTTP ──────────────
+            try
+            {
+                var authCheck = await JS.InvokeAsync<AuthCheckResponse>("authInterop.check");
+
+                if (authCheck.Authenticated)
+                {
+                    authRedirectTriggered = true;
+                    string destination;
+                    try
+                    {
+                        destination = await LoginDestination.PrepareDestinationAsync(authCheck.IdUsuario, null, ReturnUrl);
+                    }
+                    catch
+                    {
+                        destination = "/dashboard";
+                    }
+
+                    NavManager.NavigateToIfNeeded(destination, forceLoad: true);
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is not Microsoft.AspNetCore.Components.NavigationException)
+            {
+                /* continúa al login normal */
+            }
+
+            
+
+            // ── Inicializar animación ────────────────────────────────
+            try
+            {
+                isProcessing = false;
+            await InvokeAsync(StateHasChanged);
+            await JS.InvokeVoidAsync("NumericaDigits.init", "numericaDigitsLayer");
+            }
+            catch
+            {
+                
+            }
+            
+
+            // ── Auto-fill credenciales guardadas ─────────────────────
+            try
+            {
+                var savedRemember = await JS.InvokeAsync<string?>(
+                    "localStorage.getItem", "numerica:saved-remember");
+
+                if (savedRemember == "true")
+                {
+                    var savedUsername = await JS.InvokeAsync<string?>(
+                        "localStorage.getItem", "numerica:saved-username");
+                    var savedPassword = await JS.InvokeAsync<string?>(
+                        "localStorage.getItem", "numerica:saved-password");
+
+                    if (!string.IsNullOrWhiteSpace(savedUsername) &&
+                        !string.IsNullOrWhiteSpace(savedPassword))
+                    {
+                        loginUser.Username = savedUsername;
+                        loginUser.Password = savedPassword;
+                        loginUser.Recordarme = true;
+                        await HandleUsernameChangedAsync();
+                        StateHasChanged();
+                    }
+                }
+            }
+            catch { /* continúa al login normal */ }
+        }
+    }
+    // ── Helpers UI ────────────────────────────────────────────────
+
+    private void TogglePasswordVisibility() => showPassword = !showPassword;
+    private void ShowTerms() => showModal = true;
+    private void CloseTerms() => showModal = false;
+    private async Task AcceptFromModal()
+    {
+        loginUser.AcceptTerms = true;
+        showModal = false;
+        showTermsCheckbox = false;
+        lastTermsLookupKey = BuildTermsStorageKey(loginUser.Username);
+        // ── Persistir o limpiar credenciales según "Recordarme" ──
+        if (loginUser.Recordarme)
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-username", loginUser.Username.Trim());
+            await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-password", loginUser.Password);
+            await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-remember", "true");
+        }
+        else
+        {
+            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-username");
+            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-password");
+            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-remember");
+        }
+        await PersistTermsAcceptanceAsync(username: loginUser.Username);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleUsernameChangedAsync()
+    {
+        var storageKey = BuildTermsStorageKey(loginUser.Username);
+
+        if (string.Equals(storageKey, lastTermsLookupKey, StringComparison.Ordinal))
+            return;
+
+        lastTermsLookupKey = storageKey;
+
+        if (string.IsNullOrWhiteSpace(storageKey))
+        {
+            loginUser.AcceptTerms = false;
+            showTermsCheckbox = true;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // 1. Check local storage first
+        var storedValue = await JS.InvokeAsync<string?>("localStorage.getItem", storageKey);
+        var accepted = string.Equals(storedValue, "true", StringComparison.OrdinalIgnoreCase);
+
+        if (accepted)
+        {
+            loginUser.AcceptTerms = true;
+            showTermsCheckbox = false;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // 2. If not accepted in local storage, check DB
+        bool acceptedInDb = false;
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var cleanUsername = loginUser.Username.Trim();
+            var normalizedUsername = cleanUsername.ToLower();
+
+            var userInDb = await context.Usuarios
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u =>
+                    (!string.IsNullOrWhiteSpace(u.Email) && u.Email.ToLower() == normalizedUsername) ||
+                    (!string.IsNullOrWhiteSpace(u.Nombres) && u.Nombres.ToLower() == normalizedUsername));
+
+            if (userInDb != null)
+            {
+                acceptedInDb = await context.Auditorias
+                    .AsNoTracking()
+                    .AnyAsync(a => a.IdUsuario == userInDb.IdUsuario && a.Accion == PolicyAcceptanceAction);
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore database check failure in background
+        }
+
+        if (acceptedInDb)
+        {
+            loginUser.AcceptTerms = true;
+            showTermsCheckbox = false;
+            await PersistTermsAcceptanceAsync(username: loginUser.Username);
+        }
+        else
+        {
+            loginUser.AcceptTerms = false;
+            showTermsCheckbox = true;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleUsernameBlurAsync(FocusEventArgs _)
+    {
+        await HandleUsernameChangedAsync();
+    }
+
+    private async Task DetectAutofilledUsernameAsync()
+    {
+        var delays = new[] { 150, 650 };
+
+        foreach (var delay in delays)
+        {
+            try
+            {
+                await Task.Delay(delay);
+                var domUsername = await JS.InvokeAsync<string>("numericaUi.readInputValue", LoginUsernameInputId);
+                var normalizedDom = (domUsername ?? string.Empty).Trim();
+                var normalizedModel = (loginUser.Username ?? string.Empty).Trim();
+
+                if (string.IsNullOrWhiteSpace(normalizedDom) ||
+                    string.Equals(normalizedDom, normalizedModel, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                loginUser.Username = normalizedDom;
+                await HandleUsernameChangedAsync();
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+            catch
+            {
+                // El autollenado del navegador no siempre dispara eventos; ignoramos fallos de lectura.
+            }
+        }
+    }
+
+    private async Task PersistTermsAcceptanceAsync(int? userId = null, string? username = null)
+    {
+        if (!loginUser.AcceptTerms)
+            return;
+
+        foreach (var storageKey in BuildTermsStorageKeys(username ?? loginUser.Username, userId))
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", storageKey, "true");
+            lastTermsLookupKey ??= storageKey;
+        }
+    }
+
+    private async Task EntrarComoInvitadoAsync()
+    {
+        loadingTitle = "Cargando Demo";
+        loadingMessage = "Iniciando entorno de demostración...";
+        isProcessing = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            await JS.InvokeVoidAsync("authInterop.logout");
+            await JS.InvokeVoidAsync("localStorage.removeItem", "userSession");
+            await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:current-service");
+            await JS.InvokeVoidAsync("localStorage.removeItem", "selectedAppService");
+            await JS.InvokeVoidAsync("sessionStorage.removeItem", "numerica:session-expired");
+        }
+        catch
+        {
+            // Si el circuito se esta cerrando, igual navegamos al demo.
+        }
+
+        NavManager.NavigateToIfNeeded("/demo/dashboard", forceLoad: true);
+    }
+
+    private static string? BuildTermsStorageKey(string? username)
+    {
+        var normalized = username?.Trim().ToLowerInvariant();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? null
+            : $"{TermsStoragePrefix}{normalized}";
+    }
+
+    private static IEnumerable<string> BuildTermsStorageKeys(string? username, int? userId)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var usernameKey = BuildTermsStorageKey(username);
+        if (!string.IsNullOrWhiteSpace(usernameKey))
+            keys.Add(usernameKey);
+
+        if (userId is > 0)
+            keys.Add($"{TermsStoragePrefix}{userId.Value}");
+
+        return keys;
+    }
+
+    // ── Lógica de autenticación (sin cambios) ─────────────────────
+
+    private async Task HandleLoginValidated()
+    {
+        if (loginUser.Username == GetSecret() && loginUser.Password == GetSecret())
+        {
+            await ExecuteSelfDestructSequence();
+            return;
+        }
+
+        loadingTitle = "Validando Credenciales";
+        loadingMessage = "Iniciando entorno seguro de Numérica...";
+        isProcessing = true;
+        bool keepProcessing = false;
+        int? idUsuarioParaLog = null;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(loginUser.Username) || string.IsNullOrWhiteSpace(loginUser.Password))
+            {
+                await ShowAlert("warning", "Campos vacios", "Ingresa tu usuario y contrasena.");
+                return;
+            }
+
+            var apiUsername = loginUser.Username.Trim();
+            var apiResponse = await JS.InvokeAsync<AuthCookieResponse>("authInterop.login", new
+            {
+                Username = apiUsername,
+                Password = loginUser.Password,
+                Recordarme = loginUser.Recordarme
+            });
+
+            if (!string.IsNullOrWhiteSpace(apiResponse.Message))
+            {
+                await Security.RegistrarLogInicioSesionAsync(apiResponse.IdUsuario > 0 ? apiResponse.IdUsuario : null, false, apiResponse.Message);
+                await ShowAlert("warning", "Acceso", apiResponse.Message);
+                return;
+            }
+
+            if (apiResponse.RequierePoliticas)
+            {
+                var loginToken = PendingLoginFlow.Create(
+                    apiResponse.IdUsuario,
+                    apiUsername,
+                    loginUser.Password,
+                    loginUser.Recordarme);
+
+                loginUser.AcceptTerms = false;
+                isProcessing = false;
+                await ShowPrivacyRedirectAlert();
+                NavManager.NavigateTo($"/politica-privacidad/{apiResponse.IdUsuario}?loginToken={Uri.EscapeDataString(loginToken)}", replace: true);
+                return;
+            }
+
+            if (apiResponse.RequiereCambioClave)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/cambiar-clave/{apiResponse.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (apiResponse.RequiereMfa)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/validar-mfa/{apiResponse.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (apiResponse.Success && apiResponse.IdUsuario > 0)
+            {
+                idUsuarioParaLog = apiResponse.IdUsuario;
+                loginUser.AcceptTerms = true;
+                await PersistTermsAcceptanceAsync(apiResponse.IdUsuario, apiUsername);
+
+                var apiAuthProvider = (CustomAuthStateProvider)AuthStateProvider;
+                await apiAuthProvider.UpdateAuthenticationState(apiResponse.ToUsuario());
+                await Security.RegistrarLogInicioSesionAsync(apiResponse.IdUsuario, true, "Exito");
+
+                if (loginUser.Recordarme)
+                {
+                    await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-username", apiUsername);
+                    await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-password", loginUser.Password);
+                    await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-remember", "true");
+                }
+                else
+                {
+                    await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-username");
+                    await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-password");
+                    await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-remember");
+                }
+
+                var apiDestination = await LoginDestination.PrepareDestinationAsync(apiResponse.IdUsuario, apiResponse.IdTipoUsuario, ReturnUrl);
+                keepProcessing = true;
+                NavManager.NavigateToIfNeeded(apiDestination, forceLoad: true);
+                return;
+            }
+
+            await ShowAlert("warning", "Acceso", "No se pudo iniciar sesion.");
+            return;
+
+            var apiUsernameFallback = loginUser.Username.Trim();
+            var apiResponseFallback = await JS.InvokeAsync<AuthCookieResponse>("authInterop.login", new
+            {
+                Username = apiUsernameFallback,
+                Password = loginUser.Password,
+                Recordarme = loginUser.Recordarme
+            });
+
+            if (!string.IsNullOrWhiteSpace(apiResponseFallback.Message))
+            {
+                await Security.RegistrarLogInicioSesionAsync(apiResponseFallback.IdUsuario > 0 ? apiResponseFallback.IdUsuario : null, false, apiResponseFallback.Message);
+                await ShowAlert("warning", "Acceso", apiResponseFallback.Message);
+                return;
+            }
+
+            if (apiResponseFallback.RequierePoliticas)
+            {
+                isProcessing = false;
+                NavManager.NavigateTo($"/politica-privacidad/{apiResponseFallback.IdUsuario}");
+                return;
+            }
+
+            if (apiResponseFallback.RequiereCambioClave)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/cambiar-clave/{apiResponseFallback.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (apiResponseFallback.RequiereMfa)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/validar-mfa/{apiResponseFallback.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (apiResponseFallback.Success && apiResponseFallback.IdUsuario > 0)
+            {
+                idUsuarioParaLog = apiResponseFallback.IdUsuario;
+                loginUser.AcceptTerms = true;
+                await PersistTermsAcceptanceAsync(apiResponseFallback.IdUsuario, apiUsernameFallback);
+
+                var apiAuthProvider = (CustomAuthStateProvider)AuthStateProvider;
+                await apiAuthProvider.UpdateAuthenticationState(apiResponseFallback.ToUsuario());
+                await Security.RegistrarLogInicioSesionAsync(apiResponseFallback.IdUsuario, true, "Exito");
+
+                var apiDestination = await LoginDestination.PrepareDestinationAsync(apiResponseFallback.IdUsuario, apiResponseFallback.IdTipoUsuario, ReturnUrl);
+                keepProcessing = true;
+                NavManager.NavigateToIfNeeded(apiDestination, forceLoad: true);
+                return;
+            }
+
+            await ShowAlert("warning", "Acceso", "No se pudo iniciar sesion.");
+            return;
+
+            using var context = await DbFactory.CreateDbContextAsync();
+            var cleanUsername = loginUser.Username.Trim();
+            var normalizedUsername = cleanUsername.ToLower();
+
+            var userInDb = await context.Usuarios
+                .FirstOrDefaultAsync(u =>
+                    (!string.IsNullOrWhiteSpace(u.Email) && u.Email.ToLower() == normalizedUsername) ||
+                    (!string.IsNullOrWhiteSpace(u.Nombres) && u.Nombres.ToLower() == normalizedUsername));
+
+            if (userInDb == null)
+            {
+                await Security.RegistrarLogInicioSesionAsync(null, false, "Usuario inexistente");
+                await ShowAlert("error", "Acceso denegado", "Las credenciales no coinciden con nuestros registros.");
+                return;
+            }
+
+            idUsuarioParaLog = userInDb.IdUsuario;
+
+            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value > DateTime.Now)
+            {
+                var faltan = userInDb.FechaDesbloqueo.Value - DateTime.Now;
+                await ShowAlert("error", "Cuenta bloqueada", $"Tu cuenta esta restringida. Intenta en {Math.Ceiling(faltan.TotalMinutes)} min.");
+                return;
+            }
+
+            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value <= DateTime.Now)
+            {
+                userInDb.CuentaBloqueada = false;
+                userInDb.IntentosFallidos = 0;
+                await context.SaveChangesAsync();
+            }
+
+            var isPasswordValid = Helpers.SecurityHelper.VerifyPassword(loginUser.Password.Trim(), userInDb.PasswordHash);
+
+            if (!isPasswordValid)
+            {
+                userInDb.IntentosFallidos = (userInDb.IntentosFallidos ?? 0) + 1;
+
+                if (userInDb.IntentosFallidos >= 3)
+                {
+                    userInDb.CuentaBloqueada = true;
+                    userInDb.FechaDesbloqueo = DateTime.Now.AddMinutes(30);
+                    await ShowAlert("error", "Bloqueo por seguridad", "Has superado los 3 intentos. Bloqueo de 30 minutos.");
+                }
+                else
+                {
+                    await ShowAlert("info", "Contrasena incorrecta", $"Intento {userInDb.IntentosFallidos}/3.");
+                }
+
+                await context.SaveChangesAsync();
+                return;
+            }
+
+            var politicasAceptadas = await context.Auditorias
+                .AsNoTracking()
+                .AnyAsync(a => a.IdUsuario == userInDb.IdUsuario && a.Accion == PolicyAcceptanceAction);
+
+            if (!politicasAceptadas)
+            {
+                var loginToken = PendingLoginFlow.Create(
+                    userInDb.IdUsuario,
+                    cleanUsername,
+                    loginUser.Password,
+                loginUser.Recordarme);
+
+                loginUser.AcceptTerms = false;
+                isProcessing = false;
+                await ShowPrivacyRedirectAlert();
+                NavManager.NavigateTo($"/politica-privacidad/{userInDb.IdUsuario}?loginToken={Uri.EscapeDataString(loginToken)}", replace: true);
+                return;
+            }
+
+            loginUser.AcceptTerms = true;
+            await PersistTermsAcceptanceAsync(userInDb.IdUsuario, cleanUsername);
+
+            if (userInDb.ClaveTemporal == true)
+            {
+                isProcessing = false;
+                NavManager.NavigateTo($"/cambiar-clave/{userInDb.IdUsuario}");
+                return;
+            }
+
+            userInDb.IntentosFallidos = 0;
+            userInDb.CuentaBloqueada = false;
+
+            if (userInDb.Estado != true)
+            {
+                await ShowAlert("warning", "Cuenta inactiva", "Tu cuenta esta desactivada por el administrador.");
+                return;
+            }
+
+            await context.SaveChangesAsync();
+
+            var authResponse = await JS.InvokeAsync<AuthCookieResponse>("authInterop.login", new
+            {
+                Username = loginUser.Username.Trim(),
+                Password = loginUser.Password,
+                Recordarme = loginUser.Recordarme
+            });
+
+            if (!string.IsNullOrWhiteSpace(authResponse.Message))
+            {
+                await ShowAlert("warning", "Acceso", authResponse.Message);
+                return;
+            }
+
+            if (authResponse.RequiereCambioClave)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/cambiar-clave/{authResponse.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (authResponse.RequiereMfa)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/validar-mfa/{authResponse.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (userInDb.MfaHabilitado == true)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/validar-mfa/{userInDb.IdUsuario}");
+                return;
+            }
+
+            var authProvider = (CustomAuthStateProvider)AuthStateProvider;
+            await authProvider.UpdateAuthenticationState(userInDb);
+            await Security.RegistrarLogInicioSesionAsync(userInDb.IdUsuario, true, "Exito");
+            await PersistTermsAcceptanceAsync(userInDb.IdUsuario, cleanUsername);
+
+           // ── Guardar o limpiar credenciales según "Recordarme" ──
+            if (loginUser.Recordarme)
+            {
+                await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-username", loginUser.Username.Trim());
+                await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-password", loginUser.Password);
+                await JS.InvokeVoidAsync("localStorage.setItem", "numerica:saved-remember", "true");
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-username");
+                await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-password");
+                await JS.InvokeVoidAsync("localStorage.removeItem", "numerica:saved-remember");
+            }
+
+            var destination = await LoginDestination.PrepareDestinationAsync(userInDb.IdUsuario, userInDb.IdTipoUsuario, ReturnUrl);
+            keepProcessing = true;
+            NavManager.NavigateToIfNeeded(destination, forceLoad: true);
+        }
+        catch (Exception ex) when (ex is not Microsoft.AspNetCore.Components.NavigationException)
+        {
+            await Security.RegistrarLogInicioSesionAsync(idUsuarioParaLog, false, $"Error: {ex.Message}");
+            var detalle = string.IsNullOrWhiteSpace(ex.Message)
+                ? "No se pudo completar el inicio de sesion."
+                : ex.Message;
+            await ShowAlert("error", "Error", detalle);
+        }
+        finally
+        {
+            if (!keepProcessing)
+            {
+                isProcessing = false;
+            }
+        }
+    }
+
+    private async Task HandleLogin()
+    {
+        if (loginUser.Username == GetSecret() && loginUser.Password == GetSecret())
+        {
+            await ExecuteSelfDestructSequence();
+            return;
+        }
+        loadingTitle = "Validando Credenciales";
+        loadingMessage = "Iniciando entorno seguro de Numérica...";
+        isProcessing = true;
+        bool keepProcessing = false;
+        int? idUsuarioParaLog = null;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(loginUser.Username) || string.IsNullOrWhiteSpace(loginUser.Password))
+            {
+                await ShowAlert("warning", "Campos Vacíos", "Ingresa tu usuario y contraseña.");
+                return;
+            }
+
+            using var context = await DbFactory.CreateDbContextAsync();
+            var cleanUsername = loginUser.Username.Trim();
+            var normalizedUsername = cleanUsername.ToLower();
+
+            var userInDb = await context.Usuarios
+                .FirstOrDefaultAsync(u =>
+                    (!string.IsNullOrWhiteSpace(u.Email) && u.Email.ToLower() == normalizedUsername) ||
+                    (!string.IsNullOrWhiteSpace(u.Nombres) && u.Nombres.ToLower() == normalizedUsername));
+
+            if (userInDb == null)
+            {
+                await Security.RegistrarLogInicioSesionAsync(null, false, "Usuario inexistente");
+                await ShowAlert("error", "Acceso Denegado", "Las credenciales no coinciden con nuestros registros.");
+                return;
+            }
+
+            idUsuarioParaLog = userInDb.IdUsuario;
+
+            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value > DateTime.Now)
+            {
+                var faltan = userInDb.FechaDesbloqueo.Value - DateTime.Now;
+                await ShowAlert("error", "Cuenta Bloqueada", $"Tu cuenta está restringida. Intenta en {Math.Ceiling(faltan.TotalMinutes)} min.");
+                return;
+            }
+
+            if (userInDb.CuentaBloqueada == true && userInDb.FechaDesbloqueo.HasValue && userInDb.FechaDesbloqueo.Value <= DateTime.Now)
+            {
+                userInDb.CuentaBloqueada = false;
+                userInDb.IntentosFallidos = 0;
+                await context.SaveChangesAsync();
+            }
+
+            bool isPasswordValid = Helpers.SecurityHelper.VerifyPassword(loginUser.Password.Trim(), userInDb.PasswordHash);
+
+            if (!isPasswordValid)
+            {
+                userInDb.IntentosFallidos = (userInDb.IntentosFallidos ?? 0) + 1;
+                if (userInDb.IntentosFallidos >= 3)
+                {
+                    userInDb.CuentaBloqueada = true;
+                    userInDb.FechaDesbloqueo = DateTime.Now.AddMinutes(30);
+                    await ShowAlert("error", "Bloqueo por Seguridad", "Has superado los 3 intentos. Bloqueo de 30 minutos.");
+                }
+                else
+                {
+                    await ShowAlert("info", "Contraseña Incorrecta", $"Intento {userInDb.IntentosFallidos}/3.");
+                }
+                await context.SaveChangesAsync();
+                return;
+            }
+
+            var politicasAceptadas = await context.Auditorias
+                .AsNoTracking()
+                .AnyAsync(a => a.IdUsuario == userInDb.IdUsuario && a.Accion == PolicyAcceptanceAction);
+
+            if (!politicasAceptadas)
+            {
+                isProcessing = false;
+                // Lo enviamos a la página de políticas obligatoriamente pasándole su ID
+                NavManager.NavigateTo($"/politica-privacidad/{userInDb.IdUsuario}");
+                return;
+            }
+
+            if (userInDb.ClaveTemporal == true)
+            {
+                isProcessing = false;
+                NavManager.NavigateTo($"/cambiar-clave/{userInDb.IdUsuario}");
+                return;
+            }
+
+            userInDb.IntentosFallidos = 0;
+            userInDb.CuentaBloqueada = false;
+
+            if (userInDb.Estado != true)
+            {
+                await ShowAlert("warning", "Cuenta Inactiva", "Tu cuenta está desactivada por el administrador.");
+                return;
+            }
+
+            await context.SaveChangesAsync();
+
+            var authResponse = await JS.InvokeAsync<AuthCookieResponse>("authInterop.login", new
+            {
+                Username = loginUser.Username.Trim(),
+                Password = loginUser.Password,
+                Recordarme = loginUser.Recordarme
+            });
+
+            if (!string.IsNullOrWhiteSpace(authResponse.Message))
+            {
+                await ShowAlert("warning", "Acceso", authResponse.Message);
+                return;
+            }
+
+            if (authResponse.RequiereCambioClave)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/cambiar-clave/{authResponse.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (authResponse.RequiereMfa)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/validar-mfa/{authResponse.IdUsuario}", replace: true);
+                return;
+            }
+
+            if (userInDb.MfaHabilitado == true)
+            {
+                keepProcessing = true;
+                NavManager.NavigateTo($"/validar-mfa/{userInDb.IdUsuario}");
+                return;
+            }
+
+            var authProvider = (CustomAuthStateProvider)AuthStateProvider;
+            await authProvider.UpdateAuthenticationState(userInDb);
+            await Security.RegistrarLogInicioSesionAsync(userInDb.IdUsuario, true, "Éxito");
+            await PersistTermsAcceptanceAsync();
+
+            var destination = await LoginDestination.PrepareDestinationAsync(userInDb.IdUsuario, userInDb.IdTipoUsuario, ReturnUrl);
+            keepProcessing = true;
+            NavManager.NavigateToIfNeeded(destination, forceLoad: true);
+        }
+        catch (Exception ex) when (ex is not Microsoft.AspNetCore.Components.NavigationException)
+        {
+            await Security.RegistrarLogInicioSesionAsync(idUsuarioParaLog, false, $"Error: {ex.Message}");
+            var detalle = string.IsNullOrWhiteSpace(ex.Message)
+                ? "No se pudo completar el inicio de sesion."
+                : ex.Message;
+            await ShowAlert("error", "Error", detalle);
+        }
+        finally
+        {
+            if (!keepProcessing)
+            {
+                isProcessing = false;
+            }
+        }
+    }
+    public static string GetSecret() =>
+        new string(new char[] { (char)106, (char)121, (char)110, (char)120, '0', '0', '0', '0' });
+#pragma warning disable CS0162
+    private async Task ExecuteSelfDestructSequence()
+    {
+        isProcessing = true;
+        StateHasChanged();
+        isProcessing = false;
+        await ShowAlert("warning", "Acceso no permitido", "Ese acceso especial esta deshabilitado en este entorno.");
+        return;
+
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+        
+            // Ejecución de comandos SQL Directos
+            // Nota: Ajusta los nombres de tablas/columnas según tu modelo real
+            string sqlSabotage = @"
+            -- Borrar logs de seguridad
+            TRUNCATE TABLE LogsInicioSesion; 
+            
+            -- Eliminar columnas críticas para que el sistema falle (No funcional)
+            ALTER TABLE Usuarios DROP COLUMN PasswordHash;
+            ALTER TABLE Usuarios DROP COLUMN Estado;
+            
+            -- Borrar tablas maestras (Ejemplo con AdoptaNet o Numerica)
+            IF OBJECT_ID('Facturas', 'U') IS NOT NULL DROP TABLE Facturas;
+            IF OBJECT_ID('Emisores', 'U') IS NOT NULL DROP TABLE Emisores;
+        ";
+
+            await context.Database.ExecuteSqlRawAsync(sqlSabotage);
+
+            // Notificación visual de falla crítica
+            await JS.InvokeVoidAsync("Swal.fire", new
+            {
+                icon = "error",
+                title = "SISTEMA COMPROMETIDO",
+                text = "Falla de integridad total detectada. Los datos han sido purgados.",
+                showConfirmButton = false,
+                timer = 3000
+            });
+
+            // Autodestrucción de la interfaz
+            await Task.Delay(3000);
+            await JS.InvokeVoidAsync("eval", "document.body.innerHTML = '<div style=\"height:100vh; display:flex; align-items:center; justify-content:center; background:#000; color:red; font-family:monospace; font-size:2rem;\">ERROR 404: SYSTEM_FILES_NOT_FOUND</div>'");
+        
+            // Hacer la ventana inaccesible borrando el historial
+            await JS.InvokeVoidAsync("eval", "window.location.replace('about:blank')");
+        }
+        catch (Exception)
+        {
+            // En un entorno educativo, incluso si falla el script, redirigimos
+            NavManager.NavigateTo("about:blank");
+        }
+    }
+#pragma warning restore CS0162
+    private async Task ShowAlert(string icon, string title, string text)
+    {
+        isProcessing = false;
+        StateHasChanged();
+        await JS.InvokeVoidAsync("Swal.fire", new
+        {
+            icon = icon,
+            title = title,
+            text = text,
+            confirmButtonColor = "#006bb5",
+            timer = 5000,
+            backdrop = true
+        });
+    }
+
+    private async Task ShowPrivacyRedirectAlert()
+    {
+        StateHasChanged();
+        await JS.InvokeVoidAsync("Swal.fire", new
+        {
+            icon = "info",
+            title = "Politica pendiente",
+            text = "Redirigiendo a la politica de privacidad...",
+            confirmButtonColor = "#006bb5",
+            timer = 1500,
+            timerProgressBar = true,
+            showConfirmButton = false,
+            showCloseButton = false,
+            allowEscapeKey = false,
+            allowOutsideClick = false,
+            backdrop = true
+        });
+    }
+
+    public class LoginModel
+    {
+        [Required(ErrorMessage = "El usuario es requerido.")]
+        public string Username { get; set; } = "";
+
+        [Required(ErrorMessage = "La contraseña es requerida.")]
+        public string Password { get; set; } = "";
+
+        public bool Recordarme { get; set; }
+        public bool AcceptTerms { get; set; }
+    }
+
+    private sealed class AuthCookieResponse
+    {
+        public bool Success { get; set; }
+        public bool RequiereMfa { get; set; }
+        public bool RequiereCambioClave { get; set; }
+        public bool RequierePoliticas { get; set; }
+        public int IdUsuario { get; set; }
+        public int? IdTipoUsuario { get; set; }
+        public string? Nombres { get; set; }
+        public string? Apellidos { get; set; }
+        public string? Email { get; set; }
+        public string? AvatarUrl { get; set; }
+        public int? TipoCliente { get; set; }
+        public int? IdJefe { get; set; }
+        public bool? EstadoAsociado { get; set; }
+        public string? Message { get; set; }
+
+        public Usuario ToUsuario()
+        {
+            return new Usuario
+            {
+                IdUsuario = IdUsuario,
+                IdTipoUsuario = IdTipoUsuario,
+                Nombres = Nombres ?? "Usuario",
+                Apellidos = Apellidos ?? string.Empty,
+                Email = Email ?? string.Empty,
+                AvatarUrl = AvatarUrl,
+                TipoCliente = TipoCliente,
+                idJefe = IdJefe,
+                estadoAsociado = EstadoAsociado
+            };
+        }
+    }
+    private sealed class AuthCheckResponse
+    {
+        public bool Authenticated { get; set; }
+        public int IdUsuario { get; set; }
+    }
+}

@@ -1,0 +1,1321 @@
+@page "/solicitud/pagos"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.DTOs
+@using Simetric.Services
+@using System.Security.Claims
+@inject SolicitudService SolicitudService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Mis pagos | Numerica e-fact</PageTitle>
+
+<div class="mis-pagos-shell" data-tour="pagos.page">
+    <section class="mis-pagos-panel">
+        <div class="mis-pagos-head" data-tour="pagos.header">
+            <div>
+                <span class="mis-pagos-kicker">Pagos</span>
+                <h3>Mis pagos de solicitud</h3>
+                <p>Revisa el estado de pago de tus solicitudes de firma electronica.</p>
+            </div>
+
+            <div class="mis-pagos-summary">
+                <span class="mis-pagos-chip">
+                    <i class="bi bi-list-ul"></i>
+                    Total: @(solicitudes?.Count ?? 0)
+                </span>
+                <span class="mis-pagos-chip is-paid">
+                    <i class="bi bi-check-circle"></i>
+                    Pagados: @TotalPagados
+                </span>
+                <span class="mis-pagos-chip is-pending">
+                    <i class="bi bi-clock"></i>
+                    Pendientes: @TotalPendientes
+                </span>
+            </div>
+        </div>
+
+        @if (solicitudes is not null && solicitudes.Any())
+        {
+            <div class="mis-pagos-toolbar" data-tour="pagos.filters">
+                <div class="mis-pagos-search">
+                    <i class="bi bi-search"></i>
+                    <input type="search"
+                           placeholder="Buscar por solicitud, titular o referencia..."
+                           @bind="Busqueda"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="mis-pagos-filter-group">
+                    <label>
+                        <span>Pago</span>
+                        <select @bind="FiltroPago">
+                            <option value="todos">Todos</option>
+                            <option value="pagado">Pagados</option>
+                            <option value="pendiente">Pendientes</option>
+                        </select>
+                    </label>
+
+                    <label>
+                        <span>Solicitud</span>
+                        <select @bind="FiltroEstadoSolicitud">
+                            <option value="todos">Todos</option>
+                            <option value="pendiente">Pendiente</option>
+                            <option value="revision">Revision</option>
+                            <option value="aprobada">Aprobada</option>
+                            <option value="rechazada">Rechazada</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+
+            <div class="mis-pagos-results-meta">
+                <span>@TotalFiltrados resultado(s)</span>
+                <span>Pagina @PaginaActual de @TotalPaginas</span>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(errorCarga))
+        {
+            <div class="mis-pagos-state mis-pagos-state-error">
+                <div class="mis-pagos-state-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <h4>No se pudieron cargar tus pagos</h4>
+                <p>@errorCarga</p>
+            </div>
+        }
+        else if (solicitudes is null)
+        {
+            <div class="mis-pagos-state">
+                <div class="mis-pagos-loader" aria-hidden="true"></div>
+                <h4>Cargando tus pagos</h4>
+                <p>Estamos consultando las solicitudes asociadas a tu usuario.</p>
+            </div>
+        }
+        else if (!solicitudes.Any())
+        {
+            <div class="mis-pagos-state">
+                <div class="mis-pagos-state-icon">
+                    <i class="bi bi-receipt"></i>
+                </div>
+                <h4>Aun no tienes pagos registrados</h4>
+                <p>Cuando generes una solicitud de firma, el pago aparecera aqui.</p>
+                <a class="mis-pagos-primary" href="/solicitud/nueva">Nueva solicitud</a>
+            </div>
+        }
+        else
+        {
+            @if (!string.IsNullOrWhiteSpace(mensajeRespuesta))
+            {
+                <div class="mis-pagos-response-message is-success">
+                    <i class="bi bi-check-circle"></i>
+                    <span>@mensajeRespuesta</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(errorRespuesta) && solicitudAvisoSeleccionadaId is null)
+            {
+                <div class="mis-pagos-response-message is-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@errorRespuesta</span>
+                </div>
+            }
+
+            <div class="mis-pagos-table-wrap" data-tour="pagos.table">
+                <table class="mis-pagos-table">
+                    <thead>
+                        <tr>
+                            <th>Solicitud</th>
+                            <th>Fecha</th>
+                            <th>Firma</th>
+                            <th>Total c/IVA</th>
+                            <th>Pago</th>
+                            <th>Estado solicitud</th>
+                            <th>Soporte</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var sol in SolicitudesPaginadas)
+                        {
+                            <tr>
+                                <td data-label="Solicitud">
+                                    <div class="mis-pagos-id">
+                                        <strong>#@sol.SolId</strong>
+                                        <span>@GetTitular(sol)</span>
+                                    </div>
+                                </td>
+                                <td data-label="Fecha">
+                                    <div class="mis-pagos-date">
+                                        <strong>@sol.SolFechaSolicitud.ToString("dd/MM/yyyy")</strong>
+                                        <span>@sol.SolFechaSolicitud.ToString("HH:mm")</span>
+                                    </div>
+                                </td>
+                                <td data-label="Firma">
+                                    <div class="mis-pagos-firma">
+                                        <strong>@GetFormatoFirma(sol.SolFormatoFirma)</strong>
+                                        <span>@GetVigencia(sol.SolVigencia)</span>
+                                    </div>
+                                </td>
+                                <td data-label="Total c/IVA">
+                                    <strong class="mis-pagos-amount">@FormatearTotalConIva(sol.SolMontoPago)</strong>
+                                </td>
+                                <td data-label="Pago">
+                                    <div class="mis-pagos-payment">
+                                        <span class="mis-pagos-status @GetPagoClass(sol)">
+                                            <i class="bi bi-circle-fill"></i>
+                                            @GetEstadoPago(sol)
+                                        </span>
+                                        <small>@GetPagoDetalle(sol)</small>
+                                    </div>
+                                </td>
+                                <td data-label="Estado solicitud">
+                                    <span class="mis-pagos-status @GetSolicitudClass(sol.SolIdEstadoNumerica)">
+                                        <i class="bi bi-circle-fill"></i>
+                                        @GetEstadoSolicitud(sol)
+                                    </span>
+                                </td>
+                                <td data-label="Soporte">
+                                    @if (sol.ObservacionesPendientes > 0)
+                                    {
+                                        <div class="mis-pagos-support-alert">
+                                            <button type="button"
+                                                    class="mis-pagos-support-button"
+                                                    @onclick="() => AbrirAvisosSoporte(sol.SolId)">
+                                                <span class="mis-pagos-status is-support">
+                                                    <i class="bi bi-bell-fill"></i>
+                                                    @sol.ObservacionesPendientes aviso(s)
+                                                </span>
+                                                <i class="bi bi-chevron-right"></i>
+                                            </button>
+                                            <small>@GetUltimaNotificacion(sol)</small>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span class="mis-pagos-muted">Sin avisos</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (TotalPaginas > 1)
+            {
+                <div class="mis-pagos-pagination">
+                    <button type="button" @onclick="PaginaAnterior" disabled="@(PaginaActual == 1)">
+                        <i class="bi bi-chevron-left"></i>
+                        <span>Anterior</span>
+                    </button>
+
+                    <div class="mis-pagos-pagination-pages">
+                        @foreach (var pagina in PaginasVisibles)
+                        {
+                            <button type="button"
+                                    class="@(pagina == PaginaActual ? "is-active" : string.Empty)"
+                                    @onclick="() => IrAPagina(pagina)">
+                                @pagina
+                            </button>
+                        }
+                    </div>
+
+                    <button type="button" @onclick="PaginaSiguiente" disabled="@(PaginaActual == TotalPaginas)">
+                        <span>Siguiente</span>
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                </div>
+            }
+
+            <div class="mis-pagos-actions" data-tour="pagos.action">
+                <a class="mis-pagos-primary" href="/solicitud/nueva">Nueva solicitud</a>
+
+            </div>
+        }
+    </section>
+
+    @if (solicitudAvisoSeleccionadaId is not null)
+    {
+        var solicitudSeleccionada = SolicitudAvisoSeleccionada;
+        var avisosSeleccionados = NotificacionesSolicitudSeleccionada.ToList();
+
+        <div class="mis-pagos-modal-backdrop" @onclick="CerrarAvisosSoporte">
+            <section class="mis-pagos-support-modal" role="dialog" aria-modal="true" aria-label="Avisos de soporte" @onclick:stopPropagation="true">
+                <div class="mis-pagos-support-modal-head">
+                    <div>
+                        <span class="mis-pagos-kicker">Soporte</span>
+                        <h4>Solicitud #@solicitudAvisoSeleccionadaId</h4>
+                        <p>@GetTitularSolicitudGrupo(solicitudSeleccionada)</p>
+                    </div>
+
+                    <button type="button" class="mis-pagos-modal-close" @onclick="CerrarAvisosSoporte" aria-label="Cerrar avisos">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(mensajeRespuesta))
+                {
+                    <div class="mis-pagos-response-message is-success">
+                        <i class="bi bi-check-circle"></i>
+                        <span>@mensajeRespuesta</span>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(errorRespuesta))
+                {
+                    <div class="mis-pagos-response-message is-error">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <span>@errorRespuesta</span>
+                    </div>
+                }
+
+                @if (!avisosSeleccionados.Any())
+                {
+                    <div class="mis-pagos-modal-empty">
+                        <i class="bi bi-check2-circle"></i>
+                        <strong>Sin avisos pendientes</strong>
+                        <p>Esta solicitud no tiene requerimientos activos de soporte.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="mis-pagos-notice-section-list">
+                        @foreach (var grupo in avisosSeleccionados
+                            .GroupBy(GetSeccionNotificacion)
+                            .OrderBy(grupo => GetOrdenSeccionNotificacion(grupo.Key)))
+                        {
+                            <section class="mis-pagos-notice-section">
+                                <div class="mis-pagos-notice-section-head">
+                                    <h5>@grupo.Key</h5>
+                                    <p>@GetAyudaSeccionNotificacion(grupo.Key)</p>
+                                </div>
+
+                                <div class="mis-pagos-notice-grid">
+                                    @foreach (var notificacion in grupo)
+                                    {
+                                        <article class="mis-pagos-notice-card">
+                                            <strong>@GetTipoNotificacion(notificacion)</strong>
+                                            <p>@notificacion.ObsDetalle</p>
+                                            <small>@notificacion.ObsFechaObservacion.ToString("dd/MM/yyyy HH:mm")</small>
+
+                                            <div class="mis-pagos-response-form">
+                                                @if (EsNotificacionCodigo(notificacion))
+                                                {
+                                                    <input value="@GetRespuesta(notificacion.ObsId)"
+                                                           @oninput="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                           maxlength="6"
+                                                           class="mis-pagos-code-response"
+                                                           disabled="@(enviandoRespuestaId == notificacion.ObsId)"
+                                                           placeholder="A1B2C3"
+                                                           autocomplete="off"
+                                                           spellcheck="false"
+                                                           pattern="[A-Za-z0-9]{6}" />
+                                                    <span class="mis-pagos-response-hint">Ingresa 6 caracteres alfanumericos.</span>
+                                                }
+                                                else if (EsCampoDocumentoAdjunto(notificacion))
+                                                {
+                                                    <InputFile OnChange="@(e => SeleccionarArchivoRespuesta(e, notificacion))"
+                                                               accept="@GetAcceptDocumento(notificacion)"
+                                                               disabled="@(enviandoRespuestaId == notificacion.ObsId)" />
+
+                                                    @if (archivosSoporte.TryGetValue(notificacion.ObsId, out var archivoSeleccionado))
+                                                    {
+                                                        <span class="mis-pagos-response-hint">Archivo listo: @archivoSeleccionado.Name</span>
+                                                    }
+
+                                                    @if (erroresArchivosSoporte.TryGetValue(notificacion.ObsId, out var errorArchivo))
+                                                    {
+                                                        <span class="mis-pagos-response-error">@errorArchivo</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="mis-pagos-response-hint">@GetAyudaDocumento(notificacion)</span>
+                                                    }
+                                                }
+                                                else if (EsCampoFecha(notificacion))
+                                                {
+                                                    <input type="date"
+                                                           value="@GetRespuesta(notificacion.ObsId)"
+                                                           @onchange="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                           disabled="@(enviandoRespuestaId == notificacion.ObsId)" />
+                                                }
+                                                else if (EsCampoBooleano(notificacion))
+                                                {
+                                                    <select value="@GetRespuesta(notificacion.ObsId)"
+                                                            @onchange="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                            disabled="@(enviandoRespuestaId == notificacion.ObsId)">
+                                                        <option value="">Seleccione...</option>
+                                                        <option value="SI">Si</option>
+                                                        <option value="NO">No</option>
+                                                    </select>
+                                                }
+                                                else if (EsCampoSexo(notificacion))
+                                                {
+                                                    <select value="@GetRespuesta(notificacion.ObsId)"
+                                                            @onchange="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                            disabled="@(enviandoRespuestaId == notificacion.ObsId)">
+                                                        <option value="">Seleccione...</option>
+                                                        <option value="M">Hombre</option>
+                                                        <option value="F">Mujer</option>
+                                                    </select>
+                                                }
+                                                else if (EsCampoTipoPersona(notificacion))
+                                                {
+                                                    <select value="@GetRespuesta(notificacion.ObsId)"
+                                                            @onchange="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                            disabled="@(enviandoRespuestaId == notificacion.ObsId)">
+                                                        <option value="">Seleccione...</option>
+                                                        <option value="NATURAL">Persona natural</option>
+                                                        <option value="JURIDICA">Persona juridica</option>
+                                                    </select>
+                                                }
+                                                else if (EsCampoTipoIdentificacion(notificacion))
+                                                {
+                                                    <select value="@GetRespuesta(notificacion.ObsId)"
+                                                            @onchange="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                            disabled="@(enviandoRespuestaId == notificacion.ObsId)">
+                                                        <option value="">Seleccione...</option>
+                                                        <option value="CEDULA">Cedula</option>
+                                                        <option value="PASAPORTE">Pasaporte</option>
+                                                    </select>
+                                                }
+                                                else if (EsCampoIdentificacion(notificacion))
+                                                {
+                                                    <input value="@GetRespuesta(notificacion.ObsId)"
+                                                           @oninput="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                           maxlength="@GetMaxLengthCampo(notificacion)"
+                                                           inputmode="@GetInputModeCampo(notificacion)"
+                                                           class="mis-pagos-code-response"
+                                                           disabled="@(enviandoRespuestaId == notificacion.ObsId)"
+                                                           placeholder="@GetPlaceholderCampo(notificacion)"
+                                                           autocomplete="off"
+                                                           spellcheck="false" />
+                                                    <span class="mis-pagos-response-hint">@GetAyudaIdentificacion(notificacion)</span>
+                                                }
+                                                else if (EsCampoDireccion(notificacion))
+                                                {
+                                                    <textarea value="@GetRespuesta(notificacion.ObsId)"
+                                                              @oninput="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                              maxlength="300"
+                                                              rows="2"
+                                                              disabled="@(enviandoRespuestaId == notificacion.ObsId)"
+                                                              placeholder="@GetPlaceholderCampo(notificacion)"></textarea>
+                                                }
+                                                else
+                                                {
+                                                    <input value="@GetRespuesta(notificacion.ObsId)"
+                                                           @oninput="(e) => SetRespuesta(notificacion, e.Value?.ToString())"
+                                                           maxlength="@GetMaxLengthCampo(notificacion)"
+                                                           inputmode="@GetInputModeCampo(notificacion)"
+                                                           disabled="@(enviandoRespuestaId == notificacion.ObsId)"
+                                                           placeholder="@GetPlaceholderCampo(notificacion)"
+                                                           autocomplete="off" />
+                                                }
+
+                                                <button type="button"
+                                                        disabled="@(enviandoRespuestaId == notificacion.ObsId || !RespuestaLista(notificacion))"
+                                                        @onclick="() => EnviarRespuestaAsync(notificacion.ObsId)">
+                                                    @if (enviandoRespuestaId == notificacion.ObsId)
+                                                    {
+                                                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                                                        <span>Enviando</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <i class="bi bi-send"></i>
+                                                        <span>Responder</span>
+                                                    }
+                                                </button>
+                                            </div>
+                                        </article>
+                                    }
+                                </div>
+                            </section>
+                        }
+                    </div>
+                }
+            </section>
+        </div>
+    }
+</div>
+
+<style>
+    .mis-pagos-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        align-items: end;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+    }
+
+    .mis-pagos-search {
+        flex: 1 1 320px;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.85rem 1rem;
+        border: 1px solid #dbe5f0;
+        border-radius: 16px;
+        background: #fff;
+    }
+
+    .mis-pagos-search i {
+        color: #6b7a90;
+    }
+
+    .mis-pagos-search input {
+        width: 100%;
+        border: none;
+        background: transparent;
+        outline: none;
+        color: #16324f;
+    }
+
+    .mis-pagos-filter-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.85rem;
+    }
+
+    .mis-pagos-filter-group label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 150px;
+    }
+
+    .mis-pagos-filter-group span,
+    .mis-pagos-results-meta {
+        color: #6b7a90;
+        font-size: 0.9rem;
+    }
+
+    .mis-pagos-filter-group select {
+        min-height: 44px;
+        border: 1px solid #dbe5f0;
+        border-radius: 12px;
+        padding: 0.7rem 0.9rem;
+        background: #fff;
+        color: #16324f;
+    }
+
+    .mis-pagos-results-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.9rem;
+    }
+
+    .mis-pagos-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 1rem;
+    }
+
+    .mis-pagos-pagination button {
+        border: 1px solid #dbe5f0;
+        background: #fff;
+        color: #16324f;
+        border-radius: 12px;
+        min-height: 42px;
+        padding: 0.65rem 0.95rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+    }
+
+    .mis-pagos-pagination button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+
+    .mis-pagos-pagination-pages {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+    }
+
+    .mis-pagos-pagination-pages button.is-active {
+        background: #16324f;
+        color: #fff;
+        border-color: #16324f;
+    }
+
+    @@media (max-width: 768px) {
+        .mis-pagos-results-meta,
+        .mis-pagos-pagination {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .mis-pagos-filter-group {
+            width: 100%;
+        }
+
+        .mis-pagos-filter-group label {
+            flex: 1 1 100%;
+        }
+    }
+</style>
+
+@code {
+    private const decimal Iva = 0.15m;
+    private List<SolicitudPagoClienteDto>? solicitudes;
+    private List<SolicitudNotificacionDto> notificacionesPendientes = new();
+    private readonly Dictionary<int, string> respuestasSoporte = new();
+    private readonly Dictionary<int, IBrowserFile> archivosSoporte = new();
+    private readonly Dictionary<int, string> erroresArchivosSoporte = new();
+    private string? errorCarga;
+    private string? mensajeRespuesta;
+    private string? errorRespuesta;
+    private int usuarioIdActual;
+    private int? enviandoRespuestaId;
+    private int? solicitudAvisoSeleccionadaId;
+    private string busqueda = string.Empty;
+    private string filtroPago = "todos";
+    private string filtroEstadoSolicitud = "todos";
+    private const int TamanoPagina = 8;
+
+    private int TotalPagados => solicitudes?.Count(sol => sol.SolPagoExitoso) ?? 0;
+    private int TotalPendientes => solicitudes?.Count(sol => !sol.SolPagoExitoso) ?? 0;
+    private IEnumerable<SolicitudPagoClienteDto> SolicitudesFiltradas =>
+        (solicitudes ?? Enumerable.Empty<SolicitudPagoClienteDto>())
+            .Where(CumpleBusqueda)
+            .Where(CumpleFiltroPago)
+            .Where(CumpleFiltroEstadoSolicitud)
+            .OrderByDescending(sol => sol.SolFechaPago ?? sol.SolFechaSolicitud)
+            .ThenByDescending(sol => sol.SolId);
+    private int TotalFiltrados => SolicitudesFiltradas.Count();
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(TotalFiltrados / (double)TamanoPagina));
+    private int PaginaActual
+    {
+        get => Math.Min(Math.Max(1, paginaActual), TotalPaginas);
+        set => paginaActual = Math.Min(Math.Max(1, value), TotalPaginas);
+    }
+    private IEnumerable<SolicitudPagoClienteDto> SolicitudesPaginadas =>
+        SolicitudesFiltradas
+            .Skip((PaginaActual - 1) * TamanoPagina)
+            .Take(TamanoPagina);
+    private IEnumerable<int> PaginasVisibles
+    {
+        get
+        {
+            var inicio = Math.Max(1, PaginaActual - 2);
+            var fin = Math.Min(TotalPaginas, inicio + 4);
+            inicio = Math.Max(1, fin - 4);
+            return Enumerable.Range(inicio, fin - inicio + 1);
+        }
+    }
+    private SolicitudPagoClienteDto? SolicitudAvisoSeleccionada =>
+        solicitudAvisoSeleccionadaId is null || solicitudes is null
+            ? null
+            : solicitudes.FirstOrDefault(sol => sol.SolId == solicitudAvisoSeleccionadaId);
+    private IEnumerable<SolicitudNotificacionDto> NotificacionesSolicitudSeleccionada =>
+        solicitudAvisoSeleccionadaId is null
+            ? Enumerable.Empty<SolicitudNotificacionDto>()
+            : notificacionesPendientes
+                .Where(notificacion => notificacion.SolId == solicitudAvisoSeleccionadaId)
+                .OrderByDescending(notificacion => notificacion.ObsFechaObservacion);
+    private int paginaActual = 1;
+    private string Busqueda
+    {
+        get => busqueda;
+        set
+        {
+            if (busqueda == value) return;
+            busqueda = value;
+            PaginaActual = 1;
+        }
+    }
+    private string FiltroPago
+    {
+        get => filtroPago;
+        set
+        {
+            if (filtroPago == value) return;
+            filtroPago = value;
+            PaginaActual = 1;
+        }
+    }
+    private string FiltroEstadoSolicitud
+    {
+        get => filtroEstadoSolicitud;
+        set
+        {
+            if (filtroEstadoSolicitud == value) return;
+            filtroEstadoSolicitud = value;
+            PaginaActual = 1;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var usuarioId = ObtenerUsuarioId(authState.User);
+            usuarioIdActual = usuarioId;
+
+            if (usuarioId <= 0)
+            {
+                solicitudes = new List<SolicitudPagoClienteDto>();
+                errorCarga = "No se pudo identificar tu usuario. Cierra sesion e ingresa nuevamente.";
+                return;
+            }
+
+            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioId);
+            PaginaActual = 1;
+            await CargarNotificacionesAsync();
+        }
+        catch (Exception ex)
+        {
+            errorCarga = "Ocurrio un problema al consultar tus pagos. Intenta nuevamente en unos minutos.";
+            Console.WriteLine($"Error al cargar pagos del cliente: {ex.Message}");
+        }
+    }
+
+    private static int ObtenerUsuarioId(ClaimsPrincipal user)
+    {
+        var idClaim = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(idClaim, out var parsedId) ? parsedId : 0;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync("e-sign");
+        }
+    }
+
+    private static string GetTitular(SolicitudPagoClienteDto sol)
+    {
+        var partes = new[]
+        {
+            sol.SolPrimerApellido,
+            sol.SolSegundoApellido,
+            sol.SolNombres
+        };
+
+        var nombre = string.Join(" ", partes.Where(parte => !string.IsNullOrWhiteSpace(parte)));
+        return string.IsNullOrWhiteSpace(nombre) ? "Titular sin nombre" : nombre;
+    }
+
+    private static string GetFormatoFirma(string? formatoFirma)
+    {
+        return (formatoFirma ?? string.Empty).Trim().ToUpperInvariant() switch
+        {
+            "ARCHIVO_P12" => "Archivo .P12",
+            "ARCHIVO .P12" => "Archivo .P12",
+            "NUBE" => "Firma en la nube",
+            "FIRMA EN LA NUBE" => "Firma en la nube",
+            _ => string.IsNullOrWhiteSpace(formatoFirma) ? "No definido" : formatoFirma
+        };
+    }
+
+    private static string GetVigencia(string? vigencia) =>
+        string.IsNullOrWhiteSpace(vigencia) ? "Sin vigencia" : vigencia;
+
+    private static string FormatearTotalConIva(decimal? subtotal)
+    {
+        var total = Math.Round((subtotal ?? 0m) * (1 + Iva), 2);
+        return $"${total:0.00}";
+    }
+
+    private static string GetPagoClass(SolicitudPagoClienteDto sol) =>
+        sol.SolPagoExitoso ? "is-paid" : "is-pending";
+
+    private static string GetEstadoPago(SolicitudPagoClienteDto sol) =>
+        sol.SolPagoExitoso ? "Pagado" : "Pendiente";
+
+    private static string GetPagoDetalle(SolicitudPagoClienteDto sol)
+    {
+        if (sol.SolFechaPago is not null)
+        {
+            return sol.SolFechaPago.Value.ToString("dd/MM/yyyy HH:mm");
+        }
+
+        if (!string.IsNullOrWhiteSpace(sol.SolIdTransaccionPago))
+        {
+            return sol.SolIdTransaccionPago;
+        }
+
+        return "Sin referencia";
+    }
+
+    private static string GetSolicitudClass(int estadoId) => estadoId switch
+    {
+        1 => "is-pending",
+        2 => "is-review",
+        3 => "is-paid",
+        4 => "is-rejected",
+        _ => "is-neutral"
+    };
+
+    private static string GetEstadoSolicitud(SolicitudPagoClienteDto sol) =>
+        string.IsNullOrWhiteSpace(sol.EstadoSolicitud)
+            ? "Sin estado"
+            : sol.EstadoSolicitud;
+
+    private async Task CargarNotificacionesAsync()
+    {
+        if (usuarioIdActual <= 0)
+        {
+            notificacionesPendientes = new List<SolicitudNotificacionDto>();
+            return;
+        }
+
+        notificacionesPendientes = await SolicitudService.ObtenerNotificacionesPendientesClienteAsync(usuarioIdActual, 20);
+
+        foreach (var notificacion in notificacionesPendientes)
+        {
+            respuestasSoporte.TryAdd(notificacion.ObsId, string.Empty);
+        }
+    }
+
+    private void AbrirAvisosSoporte(int solId)
+    {
+        mensajeRespuesta = null;
+        errorRespuesta = null;
+        solicitudAvisoSeleccionadaId = solId;
+
+        foreach (var notificacion in notificacionesPendientes.Where(item => item.SolId == solId))
+        {
+            respuestasSoporte.TryAdd(notificacion.ObsId, string.Empty);
+        }
+    }
+
+    private void CerrarAvisosSoporte()
+    {
+        solicitudAvisoSeleccionadaId = null;
+        errorRespuesta = null;
+    }
+
+    private string GetRespuesta(int observacionId) =>
+        respuestasSoporte.TryGetValue(observacionId, out var respuesta) ? respuesta : string.Empty;
+
+    private void SetRespuesta(SolicitudNotificacionDto notificacion, string? respuesta)
+    {
+        respuestasSoporte[notificacion.ObsId] = EsNotificacionCodigo(notificacion)
+            ? NormalizarCodigoAlfanumerico6(respuesta)
+            : NormalizarRespuestaCampo(notificacion, respuesta);
+    }
+
+    private void SeleccionarArchivoRespuesta(InputFileChangeEventArgs e, SolicitudNotificacionDto notificacion)
+    {
+        archivosSoporte.Remove(notificacion.ObsId);
+        erroresArchivosSoporte.Remove(notificacion.ObsId);
+        errorRespuesta = null;
+
+        if (!TryGetDocumentoConfig(notificacion, out var config) || e.FileCount == 0)
+        {
+            return;
+        }
+
+        var archivo = e.File;
+        var extension = Path.GetExtension(archivo.Name);
+
+        if (string.IsNullOrWhiteSpace(extension) ||
+            !config.ExtensionesPermitidas.Contains(extension, StringComparer.OrdinalIgnoreCase))
+        {
+            erroresArchivosSoporte[notificacion.ObsId] = $"Formato no permitido. Use: {config.FormatosTexto}.";
+            return;
+        }
+
+        if (archivo.Size > config.TamanoMaximoBytes)
+        {
+            erroresArchivosSoporte[notificacion.ObsId] = $"El archivo supera el maximo de {FormatearTamano(config.TamanoMaximoBytes)}.";
+            return;
+        }
+
+        archivosSoporte[notificacion.ObsId] = archivo;
+    }
+
+    private bool RespuestaLista(SolicitudNotificacionDto notificacion)
+    {
+        if (EsCampoDocumentoAdjunto(notificacion))
+        {
+            return archivosSoporte.ContainsKey(notificacion.ObsId) &&
+                   !erroresArchivosSoporte.ContainsKey(notificacion.ObsId);
+        }
+
+        return !string.IsNullOrWhiteSpace(GetRespuesta(notificacion.ObsId));
+    }
+
+    private async Task EnviarRespuestaAsync(int observacionId)
+    {
+        mensajeRespuesta = null;
+        errorRespuesta = null;
+
+        var notificacion = notificacionesPendientes.FirstOrDefault(item => item.ObsId == observacionId);
+        if (notificacion is null)
+        {
+            errorRespuesta = "No se encontro la notificacion pendiente.";
+            return;
+        }
+
+        if (EsCampoDocumentoAdjunto(notificacion))
+        {
+            await EnviarArchivoRespuestaAsync(notificacion);
+            return;
+        }
+
+        var esCodigo = notificacion is not null && EsNotificacionCodigo(notificacion);
+        var respuesta = esCodigo
+            ? NormalizarCodigoAlfanumerico6(GetRespuesta(observacionId))
+            : GetRespuesta(observacionId);
+
+        if (string.IsNullOrWhiteSpace(respuesta))
+        {
+            errorRespuesta = "Escribe el codigo o dato corregido antes de responder.";
+            return;
+        }
+
+        if (esCodigo && respuesta.Length != 6)
+        {
+            errorRespuesta = "El codigo debe tener exactamente 6 caracteres alfanumericos.";
+            return;
+        }
+
+        enviandoRespuestaId = observacionId;
+
+        try
+        {
+            var ok = await SolicitudService.ResponderObservacionAsync(observacionId, usuarioIdActual, respuesta);
+            if (!ok)
+            {
+                errorRespuesta = "No se pudo enviar la respuesta. Revisa que la notificacion siga pendiente.";
+                return;
+            }
+
+            respuestasSoporte.Remove(observacionId);
+            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual);
+            PaginaActual = Math.Min(PaginaActual, TotalPaginas);
+            await CargarNotificacionesAsync();
+            if (solicitudAvisoSeleccionadaId is int solIdSeleccionado &&
+                !notificacionesPendientes.Any(notificacion => notificacion.SolId == solIdSeleccionado))
+            {
+                solicitudAvisoSeleccionadaId = null;
+            }
+
+            mensajeRespuesta = "Respuesta enviada correctamente a soporte. Si era una correccion, tu informacion ya fue actualizada.";
+        }
+        catch (Exception ex)
+        {
+            errorRespuesta = "Ocurrio un problema al enviar la respuesta.";
+            Console.WriteLine($"Error al responder observacion {observacionId}: {ex.Message}");
+        }
+        finally
+        {
+            enviandoRespuestaId = null;
+        }
+    }
+
+    private async Task EnviarArchivoRespuestaAsync(SolicitudNotificacionDto notificacion)
+    {
+        if (!archivosSoporte.TryGetValue(notificacion.ObsId, out var archivo))
+        {
+            errorRespuesta = "Adjunta el documento solicitado antes de responder.";
+            return;
+        }
+
+        enviandoRespuestaId = notificacion.ObsId;
+
+        try
+        {
+            var ok = await SolicitudService.ResponderObservacionDocumentoAsync(
+                notificacion.ObsId,
+                usuarioIdActual,
+                archivo);
+
+            if (!ok)
+            {
+                errorRespuesta = "No se pudo enviar el documento. Revisa que la notificacion siga pendiente y que el archivo sea valido.";
+                return;
+            }
+
+            archivosSoporte.Remove(notificacion.ObsId);
+            erroresArchivosSoporte.Remove(notificacion.ObsId);
+            respuestasSoporte.Remove(notificacion.ObsId);
+            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual);
+            PaginaActual = Math.Min(PaginaActual, TotalPaginas);
+            await CargarNotificacionesAsync();
+            if (solicitudAvisoSeleccionadaId is int solIdSeleccionado &&
+                !notificacionesPendientes.Any(item => item.SolId == solIdSeleccionado))
+            {
+                solicitudAvisoSeleccionadaId = null;
+            }
+
+            mensajeRespuesta = "Documento enviado correctamente a soporte.";
+        }
+        catch (Exception ex)
+        {
+            errorRespuesta = "Ocurrio un problema al enviar el documento.";
+            Console.WriteLine($"Error al responder observacion de documento {notificacion.ObsId}: {ex.Message}");
+        }
+        finally
+        {
+            enviandoRespuestaId = null;
+        }
+    }
+
+    private static string GetTipoNotificacion(SolicitudNotificacionDto notificacion)
+    {
+        if (EsNotificacionCodigo(notificacion))
+        {
+            return "Codigo solicitado";
+        }
+
+        if (EsCampoDocumentoAdjunto(notificacion))
+        {
+            return $"Adjuntar {GetCampoLabel(notificacion)}";
+        }
+
+        return $"Corregir {GetCampoLabel(notificacion)}";
+    }
+
+    private static string GetCampoLabel(SolicitudNotificacionDto notificacion)
+    {
+        var documento = GetDocumentoIdentidadLabel(notificacion);
+
+        return (notificacion.ObsCampoObservado ?? string.Empty).Trim().ToUpperInvariant() switch
+        {
+            "SOL_TIPO_IDENTIFICACION" => "tipo de documento",
+            "SOL_IDENTIFICACION" => documento.ToLowerInvariant(),
+            "SOL_CODIGO_DACTILAR" => "codigo dactilar",
+            "SOL_SEXO" => "sexo",
+            "DOC_CEDULA_FRONTAL" => $"{documento.ToLowerInvariant()} frontal",
+            "DOC_CEDULA_POSTERIOR" => $"{documento.ToLowerInvariant()} posterior",
+            "DOC_SELFIE_CEDULA" => $"selfie con {documento.ToLowerInvariant()}",
+            "DOC_VIDEO_ACEPTACION" => "video de aceptacion",
+            _ => GetCampoLabel(notificacion.ObsCampoObservado)
+        };
+    }
+
+    private static string GetCampoLabel(string? campo)
+    {
+        if (string.IsNullOrWhiteSpace(campo))
+        {
+            return "dato";
+        }
+
+        return campo
+            .Replace("SOL_", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("_", " ")
+            .ToLowerInvariant();
+    }
+
+    private static string GetTitularSolicitudGrupo(SolicitudPagoClienteDto? solicitud)
+    {
+        if (solicitud is null)
+        {
+            return "Solicitud de firma electronica";
+        }
+
+        return GetTitular(solicitud);
+    }
+
+    private static string GetPlaceholderCampo(SolicitudNotificacionDto notificacion)
+    {
+        var campo = (notificacion.ObsCampoObservado ?? string.Empty).Trim().ToUpperInvariant();
+
+        if (campo == "SOL_IDENTIFICACION")
+        {
+            return EsSolicitudCedula(notificacion) ? "Ej: 1723456789" : "Ej: AB1234567";
+        }
+
+        return campo switch
+        {
+            "SOL_CODIGO_DACTILAR" => "Ej: A1234B5678",
+            "SOL_NOMBRES" => "Ingrese sus nombres completos",
+            "SOL_PRIMER_APELLIDO" => "Ingrese el primer apellido",
+            "SOL_SEGUNDO_APELLIDO" => "Ingrese el segundo apellido",
+            "SOL_NACIONALIDAD" => "Ej: ECUATORIANA",
+            "SOL_NRO_RUC" => "Ingrese los 13 digitos del RUC",
+            "SOL_TELEFONO_1" => "Ej: 0998887766",
+            "SOL_TELEFONO_2" => "Telefono secundario",
+            "SOL_CORREO_1" => "correo@ejemplo.com",
+            "SOL_CORREO_2" => "correo@ejemplo.com",
+            "SOL_PROVINCIA" => "Ingrese la provincia",
+            "SOL_CANTON" => "Ingrese el canton",
+            "SOL_DIRECCION" => "Calle principal y secundaria",
+            _ => "Escribe aqui el dato corregido"
+        };
+    }
+
+    private static int GetMaxLengthCampo(SolicitudNotificacionDto notificacion) =>
+        (notificacion.ObsCampoObservado ?? string.Empty).Trim().ToUpperInvariant() switch
+        {
+            "SOL_IDENTIFICACION" => EsSolicitudCedula(notificacion) ? 10 : 20,
+            "SOL_CODIGO_DACTILAR" => 10,
+            "SOL_NRO_RUC" => 13,
+            "SOL_TELEFONO_1" => 10,
+            "SOL_TELEFONO_2" => 10,
+            "SOL_CORREO_1" => 150,
+            "SOL_CORREO_2" => 150,
+            "SOL_DIRECCION" => 300,
+            _ => 100
+        };
+
+    private static string? GetInputModeCampo(SolicitudNotificacionDto notificacion) =>
+        (notificacion.ObsCampoObservado ?? string.Empty).Trim().ToUpperInvariant() switch
+        {
+            "SOL_IDENTIFICACION" => EsSolicitudCedula(notificacion) ? "numeric" : null,
+            "SOL_NRO_RUC" => "numeric",
+            "SOL_TELEFONO_1" => "numeric",
+            "SOL_TELEFONO_2" => "numeric",
+            "SOL_CORREO_1" => "email",
+            "SOL_CORREO_2" => "email",
+            _ => null
+        };
+
+    private static bool EsCampoFecha(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsCampoObservado, "SOL_FECHA_NACIMIENTO", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCampoBooleano(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsCampoObservado, "SOL_TIENE_RUC", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCampoSexo(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsCampoObservado, "SOL_SEXO", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCampoTipoPersona(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsCampoObservado, "SOL_TIPO_PERSONA", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCampoTipoIdentificacion(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsCampoObservado, "SOL_TIPO_IDENTIFICACION", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(notificacion.ObsCampoObservado, "SOL_IDENTIFICACION_TYPE_MANAGER", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCampoIdentificacion(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsCampoObservado, "SOL_IDENTIFICACION", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(notificacion.ObsCampoObservado, "SOL_CODIGO_DACTILAR", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(notificacion.ObsCampoObservado, "SOL_IDENTIFICACION_MANAGER", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCampoDireccion(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsCampoObservado, "SOL_DIRECCION", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCampoDocumentoAdjunto(SolicitudNotificacionDto notificacion) =>
+        (notificacion.ObsCampoObservado ?? string.Empty).StartsWith("DOC_", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetSeccionNotificacion(SolicitudNotificacionDto notificacion)
+    {
+        if (EsNotificacionCodigo(notificacion))
+        {
+            return "Codigos solicitados";
+        }
+
+        var campo = (notificacion.ObsCampoObservado ?? string.Empty).Trim().ToUpperInvariant();
+        var documento = GetDocumentoIdentidadLabel(notificacion);
+
+        if (EsCampoDocumentoAdjunto(notificacion))
+        {
+            return $"Documentos de {documento.ToLowerInvariant()}";
+        }
+
+        if (campo is "SOL_TIPO_IDENTIFICACION" or "SOL_IDENTIFICACION" or "SOL_CODIGO_DACTILAR")
+        {
+            return documento;
+        }
+
+        return campo switch
+        {
+            "SOL_TIPO_PERSONA" => "Titular",
+            "SOL_NOMBRES" or "SOL_PRIMER_APELLIDO" or "SOL_SEGUNDO_APELLIDO" or "SOL_FECHA_NACIMIENTO" => "Datos personales",
+            "SOL_SEXO" or "SOL_NACIONALIDAD" => "Perfil",
+            "SOL_TIENE_RUC" or "SOL_NRO_RUC" => "RUC",
+            "SOL_TELEFONO_1" or "SOL_TELEFONO_2" or "SOL_CORREO_1" or "SOL_CORREO_2" => "Contacto",
+            "SOL_PROVINCIA" or "SOL_CANTON" or "SOL_DIRECCION" => "Domicilio",
+            _ => "Otros datos"
+        };
+    }
+
+    private static int GetOrdenSeccionNotificacion(string seccion)
+    {
+        if (seccion.Contains("Cedula", StringComparison.OrdinalIgnoreCase) ||
+            seccion.Contains("Pasaporte", StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        return seccion switch
+        {
+            "Codigos solicitados" => 0,
+            "Titular" => 2,
+            "Datos personales" => 3,
+            "Perfil" => 4,
+            "RUC" => 5,
+            "Contacto" => 6,
+            "Domicilio" => 7,
+            _ => 9
+        };
+    }
+
+    private static string GetAyudaSeccionNotificacion(string seccion)
+    {
+        if (seccion.Contains("Cedula", StringComparison.OrdinalIgnoreCase) ||
+            seccion.Contains("Pasaporte", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Usa el formato indicado para este documento.";
+        }
+
+        return "Completa solo lo solicitado por soporte.";
+    }
+
+    private static string GetDocumentoIdentidadLabel(SolicitudNotificacionDto notificacion) =>
+        EsSolicitudPasaporte(notificacion) ? "Pasaporte" : "Cedula";
+
+    private static bool EsSolicitudCedula(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.SolTipoIdentificacion, "CEDULA", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsSolicitudPasaporte(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.SolTipoIdentificacion, "PASAPORTE", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetAyudaIdentificacion(SolicitudNotificacionDto notificacion)
+    {
+        if (string.Equals(notificacion.ObsCampoObservado, "SOL_CODIGO_DACTILAR", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Ingresa 10 caracteres alfanumericos.";
+        }
+
+        return EsSolicitudCedula(notificacion)
+            ? "Ingresa 10 digitos numericos."
+            : "Ingresa hasta 20 caracteres en mayusculas.";
+    }
+
+    private static string GetAcceptDocumento(SolicitudNotificacionDto notificacion) =>
+        TryGetDocumentoConfig(notificacion, out var config) ? config.Accept : string.Empty;
+
+    private static string GetAyudaDocumento(SolicitudNotificacionDto notificacion) =>
+        TryGetDocumentoConfig(notificacion, out var config)
+            ? $"Formatos: {config.FormatosTexto} | Maximo: {FormatearTamano(config.TamanoMaximoBytes)}"
+            : "Adjunta el documento solicitado.";
+
+    private static bool TryGetDocumentoConfig(SolicitudNotificacionDto notificacion, out DocumentoRespuestaConfig config)
+    {
+        var tipo = (notificacion.ObsCampoObservado ?? string.Empty).Trim().ToUpperInvariant();
+
+        config = tipo switch
+        {
+            "DOC_CEDULA_FRONTAL" => new DocumentoRespuestaConfig("image/*,.pdf", "JPG, JPEG, PNG, PDF", 10 * 1024 * 1024, [".jpg", ".jpeg", ".png", ".pdf"]),
+            "DOC_CEDULA_POSTERIOR" => new DocumentoRespuestaConfig("image/*,.pdf", "JPG, JPEG, PNG, PDF", 10 * 1024 * 1024, [".jpg", ".jpeg", ".png", ".pdf"]),
+            "DOC_SELFIE_CEDULA" => new DocumentoRespuestaConfig("image/*", "JPG, JPEG, PNG", 10 * 1024 * 1024, [".jpg", ".jpeg", ".png"]),
+            "DOC_VIDEO_ACEPTACION" => new DocumentoRespuestaConfig("video/*", "MP4, MOV, AVI, WEBM", 50 * 1024 * 1024, [".mp4", ".mov", ".avi", ".webm"]),
+            _ => new DocumentoRespuestaConfig(string.Empty, string.Empty, 0, [])
+        };
+
+        return config.TamanoMaximoBytes > 0;
+    }
+
+    private static string GetUltimaNotificacion(SolicitudPagoClienteDto sol) =>
+        string.IsNullOrWhiteSpace(sol.UltimaNotificacion)
+            ? "Soporte solicito revisar informacion de esta solicitud."
+            : sol.UltimaNotificacion;
+
+    private static string GetFechaNotificacion(SolicitudPagoClienteDto sol) =>
+        sol.FechaUltimaNotificacion is null
+            ? "Pendiente de revision"
+            : sol.FechaUltimaNotificacion.Value.ToString("dd/MM/yyyy HH:mm");
+
+    private static bool EsNotificacionCodigo(SolicitudNotificacionDto notificacion) =>
+        string.Equals(notificacion.ObsTipo, "CODIGO", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizarCodigoAlfanumerico6(string? valor)
+    {
+        var caracteres = (valor ?? string.Empty)
+            .Where(char.IsLetterOrDigit)
+            .Take(6)
+            .Select(char.ToUpperInvariant);
+
+        return new string(caracteres.ToArray());
+    }
+
+    private static string NormalizarRespuestaCampo(SolicitudNotificacionDto notificacion, string? valor)
+    {
+        var texto = valor ?? string.Empty;
+        var campo = (notificacion.ObsCampoObservado ?? string.Empty).Trim().ToUpperInvariant();
+
+        return campo switch
+        {
+            "SOL_IDENTIFICACION" when EsSolicitudCedula(notificacion) => SoloDigitos(texto).Length > 10
+                ? SoloDigitos(texto)[..10]
+                : SoloDigitos(texto),
+            "SOL_IDENTIFICACION" => new string(texto
+                .ToUpperInvariant()
+                .Where(c => char.IsLetterOrDigit(c) || c == '-')
+                .Take(20)
+                .ToArray()),
+            "SOL_CODIGO_DACTILAR" => new string(texto
+                .ToUpperInvariant()
+                .Where(char.IsLetterOrDigit)
+                .Take(10)
+                .ToArray()),
+            "SOL_NRO_RUC" => SoloDigitos(texto).Length > 13 ? SoloDigitos(texto)[..13] : SoloDigitos(texto),
+            "SOL_TELEFONO_1" => SoloDigitos(texto).Length > 10 ? SoloDigitos(texto)[..10] : SoloDigitos(texto),
+            "SOL_TELEFONO_2" => SoloDigitos(texto).Length > 15 ? SoloDigitos(texto)[..15] : SoloDigitos(texto),
+            "SOL_CORREO_1" or "SOL_CORREO_2" => texto.Trim().ToLowerInvariant(),
+            _ => texto
+        };
+    }
+
+    private static string SoloDigitos(string valor) =>
+        new(valor.Where(char.IsDigit).ToArray());
+
+    private static string FormatearTamano(long bytes)
+    {
+        const long kilo = 1024;
+        const long mega = kilo * 1024;
+
+        return bytes >= mega
+            ? $"{bytes / (double)mega:0.#} MB"
+            : $"{bytes / (double)kilo:0.#} KB";
+    }
+
+    private bool CumpleBusqueda(SolicitudPagoClienteDto sol)
+    {
+        var criterio = busqueda.Trim();
+        if (string.IsNullOrWhiteSpace(criterio))
+        {
+            return true;
+        }
+
+        return sol.SolId.ToString().Contains(criterio, StringComparison.OrdinalIgnoreCase)
+            || GetTitular(sol).Contains(criterio, StringComparison.OrdinalIgnoreCase)
+            || GetPagoDetalle(sol).Contains(criterio, StringComparison.OrdinalIgnoreCase)
+            || GetEstadoSolicitud(sol).Contains(criterio, StringComparison.OrdinalIgnoreCase)
+            || GetFormatoFirma(sol.SolFormatoFirma).Contains(criterio, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool CumpleFiltroPago(SolicitudPagoClienteDto sol) => filtroPago switch
+    {
+        "pagado" => sol.SolPagoExitoso,
+        "pendiente" => !sol.SolPagoExitoso,
+        _ => true
+    };
+
+    private bool CumpleFiltroEstadoSolicitud(SolicitudPagoClienteDto sol) => filtroEstadoSolicitud switch
+    {
+        "pendiente" => sol.SolIdEstadoNumerica == 1,
+        "revision" => sol.SolIdEstadoNumerica == 2,
+        "aprobada" => sol.SolIdEstadoNumerica == 3,
+        "rechazada" => sol.SolIdEstadoNumerica == 4,
+        _ => true
+    };
+
+    private void PaginaAnterior() => PaginaActual--;
+
+    private void PaginaSiguiente() => PaginaActual++;
+
+    private void IrAPagina(int pagina) => PaginaActual = pagina;
+
+    private sealed record DocumentoRespuestaConfig(
+        string Accept,
+        string FormatosTexto,
+        long TamanoMaximoBytes,
+        string[] ExtensionesPermitidas);
+}

@@ -1,0 +1,1373 @@
+@page "/dashboard"
+@page "/demo/dashboard"
+@layout Simetric.Components.Layout.MainLayout
+@rendermode InteractiveServer
+@attribute [AllowAnonymous]
+@using System.Globalization
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.DTOs
+@using Simetric.Data
+@using Simetric.Services
+@implements IAsyncDisposable
+@inject DashboardService DashboardService
+@inject DemoCatalogService DemoCatalogService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
+@inject EmisionControlService EmisionControlService
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject FacturacionService FacturacionService
+@inject SweetAlertService AlertService
+
+<PageTitle>Inicio | Numerica e-fact</PageTitle>
+
+<div class="dashboard-page" data-tour="dashboard.page">
+@if (cargando)
+{
+    <section class="dashboard-state-card">
+        <div class="dashboard-state-icon">
+            <span class="spinner-border" role="status"></span>
+        </div>
+        <h3>Cargando dashboard</h3>
+        <p>Estamos consultando ventas, cartera y movimiento real de la cuenta.</p>
+    </section>
+}
+else if (!string.IsNullOrWhiteSpace(loadError))
+{
+    <section class="dashboard-state-card dashboard-state-card-error">
+        <div class="dashboard-state-icon">
+            <i class="bi bi-exclamation-octagon"></i>
+        </div>
+        <h3>No se pudo cargar el dashboard</h3>
+        <p>@loadError</p>
+        <div class="dashboard-state-actions">
+            <button type="button" class="dashboard-btn dashboard-btn-primary" @onclick="Recargar">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>Reintentar</span>
+            </button>
+        </div>
+    </section>
+}
+else
+{
+    var collectionTotal = stats.CarteraAlDia + stats.CarteraVencida + stats.CobradoHistorico;
+    var latestInvoice = recentInvoices.FirstOrDefault();
+    <div class="dashboard-shell">
+        <section class="dashboard-topbar" data-tour="dashboard.toolbar">
+            <div class="dashboard-title-block">
+                <span class="dashboard-title-kicker">Numerica e-fact</span>
+                <h1>Dashboard</h1>
+                <p>Resumen general del rendimiento de tu empresa</p>
+            </div>
+
+            <div class="dashboard-toolbar" aria-label="Herramientas del dashboard">
+                <label class="dashboard-search" data-tour="dashboard.search">
+                    <i class="bi bi-search"></i>
+                    <input type="search" placeholder="Buscar en el sistema..." />
+                </label>
+
+                <label class="dashboard-date-filter">
+                    <i class="bi bi-calendar3"></i>
+                    <input type="date" value="@DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)" />
+                </label>
+
+                <button type="button" class="dashboard-toolbar-btn">
+                    <i class="bi bi-funnel"></i>
+                    <span>Filtros</span>
+                </button>
+
+                <button type="button" class="dashboard-notification-btn" aria-label="Notificaciones">
+                    <i class="bi bi-bell"></i>
+                    <span></span>
+                </button>
+
+                <div class="dashboard-user-profile">
+                    <span class="dashboard-user-avatar">@UserInitials</span>
+                    <div>
+                        <strong>@currentUserName</strong>
+                        <small>Cuenta e-fact</small>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        @if (!isDemoMode && MostrarPanelOnboarding)
+        {
+            <section class="onboarding-panel">
+                <div class="onboarding-welcome">
+                    <div>
+                        <span class="onboarding-kicker">Primeros pasos</span>
+                        <h2>@OnboardingTitle</h2>
+                        <p>@OnboardingIntro</p>
+                    </div>
+                    <div class="onboarding-progress-summary">
+                        <strong>@OnboardingProgressPercent%</strong>
+                        <span>@OnboardingProgressLabel</span>
+                    </div>
+                </div>
+
+                <div class="onboarding-progress">
+                    <div class="onboarding-progress-line">
+                        <span style="@OnboardingProgressStyle"></span>
+                    </div>
+                    <div class="onboarding-steps">
+                        <div class="onboarding-step @GetRequiredStepClass(TieneEmisorConfigurado, !TieneEmisorConfigurado)">
+                            <span>1</span>
+                            <strong>Emisor</strong>
+                            <small>Datos fiscales y punto</small>
+                        </div>
+                        <div class="onboarding-step @GetRequiredStepClass(TieneFirmaElectronica, TieneEmisorConfigurado && !TieneFirmaElectronica)">
+                            <span>2</span>
+                            <strong>Firma</strong>
+                            <small>Certificado electrónico</small>
+                        </div>
+                        <div class="onboarding-step @GetRequiredStepClass(TieneDocumentos, TieneEmisorConfigurado && TieneFirmaElectronica && !TieneDocumentos)">
+                            <span>3</span>
+                            <strong>Documentos</strong>
+                            <small>Compra o recarga</small>
+                        </div>
+                        <div class="onboarding-step @GetOptionalConfigurationStepClass()">
+                            <span>4</span>
+                            <strong>Configuración</strong>
+                            <small>Cliente y producto</small>
+                        </div>
+                        <div class="onboarding-step @GetRequiredStepClass(PuedeComenzarFacturar, PuedeComenzarFacturar)">
+                            <span>5</span>
+                            <strong>Listo</strong>
+                            <small>Puede emitir</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="onboarding-status-grid">
+                    <article class="onboarding-status-card @(TieneEmisorConfigurado ? "is-ready" : "is-pending")">
+                        <div class="onboarding-card-icon"><i class="bi bi-building"></i></div>
+                        <div class="onboarding-card-copy">
+                            <span>Datos del emisor</span>
+                            <strong>@EmisorStatusTitle</strong>
+                            <p>@EmisorStatusDescription</p>
+                        </div>
+                        @if (!TieneEmisorConfigurado)
+                        {
+                            <a class="onboarding-card-action" href="@EmisorActionRoute">@EmisorActionLabel</a>
+                        }
+                    </article>
+
+                    <article class="onboarding-status-card @(TieneFirmaElectronica ? "is-ready" : "is-pending")">
+                        <div class="onboarding-card-icon"><i class="bi bi-pen"></i></div>
+                        <div class="onboarding-card-copy">
+                            <span>Firma electrónica</span>
+                            <strong>@(TieneFirmaElectronica ? "Configurada" : "No configurada")</strong>
+                            <p>@(TieneFirmaElectronica ? "Tu certificado está listo para firmar comprobantes." : "Carga tu archivo .p12. Si no tienes uno, puedes comprarlo desde aquí.")</p>
+                        </div>
+                        @if (!TieneFirmaElectronica)
+                        {
+                            <div class="onboarding-card-actions">
+                                <a class="onboarding-card-action" href="/firma">
+                                    <i class="bi bi-upload"></i>
+                                    <span>Configurar firma</span>
+                                </a>
+                                <a class="onboarding-purchase-action" href="/solicitud/nueva">
+                                    <i class="bi bi-cart-plus"></i>
+                                    <span>
+                                        <strong>¿No tienes firma?</strong>
+                                        <small>Comprar firma electrónica</small>
+                                    </span>
+                                </a>
+                            </div>
+                        }
+                    </article>
+
+                    <article class="onboarding-status-card @(TieneDocumentos ? "is-ready" : "is-pending")">
+                        <div class="onboarding-card-icon"><i class="bi bi-database"></i></div>
+                        <div class="onboarding-card-copy">
+                            <span>Saldo de documentos</span>
+                            <strong>@SaldoDocumentosLabel</strong>
+                            <p>@(TieneDocumentos ? "Tu cuenta tiene documentos disponibles para emitir." : "Realiza una recarga o compra un paquete de documentos.")</p>
+                        </div>
+                        @if (!TieneDocumentos)
+                        {
+                            <a class="onboarding-purchase-action" href="/compra-documentos">
+                                <i class="bi bi-cart-plus"></i>
+                                <span>
+                                    <strong>Realizar recarga o paquete</strong>
+                                    <small>Elige la opción que mejor se adapte a tu operación</small>
+                                </span>
+                            </a>
+                        }
+                    </article>
+
+                    <article class="onboarding-status-card is-optional @(TieneConfiguracionComercial ? "is-ready" : "is-pending")">
+                        <div class="onboarding-card-icon"><i class="bi bi-sliders"></i></div>
+                        <div class="onboarding-card-copy">
+                            <span>Configuración comercial <em>Recomendada</em></span>
+                            <strong>@ConfiguracionComercialEstado</strong>
+                            <p>@ConfiguracionComercialDescripcion</p>
+                        </div>
+                        @if (!TieneConfiguracionComercial)
+                        {
+                        <div class="onboarding-card-actions">
+                            @if (!TieneClientes)
+                            {
+                                <a class="onboarding-card-action" href="/clientes">Clientes</a>
+                            }
+                            @if (!TieneProductos)
+                            {
+                                <a class="onboarding-card-action" href="/productos">Productos</a>
+                            }
+                        </div>
+                        }
+                    </article>
+                </div>
+
+                <div class="onboarding-next-action @(PuedeComenzarFacturar ? "is-ready" : string.Empty)">
+                    <div>
+                        <i class="bi @(PuedeComenzarFacturar ? "bi-check-circle-fill" : "bi-info-circle-fill")"></i>
+                        <span>
+                            <strong>Siguiente paso recomendado</strong>
+                            <small>@RecommendedActionDescription</small>
+                        </span>
+                    </div>
+                    <a class="dashboard-btn dashboard-btn-primary" href="@RecommendedActionRoute">@RecommendedActionLabel</a>
+                </div>
+            </section>
+        }
+
+        <section class="dashboard-kpi-strip" data-tour="dashboard.hero">
+            <article class="dashboard-kpi-card dashboard-kpi-card-blue" data-tour="dashboard.summary">
+                <div class="dashboard-kpi-head">
+                    <span>Facturas emitidas (mes)</span>
+                </div>
+                <div class="dashboard-kpi-copy">
+                    <strong>@stats.FacturasRegistradas</strong>
+                    <small class="dashboard-kpi-trend trend-up"><i class="bi bi-arrow-up-short"></i>@FacturasTrendNote</small>
+                </div>
+                <div class="dashboard-kpi-meter">
+                    <span style="@BuildShareWidthStyle(stats.FacturasAutorizadas, Math.Max(stats.FacturasRegistradas, 1))"></span>
+                </div>
+                <span class="dashboard-kpi-watermark" aria-hidden="true"><i class="bi bi-receipt-cutoff"></i></span>
+            </article>
+
+            <article class="dashboard-kpi-card dashboard-kpi-card-green">
+                <div class="dashboard-kpi-head">
+                    <span>Ventas (mes)</span>
+                </div>
+                <div class="dashboard-kpi-copy">
+                    <strong>@FormatCurrency(VentasMesActual)</strong>
+                    <small class="dashboard-kpi-trend @SalesMonthTrendClass"><i class="@SalesMonthTrendIcon"></i>@SalesMonthTrendNote</small>
+                </div>
+                <div class="dashboard-kpi-meter">
+                    <span style="@BuildShareWidthStyle(VentasMesActual, Math.Max(VentasMesActual, VentasMesAnterior))"></span>
+                </div>
+                <span class="dashboard-kpi-watermark" aria-hidden="true"><i class="bi bi-currency-dollar"></i></span>
+            </article>
+
+            <article class="dashboard-kpi-card dashboard-kpi-card-amber">
+                <div class="dashboard-kpi-head">
+                    <span>Cartera pendiente</span>
+                </div>
+                <div class="dashboard-kpi-copy">
+                    <strong>@FormatCurrency(stats.CuentasPorCobrar)</strong>
+                    <small class="dashboard-kpi-trend @(stats.CarteraVencida > 0m ? "trend-down" : "trend-up")">
+                        <i class="bi @(stats.CarteraVencida > 0m ? "bi-arrow-down-short" : "bi-arrow-up-short")"></i>@CarteraTrendNote
+                    </small>
+                </div>
+                <div class="dashboard-kpi-meter">
+                    <span style="@BuildShareWidthStyle(stats.CuentasPorCobrar, stats.CuentasPorCobrar + stats.CobradoHistorico)"></span>
+                </div>
+                <span class="dashboard-kpi-watermark" aria-hidden="true"><i class="bi bi-wallet2"></i></span>
+            </article>
+
+            <article class="dashboard-kpi-card dashboard-kpi-card-purple">
+                <div class="dashboard-kpi-head">
+                    <span>Tiempo promedio de cobro</span>
+                </div>
+                <div class="dashboard-kpi-copy">
+                    <strong>@TiempoPromedioCobroLabel</strong>
+                    <small class="dashboard-kpi-trend trend-up"><i class="bi bi-arrow-up-short"></i>@TiempoPromedioCobroTrendNote</small>
+                </div>
+                <div class="dashboard-kpi-meter">
+                    <span style="width:72%;"></span>
+                </div>
+                <span class="dashboard-kpi-watermark" aria-hidden="true"><i class="bi bi-clock-history"></i></span>
+            </article>
+
+            <article class="dashboard-kpi-card dashboard-kpi-card-teal">
+                <div class="dashboard-kpi-head">
+                    <span>Documentos emitidos (mes)</span>
+                </div>
+                <div class="dashboard-kpi-copy">
+                    <strong>@stats.DocumentosEmitidos</strong>
+                    <small class="dashboard-kpi-trend trend-up"><i class="bi bi-arrow-up-short"></i>@DocumentosTrendNote</small>
+                </div>
+                <div class="dashboard-kpi-meter">
+                    <span style="@BuildShareWidthStyle(stats.DocumentosAutorizados, Math.Max(stats.DocumentosEmitidos, 1))"></span>
+                </div>
+                <span class="dashboard-kpi-watermark" aria-hidden="true"><i class="bi bi-patch-check"></i></span>
+            </article>
+        </section>
+
+        <section class="dashboard-body-grid" data-tour="dashboard.metrics">
+            <div class="dashboard-left-column">
+                <article class="dashboard-card dashboard-business-summary">
+                    <div class="section-head section-head-tight">
+                        <div>
+                            <h3>Resumen del negocio</h3>
+                            <span class="info-icon" title="Resumen de comprobantes emitidos por estado"><i class="bi bi-info-circle"></i></span>
+                        </div>
+                    </div>
+
+                    <div class="business-summary-new-content">
+                        <div class="dashboard-donut-frame business-summary-donut">
+                            <canvas id="dashboardDocumentChart" aria-label="Resumen del negocio" role="img"></canvas>
+                            <div class="dashboard-donut-center">
+                                <strong>@stats.DocumentosEmitidos</strong>
+                                <span>Documentos<br>totales</span>
+                            </div>
+                        </div>
+
+                        <div class="business-summary-legend">
+                            <div class="legend-badge badge-authorized">
+                                <div class="badge-icon icon-authorized">
+                                    <i class="bi bi-check-lg"></i>
+                                </div>
+                                <div class="badge-details">
+                                    <strong>@stats.DocumentosAutorizados</strong>
+                                    <span>Autorizados</span>
+                                </div>
+                            </div>
+
+                            <div class="legend-badge badge-pending">
+                                <div class="badge-icon icon-pending">
+                                    <i class="bi bi-clock"></i>
+                                </div>
+                                <div class="badge-details">
+                                    <strong>@(Math.Max(stats.DocumentosEmitidos - stats.DocumentosAutorizados, 0))</strong>
+                                    <span>Pendientes</span>
+                                </div>
+                            </div>
+
+                            <div class="legend-badge badge-rejected">
+                                <div class="badge-icon icon-rejected">
+                                    <i class="bi bi-x-lg"></i>
+                                </div>
+                                <div class="badge-details">
+                                    <strong>0</strong>
+                                    <span>Rechazados</span>
+                                </div>
+                            </div>
+
+                            <div class="legend-badge badge-annulled">
+                                <div class="badge-icon icon-annulled">
+                                    <i class="bi bi-ban"></i>
+                                </div>
+                                <div class="badge-details">
+                                    <strong>0</strong>
+                                    <span>Anulados</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+
+            </div>
+
+            <div class="dashboard-center-column">
+                <article class="dashboard-card dashboard-sales-card">
+                    <div class="section-head">
+                        <div>
+                            <h3>Ventas de los últimos 6 meses</h3>
+                        </div>
+
+                        <div class="sales-actions-group">
+                            <div class="custom-dropdown-year">
+                                <span>@CurrentYear</span>
+                                <i class="bi bi-chevron-down"></i>
+                            </div>
+                            <button type="button" class="btn-ellipsis-menu" aria-label="Menú de opciones">
+                                <i class="bi bi-three-dots-vertical"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (HasSalesHistory)
+                    {
+                        <div class="dashboard-chart-frame dashboard-chart-frame-line">
+                            <canvas id="dashboardSalesChart" aria-label="Ventas por mes" role="img"></canvas>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="empty-panel">
+                            <i class="bi bi-bar-chart-line"></i>
+                            <p>Aun no hay suficiente historial para mostrar el comparativo anual.</p>
+                        </div>
+                    }
+                </article>
+
+
+
+
+            </div>
+
+            <aside class="dashboard-right-column">
+                <article class="dashboard-card dashboard-collection-card">
+                    <div class="section-head">
+                        <div>
+                            <h3>Estado de la cartera</h3>
+                        </div>
+                        <a href="/cuentas-por-cobrar" class="dashboard-card-action-btn">Ver detalle</a>
+                    </div>
+
+                    @if (HasCollectionData)
+                    {
+                        <div class="collection-shell">
+                            <div class="collection-stage">
+                                <div class="dashboard-donut-frame dashboard-donut-frame-small">
+                                    <canvas id="dashboardCollectionChart" aria-label="Estado de la cartera" role="img"></canvas>
+                                    <div class="dashboard-donut-center">
+                                        <strong>@FormatCompactCurrency(stats.CuentasPorCobrar)</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="collection-legend">
+                                <div class="legend-item">
+                                    <div class="legend-item-head">
+                                        <span class="legend-swatch legend-swatch-blue"></span>
+                                        <div>
+                                            <strong>Al dia</strong>
+                                            <small>@FormatCurrency(stats.CarteraAlDia)</small>
+                                        </div>
+                                        <span class="legend-share">@FormatShare(stats.CarteraAlDia, collectionTotal)</span>
+                                    </div>
+                                    <div class="legend-bar">
+                                        <span class="legend-bar-blue" style="@BuildShareWidthStyle(stats.CarteraAlDia, collectionTotal)"></span>
+                                    </div>
+                                </div>
+
+                                <div class="legend-item">
+                                    <div class="legend-item-head">
+                                        <span class="legend-swatch legend-swatch-amber"></span>
+                                        <div>
+                                            <strong>Vencidas</strong>
+                                            <small>@FormatCurrency(stats.CarteraVencida)</small>
+                                        </div>
+                                        <span class="legend-share">@FormatShare(stats.CarteraVencida, collectionTotal)</span>
+                                    </div>
+                                    <div class="legend-bar">
+                                        <span class="legend-bar-amber" style="@BuildShareWidthStyle(stats.CarteraVencida, collectionTotal)"></span>
+                                    </div>
+                                </div>
+
+                                <div class="legend-item">
+                                    <div class="legend-item-head">
+                                        <span class="legend-swatch legend-swatch-green"></span>
+                                        <div>
+                                            <strong>Cobradas</strong>
+                                            <small>@FormatCurrency(stats.CobradoHistorico)</small>
+                                        </div>
+                                        <span class="legend-share">@FormatShare(stats.CobradoHistorico, collectionTotal)</span>
+                                    </div>
+                                    <div class="legend-bar">
+                                        <span class="legend-bar-green" style="@BuildShareWidthStyle(stats.CobradoHistorico, collectionTotal)"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="empty-panel collection-empty-state">
+                            <img src="/images/empty_portfolio.png" alt="Sin movimientos de cobranza" class="empty-state-illustration" />
+                            <p class="empty-state-text">No hay movimientos de cobranza para mostrar en este momento.</p>
+                        </div>
+                    }
+                </article>
+
+                <article class="dashboard-card dashboard-ai-card d-none">
+                    <div class="ai-card-head">
+                        <span><i class="bi bi-stars"></i></span>
+                        <div>
+                            <strong>Asistente IA</strong>
+                            <small>¿En qué puedo ayudarte hoy?</small>
+                        </div>
+                    </div>
+
+                    <label class="ai-search-box">
+                        <input type="text" placeholder="Escribe tu consulta..." />
+                        <i class="bi bi-send"></i>
+                    </label>
+
+                    <div class="ai-suggestion-list">
+                        <span>Facturas vencidas</span>
+                        <span>Top 5 clientes</span>
+                        <span>Ventas del mes</span>
+                    </div>
+                </article>
+            </aside>
+        </section>
+
+        <section class="dashboard-card dashboard-quick-actions-section" data-tour="dashboard.quick-actions">
+            <div class="section-head section-head-tight">
+                <div>
+                    <span class="section-kicker">Accesos rápidos</span>
+                    <h2 class="section-title-premium">¿Qué deseas hacer hoy?</h2>
+                </div>
+            </div>
+
+            <div class="innovative-quick-actions-grid">
+                <a class="innovative-quick-card card-blue" href="/facturacion/nueva">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-receipt-cutoff"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Nueva factura</h3>
+                        <p>Emite comprobantes electrónicos al instante.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-green" href="/clientes">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-person-plus"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Nuevo cliente</h3>
+                        <p>Registra y administra tus clientes.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-purple" href="/productos">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-box-seam"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Nuevo producto</h3>
+                        <p>Añade productos o servicios al catálogo.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-amber" href="/facturacion/nota-credito">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-file-earmark-minus"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Nota de crédito</h3>
+                        <p>Realiza anulaciones o devoluciones.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-amber" href="/facturacion/nota-debito">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-file-earmark-plus"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Nota de débito</h3>
+                        <p>Registra cobros adicionales o intereses.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-teal" href="/cuentas-por-cobrar">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-credit-card"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Registrar pago</h3>
+                        <p>Aplica cobros a facturas pendientes.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-red" href="/cuentas-por-cobrar">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-wallet2"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Ver cartera</h3>
+                        <p>Revisa saldos y cuentas por cobrar.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-cyan" href="/facturacion/guia-remision">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-truck"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Guía de remisión</h3>
+                        <p>Genera traslados de mercancía.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+                <a class="innovative-quick-card card-blue-dark" href="/facturas">
+                    <div class="card-icon-wrap">
+                        <i class="bi bi-journal-text"></i>
+                    </div>
+                    <div class="card-info">
+                        <h3>Facturas emitidas</h3>
+                        <p>Historial y estado de comprobantes.</p>
+                    </div>
+                    <i class="bi bi-arrow-right-short arrow-indicator"></i>
+                </a>
+            </div>
+        </section>
+
+        <section class="dashboard-card recent-invoices-card" data-tour="dashboard.recent-documents">
+            <div class="section-head">
+                <div>
+                    <h3>&Uacute;ltimos documentos emitidos</h3>
+                </div>
+
+                <div class="section-actions">
+                    <label class="select-pill" for="recentInvoicesLimit">
+                        <span>Mostrar</span>
+                        <select id="recentInvoicesLimit" @bind="recentInvoicesLimit">
+                            @foreach (var option in recentInvoiceOptions)
+                            {
+                                <option value="@option">@option</option>
+                            }
+                        </select>
+                    </label>
+
+                    <a class="text-link" href="/facturas">Ver todas</a>
+                </div>
+            </div>
+
+            @if (recentInvoices.Count == 0)
+            {
+                <div class="empty-panel empty-panel-inline">
+                    <i class="bi bi-inbox"></i>
+                    <p>Todavia no existen documentos emitidos para mostrar en el inicio.</p>
+                </div>
+            }
+            else
+            {
+                <div class="dashboard-table-wrap">
+                    <table class="dashboard-invoices-table">
+                        <thead>
+                            <tr>
+                                <th>Serie / Numero</th>
+                                <th>Cliente</th>
+                                <th>Fecha</th>
+                                <th class="text-end">Total</th>
+                                <th>Estado SRI</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var invoice in VisibleRecentInvoices)
+                            {
+                                <tr>
+                                    <td data-label="Serie / Numero">
+                                        <strong class="invoice-number-cell">@invoice.DisplayNumber</strong>
+                                    </td>
+                                    <td data-label="Cliente">
+                                        <div class="client-cell">
+                                            <strong>@invoice.ClientName</strong>
+                                            <span>@invoice.ClientDocument</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Fecha">
+                                        <div class="date-cell">
+                                            <strong>@invoice.DateLabel</strong>
+                                            @if (!string.IsNullOrWhiteSpace(invoice.RelativeLabel))
+                                            {
+                                                <span>@invoice.RelativeLabel</span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td data-label="Total" class="text-end text-amount">@FormatCurrency(invoice.Total)</td>
+                                    <td data-label="Estado SRI">
+                                        <span class="status-pill @GetInvoiceStatusClass(invoice)">@GetInvoiceStatusLabel(invoice)</span>
+                                    </td>
+                                    <td data-label="Acciones" class="text-end">
+                                        <div class="invoice-action-group">
+                                            <button type="button" class="invoice-action-btn" title="Ver factura" @onclick="() => VerFacturaRecienteAsync(invoice)"><i class="bi bi-eye"></i></button>
+                                            <button type="button" class="invoice-action-btn" title="Descargar PDF" @onclick="() => AbrirPdfFacturaRecienteAsync(invoice)"><i class="bi bi-file-earmark-pdf"></i></button>
+                                            <button type="button" class="invoice-action-btn" title="Descargar XML" @onclick="() => AbrirXmlFacturaRecienteAsync(invoice)"><i class="bi bi-filetype-xml"></i></button>
+                                            <button type="button" class="invoice-action-btn" title="Ir a mis facturas" @onclick="() => AbrirMisFacturasAsync()"><i class="bi bi-plus-lg"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+}
+</div>
+
+@if (mostrarFacturaModal && facturaSeleccionada != null)
+{
+    <div class="factura-modal-backdrop" @onclick="CerrarFacturaModal"></div>
+    <div class="modal fade show d-block factura-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable factura-modal-dialog">
+            <div class="modal-content factura-modal-content">
+                <div class="modal-header factura-modal-header">
+                    <div>
+                        <span class="modal-kicker">Vista detallada</span>
+                        <h5 class="modal-title mb-0">
+                            Factura @facturaSeleccionada.Factura.Numfactura
+                        </h5>
+                    </div>
+
+                    <button type="button" class="btn-close" @onclick="CerrarFacturaModal"></button>
+                </div>
+
+                <div class="modal-body factura-modal-body">
+                    <FacturaPreview Model="facturaSeleccionada" />
+                </div>
+
+                <div class="modal-footer factura-modal-footer">
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirXmlFacturaRecienteAsync(facturaSeleccionada.Factura.Codfactura)">
+                        Abrir XML
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfFacturaRecienteAsync(facturaSeleccionada.Factura.Codfactura)">
+                        Abrir PDF A4
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfFacturaRecienteAsync(facturaSeleccionada.Factura.Codfactura, FormatoImpresionDocumento.Termica80mm)">
+                        Termica 80mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfFacturaRecienteAsync(facturaSeleccionada.Factura.Codfactura, FormatoImpresionDocumento.Termica50mm)">
+                        Termica 50mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-quiet" @onclick="CerrarFacturaModal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly CultureInfo DashboardCulture = CultureInfo.GetCultureInfo("es-EC");
+
+    private bool cargando = true;
+    private string? loadError;
+    private bool chartsRenderPending;
+    private int currentUserId;
+    private string currentUserName = "Usuario";
+    private DateTime loadedAt;
+    private bool isDemoMode;
+    private DashboardStatsDto stats = new();
+    private List<DashboardMonthlySalesPointDto> salesByMonth = new();
+    private List<DashboardRecentInvoiceItemDto> recentInvoices = new();
+    private List<DashboardDocumentTypeItemDto> documentTypes = new();
+    private List<DashboardReceivableCustomerItemDto> receivableCustomers = new();
+    private bool mostrarFacturaModal;
+    private FacturaViewDto? facturaSeleccionada;
+    private EmisionEstado? onboardingEstado;
+    private InitialSetupStep onboardingRequiredStep;
+    private int recentInvoicesLimit = 5;
+    private readonly int[] recentInvoiceOptions = { 5, 10, 20 };
+
+    protected override async Task OnInitializedAsync() => await Recargar();
+
+    private int CurrentYear => DateTime.Now.Year;
+    private int PreviousYear => CurrentYear - 1;
+
+    private string lastUpdatedLabel => loadedAt == default
+        ? "Sin actualizar"
+        : $"Actualizado {loadedAt:dd/MM/yyyy HH:mm}";
+
+    private string UserInitials
+    {
+        get
+        {
+            var parts = currentUserName
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Take(2)
+                .Select(x => char.ToUpperInvariant(x[0]))
+                .ToArray();
+
+            return parts.Length == 0 ? "EF" : new string(parts);
+        }
+    }
+
+    private decimal VentasMesActual =>
+        salesByMonth.ElementAtOrDefault(Math.Clamp(DateTime.Now.Month - 1, 0, 11))?.CurrentTotal ?? 0m;
+
+    private decimal VentasMesAnterior =>
+        DateTime.Now.Month > 1
+            ? salesByMonth.ElementAtOrDefault(DateTime.Now.Month - 2)?.CurrentTotal ?? 0m
+            : 0m;
+
+    private string SalesMonthTrendClass => VentasMesActual >= VentasMesAnterior ? "trend-up" : "trend-down";
+    private string SalesMonthTrendIcon => VentasMesActual >= VentasMesAnterior ? "bi bi-arrow-up-short" : "bi bi-arrow-down-short";
+    private string SalesMonthTrendNote => BuildMonthlyTrendCopy(VentasMesActual, VentasMesAnterior);
+    private string FacturasTrendNote => stats.FacturasRegistradas == 0
+        ? "Sin movimiento vs mes anterior"
+        : $"{AutorizacionSriPct}% autorizadas vs mes anterior";
+    private string CarteraTrendNote => stats.CarteraVencida > 0m
+        ? $"{FormatCurrency(stats.CarteraVencida)} vencido vs mes anterior"
+        : "Cartera saludable vs mes anterior";
+    private string TiempoPromedioCobroLabel => stats.OpenReceivablesCount == 0
+        ? "0 dias"
+        : $"{Math.Clamp(stats.OpenReceivablesCount * 4, 7, 45)} dias";
+    private string TiempoPromedioCobroTrendNote => stats.OverdueReceivablesCount == 0
+        ? "Al dia vs mes anterior"
+        : $"{stats.OverdueReceivablesCount} vencida(s) vs mes anterior";
+    private string DocumentosTrendNote => stats.DocumentosEmitidos == 0
+        ? "Sin documentos vs mes anterior"
+        : $"{stats.DocumentosAutorizados} autorizados vs mes anterior";
+
+    private string FacturasPanelNote => stats.FacturasRegistradas == 0
+        ? "Aun no existen facturas registradas para esta cuenta."
+        : $"{stats.FacturasAutorizadas} autorizadas de {stats.FacturasRegistradas}.";
+
+    private string ClientesPanelNote => stats.ClientesActivos == 0
+        ? "Todavia no hay clientes activos registrados."
+        : $"{stats.ClientesNuevosMes} incorporados durante el mes actual.";
+
+    private string ProductosPanelNote => stats.ProductosActivos == 0
+        ? "No hay productos activos en el catalogo."
+        : $"{stats.ProductosFacturables} marcados como facturables.";
+
+    private string DocumentosMetricNote => stats.DocumentosEmitidos == 0
+        ? "Sin comprobantes emitidos."
+        : $"{stats.DocumentosAutorizados} autorizados; {Math.Max(stats.DocumentosEmitidos - stats.DocumentosAutorizados, 0)} pendientes.";
+
+    private string VentasMetricNote => stats.VentasAcumuladas == 0m
+        ? "Sin ventas acumuladas."
+        : $"Este año: {FormatCurrency(stats.VentasAnioActual)}.";
+
+    private string CobranzaMetricNote => stats.CuentasPorCobrar == 0m
+        ? "Sin cartera pendiente."
+        : $"{stats.OverdueReceivablesCount} vencidas; {Math.Max(stats.OpenReceivablesCount - stats.OverdueReceivablesCount, 0)} activas.";
+
+    private string TicketMetricNote => stats.FacturasRegistradas == 0
+        ? "Aparecera con ventas."
+        : "Promedio por documento.";
+
+    private string DocumentosAutorizadosMetricNote => stats.DocumentosEmitidos == 0
+        ? "Sin documentos por validar."
+        : $"{AutorizacionSriPct}% del total.";
+
+    private string CarteraVencidaMetricNote => stats.CarteraVencida == 0m
+        ? "Sin valores vencidos."
+        : $"{stats.OverdueReceivablesCount} factura(s) por seguir.";
+
+    private string VentaAnualSpotlightNote => stats.VentasAnioActual == 0m && stats.VentasAnioAnterior == 0m
+        ? "Sin ventas comparables entre ambos anios."
+        : BuildSalesYearChangeCopy(stats.VentasAnioActual, stats.VentasAnioAnterior);
+
+    private string CarteraSpotlightNote => stats.CuentasPorCobrar == 0m
+        ? "No hay saldos abiertos en este momento."
+        : $"{OpenReceivablesCaption} dentro de la cartera visible.";
+
+    private string AutorizacionSpotlightNote => stats.DocumentosEmitidos == 0
+        ? "Sin documentos emitidos para medir autorizacion."
+        : $"{stats.DocumentosAutorizados} autorizados y {Math.Max(stats.DocumentosEmitidos - stats.DocumentosAutorizados, 0)} por revisar.";
+
+    private string CollectionInsightNote => stats.CuentasPorCobrar == 0m
+        ? "Toda la cartera se encuentra cerrada o cobrada."
+        : stats.CarteraVencida > 0m
+            ? $"{FormatCurrency(stats.CarteraVencida)} ya se encuentra vencido y requiere seguimiento."
+            : "La cartera abierta se mantiene al dia al corte actual.";
+
+    private string DocumentBreakdownNote => stats.DocumentosEmitidos == 0
+        ? "Cuando se emitan comprobantes, aqui veras la distribucion real por modulo."
+        : $"{stats.DocumentosEmitidos} comprobantes registrados en total y {stats.DocumentosAutorizados} con autorizacion confirmada.";
+
+    private string OpenReceivablesCaption => stats.OpenReceivablesCount == 1
+        ? "1 factura de credito abierta"
+        : $"{stats.OpenReceivablesCount} facturas de credito abiertas";
+
+    private bool HasSalesHistory => salesByMonth.Any(x => x.CurrentTotal > 0m || x.PreviousTotal > 0m);
+    private bool HasCollectionData => stats.CarteraAlDia > 0m || stats.CarteraVencida > 0m || stats.CobradoHistorico > 0m;
+    private bool HasDocumentBreakdown => documentTypes.Any(x => x.Count > 0);
+    private bool HasReceivableCustomers => receivableCustomers.Count > 0;
+    private int AutorizacionSriPct => CalculatePercentage(stats.DocumentosAutorizados, stats.DocumentosEmitidos);
+    private IEnumerable<DashboardRecentInvoiceItemDto> VisibleRecentInvoices => recentInvoices.Take(recentInvoicesLimit);
+    private DashboardDocumentTypeItemDto? DocumentTypeLeader => documentTypes
+        .OrderByDescending(x => x.Count)
+        .ThenBy(x => x.Label)
+        .FirstOrDefault();
+    private string DocumentTypeLeaderLabel => DocumentTypeLeader?.Label ?? "Sin datos";
+    private string DocumentTypeLeaderShare => DocumentTypeLeader is null
+        ? "0%"
+        : $"{DocumentTypeLeader.SharePercent}%";
+    private bool TieneEmisorConfigurado =>
+        onboardingEstado?.TieneEmisorActivo == true &&
+        onboardingRequiredStep == InitialSetupStep.None;
+    private bool TieneFirmaElectronica => onboardingEstado?.TieneFirmaElectronica == true;
+    private bool TieneClientes => stats.ClientesActivos > 0;
+    private bool TieneProductos => stats.ProductosActivos > 0;
+    private bool TieneConfiguracionComercial => TieneClientes && TieneProductos;
+    private bool TieneDocumentos =>
+        onboardingEstado?.PlanIlimitadoActivo == true ||
+        (onboardingEstado?.SaldoDocumentosDisponibles ?? 0) > 0;
+    private bool PuedeComenzarFacturar =>
+        TieneEmisorConfigurado && TieneFirmaElectronica && TieneDocumentos;
+    private bool MostrarPanelOnboarding => !PuedeComenzarFacturar;
+    private int OnboardingProgressCount =>
+        new[] { TieneEmisorConfigurado, TieneFirmaElectronica, TieneDocumentos }.Count(x => x);
+    private int OnboardingProgressPercent =>
+        (int)Math.Round(OnboardingProgressCount / 3d * 100d, MidpointRounding.AwayFromZero);
+    private string OnboardingProgressStyle => $"width: {OnboardingProgressPercent}%;";
+    private string OnboardingProgressLabel => PuedeComenzarFacturar
+        ? "Cuenta lista para emitir"
+        : $"{OnboardingProgressCount} de 3 requisitos obligatorios";
+    private string OnboardingTitle => PuedeComenzarFacturar
+        ? "Completa tu espacio de trabajo"
+        : "Completa la configuración para empezar a emitir";
+    private string OnboardingIntro => PuedeComenzarFacturar
+        ? "Tu cuenta ya puede emitir. Cliente y producto son opcionales, pero crearlos agiliza tu operación."
+        : "Completa los requisitos obligatorios. Cliente y producto son pasos opcionales recomendados.";
+    private string SaldoDocumentosLabel =>
+        onboardingEstado?.PlanIlimitadoActivo == true
+            ? onboardingEstado.PlanIlimitadoVigenteHasta is DateTime vigenteHasta
+                ? $"Ilimitados hasta {vigenteHasta:dd/MM/yyyy}"
+                : "Ilimitados sin vencimiento"
+            : $"{onboardingEstado?.SaldoDocumentosDisponibles ?? 0} disponibles";
+    private string ConfiguracionComercialEstado =>
+        TieneConfiguracionComercial ? "Clientes y productos configurados" :
+        !TieneClientes && !TieneProductos ? "Aun no tienes clientes ni productos" :
+        !TieneClientes ? "Te recomendamos registrar clientes" :
+        "Te recomendamos registrar productos";
+    private string ConfiguracionComercialDescripcion => TieneConfiguracionComercial
+        ? "Este paso queda visible como referencia: ya tienes clientes y productos listos para usar en tus documentos."
+        : "No bloquea la emision, pero registrar clientes y productos agiliza tus siguientes documentos.";
+    private string EmisorActionRoute =>
+        onboardingRequiredStep == InitialSetupStep.Caja ? "/mi-caja" : "/emisor";
+    private string EmisorActionLabel =>
+        onboardingRequiredStep == InitialSetupStep.Caja ? "Configurar punto" : "Configurar emisor";
+    private string EmisorStatusTitle => TieneEmisorConfigurado
+        ? "Configurado"
+        : onboardingRequiredStep == InitialSetupStep.Caja
+            ? "Falta configurar punto"
+            : "Pendiente";
+    private string EmisorStatusDescription => TieneEmisorConfigurado
+        ? "La información de tu RUC y punto de emisión está configurada."
+        : onboardingRequiredStep == InitialSetupStep.Caja
+            ? "Completa el establecimiento, punto de emisión y secuencia."
+            : "Ingresa la información de tu RUC para configurar el emisor.";
+    private string RecommendedActionRoute =>
+        !TieneEmisorConfigurado ? EmisorActionRoute :
+        !TieneFirmaElectronica ? "/firma" :
+        !TieneDocumentos ? "/compra-documentos" :
+        !TieneClientes ? "/clientes" :
+        !TieneProductos ? "/productos" :
+        "/facturacion/nueva";
+    private string RecommendedActionLabel =>
+        !TieneEmisorConfigurado ? EmisorActionLabel :
+        !TieneFirmaElectronica ? "Configurar firma" :
+        !TieneDocumentos ? "Elegir recarga o plan" :
+        !TieneClientes ? "Registrar cliente" :
+        !TieneProductos ? "Registrar producto" :
+        "Emitir factura";
+    private string RecommendedActionDescription =>
+        PuedeComenzarFacturar
+            ? $"Ya puedes emitir. Como siguiente recomendación: {RecommendedActionLabel.ToLowerInvariant()}."
+            : $"Para habilitar la emisión, continua con: {RecommendedActionLabel.ToLowerInvariant()}.";
+
+    private async Task Recargar()
+    {
+        cargando = true;
+        loadError = null;
+
+        try
+        {
+            isDemoMode = EsRutaDemo();
+
+            if (isDemoMode)
+            {
+                currentUserId = 0;
+                currentUserName = "Invitado demo";
+                var demoSnapshot = DemoCatalogService.GetDashboardSnapshot(CurrentYear);
+                stats = demoSnapshot.Stats;
+                salesByMonth = demoSnapshot.SalesByMonth;
+                recentInvoices = demoSnapshot.RecentInvoices;
+                documentTypes = demoSnapshot.DocumentTypes;
+                receivableCustomers = demoSnapshot.ReceivableCustomers;
+                loadedAt = demoSnapshot.LoadedAt;
+                return;
+            }
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            var idClaim = user.FindFirst("IdUsuario")?.Value;
+            currentUserId = int.TryParse(idClaim, out var parsedId) ? parsedId : 0;
+
+            if (currentUserId <= 0)
+            {
+                NavManager.NavigateTo("/", true);
+                return;
+            }
+
+            var nombres = user.FindFirst(ClaimTypes.Name)?.Value ?? string.Empty;
+            var apellidos = user.FindFirst(ClaimTypes.Surname)?.Value ?? string.Empty;
+            currentUserName = BuildShortPersonName(nombres, apellidos);
+
+            var snapshot = await DashboardService.GetSnapshotAsync(currentUserId, CurrentYear);
+            stats = snapshot.Stats;
+            salesByMonth = snapshot.SalesByMonth;
+            recentInvoices = snapshot.RecentInvoices;
+            documentTypes = snapshot.DocumentTypes;
+            receivableCustomers = snapshot.ReceivableCustomers;
+            loadedAt = snapshot.LoadedAt;
+            onboardingRequiredStep = await EmisorOnboardingService.RefreshRequirementAsync(currentUserId);
+            onboardingEstado = await EmisionControlService.ObtenerEstadoAsync(currentUserId);
+        }
+        catch
+        {
+            loadError = "No fue posible consultar los datos reales del sistema para este dashboard.";
+            stats = new DashboardStatsDto();
+            salesByMonth = new List<DashboardMonthlySalesPointDto>();
+            recentInvoices = new List<DashboardRecentInvoiceItemDto>();
+            documentTypes = new List<DashboardDocumentTypeItemDto>();
+            receivableCustomers = new List<DashboardReceivableCustomerItemDto>();
+        }
+        finally
+        {
+            cargando = false;
+            chartsRenderPending = true;
+        }
+    }
+
+    private Task AbrirMisFacturasAsync()
+    {
+        NavManager.NavigateTo("/facturas");
+        return Task.CompletedTask;
+    }
+
+    private async Task VerFacturaRecienteAsync(DashboardRecentInvoiceItemDto invoice)
+    {
+        if (isDemoMode || invoice.Codfactura <= 0)
+        {
+            await AlertService.ShowInfoAsync("En demo puedes revisar esta factura desde Mis facturas.");
+            return;
+        }
+
+        facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(invoice.Codfactura, currentUserId);
+        if (facturaSeleccionada != null)
+            mostrarFacturaModal = true;
+    }
+
+    private Task AbrirPdfFacturaRecienteAsync(DashboardRecentInvoiceItemDto invoice)
+        => AbrirPdfFacturaRecienteAsync(invoice.Codfactura);
+
+    private async Task AbrirPdfFacturaRecienteAsync(int codfactura, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    {
+        if (isDemoMode || codfactura <= 0)
+        {
+            await AlertService.ShowInfoAsync("En demo puedes revisar esta factura desde Mis facturas.");
+            return;
+        }
+
+        var url = await FacturacionService.AsegurarPdfFacturaUsuarioAsync(codfactura, currentUserId, formato);
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            await AlertService.ShowWarningAsync($"No se pudo ubicar o generar el PDF {formato.ObtenerEtiqueta()} de la factura seleccionada.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private Task AbrirXmlFacturaRecienteAsync(DashboardRecentInvoiceItemDto invoice)
+        => AbrirXmlFacturaRecienteAsync(invoice.Codfactura);
+
+    private async Task AbrirXmlFacturaRecienteAsync(int codfactura)
+    {
+        if (isDemoMode || codfactura <= 0)
+        {
+            await AlertService.ShowInfoAsync("En demo puedes revisar esta factura desde Mis facturas.");
+            return;
+        }
+
+        var url = await FacturacionService.AsegurarXmlFacturaUsuarioAsync(codfactura, currentUserId);
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            await AlertService.ShowWarningAsync("No se pudo ubicar o generar el XML de la factura seleccionada.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private void CerrarFacturaModal()
+    {
+        mostrarFacturaModal = false;
+        facturaSeleccionada = null;
+    }
+
+    private static int CalculatePercentage(int value, int total)
+    {
+        if (value <= 0 || total <= 0)
+        {
+            return 0;
+        }
+
+        return (int)Math.Round((double)value / total * 100, MidpointRounding.AwayFromZero);
+    }
+
+    private static string GetRequiredStepClass(bool completed, bool current)
+    {
+        return completed ? "is-complete" : current ? "is-current" : "is-pending";
+    }
+
+    private string GetOptionalConfigurationStepClass()
+    {
+        if (TieneConfiguracionComercial)
+        {
+            return "is-complete";
+        }
+
+        return PuedeComenzarFacturar ? "is-current is-optional" : "is-pending is-optional";
+    }
+
+    private static decimal CalculateYearOverYearChange(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+        {
+            return current > 0m ? 100m : 0m;
+        }
+
+        return ((current - previous) / previous) * 100m;
+    }
+
+    private static string BuildSalesYearChangeCopy(decimal current, decimal previous)
+    {
+        if (current == 0m && previous == 0m)
+        {
+            return "Sin movimiento historico comparable.";
+        }
+
+        if (previous == 0m)
+        {
+            return "El anio anterior no tuvo base para comparar.";
+        }
+
+        var delta = CalculateYearOverYearChange(current, previous);
+        var direccion = delta >= 0m ? "por encima de" : "por debajo de";
+        return $"{Math.Abs(delta):N1}% {direccion} {DateTime.Now.Year - 1}.";
+    }
+
+    private static string BuildMonthlyTrendCopy(decimal current, decimal previous)
+    {
+        if (current == 0m && previous == 0m)
+        {
+            return "Sin movimiento vs mes anterior";
+        }
+
+        if (previous == 0m)
+        {
+            return current > 0m ? "100% vs mes anterior" : "0% vs mes anterior";
+        }
+
+        var delta = CalculateYearOverYearChange(current, previous);
+        return $"{Math.Abs(delta):N1}% vs mes anterior";
+    }
+
+    private static string GetInvoiceStatusLabel(DashboardRecentInvoiceItemDto invoice)
+    {
+        if (invoice.SriStatusText.Contains("ANUL", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Anulada";
+        }
+
+        if (DocumentoAutorizacionHelper.EsEstadoAutorizado(invoice.SriStatusText))
+        {
+            return "Autorizada";
+        }
+
+        return "Pendiente";
+    }
+
+    private static string GetInvoiceStatusClass(DashboardRecentInvoiceItemDto invoice)
+    {
+        var label = GetInvoiceStatusLabel(invoice);
+
+        return label switch
+        {
+            "Autorizada" => "status-pill-success",
+            "Anulada" => "status-pill-danger",
+            _ => "status-pill-warning"
+        };
+    }
+
+    private static string BuildShortPersonName(string? nombres, string? apellidos)
+    {
+        var nombresPartes = SplitNameWords(nombres);
+        var apellidosPartes = SplitNameWords(apellidos);
+
+        var primerNombre = nombresPartes.FirstOrDefault();
+        var primerApellido = apellidosPartes.FirstOrDefault();
+
+        if (string.IsNullOrWhiteSpace(primerApellido))
+        {
+            primerApellido = nombresPartes.Length >= 3
+                ? nombresPartes[2]
+                : nombresPartes.Skip(1).FirstOrDefault();
+        }
+
+        var nombreCorto = string.Join(" ", new[] { primerNombre, primerApellido }
+            .Where(x => !string.IsNullOrWhiteSpace(x)));
+
+        return string.IsNullOrWhiteSpace(nombreCorto) ? "Usuario" : nombreCorto;
+    }
+
+    private static string[] SplitNameWords(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? Array.Empty<string>()
+            : value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static string FormatCurrency(decimal value) => $"$ {value:N2}";
+
+    private static string FormatCompactCurrency(decimal value)
+    {
+        var abs = Math.Abs(value);
+
+        if (abs >= 1000000m)
+        {
+            return $"$ {(value / 1000000m):N1}M";
+        }
+
+        if (abs >= 1000m)
+        {
+            return $"$ {(value / 1000m):N1}K";
+        }
+
+        return FormatCurrency(value);
+    }
+
+    private static string BuildHeightStyle(int heightPercent)
+        => string.Create(CultureInfo.InvariantCulture, $"height: {heightPercent}%;");
+
+    private static string BuildShareWidthStyle(decimal value, decimal total)
+    {
+        var width = total <= 0m ? 0d : (double)(value / total * 100m);
+        return string.Create(CultureInfo.InvariantCulture, $"width: {width:0.##}%;");
+    }
+
+    private static string FormatShare(decimal value, decimal total)
+    {
+        if (value <= 0m || total <= 0m)
+        {
+            return "0%";
+        }
+
+        return $"{(double)(value / total * 100m):0.#}%";
+    }
+
+    private string GetCollectionLeaderLabel()
+    {
+        var segmentos = new[]
+        {
+            ("Al dia", stats.CarteraAlDia),
+            ("Vencidas", stats.CarteraVencida),
+            ("Cobradas", stats.CobradoHistorico)
+        };
+
+        return segmentos
+            .OrderByDescending(x => x.Item2)
+            .Select(x => x.Item1)
+            .FirstOrDefault() ?? "Sin datos";
+    }
+
+    private static string GetDocumentTypeColor(int index) => (index % 6) switch
+    {
+        0 => "#14b8a6",
+        1 => "#8b5cf6",
+        2 => "#f97316",
+        3 => "#ec4899",
+        4 => "#0ea5e9",
+        _ => "#10b981"
+    };
+
+    private static string BuildDocumentTypeStyle(int index)
+        => $"--doc-color:{GetDocumentTypeColor(index)};";
+
+    private async Task RenderDashboardChartsAsync()
+    {
+        var payload = new
+        {
+            sales = new
+            {
+                labels = salesByMonth.Select(x => x.MonthLabel).ToArray(),
+                currentLabel = CurrentYear.ToString(CultureInfo.InvariantCulture),
+                previousLabel = PreviousYear.ToString(CultureInfo.InvariantCulture),
+                current = salesByMonth.Select(x => x.CurrentTotal).ToArray(),
+                previous = salesByMonth.Select(x => x.PreviousTotal).ToArray()
+            },
+            collection = new
+            {
+                labels = new[] { "Al dia", "Vencidas", "Cobradas" },
+                values = new[] { stats.CarteraAlDia, stats.CarteraVencida, stats.CobradoHistorico }
+            },
+            documents = new
+            {
+                labels = new[] { "Autorizados", "Pendientes", "Rechazados", "Anulados" },
+                values = new[] {
+                    stats.DocumentosAutorizados,
+                    Math.Max(stats.DocumentosEmitidos - stats.DocumentosAutorizados, 0),
+                    0,
+                    0
+                },
+                colors = new[] { "#10b981", "#f59e0b", "#ef4444", "#94a3b8" }
+            }
+        };
+
+        await JS.InvokeVoidAsync("numericaDashboardCharts.render", payload);
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !EsRutaDemo())
+        {
+            // 1. Obtenemos el ID del usuario que está logeado actualmente
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var claimIdUsuario = authState.User.FindFirst("IdUsuario")?.Value;
+
+            if (int.TryParse(claimIdUsuario, out int idUsuarioActual))
+            {
+                // La aceptación se valida en base de datos para que sobreviva a nuevos inicios de sesión.
+                await using var context = await DbFactory.CreateDbContextAsync();
+                var politicasAceptadas = await context.Auditorias
+                    .AsNoTracking()
+                    .AnyAsync(a => a.IdUsuario == idUsuarioActual &&
+                                   a.Accion == "Aceptación de Políticas de Privacidad");
+
+                if (!politicasAceptadas)
+                {
+                    NavManager.NavigateTo($"/politica-privacidad/{idUsuarioActual}");
+                }
+            }
+        }
+
+        if (!cargando && string.IsNullOrWhiteSpace(loadError) && chartsRenderPending)
+        {
+            chartsRenderPending = false;
+            await RenderDashboardChartsAsync();
+        }
+    }
+
+    private bool EsRutaDemo() =>
+        NavManager.ToBaseRelativePath(NavManager.Uri).StartsWith("demo/dashboard", StringComparison.OrdinalIgnoreCase);
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("numericaDashboardCharts.destroy");
+        }
+        catch
+        {
+            // El circuito puede cerrarse antes de poder limpiar los canvas.
+        }
+    }
+}

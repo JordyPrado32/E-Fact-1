@@ -1,0 +1,1302 @@
+@page "/e-declara/configuracion/suscripcion"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.EDeclara
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject PagoService PagoService
+
+<PageTitle>Mi Suscripción | E-Declara</PageTitle>
+
+<div class="suscripcion-container">
+    @if (cargando)
+    {
+        <section class="loading-state-card">
+            <div class="loading-state-icon">
+                <span class="spinner-border" role="status" style="color: #6e40c9;"></span>
+            </div>
+            <h3>Cargando tu suscripción</h3>
+            <p>Preparando tu información de facturación de E-Declara.</p>
+        </section>
+    }
+    else
+    {
+        <!-- Mensajes de Estado -->
+        @if (!string.IsNullOrWhiteSpace(successMensaje))
+        {
+            <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm" role="alert" style="border-radius: 16px; background-color: #f1ecfc; color: #4e2d91; padding: 1rem 1.5rem; margin-bottom: 1.5rem; border-left: 4px solid #6e40c9 !important;">
+                <i class="ri-checkbox-circle-line me-2" style="font-size: 1.2rem; vertical-align: middle; color: #6e40c9;"></i> @successMensaje
+                <button type="button" class="btn-close" @onclick="() => successMensaje = null" aria-label="Cerrar"></button>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(errorMensaje))
+        {
+            <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm" role="alert" style="border-radius: 16px; background-color: #fdf3f2; color: #b02a37; padding: 1rem 1.5rem; margin-bottom: 1.5rem; border-left: 4px solid #dc3545 !important;">
+                <i class="ri-error-warning-line me-2" style="font-size: 1.2rem; vertical-align: middle;"></i> @errorMensaje
+                <button type="button" class="btn-close" @onclick="() => errorMensaje = null" aria-label="Cerrar"></button>
+            </div>
+        }
+
+        <div class="suscripcion-layout-grid">
+            
+            <!-- PANEL IZQUIERDO: DETALLE DE PLAN & TARJETAS (Aside Glassmorphism) -->
+            <aside class="suscripcion-aside-panel">
+                
+                <!-- PLAN ACTIVO -->
+                <div class="aside-block-card">
+                    <div class="block-header">
+                        <div>
+                            <span class="block-kicker-purple">Suscripción</span>
+                            <h3>Plan Activo</h3>
+                        </div>
+                        @if (subActiva is not null && string.Equals(subActiva.Estado, "ACTIVA", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <span class="status-badge-active">Activo</span>
+                        }
+                        else
+                        {
+                            <span class="status-badge-inactive">Inactivo</span>
+                        }
+                    </div>
+
+                    <div style="margin-top: 1rem;">
+                        @if (subActiva is not null && string.Equals(subActiva.Estado, "ACTIVA", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <div class="plan-info-detail-box">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                    <strong style="font-size: 1.1rem; color: #2c3d50; font-weight: 800;">
+                                        @GetPlanFriendlyName(subActiva.PlanActual)
+                                    </strong>
+                                    <span class="cycle-pill">
+                                        @GetCicloFriendlyName(subActiva.CicloActual)
+                                    </span>
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: #6b7d8e;">
+                                    <div>Costo: <strong style="color: #6e40c9;">$@GetPlanPrice(subActiva.PlanActual, subActiva.CicloActual).ToString("F2") + IVA</strong></div>
+                                    <div>Fecha de Vencimiento: <strong style="color: #2c3d50;">@(subActiva.FechaFin?.ToString("dd/MM/yyyy") ?? "Sin fecha")</strong></div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="empty-plan-placeholder">
+                                <div class="placeholder-icon-wrap">
+                                    <i class="ri-error-warning-line"></i>
+                                </div>
+                                <div class="placeholder-copy">
+                                    <strong>Sin plan activo</strong>
+                                    <span>Suscríbete en el panel lateral para empezar.</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    <!-- CAMBIO AGENDADO -->
+                    @if (subActiva is not null && !string.IsNullOrWhiteSpace(subActiva.PlanAgendado))
+                    {
+                        <div class="scheduled-banner">
+                            <div style="display: flex; gap: 0.6rem; align-items: flex-start;">
+                                <i class="ri-time-line" style="color: #b25e00; font-size: 1.15rem; margin-top: 0.1rem;"></i>
+                                <div style="font-size: 0.8rem; color: #b25e00; line-height: 1.45; text-align: left;">
+                                    <strong style="display: block; font-weight: 800; margin-bottom: 0.15rem;">Cambio de plan agendado</strong>
+                                    Tu suscripción cambiará al <strong>@GetPlanFriendlyName(subActiva.PlanAgendado) (@GetCicloFriendlyName(subActiva.CicloAgendado))</strong> automáticamente el día <strong>@(subActiva.FechaFin?.ToString("dd/MM/yyyy") ?? "")</strong> una vez finalice tu ciclo actual.
+                                </div>
+                            </div>
+                            <div style="display: flex; justify-content: flex-end; margin-top: 0.8rem;">
+                                <button type="button" class="btn btn-sm btn-outline-danger cancel-agenda-btn" @onclick="CancelarCambioPlanAsync" disabled="@procesandoAccion">
+                                    @if (procesandoAccion)
+                                    {
+                                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                                    }
+                                    else
+                                    {
+                                        <span>Cancelar Cambio</span>
+                                    }
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <!-- TARJETAS -->
+                <div class="aside-block-card" style="border-top: 1px solid rgba(110,64,201,0.12); padding-top: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div>
+                            <span class="block-kicker-purple">Método de Pago</span>
+                            <h3 style="font-size: 1rem; font-weight: 800; color: #2c3d50; margin: 0.1rem 0 0;">Tarjetas Registradas</h3>
+                        </div>
+                        <button type="button" class="btn btn-sm add-card-purple-btn" @onclick="RegistrarNuevaTarjetaAsync" disabled="@procesandoAccion">
+                            <i class="ri-add-line"></i> Agregar
+                        </button>
+                    </div>
+
+                    <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                        @if (tarjetas.Any())
+                        {
+                            @foreach (var tarjeta in tarjetas)
+                            {
+                                <div class="card-item-row">
+                                    <div style="display: flex; align-items: center; gap: 0.65rem;">
+                                        <div class="card-icon-frame">
+                                            @if ((tarjeta.MarcaTarjeta ?? "").Contains("visa", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                <i class="ri-visa-line visa-brand-icon"></i>
+                                            }
+                                            else
+                                            {
+                                                <i class="ri-mastercard-line mastercard-brand-icon"></i>
+                                            }
+                                        </div>
+                                        <div style="display: flex; flex-direction: column; text-align: left;">
+                                            <span style="font-size: 0.82rem; font-weight: 800; color: #2d3748;">
+                                                •••• @(tarjeta.NumeroMascara?.Length >= 4 ? tarjeta.NumeroMascara.Substring(tarjeta.NumeroMascara.Length - 4) : "****")
+                                            </span>
+                                            <span style="font-size: 0.68rem; color: #a0aec0;">
+                                                Registrada el @tarjeta.FechaRegistro.ToString("dd/MM/yyyy")
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <button type="button" class="btn btn-sm text-danger delete-btn-icon" @onclick="() => EliminarTarjetaAsync(tarjeta)" disabled="@procesandoAccion" title="Eliminar tarjeta">
+                                        <i class="ri-delete-bin-line"></i>
+                                    </button>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="empty-cards-box">
+                                <div style="color: #cbd5e0; font-size: 1.6rem; margin-bottom: 0.25rem;">
+                                    <i class="ri-bank-card-line"></i>
+                                </div>
+                                <p style="font-size: 0.76rem; color: #a0aec0; margin: 0; line-height: 1.35; max-width: 25ch; margin: 0 auto;">
+                                    No tienes tarjetas de pago registradas. Agrega una tarjeta para cobros automáticos.
+                                </p>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+            </aside>
+
+            <!-- PANEL DERECHO: SELECTOR DE PLANES (Main Glassmorphism) -->
+            <section class="suscripcion-main-panel">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.8rem; border-bottom: 1px solid rgba(110,64,201,0.12); padding-bottom: 1.2rem;">
+                    <div style="text-align: left;">
+                        <span class="block-kicker-purple">Planes E-Declara</span>
+                        <h3 style="font-size: 1.2rem; font-weight: 800; color: #2c3d50; margin: 0.1rem 0 0;">Planes de Suscripción</h3>
+                    </div>
+                    
+                    <!-- Frecuencia Toggle -->
+                    <div class="billing-frequency-switcher">
+                        <button type="button" class="billing-switch-btn @(cicloSeleccionado == "mensual" ? "active" : "")" @onclick='() => SetCiclo("mensual")'>
+                            Mensual
+                        </button>
+                        <button type="button" class="billing-switch-btn @(cicloSeleccionado == "anual" ? "active" : "")" @onclick='() => SetCiclo("anual")'>
+                            Anual <span class="ahorro-badge">Ahorra 20%</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="planes-cards-stack">
+                    <!-- PLAN INDIVIDUAL -->
+                    <div class="plan-card-box @(IsPlanActual("individual") ? "active-plan" : "") @(IsPlanAgendado("individual") ? "scheduled-plan" : "")">
+                        <div class="plan-box-body">
+                            <div class="plan-box-info">
+                                <div class="plan-box-title-row">
+                                    <h4>Plan Individual</h4>
+                                    @if (IsPlanActual("individual") && string.Equals(cicloSeleccionado, subActiva?.CicloActual, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="plan-status-pill current-pill"><i class="ri-checkbox-circle-fill"></i> Actual</span>
+                                    }
+                                    else if (IsPlanAgendado("individual") && string.Equals(cicloSeleccionado, subActiva?.CicloAgendado, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="plan-status-pill agenda-pill"><i class="ri-time-fill"></i> Agendado</span>
+                                    }
+                                </div>
+                                <p class="plan-box-desc">Para personas naturales que desean manejar su control tributario de forma básica y rápida.</p>
+                                
+                                <ul class="plan-features-bullet-list">
+                                    <li><i class="ri-check-line text-success"></i> 1 Contribuyente máximo</li>
+                                    <li><i class="ri-check-line text-success"></i> Declaración de impuestos simplificada</li>
+                                </ul>
+                            </div>
+
+                            <div class="plan-box-price-action">
+                                <div class="plan-box-price">
+                                    <span class="price-symbol">$</span>
+                                    <span class="price-num">@(cicloSeleccionado == "anual" ? "80.00" : "10.00")</span>
+                                    <span class="price-cycle">/@(cicloSeleccionado == "anual" ? "año" : "mes")</span>
+                                    <small class="price-tax-label">+ IVA</small>
+                                </div>
+
+                                @if (!(IsPlanActual("individual") && string.Equals(cicloSeleccionado, subActiva?.CicloActual, StringComparison.OrdinalIgnoreCase)) &&
+                                     !(IsPlanAgendado("individual") && string.Equals(cicloSeleccionado, subActiva?.CicloAgendado, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    <button type="button" class="btn btn-purple-action" @onclick='() => AgendarCambioPlanAsync("individual", cicloSeleccionado)' disabled="@procesandoAccion">
+                                        @if (subActiva is null || string.Equals(subActiva.Estado, "PENDIENTE_PAGO", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <span>Suscribirse</span>
+                                        }
+                                        else
+                                        {
+                                            <span>Agendar Cambio</span>
+                                        }
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PLAN ASESOR -->
+                    <div class="plan-card-box popular-plan @(IsPlanActual("asesor") ? "active-plan" : "") @(IsPlanAgendado("asesor") ? "scheduled-plan" : "")">
+                        <div class="popular-ribbon-tag">Más Popular</div>
+                        <div class="plan-box-body">
+                            <div class="plan-box-info">
+                                <div class="plan-box-title-row">
+                                    <h4>Plan Asesor</h4>
+                                    @if (IsPlanActual("asesor") && string.Equals(cicloSeleccionado, subActiva?.CicloActual, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="plan-status-pill current-pill"><i class="ri-checkbox-circle-fill"></i> Actual</span>
+                                    }
+                                    else if (IsPlanAgendado("asesor") && string.Equals(cicloSeleccionado, subActiva?.CicloAgendado, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="plan-status-pill agenda-pill"><i class="ri-time-fill"></i> Agendado</span>
+                                    }
+                                </div>
+                                <p class="plan-box-desc">Para contadores y asesores tributarios independientes que manejan múltiples clientes.</p>
+                                
+                                <ul class="plan-features-bullet-list">
+                                    <li><i class="ri-check-line text-success"></i> Hasta 100 Contribuyentes</li>
+                                    <li><i class="ri-check-line text-success"></i> Soporte prioritario y descargas masivas</li>
+                                </ul>
+                            </div>
+
+                            <div class="plan-box-price-action">
+                                <div class="plan-box-price">
+                                    <span class="price-symbol">$</span>
+                                    <span class="price-num">@(cicloSeleccionado == "anual" ? "200.00" : "25.00")</span>
+                                    <span class="price-cycle">/@(cicloSeleccionado == "anual" ? "año" : "mes")</span>
+                                    <small class="price-tax-label">+ IVA</small>
+                                </div>
+
+                                @if (!(IsPlanActual("asesor") && string.Equals(cicloSeleccionado, subActiva?.CicloActual, StringComparison.OrdinalIgnoreCase)) &&
+                                     !(IsPlanAgendado("asesor") && string.Equals(cicloSeleccionado, subActiva?.CicloAgendado, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    <button type="button" class="btn btn-purple-action" @onclick='() => AgendarCambioPlanAsync("asesor", cicloSeleccionado)' disabled="@procesandoAccion">
+                                        @if (subActiva is null || string.Equals(subActiva.Estado, "PENDIENTE_PAGO", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <span>Suscribirse</span>
+                                        }
+                                        else
+                                        {
+                                            <span>Agendar Cambio</span>
+                                        }
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PLAN EMPRESARIAL -->
+                    <div class="plan-card-box @(IsPlanActual("empresarial") ? "active-plan" : "") @(IsPlanAgendado("empresarial") ? "scheduled-plan" : "")">
+                        <div class="plan-box-body">
+                            <div class="plan-box-info">
+                                <div class="plan-box-title-row">
+                                    <h4>Plan Empresarial</h4>
+                                    @if (IsPlanActual("empresarial") && string.Equals(cicloSeleccionado, subActiva?.CicloActual, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="plan-status-pill current-pill"><i class="ri-checkbox-circle-fill"></i> Actual</span>
+                                    }
+                                    else if (IsPlanAgendado("empresarial") && string.Equals(cicloSeleccionado, subActiva?.CicloAgendado, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="plan-status-pill agenda-pill"><i class="ri-time-fill"></i> Agendado</span>
+                                    }
+                                </div>
+                                <p class="plan-box-desc">Para firmas contables y corporaciones que necesitan accesos multi-usuario y soporte 24/7.</p>
+                                
+                                <ul class="plan-features-bullet-list">
+                                    <li><i class="ri-check-line text-success"></i> Hasta 500 Contribuyentes</li>
+                                    <li><i class="ri-check-line text-success"></i> Soporte 24/7 y acceso a API</li>
+                                </ul>
+                            </div>
+
+                            <div class="plan-box-price-action">
+                                <div class="plan-box-price">
+                                    <span class="price-symbol">$</span>
+                                    <span class="price-num">@(cicloSeleccionado == "anual" ? "500.00" : "50.00")</span>
+                                    <span class="price-cycle">/@(cicloSeleccionado == "anual" ? "año" : "mes")</span>
+                                    <small class="price-tax-label">+ IVA</small>
+                                </div>
+
+                                @if (!(IsPlanActual("empresarial") && string.Equals(cicloSeleccionado, subActiva?.CicloActual, StringComparison.OrdinalIgnoreCase)) &&
+                                     !(IsPlanAgendado("empresarial") && string.Equals(cicloSeleccionado, subActiva?.CicloAgendado, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    <button type="button" class="btn btn-purple-action" @onclick='() => AgendarCambioPlanAsync("empresarial", cicloSeleccionado)' disabled="@procesandoAccion">
+                                        @if (subActiva is null || string.Equals(subActiva.Estado, "PENDIENTE_PAGO", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <span>Suscribirse</span>
+                                        }
+                                        else
+                                        {
+                                            <span>Agendar Cambio</span>
+                                        }
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+<style>
+    /* Estilos base compartidos y personalizaciones de E-Declara (Tema Lavanda / Purpura / Glassmorphism) */
+    .suscripcion-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 1.5rem 1rem;
+        font-family: 'Inter', sans-serif;
+    }
+
+    .loading-state-card {
+        border-radius: 24px;
+        border: 1px solid rgba(110, 64, 201, 0.15);
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 14px 30px rgba(110, 64, 201, 0.05);
+        padding: 2.5rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        min-height: 320px;
+    }
+
+    .loading-state-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 20px;
+        background: rgba(110, 64, 201, 0.08);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 1.2rem;
+    }
+
+    .loading-state-card h3 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: #2c3d50;
+    }
+
+    .loading-state-card p {
+        color: #6b7d8e;
+        margin: 0.35rem 0 0;
+        font-size: 0.88rem;
+    }
+
+    .suscripcion-layout-grid {
+        display: grid;
+        grid-template-columns: minmax(290px, 340px) minmax(0, 1fr);
+        gap: 1rem;
+        align-items: start;
+    }
+
+    @@media (max-width: 1080px) {
+        .suscripcion-layout-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* Cards Estilo Aside y Form de E-Declara */
+    .suscripcion-aside-panel,
+    .suscripcion-main-panel {
+        border-radius: 24px;
+        border: 1px solid rgba(110, 64, 201, 0.15);
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 14px 30px rgba(110, 64, 201, 0.05);
+        padding: 1rem;
+    }
+
+    .suscripcion-aside-panel {
+        background:
+            radial-gradient(circle at top, rgba(110, 64, 201, 0.06), transparent 35%),
+            linear-gradient(180deg, rgba(255,255,255,0.98), rgba(252,250,255,0.98));
+    }
+
+    .aside-block-card {
+        display: flex;
+        flex-direction: column;
+        text-align: left;
+    }
+
+    .block-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+    }
+
+    .block-kicker-purple {
+        display: inline-flex;
+        align-items: center;
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #6e40c9;
+    }
+
+    .suscripcion-aside-panel h3,
+    .suscripcion-main-panel h3 {
+        margin: 0.2rem 0 0;
+        font-size: 1.05rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        color: #2c3d50;
+    }
+
+    .status-badge-active {
+        min-height: 28px;
+        padding: 0 0.72rem;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(110, 64, 201, 0.12);
+        color: #6e40c9;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+    }
+
+    .status-badge-inactive {
+        min-height: 28px;
+        padding: 0 0.72rem;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(220, 53, 69, 0.1);
+        color: #dc3545;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+    }
+
+    .plan-info-detail-box {
+        display: flex;
+        flex-direction: column;
+        padding: 1rem;
+        border-radius: 16px;
+        border: 1px solid rgba(110,64,201,0.22);
+        background: linear-gradient(180deg, #fbfaff, #f4f0fd);
+        text-align: left;
+    }
+
+    .cycle-pill {
+        min-height: 22px;
+        padding: 0 0.5rem;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(110, 64, 201, 0.1);
+        color: #6e40c9;
+        font-size: 0.65rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+    }
+
+    .empty-plan-placeholder {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.8rem;
+        border-radius: 16px;
+        background: rgba(110, 64, 201, 0.04);
+        border: 1px dashed rgba(110, 64, 201, 0.2);
+        color: #6b7d8e;
+        text-align: left;
+    }
+
+    .placeholder-icon-wrap {
+        width: 36px;
+        height: 36px;
+        border-radius: 12px;
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(110, 64, 201, 0.08);
+        color: #6e40c9;
+        font-size: 1.15rem;
+    }
+
+    .placeholder-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.1rem;
+    }
+
+    .placeholder-copy strong {
+        font-size: 0.8rem;
+        color: #2c3d50;
+        font-weight: 800;
+    }
+
+    .placeholder-copy span {
+        font-size: 0.72rem;
+        color: #6b7d8e;
+    }
+
+    .scheduled-banner {
+        margin-top: 0.8rem;
+        background: #fffdf5;
+        border: 1px solid #ffeeba;
+        border-radius: 16px;
+        padding: 1rem;
+    }
+
+    .cancel-agenda-btn {
+        background: transparent;
+        border: 1px solid #dc3545;
+        color: #dc3545;
+        transition: all 0.2s ease;
+    }
+
+    .cancel-agenda-btn:hover {
+        background: #dc3545;
+        color: white;
+    }
+
+    /* Tarjetas */
+    .add-card-purple-btn {
+        background: #6e40c9;
+        color: white;
+        font-weight: 700;
+        border-radius: 8px;
+        font-size: 0.72rem;
+        padding: 0.35rem 0.75rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        border: 0;
+        transition: background 0.18s ease;
+    }
+
+    .add-card-purple-btn:hover:not(:disabled) {
+        background: #5630a3;
+        color: white;
+    }
+
+    .card-item-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.65rem 0.8rem;
+        background: white;
+        border: 1px solid rgba(110,64,201,0.18);
+        border-radius: 14px;
+        box-shadow: 0 2px 4px rgba(110, 64, 201, 0.02);
+    }
+
+    .card-icon-frame {
+        width: 38px;
+        height: 24px;
+        border: 1px solid rgba(110,64,201,0.15);
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #fafafa;
+        font-size: 1.15rem;
+    }
+
+    .visa-brand-icon { color: #1a1f71; }
+    .mastercard-brand-icon { color: #eb001b; }
+
+    .delete-btn-icon {
+        font-size: 1.05rem;
+        line-height: 1;
+        background: transparent;
+        border: 0;
+        color: #a0aec0;
+        padding: 0.25rem;
+        border-radius: 6px;
+        transition: all 0.2s ease;
+    }
+
+    .delete-btn-icon:hover {
+        color: #dc3545;
+        background: rgba(220, 53, 69, 0.08);
+    }
+
+    .empty-cards-box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1.5px dashed rgba(110,64,201,0.22);
+        border-radius: 16px;
+        background: transparent;
+        padding: 1.2rem 0.8rem;
+    }
+
+    /* SWITHCER FACTURACION */
+    .billing-frequency-switcher {
+        display: flex;
+        background: #f4f0fd;
+        border: 1px solid rgba(110,64,201,0.2);
+        padding: 0.2rem;
+        border-radius: 12px;
+        align-items: center;
+    }
+
+    .billing-switch-btn {
+        background: transparent;
+        border: 0;
+        padding: 0.4rem 0.9rem;
+        border-radius: 9px;
+        font-size: 0.78rem;
+        font-weight: 800;
+        color: #6b7d8e;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        transition: all 0.18s ease;
+    }
+
+    .billing-switch-btn.active {
+        background: #6e40c9;
+        color: white;
+        box-shadow: 0 4px 10px rgba(110, 64, 201, 0.18);
+    }
+
+    .ahorro-badge {
+        font-size: 0.65rem;
+        background: #38a169;
+        color: white;
+        padding: 0.1rem 0.35rem;
+        border-radius: 99px;
+        font-weight: 800;
+    }
+
+    /* SECTOR PLANES DERECHO */
+    .planes-cards-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .plan-card-box {
+        border: 1.5px solid rgba(110, 64, 201, 0.15);
+        background: #ffffff;
+        border-radius: 20px;
+        position: relative;
+        overflow: hidden;
+        transition: all 0.22s ease;
+    }
+
+    .plan-card-box:hover {
+        border-color: #6e40c9;
+        box-shadow: 0 6px 20px rgba(110, 64, 201, 0.05);
+    }
+
+    .plan-card-box.active-plan {
+        border-color: #38a169;
+        background: #f6fffb;
+    }
+
+    .plan-card-box.scheduled-plan {
+        border-color: #6e40c9;
+        background: #fdfcff;
+    }
+
+    .plan-card-box.popular-plan {
+        border-color: rgba(110, 64, 201, 0.3);
+    }
+
+    .plan-card-box.popular-plan.active-plan {
+        border-color: #38a169;
+    }
+
+    .plan-card-box.popular-plan.scheduled-plan {
+        border-color: #6e40c9;
+    }
+
+    .popular-ribbon-tag {
+        position: absolute;
+        top: 0;
+        right: 0;
+        background: #6e40c9;
+        color: white;
+        font-size: 0.68rem;
+        font-weight: 800;
+        padding: 0.25rem 0.8rem;
+        border-bottom-left-radius: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .plan-box-body {
+        display: flex;
+        padding: 1.25rem;
+        gap: 1.5rem;
+        justify-content: space-between;
+        align-items: center;
+        text-align: left;
+    }
+
+    @@media (max-width: 768px) {
+        .plan-box-body {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 1.2rem;
+        }
+    }
+
+    .plan-box-info {
+        flex-grow: 1;
+    }
+
+    .plan-box-title-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin-bottom: 0.3rem;
+    }
+
+    .plan-box-title-row h4 {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #2c3d50;
+    }
+
+    .plan-box-desc {
+        font-size: 0.82rem;
+        color: #6b7d8e;
+        margin: 0 0 0.8rem;
+        line-height: 1.45;
+    }
+
+    .plan-status-pill {
+        font-size: 0.72rem;
+        font-weight: 800;
+        padding: 0.2rem 0.6rem;
+        border-radius: 99px;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+    }
+
+    .current-pill {
+        background: rgba(56, 161, 105, 0.1);
+        color: #38a169;
+    }
+
+    .agenda-pill {
+        background: rgba(110, 64, 201, 0.1);
+        color: #6e40c9;
+    }
+
+    .plan-features-bullet-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem 1.2rem;
+    }
+
+    .plan-features-bullet-list li {
+        font-size: 0.78rem;
+        color: #4a5568;
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+    }
+
+    .plan-box-price-action {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.75rem;
+        flex-shrink: 0;
+    }
+
+    @@media (max-width: 768px) {
+        .plan-box-price-action {
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid #f4f0fd;
+            padding-top: 0.75rem;
+        }
+    }
+
+    .plan-box-price {
+        text-align: right;
+        line-height: 1.1;
+    }
+
+    .price-num {
+        font-size: 1.45rem;
+        font-weight: 900;
+        color: #2c3d50;
+    }
+
+    .price-symbol {
+        font-size: 0.85rem;
+        font-weight: 800;
+        color: #2c3d50;
+        vertical-align: super;
+    }
+
+    .price-cycle {
+        font-size: 0.8rem;
+        color: #6b7d8e;
+        font-weight: 600;
+    }
+
+    .price-tax-label {
+        display: block;
+        font-size: 0.68rem;
+        color: #a0aec0;
+        font-weight: 600;
+    }
+
+    .btn-purple-action {
+        background-color: #6e40c9 !important;
+        color: white !important;
+        border: 0 !important;
+        font-weight: 700;
+        font-size: 0.8rem;
+        padding: 0.5rem 1.2rem;
+        border-radius: 10px;
+        transition: all 0.2s ease;
+        box-shadow: 0 4px 10px rgba(110, 64, 201, 0.15);
+    }
+
+    .btn-purple-action:hover:not(:disabled) {
+        background-color: #5630a3 !important;
+        transform: translateY(-1px);
+        box-shadow: 0 6px 14px rgba(110, 64, 201, 0.22);
+    }
+</style>
+
+@code {
+    private bool cargando = true;
+    private bool procesandoAccion = false;
+    private int usuarioId;
+    private string cicloSeleccionado = "mensual";
+    private string? errorMensaje;
+    private string? successMensaje;
+
+    private Usuario? usuarioObj;
+    private UsuarioServicioSuscripcion? subActiva;
+    private List<EdeclareTarjeta> tarjetas = new();
+    private int edeclaraServiceId;
+
+    [SupplyParameterFromQuery(Name = "registro")]
+    public string? Registro { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true ||
+            !int.TryParse(user.FindFirst("IdUsuario")?.Value, out usuarioId) ||
+            usuarioId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        await LoadDataAsync();
+
+        // Procesar retorno de registro de tarjeta
+        if (string.Equals(Registro, "exito", StringComparison.OrdinalIgnoreCase))
+        {
+            successMensaje = "¡Tarjeta registrada exitosamente en Pagomedios!";
+        }
+        else if (string.Equals(Registro, "error", StringComparison.OrdinalIgnoreCase))
+        {
+            errorMensaje = "Hubo un problema al registrar la tarjeta. Por favor inténtalo de nuevo.";
+        }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        cargando = true;
+        errorMensaje = null;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            usuarioObj = await context.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == usuarioId);
+            if (usuarioObj is null)
+            {
+                errorMensaje = "No se pudo cargar la información del usuario.";
+                return;
+            }
+
+            // Cargar servicio E-Declara
+            var servicio = await context.AppServicios.FirstOrDefaultAsync(x => x.Clave == "e-declara");
+            if (servicio is not null)
+            {
+                edeclaraServiceId = servicio.ServicioId;
+
+                // Cargar suscripción activa o existente
+                subActiva = await context.UsuarioServicioSuscripciones
+                    .FirstOrDefaultAsync(x => x.IdUsuario == usuarioId && x.ServicioId == edeclaraServiceId);
+                
+                // Si la suscripción actual tiene un plan específico, pre-seleccionar ciclo
+                if (subActiva is not null && !string.IsNullOrWhiteSpace(subActiva.CicloActual))
+                {
+                    cicloSeleccionado = subActiva.CicloActual;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error al cargar datos: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+
+        // Sincronizar y cargar tarjetas en tiempo real
+        await CargarYEstablecerTarjetasAsync();
+    }
+
+    private async Task EliminarTarjetaAsync(EdeclareTarjeta tarjeta)
+    {
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            // 1. Eliminar de Pagomedios
+            var result = await PagoService.EliminarTarjetaTokenizada(tarjeta.Token);
+            if (result.IsSuccess)
+            {
+                // 2. Eliminar de base de datos
+                await using var context = await DbFactory.CreateDbContextAsync();
+                var dbTarjeta = await context.EdeclareTarjetas.FirstOrDefaultAsync(t => t.IdTarjeta == tarjeta.IdTarjeta);
+                if (dbTarjeta is not null)
+                {
+                    context.EdeclareTarjetas.Remove(dbTarjeta);
+                    await context.SaveChangesAsync();
+                }
+
+                successMensaje = "Tarjeta eliminada con éxito.";
+                await LoadDataAsync();
+            }
+            else
+            {
+                errorMensaje = $"Error al eliminar la tarjeta en Pagomedios: {result.ErrorMessage ?? "Error desconocido."}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Ocurrió un error inesperado: {ex.Message}";
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task RegistrarNuevaTarjetaAsync()
+    {
+        if (usuarioObj is null || string.IsNullOrWhiteSpace(usuarioObj.Identificacion))
+        {
+            errorMensaje = "No se puede iniciar el registro sin la identificación del perfil.";
+            return;
+        }
+
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            var documentSanitized = new string((usuarioObj.Identificacion ?? "").Where(char.IsLetterOrDigit).ToArray());
+            var notifyUrl = NavManager.ToAbsoluteUri("/api/pagomedios/notificacion-registro-tarjeta").ToString();
+
+            var request = new
+            {
+                integration = true,
+                third = new
+                {
+                    document = documentSanitized,
+                    document_type = documentSanitized.Length == 13 ? "04" : "05",
+                    name = usuarioObj.NombreCompleto,
+                    email = usuarioObj.Email,
+                    phones = string.IsNullOrWhiteSpace(usuarioObj.Celular) ? "0999999999" : usuarioObj.Celular,
+                    address = string.IsNullOrWhiteSpace(usuarioObj.DireccionEmpresa) ? "Quito" : usuarioObj.DireccionEmpresa,
+                    type = "Individual"
+                },
+                generate_invoice = 0,
+                description = "Registro de Tarjeta - Configuración E-DECLARA",
+                amount = 1.15m,
+                amount_with_tax = 1.00m,
+                amount_without_tax = 0.00m,
+                tax_value = 0.15m,
+                notify_url = notifyUrl,
+                custom_value = $"user-{usuarioId}-plan-gestion-ciclo-gestion"
+            };
+
+            var result = await PagoService.RegistrarTarjetaSuscripcion(request);
+            if (result.IsSuccess && !string.IsNullOrWhiteSpace(result.PaymentUrl))
+            {
+                NavManager.NavigateTo(result.PaymentUrl, forceLoad: true);
+            }
+            else
+            {
+                errorMensaje = $"Error al iniciar el registro de tarjeta: {result.ErrorMessage ?? "Error en el servidor de pagos."}";
+                procesandoAccion = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error: {ex.Message}";
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task AgendarCambioPlanAsync(string plan, string ciclo)
+    {
+        // Si no hay suscripción en absoluto, o si está pendiente de pago, redirigir a checkout
+        if (subActiva is null || string.Equals(subActiva.Estado, "PENDIENTE_PAGO", StringComparison.OrdinalIgnoreCase))
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio=e-declara&plan={plan}&ciclo={ciclo}");
+            return;
+        }
+
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var dbSub = await context.UsuarioServicioSuscripciones.FirstOrDefaultAsync(s => s.SuscripcionId == subActiva.SuscripcionId);
+
+            if (dbSub is not null)
+            {
+                dbSub.PlanAgendado = plan;
+                dbSub.CicloAgendado = ciclo;
+                dbSub.FechaActualizacion = DateTime.Now;
+
+                await context.SaveChangesAsync();
+                successMensaje = $"Tu cambio de plan a {GetPlanFriendlyName(plan)} ({GetCicloFriendlyName(ciclo)}) fue programado con éxito.";
+                await LoadDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error al agendar el plan: {ex.Message}";
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task CancelarCambioPlanAsync()
+    {
+        if (subActiva is null) return;
+
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var dbSub = await context.UsuarioServicioSuscripciones.FirstOrDefaultAsync(s => s.SuscripcionId == subActiva.SuscripcionId);
+
+            if (dbSub is not null)
+            {
+                dbSub.PlanAgendado = null;
+                dbSub.CicloAgendado = null;
+                dbSub.FechaActualizacion = DateTime.Now;
+
+                await context.SaveChangesAsync();
+                successMensaje = "El cambio agendado fue cancelado.";
+                await LoadDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error al cancelar cambio de plan: {ex.Message}";
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private string GetPlanFriendlyName(string? plan)
+    {
+        if (string.Equals(plan, "individual", StringComparison.OrdinalIgnoreCase)) return "Plan Individual";
+        if (string.Equals(plan, "asesor", StringComparison.OrdinalIgnoreCase)) return "Plan Asesor";
+        if (string.Equals(plan, "empresarial", StringComparison.OrdinalIgnoreCase)) return "Plan Empresarial";
+        return plan ?? "Ninguno";
+    }
+
+    private string GetCicloFriendlyName(string? ciclo)
+    {
+        if (string.Equals(ciclo, "anual", StringComparison.OrdinalIgnoreCase)) return "Anual";
+        if (string.Equals(ciclo, "mensual", StringComparison.OrdinalIgnoreCase)) return "Mensual";
+        return ciclo ?? "-";
+    }
+
+    private decimal GetPlanPrice(string? plan, string? ciclo)
+    {
+        if (string.Equals(plan, "individual", StringComparison.OrdinalIgnoreCase))
+            return string.Equals(ciclo, "anual", StringComparison.OrdinalIgnoreCase) ? 80.00m : 10.00m;
+        if (string.Equals(plan, "asesor", StringComparison.OrdinalIgnoreCase))
+            return string.Equals(ciclo, "anual", StringComparison.OrdinalIgnoreCase) ? 200.00m : 25.00m;
+        if (string.Equals(plan, "empresarial", StringComparison.OrdinalIgnoreCase))
+            return string.Equals(ciclo, "anual", StringComparison.OrdinalIgnoreCase) ? 500.00m : 50.00m;
+        return 0m;
+    }
+
+    private bool IsPlanActual(string plan) =>
+        subActiva is not null && string.Equals(subActiva.PlanActual, plan, StringComparison.OrdinalIgnoreCase);
+
+    private bool IsPlanAgendado(string plan) =>
+        subActiva is not null && string.Equals(subActiva.PlanAgendado, plan, StringComparison.OrdinalIgnoreCase);
+
+    private void SetCiclo(string ciclo)
+    {
+        cicloSeleccionado = ciclo;
+    }
+
+    private async Task CargarYEstablecerTarjetasAsync()
+    {
+        if (usuarioObj is null || string.IsNullOrWhiteSpace(usuarioObj.Identificacion)) return;
+
+        try
+        {
+            var result = await PagoService.ObtenerTarjetasTokenizadas(usuarioObj.Identificacion);
+            if (result.IsSuccess && !string.IsNullOrWhiteSpace(result.ResponseBody))
+            {
+                var cardsResponse = JsonSerializer.Deserialize<PagomediosCardListResponse>(result.ResponseBody);
+                if (cardsResponse?.Success == true && cardsResponse.Data != null)
+                {
+                    var apiCards = cardsResponse.Data.SelectMany(x => x.Cards ?? new List<PagomediosTokenizedCard>()).ToList();
+                    
+                    if (apiCards.Any())
+                    {
+                        await using var context = await DbFactory.CreateDbContextAsync();
+                        var existingTokens = await context.EdeclareTarjetas
+                            .Where(x => x.IdUsuario == usuarioId)
+                            .Select(x => x.Token)
+                            .ToListAsync();
+
+                        var newTarjetas = new List<EdeclareTarjeta>();
+                        foreach (var card in apiCards)
+                        {
+                            if (!string.IsNullOrWhiteSpace(card.Token) && !existingTokens.Contains(card.Token))
+                            {
+                                newTarjetas.Add(new EdeclareTarjeta
+                                {
+                                    IdUsuario = usuarioId,
+                                    Documento = usuarioObj.Identificacion,
+                                    Token = card.Token,
+                                    MarcaTarjeta = card.CardBrand ?? "Desconocida",
+                                    NumeroMascara = card.Number ?? "****",
+                                    FechaRegistro = DateTime.Now,
+                                    Estado = true
+                                });
+                            }
+                        }
+
+                        if (newTarjetas.Any())
+                        {
+                            context.EdeclareTarjetas.AddRange(newTarjetas);
+                            await context.SaveChangesAsync();
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error al sincronizar tarjetas: {ex.Message}");
+        }
+        
+        // Cargar tarjetas de base de datos actualizadas
+        try 
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            tarjetas = await context.EdeclareTarjetas
+                .Where(x => x.IdUsuario == usuarioId && x.Estado)
+                .OrderByDescending(x => x.FechaRegistro)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error al cargar tarjetas de BD: {ex.Message}");
+        }
+    }
+
+    public class PagomediosCardListResponse
+    {
+        [JsonPropertyName("success")]
+        public bool Success { get; set; }
+
+        [JsonPropertyName("status")]
+        public int Status { get; set; }
+
+        [JsonPropertyName("data")]
+        public List<PagomediosClientCards>? Data { get; set; }
+    }
+
+    public class PagomediosClientCards
+    {
+        [JsonPropertyName("document")]
+        public string? Document { get; set; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("tradename")]
+        public string? Tradename { get; set; }
+
+        [JsonPropertyName("cards")]
+        public List<PagomediosTokenizedCard>? Cards { get; set; }
+    }
+
+    public class PagomediosTokenizedCard
+    {
+        [JsonPropertyName("card_brand")]
+        public string? CardBrand { get; set; }
+
+        [JsonPropertyName("number")]
+        public string? Number { get; set; }
+
+        [JsonPropertyName("token")]
+        public string? Token { get; set; }
+    }
+}

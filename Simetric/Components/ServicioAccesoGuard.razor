@@ -1,0 +1,116 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Extensions
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using Simetric.Services.EDeclara
+@using Simetric.Services.ESign
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject AppAccessService AppAccessService
+
+@code {
+    private bool _evaluando;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        await ValidarAccesoAsync();
+    }
+
+    private async Task ValidarAccesoAsync()
+    {
+        if (_evaluando)
+            return;
+
+        if (NavManager.Uri.Contains("/demo/", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var relativePath = NavManager.ToBaseRelativePath(NavManager.Uri);
+        if (EsRutaPortalServicios(relativePath))
+            return;
+
+        _evaluando = true;
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated != true)
+                return;
+
+            // ── Rutas de servicios propios: no validar aquí ──────────────────
+            var uri = NavManager.Uri;
+            if (IsEContaxPath(uri) || IsEDeclaraPath(uri) || IsESignPath(uri) || IsBackOfficePath(uri))
+                return;
+
+            // ── Contexto e-fact (facturación) ────────────────────────────────
+            var expectedService = AppAccessService.FreeServiceKey;
+
+            var currentService = await SelectedAppServiceState.GetCurrentServiceKeyAsync();
+            if (string.IsNullOrWhiteSpace(currentService))
+            {
+                await SelectedAppServiceState.SetCurrentServiceKeyAsync(expectedService);
+                currentService = expectedService;
+            }
+
+            if (!string.Equals(currentService, expectedService, StringComparison.OrdinalIgnoreCase))
+            {
+                NavManager.NavigateToIfNeeded("/portal-servicios");
+                return;
+            }
+
+            var userIdClaim = user.FindFirst("IdUsuario")?.Value;
+            if (!int.TryParse(userIdClaim, out var userId) || userId <= 0)
+            {
+                NavManager.NavigateToIfNeeded("/portal-servicios");
+                return;
+            }
+
+            var roleId = user.FindFirst("IdTipoUsuario")?.Value;
+            var canAccess = await AppAccessService.CanAccessAsync(
+                userId,
+                expectedService,
+                roleId == AppAccessService.AdminRoleId);
+
+            if (!canAccess.HasAccess)
+            {
+                NavManager.NavigateToIfNeeded(
+                    $"/suscripciones?servicio={Uri.EscapeDataString(expectedService)}",
+                    replace: true);
+                return;
+            }
+
+            if (!string.Equals(currentService, expectedService, StringComparison.OrdinalIgnoreCase))
+            {
+                await SelectedAppServiceState.SetCurrentServiceKeyAsync(expectedService);
+            }
+        }
+        finally
+        {
+            _evaluando = false;
+        }
+    }
+
+    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);
+
+    private bool IsEDeclaraPath(string location) => EDeclaraRoutes.IsEDeclaraPath(NavManager, location);
+
+    private bool IsESignPath(string location) => ESignRoutes.IsESignPath(NavManager, location);
+
+    private bool IsBackOfficePath(string location) => BackOfficeRoutes.IsBackOfficePath(NavManager, location);
+
+    private static bool EsRutaPortalServicios(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        return relativePath.StartsWith("portal-servicios", StringComparison.OrdinalIgnoreCase) ||
+               relativePath.StartsWith("suscripciones", StringComparison.OrdinalIgnoreCase) ||
+               relativePath.StartsWith("servicios/", StringComparison.OrdinalIgnoreCase) ||
+               relativePath.StartsWith("configuracion/", StringComparison.OrdinalIgnoreCase);
+    }
+}

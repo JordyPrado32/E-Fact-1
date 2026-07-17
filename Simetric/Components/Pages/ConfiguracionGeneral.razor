@@ -1,0 +1,1546 @@
+@page "/configuracion/general"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
+@using Simetric.Services
+@inject ConfiguracionService ConfigService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+
+@{
+    var currentKicker = GetCurrentSectionKicker();
+    var currentTitle = GetCurrentSectionTitle();
+    var currentDescription = GetCurrentSectionDescription();
+    var currentAction = GetCurrentActionLabel();
+}
+
+<PageTitle>Configuracion General | Numerica e-fact</PageTitle>
+
+<style>
+    .field-error {
+        color: #dc3545 !important;
+        font-size: 0.86rem;
+        font-weight: 600;
+        margin-top: 6px;
+        display: block;
+    }
+
+    .input-error {
+        border: 1px solid #dc3545 !important;
+        box-shadow: 0 0 0 0.15rem rgba(220, 53, 69, 0.15) !important;
+    }
+</style>
+
+<div class="config-shell" data-tour="config.page">
+    <section class="tabs-shell" data-tour="config.tabs">
+        <button class="tab-pill @(activeTab == "pagos" ? "is-active" : string.Empty)" @onclick='() => CambiarTab("pagos")'>
+            <i class="bi bi-credit-card-2-back"></i>
+            <span>Formas de Pago</span>
+        </button>
+
+        <button class="tab-pill @(activeTab == "docs" ? "is-active" : string.Empty)" @onclick='() => CambiarTab("docs")'>
+            <i class="bi bi-file-earmark-medical"></i>
+            <span>Tipos de Documento</span>
+        </button>
+    </section>
+
+    @if (isLoading)
+    {
+        <section class="config-state-card">
+            <div class="state-icon">
+                <span class="spinner-border text-primary" role="status"></span>
+            </div>
+            <h3>Cargando configuracion</h3>
+            <p>Estamos consultando catalogos y documentos para dejar el panel listo.</p>
+        </section>
+    }
+    else
+    {
+        <section class="config-card animate__animated animate__fadeIn" data-tour="config.hero">
+            <div class="config-card-head" data-tour="config.card-head">
+                <div>
+                    <span class="section-kicker">@currentKicker</span>
+                    <h3>@currentTitle</h3>
+                    <p>@currentDescription</p>
+                </div>
+
+                <button class="config-primary-btn" @onclick="OpenCurrentModal">
+                    <i class="bi bi-plus-circle"></i>
+                    <span>@currentAction</span>
+                </button>
+            </div>
+
+            <div class="config-toolbar" data-tour="config.filters">
+                <div class="config-search-box">
+                    <i class="bi bi-search"></i>
+                    <input type="search"
+                           class="config-search-input"
+                           placeholder="@GetSearchPlaceholder()"
+                           @bind="SearchTerm"
+                           @bind:event="oninput" />
+                </div>
+
+                @if (activeTab == "pagos")
+                {
+                    <select class="config-filter-select" @bind="FiltroUsoPagos">
+                        <option value="todos">Todos</option>
+                        <option value="venta">Solo ventas</option>
+                        <option value="compra">Solo compras</option>
+                    </select>
+                }
+
+                <select class="config-filter-select config-filter-select-small" @bind="CurrentPageSize">
+                    <option value="5">5 registros</option>
+                    <option value="10">10 registros</option>
+                    <option value="20">20 registros</option>
+                </select>
+            </div>
+
+            <div class="config-table-wrap" data-tour="config.table">
+                @if (activeTab == "pagos")
+                {
+                    @if (PagosPaginados.Any())
+                    {
+                        <table class="table table-hover align-middle mb-0 config-table">
+                            <thead>
+                                <tr>
+                                    <th class="ps-4">Codigo</th>
+                                    <th>Descripcion</th>
+                                    <th>SRI</th>
+                                    <th class="text-center">Venta / Compra</th>
+                                    <th class="text-center">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var f in PagosPaginados)
+                                {
+                                    <tr>
+                                        <td class="ps-4">
+                                            <span class="code-pill">@f.Codigo</span>
+                                        </td>
+                                        <td>
+                                            <div class="cell-main">
+                                                <strong>@f.Descripcion</strong>
+                                            </div>
+                                        </td>
+                                        <td class="text-muted small">@f.DescripcionSri</td>
+                                        <td class="text-center">
+                                            <div class="soft-badge-group justify-content-center">
+                                                <span class="soft-badge @(f.TipoVenta == true ? "soft-badge-success" : "soft-badge-muted")">Venta</span>
+                                                <span class="soft-badge @(f.TipoCompra == true ? "soft-badge-info" : "soft-badge-muted")">Compra</span>
+                                            </div>
+                                        </td>
+                                        <td class="text-center">
+                                            <div class="action-group">
+                                                <button class="action-btn action-view" @onclick="() => VerDetallePago(f.Id)" title="Ver detalle">
+                                                    <i class="bi bi-eye"></i>
+                                                </button>
+                                                <button class="action-btn action-edit" @onclick="() => OpenModalPago(f)" title="Editar">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </button>
+                                                <button class="action-btn action-delete" @onclick="() => SolicitarEliminarPago(f)" title="Eliminar">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <div class="config-empty-state">
+                            <i class="bi bi-search"></i>
+                            <strong>Sin resultados</strong>
+                            <span>No encontramos formas de pago con los filtros actuales.</span>
+                        </div>
+                    }
+                }
+                else if (activeTab == "docs")
+                {
+                    @if (DocsPaginados.Any())
+                    {
+                        <table class="table table-hover align-middle mb-0 config-table">
+                            <thead>
+                                <tr>
+                                    <th class="ps-4">Codigo</th>
+                                    <th>Descripcion</th>
+                                    <th class="text-center">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var d in DocsPaginados)
+                                {
+                                    <tr>
+                                        <td class="ps-4">
+                                            <span class="code-pill code-pill-secondary">@d.Codigo</span>
+                                        </td>
+                                        <td>
+                                            <div class="cell-main">
+                                                <strong>@d.Descripcion</strong>
+                                            </div>
+                                        </td>
+                                        <td class="text-center">
+                                            <div class="action-group">
+                                                <button class="action-btn action-view" @onclick="() => VerDetalleDoc(d.Sec)" title="Ver detalle">
+                                                    <i class="bi bi-eye"></i>
+                                                </button>
+                                                <button class="action-btn action-edit" @onclick="() => OpenModalDoc(d)" title="Editar">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </button>
+                                                <button class="action-btn action-delete" @onclick="() => SolicitarEliminarDoc(d)" title="Eliminar">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <div class="config-empty-state">
+                            <i class="bi bi-search"></i>
+                            <strong>Sin resultados</strong>
+                            <span>No encontramos tipos de documento con los filtros actuales.</span>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="config-pagination">
+                <span class="config-pagination-meta">
+                    Mostrando @CurrentPageStart - @CurrentPageEnd de @CurrentTotalRecords registros
+                </span>
+
+                <div class="config-pagination-actions">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaAnterior" disabled="@(CurrentPage <= 1)">
+                        <i class="bi bi-chevron-left"></i>
+                    </button>
+                    <span class="config-page-indicator">Pagina @CurrentPage de @CurrentTotalPages</span>
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaSiguiente" disabled="@(CurrentPage >= CurrentTotalPages)">
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </section>
+    }
+</div>
+
+@if (showModal)
+{
+    <div class="config-modal-backdrop"></div>
+    <div class="modal fade show d-block config-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered @(activeTab == "cajas" ? "modal-xl" : activeTab == "pagos" ? "modal-lg" : string.Empty)">
+            <div class="modal-content config-modal-content animate__animated animate__zoomIn animate__faster">
+                <div class="modal-header config-modal-header @(isReadOnly ? "is-readonly" : "is-editable")">
+                    <div>
+                        <span class="modal-kicker">@GetCurrentSectionKicker()</span>
+                        <h5 class="modal-title fw-bold">
+                            <i class="bi @(isReadOnly ? "bi-eye" : "bi-pencil-square") me-2"></i>
+                            @(isReadOnly ? "Vista de detalle" : (EsNuevoRegistro() ? "Nuevo registro" : "Editar registro"))
+                        </h5>
+                    </div>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CloseModal"></button>
+                </div>
+
+                <div class="modal-body config-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(errorMessage))
+                    {
+                        <div class="alert alert-danger d-flex align-items-center mb-3 border-0 animate__animated animate__shakeX">
+                            <i class="bi bi-exclamation-octagon-fill me-2 fs-5"></i>
+                            <div>@errorMessage</div>
+                        </div>
+                    }
+
+                    @if (activeTab == "pagos")
+                    {
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="config-label">Codigo</label>
+                                <input type="text"
+                                       value="@tempPago.Codigo"
+                                       @oninput="OnPagoCodigoChanged"
+                                       class="@GetPagoInputClass(nameof(tempPago.Codigo))"
+                                       readonly="@isReadOnly"
+                                       maxlength="2" />
+                                @if (pagoErrors.ContainsKey(nameof(tempPago.Codigo)))
+                                {
+                                    <span class="field-error">@pagoErrors[nameof(tempPago.Codigo)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-8">
+                                <label class="config-label">Descripcion</label>
+                                <input type="text"
+                                       value="@tempPago.Descripcion"
+                                       @oninput="OnPagoDescripcionChanged"
+                                       class="@GetPagoInputClass(nameof(tempPago.Descripcion))"
+                                       readonly="@isReadOnly"
+                                       maxlength="150" />
+                                @if (pagoErrors.ContainsKey(nameof(tempPago.Descripcion)))
+                                {
+                                    <span class="field-error">@pagoErrors[nameof(tempPago.Descripcion)]</span>
+                                }
+                            </div>
+
+                            <div class="col-12">
+                                <label class="config-label">Descripcion SRI</label>
+                                <input type="text"
+                                       value="@tempPago.DescripcionSri"
+                                       @oninput="OnPagoDescripcionSriChanged"
+                                       class="@GetPagoInputClass(nameof(tempPago.DescripcionSri))"
+                                       readonly="@isReadOnly"
+                                       maxlength="150" />
+                                @if (pagoErrors.ContainsKey(nameof(tempPago.DescripcionSri)))
+                                {
+                                    <span class="field-error">@pagoErrors[nameof(tempPago.DescripcionSri)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-6">
+                                <div class="config-switch">
+                                    <input class="form-check-input"
+                                           type="checkbox"
+                                           checked="@(tempPago.TipoVenta == true)"
+                                           @onchange="OnTipoVentaChanged"
+                                           disabled="@isReadOnly" />
+                                    <label>Aplica para ventas</label>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6">
+                                <div class="config-switch">
+                                    <input class="form-check-input"
+                                           type="checkbox"
+                                           checked="@(tempPago.TipoCompra == true)"
+                                           @onchange="OnTipoCompraChanged"
+                                           disabled="@isReadOnly" />
+                                    <label>Aplica para compras</label>
+                                </div>
+                            </div>
+
+                            <div class="col-12">
+                                @if (pagoErrors.ContainsKey("TipoUso"))
+                                {
+                                    <span class="field-error">@pagoErrors["TipoUso"]</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else if (activeTab == "docs")
+                    {
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="config-label">Codigo doc.</label>
+                                <input type="text"
+                                       value="@tempDoc.Codigo"
+                                       @oninput="OnDocCodigoChanged"
+                                       class="@GetDocInputClass(nameof(tempDoc.Codigo))"
+                                       readonly="@isReadOnly"
+                                       maxlength="10" />
+                                @if (docErrors.ContainsKey(nameof(tempDoc.Codigo)))
+                                {
+                                    <span class="field-error">@docErrors[nameof(tempDoc.Codigo)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-8">
+                                <label class="config-label">Descripcion</label>
+                                <input type="text"
+                                       value="@tempDoc.Descripcion"
+                                       @oninput="OnDocDescripcionChanged"
+                                       class="@GetDocInputClass(nameof(tempDoc.Descripcion))"
+                                       readonly="@isReadOnly"
+                                       maxlength="150" />
+                                @if (docErrors.ContainsKey(nameof(tempDoc.Descripcion)))
+                                {
+                                    <span class="field-error">@docErrors[nameof(tempDoc.Descripcion)]</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else if (activeTab == "cajas")
+                    {
+                        <div class="row g-3">
+                            <div class="col-md-8">
+                                <label class="config-label">Usuario responsable</label>
+                                <select value="@(tempCaja.IdUsuario?.ToString() ?? string.Empty)"
+                                        @onchange="OnCajaUsuarioChanged"
+                                        class="@GetCajaInputClass(nameof(tempCaja.IdUsuario))"
+                                        disabled="@isReadOnly">
+                                    <option value="">Sin asignar</option>
+                                    @foreach (var u in listaUsuarios)
+                                    {
+                                        <option value="@u.IdUsuario">@u.Nombres @u.Apellidos</option>
+                                    }
+                                </select>
+                                @if (cajaErrors.ContainsKey(nameof(tempCaja.IdUsuario)))
+                                {
+                                    <span class="field-error">@cajaErrors[nameof(tempCaja.IdUsuario)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-4">
+                                <label class="config-label"># Caja</label>
+                                <input type="number"
+                                       value="@GetNullableIntText(tempCaja.NumCaja)"
+                                       @oninput="OnCajaNumCajaChanged"
+                                       class="@GetCajaInputClass(nameof(tempCaja.NumCaja))"
+                                       readonly="@isReadOnly" />
+                                @if (cajaErrors.ContainsKey(nameof(tempCaja.NumCaja)))
+                                {
+                                    <span class="field-error">@cajaErrors[nameof(tempCaja.NumCaja)]</span>
+                                }
+                            </div>
+
+                            <div class="col-12 mt-4">
+                                <div class="series-divider">
+                                    <i class="bi bi-hash"></i>
+                                    <span>Series de comprobantes</span>
+                                </div>
+                            </div>
+
+                            <div class="col-md-4">
+                                <label class="config-label">Serie Factura</label>
+                                <input type="text"
+                                       value="@tempCaja.SerieFactura"
+                                       @oninput="OnCajaSerieFacturaChanged"
+                                       class="@($"{GetCajaInputClass(nameof(tempCaja.SerieFactura))} config-input-strong")"
+                                       readonly="@isReadOnly"
+                                       maxlength="7"
+                                       placeholder="001-001" />
+                                @if (cajaErrors.ContainsKey(nameof(tempCaja.SerieFactura)))
+                                {
+                                    <span class="field-error">@cajaErrors[nameof(tempCaja.SerieFactura)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-4">
+                                <label class="config-label">Serie Notas Credito</label>
+                                <input type="text"
+                                       value="@tempCaja.SerieNotasCred"
+                                       @oninput="OnCajaSerieNotasCredChanged"
+                                       class="@($"{GetCajaInputClass(nameof(tempCaja.SerieNotasCred))} config-input-strong")"
+                                       readonly="@isReadOnly"
+                                       maxlength="7" />
+                                @if (cajaErrors.ContainsKey(nameof(tempCaja.SerieNotasCred)))
+                                {
+                                    <span class="field-error">@cajaErrors[nameof(tempCaja.SerieNotasCred)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-4">
+                                <label class="config-label">Serie Guia Remision</label>
+                                <input type="text"
+                                       value="@tempCaja.SerieGuia"
+                                       @oninput="OnCajaSerieGuiaChanged"
+                                       class="@($"{GetCajaInputClass(nameof(tempCaja.SerieGuia))} config-input-strong")"
+                                       readonly="@isReadOnly"
+                                       maxlength="7" />
+                                @if (cajaErrors.ContainsKey(nameof(tempCaja.SerieGuia)))
+                                {
+                                    <span class="field-error">@cajaErrors[nameof(tempCaja.SerieGuia)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-6">
+                                <label class="config-label">Serie Compras</label>
+                                <input type="text"
+                                       value="@tempCaja.SerieCompras"
+                                       @oninput="OnCajaSerieComprasChanged"
+                                       class="@GetCajaInputClass(nameof(tempCaja.SerieCompras))"
+                                       readonly="@isReadOnly"
+                                       maxlength="7" />
+                                @if (cajaErrors.ContainsKey(nameof(tempCaja.SerieCompras)))
+                                {
+                                    <span class="field-error">@cajaErrors[nameof(tempCaja.SerieCompras)]</span>
+                                }
+                            </div>
+
+                            <div class="col-md-6">
+                                <label class="config-label">Serie Debitos</label>
+                                <input type="text"
+                                       value="@tempCaja.SerieDebitos"
+                                       @oninput="OnCajaSerieDebitosChanged"
+                                       class="@GetCajaInputClass(nameof(tempCaja.SerieDebitos))"
+                                       readonly="@isReadOnly"
+                                       maxlength="7" />
+                                @if (cajaErrors.ContainsKey(nameof(tempCaja.SerieDebitos)))
+                                {
+                                    <span class="field-error">@cajaErrors[nameof(tempCaja.SerieDebitos)]</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div class="modal-footer config-modal-footer">
+                    <button class="secondary-btn secondary-btn-quiet" @onclick="CloseModal" disabled="@isSaving">Cerrar</button>
+                    @if (!isReadOnly)
+                    {
+                        <button class="primary-btn" @onclick="GuardarTodo" disabled="@isSaving">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2"></span>
+                                <span>Procesando...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-save me-2"></i>
+                                @(EsNuevoRegistro() ? "Crear registro" : "Guardar cambios")
+                            }
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showDeleteConfirm)
+{
+    <div class="config-modal-backdrop"></div>
+    <div class="modal fade show d-block config-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content config-modal-content animate__animated animate__zoomIn animate__faster">
+                <div class="modal-header config-modal-header is-delete">
+                    <div>
+                        <span class="modal-kicker">Confirmacion</span>
+                        <h5 class="modal-title fw-bold">
+                            <i class="bi bi-trash me-2"></i>
+                            Eliminar registro
+                        </h5>
+                    </div>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarConfirmacionEliminar"></button>
+                </div>
+                <div class="modal-body config-modal-body">
+                    <div class="delete-confirm-card">
+                        <strong>@deleteConfirmTitle</strong>
+                        <p>@deleteConfirmMessage</p>
+                    </div>
+                </div>
+                <div class="modal-footer config-modal-footer">
+                    <button class="secondary-btn secondary-btn-quiet" @onclick="CerrarConfirmacionEliminar" disabled="@isDeleting">Cancelar</button>
+                    <button class="danger-btn" @onclick="ConfirmarEliminarAsync" disabled="@isDeleting">
+                        @if (isDeleting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2"></span>
+                            <span>Eliminando...</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-trash me-2"></i>
+                            <span>Eliminar</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string activeTab = "pagos";
+    private bool showModal;
+    private bool isReadOnly;
+    private bool isLoading = true;
+    private bool isSaving;
+    private bool isDeleting;
+    private bool showDeleteConfirm;
+    private int idUsuarioActual;
+    private string? errorMessage;
+    private string busquedaPagos = string.Empty;
+    private string busquedaDocs = string.Empty;
+    private string filtroUsoPagos = "todos";
+    private int pageSizePagos = 10;
+    private int pageSizeDocs = 10;
+    private int currentPagePagos = 1;
+    private int currentPageDocs = 1;
+    private string deleteConfirmTitle = string.Empty;
+    private string deleteConfirmMessage = string.Empty;
+    private Func<Task<bool>>? deleteConfirmAction;
+
+    private List<FormasPago> listaPagos = new();
+    private List<TipoDocumento> listaDocs = new();
+    private List<Caja> listaCajas = new();
+    private List<Usuario> listaUsuarios = new();
+
+    private FormasPago tempPago = new();
+    private TipoDocumento tempDoc = new();
+    private Caja tempCaja = new();
+
+    private Dictionary<string, string> pagoErrors = new();
+    private Dictionary<string, string> docErrors = new();
+    private Dictionary<string, string> cajaErrors = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        int.TryParse(authState.User.FindFirst("IdUsuario")?.Value, out idUsuarioActual);
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        isLoading = true;
+        errorMessage = null;
+
+        try
+        {
+            listaPagos = await ConfigService.GetFormasPagoActiveAsync() ?? new List<FormasPago>();
+            listaDocs = await ConfigService.GetTipoDocumentoAsync() ?? new List<TipoDocumento>();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al cargar: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+            AjustarPaginaActual();
+        }
+    }
+
+    private string SearchTerm
+    {
+        get => activeTab == "pagos" ? busquedaPagos : busquedaDocs;
+        set
+        {
+            if (activeTab == "pagos")
+            {
+                busquedaPagos = value;
+                currentPagePagos = 1;
+            }
+            else
+            {
+                busquedaDocs = value;
+                currentPageDocs = 1;
+            }
+        }
+    }
+
+    private int CurrentPageSize
+    {
+        get => activeTab == "pagos" ? pageSizePagos : pageSizeDocs;
+        set
+        {
+            if (activeTab == "pagos")
+            {
+                pageSizePagos = value;
+                currentPagePagos = 1;
+            }
+            else
+            {
+                pageSizeDocs = value;
+                currentPageDocs = 1;
+            }
+        }
+    }
+
+    private int CurrentPage => activeTab == "pagos" ? currentPagePagos : currentPageDocs;
+
+    private string FiltroUsoPagos
+    {
+        get => filtroUsoPagos;
+        set
+        {
+            filtroUsoPagos = value;
+            currentPagePagos = 1;
+        }
+    }
+
+    private IEnumerable<FormasPago> PagosFiltrados =>
+        listaPagos
+            .Where(f => CoincideBusquedaPago(f, busquedaPagos))
+            .Where(f => filtroUsoPagos switch
+            {
+                "venta" => f.TipoVenta == true,
+                "compra" => f.TipoCompra == true,
+                _ => true
+            })
+            .OrderBy(f => ParseCodigoNumerico(f.Codigo))
+            .ThenBy(f => (f.Codigo ?? string.Empty).Trim())
+            .ThenBy(f => f.Descripcion ?? string.Empty);
+
+    private IEnumerable<TipoDocumento> DocsFiltrados =>
+        listaDocs
+            .Where(d => CoincideBusquedaDocumento(d, busquedaDocs))
+            .OrderBy(d => ParseCodigoNumerico(d.Codigo))
+            .ThenBy(d => (d.Codigo ?? string.Empty).Trim())
+            .ThenBy(d => d.Descripcion ?? string.Empty);
+
+    private IEnumerable<FormasPago> PagosPaginados =>
+        PagosFiltrados
+            .Skip((currentPagePagos - 1) * pageSizePagos)
+            .Take(pageSizePagos);
+
+    private IEnumerable<TipoDocumento> DocsPaginados =>
+        DocsFiltrados
+            .Skip((currentPageDocs - 1) * pageSizeDocs)
+            .Take(pageSizeDocs);
+
+    private int CurrentTotalRecords => activeTab == "pagos" ? PagosFiltrados.Count() : DocsFiltrados.Count();
+    private int CurrentTotalPages => Math.Max(1, (int)Math.Ceiling(CurrentTotalRecords / (double)CurrentPageSize));
+    private int CurrentPageStart => CurrentTotalRecords == 0 ? 0 : ((CurrentPage - 1) * CurrentPageSize) + 1;
+    private int CurrentPageEnd => CurrentTotalRecords == 0 ? 0 : Math.Min(CurrentTotalRecords, CurrentPage * CurrentPageSize);
+
+    private string GetSearchPlaceholder() =>
+        activeTab == "pagos"
+            ? "Buscar por codigo, descripcion o SRI"
+            : "Buscar por codigo o descripcion";
+
+    private static bool CoincideBusquedaPago(FormasPago pago, string termino)
+    {
+        if (string.IsNullOrWhiteSpace(termino))
+        {
+            return true;
+        }
+
+        var filtro = termino.Trim();
+        return (pago.Codigo ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase)
+            || (pago.Descripcion ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase)
+            || (pago.DescripcionSri ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool CoincideBusquedaDocumento(TipoDocumento doc, string termino)
+    {
+        if (string.IsNullOrWhiteSpace(termino))
+        {
+            return true;
+        }
+
+        var filtro = termino.Trim();
+        return (doc.Codigo ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase)
+            || (doc.Descripcion ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ParseCodigoNumerico(string? codigo) =>
+        int.TryParse(codigo?.Trim(), out var numero) ? numero : int.MaxValue;
+
+    private void AjustarPaginaActual()
+    {
+        if (activeTab == "pagos")
+        {
+            currentPagePagos = Math.Min(Math.Max(1, currentPagePagos), Math.Max(1, (int)Math.Ceiling(PagosFiltrados.Count() / (double)pageSizePagos)));
+        }
+        else
+        {
+            currentPageDocs = Math.Min(Math.Max(1, currentPageDocs), Math.Max(1, (int)Math.Ceiling(DocsFiltrados.Count() / (double)pageSizeDocs)));
+        }
+    }
+
+    private void PaginaAnterior()
+    {
+        if (activeTab == "pagos" && currentPagePagos > 1)
+        {
+            currentPagePagos--;
+        }
+        else if (activeTab == "docs" && currentPageDocs > 1)
+        {
+            currentPageDocs--;
+        }
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (activeTab == "pagos" && currentPagePagos < CurrentTotalPages)
+        {
+            currentPagePagos++;
+        }
+        else if (activeTab == "docs" && currentPageDocs < CurrentTotalPages)
+        {
+            currentPageDocs++;
+        }
+    }
+
+    private void CambiarTab(string tab)
+    {
+        activeTab = tab;
+        errorMessage = null;
+        LimpiarErrores();
+        AjustarPaginaActual();
+    }
+
+    private string GetCurrentSectionKicker()
+    {
+        if (activeTab == "pagos") return "Catalogo transaccional";
+        if (activeTab == "docs") return "Control documental";
+        return "Configuracion";
+    }
+
+    private string GetCurrentSectionTitle()
+    {
+        if (activeTab == "pagos") return "Listado de formas de pago";
+        if (activeTab == "docs") return "Tipos de documento";
+        return "Configuracion general";
+    }
+
+    private string GetCurrentSectionDescription()
+    {
+        if (activeTab == "pagos") return "Gestiona codigos y descripciones para compras y ventas.";
+        if (activeTab == "docs") return "Mantiene el catalogo de documentos usado por la plataforma.";
+        return "Administra catalogos principales del sistema.";
+    }
+
+    private string GetCurrentActionLabel() => "Nuevo";
+
+    private void OpenCurrentModal()
+    {
+        if (activeTab == "pagos")
+            OpenModalPago();
+        else
+            OpenModalDoc();
+    }
+
+    private bool EsNuevoRegistro()
+    {
+        if (activeTab == "pagos") return tempPago.Id == 0;
+        if (activeTab == "docs") return tempDoc.Sec == 0;
+        return true;
+    }
+
+    private void LimpiarErrores()
+    {
+        pagoErrors.Clear();
+        docErrors.Clear();
+        cajaErrors.Clear();
+    }
+
+    private string GetPagoInputClass(string field)
+    {
+        return pagoErrors.ContainsKey(field)
+            ? "form-control config-input input-error"
+            : "form-control config-input";
+    }
+
+    private string GetDocInputClass(string field)
+    {
+        return docErrors.ContainsKey(field)
+            ? "form-control config-input input-error"
+            : "form-control config-input";
+    }
+
+    private string GetCajaInputClass(string field)
+    {
+        string baseClass = field == nameof(tempCaja.IdUsuario)
+            ? "form-select config-input"
+            : "form-control config-input";
+
+        return cajaErrors.ContainsKey(field)
+            ? $"{baseClass} input-error"
+            : baseClass;
+    }
+
+    private string GetNullableIntText(int? value)
+    {
+        return value?.ToString() ?? string.Empty;
+    }
+
+    private void OpenModalPago(FormasPago? f = null)
+    {
+        errorMessage = null;
+        isReadOnly = false;
+        pagoErrors.Clear();
+
+        tempPago = f != null
+            ? new FormasPago
+            {
+                Id = f.Id,
+                Codigo = f.Codigo,
+                Descripcion = f.Descripcion,
+                DescripcionSri = f.DescripcionSri,
+                TipoVenta = f.TipoVenta,
+                TipoCompra = f.TipoCompra,
+                Estado = f.Estado
+            }
+            : new FormasPago
+            {
+                Estado = true,
+                Codigo = string.Empty,
+                Descripcion = string.Empty,
+                DescripcionSri = string.Empty,
+                TipoVenta = false,
+                TipoCompra = false
+            };
+
+        showModal = true;
+    }
+
+    private async Task VerDetallePago(int id)
+    {
+        var res = await ConfigService.GetFormaPagoByIdAsync(id);
+        if (res != null)
+        {
+            pagoErrors.Clear();
+            tempPago = new FormasPago
+            {
+                Id = res.Id,
+                Codigo = res.Codigo,
+                Descripcion = res.Descripcion,
+                DescripcionSri = res.DescripcionSri,
+                TipoVenta = res.TipoVenta,
+                TipoCompra = res.TipoCompra,
+                Estado = res.Estado
+            };
+            isReadOnly = true;
+            showModal = true;
+        }
+    }
+
+    private async Task EliminarPago(int id)
+    {
+        if (await JS.ConfirmDeleteAsync("Dar de baja forma de pago", "Se desactivara esta forma de pago."))
+        {
+            await ConfigService.DeleteFormasPagoLogicalAsync(id);
+            await Cargar();
+            await JS.ShowToastAsync("Forma de pago desactivada");
+        }
+    }
+
+    private async Task SolicitarEliminarPago(FormasPago pago)
+    {
+        if (!await JS.ConfirmDeleteAsync("Dar de baja forma de pago", $"Se desactivara la forma de pago {pago.Codigo} - {pago.Descripcion}."))
+        {
+            return;
+        }
+
+        if (await ConfigService.DeleteFormasPagoLogicalAsync(pago.Id))
+        {
+            await Cargar();
+            AjustarPaginaActual();
+            await JS.ShowToastAsync("Forma de pago desactivada");
+        }
+        else
+        {
+            await JS.ShowAlertAsync("No se pudo eliminar", "No se pudo completar la eliminacion.", "error");
+        }
+    }
+
+    private void OpenModalDoc(TipoDocumento? d = null)
+    {
+        errorMessage = null;
+        isReadOnly = false;
+        docErrors.Clear();
+
+        tempDoc = d != null
+            ? new TipoDocumento
+            {
+                Sec = d.Sec,
+                Codigo = d.Codigo,
+                Descripcion = d.Descripcion
+            }
+            : new TipoDocumento
+            {
+                Codigo = string.Empty,
+                Descripcion = string.Empty
+            };
+
+        showModal = true;
+    }
+
+    private async Task VerDetalleDoc(int sec)
+    {
+        var res = await ConfigService.GetTipoDocBySecAsync(sec);
+        if (res != null)
+        {
+            docErrors.Clear();
+            tempDoc = new TipoDocumento
+            {
+                Sec = res.Sec,
+                Codigo = res.Codigo,
+                Descripcion = res.Descripcion
+            };
+            isReadOnly = true;
+            showModal = true;
+        }
+    }
+
+    private async Task EliminarDoc(int sec)
+    {
+        if (await JS.ConfirmDeleteAsync("Eliminar tipo de documento", "Se eliminara permanentemente este tipo de documento."))
+        {
+            await ConfigService.DeleteTipoDocAsync(sec);
+            await Cargar();
+            await JS.ShowToastAsync("Tipo de documento eliminado");
+        }
+    }
+
+    private async Task SolicitarEliminarDoc(TipoDocumento doc)
+    {
+        if (!await JS.ConfirmDeleteAsync("Eliminar tipo de documento", $"Se eliminara el tipo de documento {doc.Codigo} - {doc.Descripcion}."))
+        {
+            return;
+        }
+
+        if (await ConfigService.DeleteTipoDocAsync(doc.Sec))
+        {
+            await Cargar();
+            AjustarPaginaActual();
+            await JS.ShowToastAsync("Tipo de documento eliminado");
+        }
+        else
+        {
+            await JS.ShowAlertAsync("No se pudo eliminar", "No se pudo completar la eliminacion.", "error");
+        }
+    }
+
+    private void OpenModalCaja(Caja? c = null)
+    {
+        errorMessage = null;
+        isReadOnly = false;
+        cajaErrors.Clear();
+
+        if (c != null)
+        {
+            tempCaja = new Caja
+            {
+                Sec = c.Sec,
+                NumCaja = c.NumCaja,
+                IdUsuario = c.IdUsuario,
+                IdEmpresa = c.IdEmpresa,
+                IdSucursal = c.IdSucursal,
+                SerieFactura = FormatearSerieCaja(c.SerieFactura),
+                SerieCompras = FormatearSerieCaja(c.SerieCompras),
+                SerieGuia = FormatearSerieCaja(c.SerieGuia),
+                SerieDebitos = FormatearSerieCaja(c.SerieDebitos),
+                SerieNotasCred = FormatearSerieCaja(c.SerieNotasCred),
+                Estado = c.Estado,
+                SecuenciaFacturaInicializada = c.SecuenciaFacturaInicializada,
+                UltimoSecuencialFactura = c.UltimoSecuencialFactura,
+                idJefe = c.idJefe
+            };
+        }
+        else
+        {
+            tempCaja = new Caja
+            {
+                IdUsuario = null,
+                NumCaja = 1,
+                IdEmpresa = 1,
+                IdSucursal = 1,
+                SerieFactura = "001-001",
+                SerieNotasCred = "001-001",
+                SerieGuia = "001-001",
+                SerieCompras = string.Empty,
+                SerieDebitos = string.Empty,
+                Estado = true,
+                idJefe = idUsuarioActual
+            };
+        }
+
+        showModal = true;
+    }
+
+    private async Task VerDetalleCaja(int sec)
+    {
+        var res = await ConfigService.GetCajaBySecAsync(sec);
+        if (res != null)
+        {
+            cajaErrors.Clear();
+            tempCaja = new Caja
+            {
+                Sec = res.Sec,
+                NumCaja = res.NumCaja,
+                IdUsuario = res.IdUsuario,
+                IdEmpresa = res.IdEmpresa,
+                IdSucursal = res.IdSucursal,
+                SerieFactura = FormatearSerieCaja(res.SerieFactura),
+                SerieCompras = FormatearSerieCaja(res.SerieCompras),
+                SerieGuia = FormatearSerieCaja(res.SerieGuia),
+                SerieDebitos = FormatearSerieCaja(res.SerieDebitos),
+                SerieNotasCred = FormatearSerieCaja(res.SerieNotasCred),
+                Estado = res.Estado,
+                SecuenciaFacturaInicializada = res.SecuenciaFacturaInicializada,
+                UltimoSecuencialFactura = res.UltimoSecuencialFactura,
+                idJefe = res.idJefe
+            };
+            isReadOnly = true;
+            showModal = true;
+        }
+    }
+
+    private async Task EliminarCaja(int sec)
+    {
+        if (await JS.ConfirmDeleteAsync("Eliminar configuracion de caja", "Se eliminara permanentemente esta configuracion de caja."))
+        {
+            await ConfigService.DeleteCajaAsync(sec);
+            await Cargar();
+            await JS.ShowToastAsync("Configuracion de caja eliminada");
+        }
+    }
+
+    private void CloseModal()
+    {
+        if (isSaving) return;
+        showModal = false;
+    }
+
+    private void CerrarConfirmacionEliminar()
+    {
+        showDeleteConfirm = false;
+        deleteConfirmTitle = string.Empty;
+        deleteConfirmMessage = string.Empty;
+        deleteConfirmAction = null;
+    }
+
+    private async Task ConfirmarEliminarAsync()
+    {
+        if (deleteConfirmAction is null)
+        {
+            CerrarConfirmacionEliminar();
+            return;
+        }
+
+        isDeleting = true;
+        errorMessage = null;
+
+        try
+        {
+            var exito = await deleteConfirmAction.Invoke();
+            if (exito)
+            {
+                CerrarConfirmacionEliminar();
+                await Cargar();
+                AjustarPaginaActual();
+            }
+            else
+            {
+                errorMessage = "No se pudo completar la eliminacion.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isDeleting = false;
+        }
+    }
+
+    private void OnPagoCodigoChanged(ChangeEventArgs e)
+    {
+        tempPago.Codigo = e.Value?.ToString() ?? string.Empty;
+        ValidarCampoPagoCodigo();
+    }
+
+    private void OnPagoDescripcionChanged(ChangeEventArgs e)
+    {
+        tempPago.Descripcion = e.Value?.ToString() ?? string.Empty;
+        ValidarCampoPagoDescripcion();
+    }
+
+    private void OnPagoDescripcionSriChanged(ChangeEventArgs e)
+    {
+        tempPago.DescripcionSri = e.Value?.ToString() ?? string.Empty;
+        ValidarCampoPagoDescripcionSri();
+    }
+
+    private void OnTipoVentaChanged(ChangeEventArgs e)
+    {
+        tempPago.TipoVenta = ParseCheckboxValue(e.Value);
+        ValidarCampoPagoTipoUso();
+    }
+
+    private void OnTipoCompraChanged(ChangeEventArgs e)
+    {
+        tempPago.TipoCompra = ParseCheckboxValue(e.Value);
+        ValidarCampoPagoTipoUso();
+    }
+
+    private void OnDocCodigoChanged(ChangeEventArgs e)
+    {
+        var valor = e.Value?.ToString() ?? "";
+
+        valor = new string(valor.Where(char.IsDigit).ToArray());
+
+        tempDoc.Codigo = valor;
+
+        ValidarCampoDocCodigo();
+    }
+
+    private void OnDocDescripcionChanged(ChangeEventArgs e)
+    {
+        tempDoc.Descripcion = e.Value?.ToString() ?? string.Empty;
+        ValidarCampoDocDescripcion();
+    }
+
+    private void OnCajaUsuarioChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value) && value > 0)
+            tempCaja.IdUsuario = value;
+        else
+            tempCaja.IdUsuario = null;
+
+        ValidarCampoCajaUsuario();
+    }
+
+    private void OnCajaNumCajaChanged(ChangeEventArgs e)
+    {
+        tempCaja.NumCaja = ParseNullableInt(e.Value?.ToString());
+        ValidarCampoCajaNumCaja();
+    }
+
+    private void OnCajaIdSucursalChanged(ChangeEventArgs e)
+    {
+        tempCaja.IdSucursal = ParseNullableInt(e.Value?.ToString());
+        ValidarCampoCajaIdSucursal();
+    }
+
+    private void OnCajaIdEmpresaChanged(ChangeEventArgs e)
+    {
+        tempCaja.IdEmpresa = ParseNullableInt(e.Value?.ToString());
+        ValidarCampoCajaIdEmpresa();
+    }
+
+    private void OnCajaSerieFacturaChanged(ChangeEventArgs e)
+    {
+        tempCaja.SerieFactura = NormalizarSerieCajaInput(e.Value?.ToString());
+        ValidarCampoCajaSerieFactura();
+    }
+
+    private void OnCajaSerieNotasCredChanged(ChangeEventArgs e)
+    {
+        tempCaja.SerieNotasCred = NormalizarSerieCajaInput(e.Value?.ToString());
+        ValidarCampoCajaSerieNotasCred();
+    }
+
+    private void OnCajaSerieGuiaChanged(ChangeEventArgs e)
+    {
+        tempCaja.SerieGuia = NormalizarSerieCajaInput(e.Value?.ToString());
+        ValidarCampoCajaSerieGuia();
+    }
+
+    private void OnCajaSerieComprasChanged(ChangeEventArgs e)
+    {
+        tempCaja.SerieCompras = NormalizarSerieCajaInput(e.Value?.ToString());
+        ValidarCampoCajaSerieCompras();
+    }
+
+    private void OnCajaSerieDebitosChanged(ChangeEventArgs e)
+    {
+        tempCaja.SerieDebitos = NormalizarSerieCajaInput(e.Value?.ToString());
+        ValidarCampoCajaSerieDebitos();
+    }
+
+    private bool ParseCheckboxValue(object? value)
+    {
+        if (value is bool boolValue)
+            return boolValue;
+
+        if (value is string text && bool.TryParse(text, out var parsed))
+            return parsed;
+
+        return false;
+    }
+
+    private int? ParseNullableInt(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (int.TryParse(value, out var result))
+            return result;
+
+        return null;
+    }
+
+    private string NormalizarSerieCajaInput(string? value)
+    {
+        var digits = new string((value ?? string.Empty).Where(char.IsDigit).Take(6).ToArray());
+
+        if (digits.Length <= 3)
+            return digits;
+
+        return $"{digits[..3]}-{digits[3..]}";
+    }
+
+    private string FormatearSerieCaja(string? value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return string.Empty;
+
+        if (EsSerieValida(trimmed))
+            return trimmed;
+
+        var digits = new string(trimmed.Where(char.IsDigit).Take(6).ToArray());
+
+        return digits.Length == 6
+            ? $"{digits[..3]}-{digits[3..]}"
+            : trimmed;
+    }
+
+    private bool ValidarPagos()
+    {
+        pagoErrors.Clear();
+        ValidarCampoPagoCodigo();
+        ValidarCampoPagoDescripcion();
+        ValidarCampoPagoDescripcionSri();
+        ValidarCampoPagoTipoUso();
+        return pagoErrors.Count == 0;
+    }
+
+    private void ValidarCampoPagoCodigo()
+    {
+        pagoErrors.Remove(nameof(tempPago.Codigo));
+        var codigo = tempPago.Codigo?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(codigo))
+            pagoErrors[nameof(tempPago.Codigo)] = "El código es obligatorio.";
+        else if (!codigo.All(char.IsDigit))
+            pagoErrors[nameof(tempPago.Codigo)] = "El código solo puede contener números.";
+        else if (codigo.Length > 2)
+            pagoErrors[nameof(tempPago.Codigo)] = "El código no puede tener más de 2 dígitos.";
+    }
+
+    private void ValidarCampoPagoDescripcion()
+    {
+        pagoErrors.Remove(nameof(tempPago.Descripcion));
+        var descripcion = tempPago.Descripcion?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(descripcion))
+            pagoErrors[nameof(tempPago.Descripcion)] = "La descripción es obligatoria.";
+    }
+
+    private void ValidarCampoPagoDescripcionSri()
+    {
+        pagoErrors.Remove(nameof(tempPago.DescripcionSri));
+        var descripcionSri = tempPago.DescripcionSri?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(descripcionSri))
+            pagoErrors[nameof(tempPago.DescripcionSri)] = "La descripción SRI es obligatoria.";
+    }
+
+    private void ValidarCampoPagoTipoUso()
+    {
+        pagoErrors.Remove("TipoUso");
+
+        if (tempPago.TipoVenta != true && tempPago.TipoCompra != true)
+            pagoErrors["TipoUso"] = "Debes marcar al menos venta o compra.";
+    }
+
+    private bool ValidarDocumentos()
+    {
+        docErrors.Clear();
+        ValidarCampoDocCodigo();
+        ValidarCampoDocDescripcion();
+        return docErrors.Count == 0;
+    }
+
+    private void ValidarCampoDocCodigo()
+    {
+        docErrors.Remove(nameof(tempDoc.Codigo));
+
+        if (string.IsNullOrWhiteSpace(tempDoc.Codigo))
+        {
+            docErrors[nameof(tempDoc.Codigo)] = "El código es obligatorio.";
+        }
+        else if (!tempDoc.Codigo.All(char.IsDigit))
+        {
+            docErrors[nameof(tempDoc.Codigo)] = "Solo se permiten números.";
+        }
+    }
+
+    private void ValidarCampoDocDescripcion()
+    {
+        docErrors.Remove(nameof(tempDoc.Descripcion));
+        var descripcion = tempDoc.Descripcion?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(descripcion))
+            docErrors[nameof(tempDoc.Descripcion)] = "La descripción es obligatoria.";
+    }
+
+    private bool ValidarCajas()
+    {
+        cajaErrors.Clear();
+        ValidarCampoCajaUsuario();
+        ValidarCampoCajaNumCaja();
+        ValidarCampoCajaIdSucursal();
+        ValidarCampoCajaIdEmpresa();
+        ValidarCampoCajaSerieFactura();
+        ValidarCampoCajaSerieNotasCred();
+        ValidarCampoCajaSerieGuia();
+        ValidarCampoCajaSerieCompras();
+        ValidarCampoCajaSerieDebitos();
+        return cajaErrors.Count == 0;
+    }
+
+    private void ValidarCampoCajaUsuario()
+    {
+        cajaErrors.Remove(nameof(tempCaja.IdUsuario));
+
+        if ((tempCaja.IdUsuario ?? 0) <= 0)
+            cajaErrors[nameof(tempCaja.IdUsuario)] = "Seleccione un usuario responsable.";
+    }
+
+    private void ValidarCampoCajaNumCaja()
+    {
+        cajaErrors.Remove(nameof(tempCaja.NumCaja));
+
+        if ((tempCaja.NumCaja ?? 0) <= 0)
+            cajaErrors[nameof(tempCaja.NumCaja)] = "El número de caja debe ser mayor a 0.";
+    }
+
+    private void ValidarCampoCajaIdSucursal()
+    {
+        cajaErrors.Remove(nameof(tempCaja.IdSucursal));
+
+        if ((tempCaja.IdSucursal ?? 0) <= 0)
+            cajaErrors[nameof(tempCaja.IdSucursal)] = "El ID de sucursal debe ser mayor a 0.";
+    }
+
+    private void ValidarCampoCajaIdEmpresa()
+    {
+        cajaErrors.Remove(nameof(tempCaja.IdEmpresa));
+
+        if ((tempCaja.IdEmpresa ?? 0) <= 0)
+            cajaErrors[nameof(tempCaja.IdEmpresa)] = "El ID de empresa debe ser mayor a 0.";
+    }
+
+    private void ValidarCampoCajaSerieFactura()
+    {
+        cajaErrors.Remove(nameof(tempCaja.SerieFactura));
+        var valor = tempCaja.SerieFactura?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(valor))
+            cajaErrors[nameof(tempCaja.SerieFactura)] = "La serie de factura es obligatoria.";
+        else if (!EsSerieValida(valor))
+            cajaErrors[nameof(tempCaja.SerieFactura)] = "La serie de factura debe tener formato 001-001.";
+    }
+
+    private void ValidarCampoCajaSerieNotasCred()
+    {
+        cajaErrors.Remove(nameof(tempCaja.SerieNotasCred));
+        var valor = tempCaja.SerieNotasCred?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(valor))
+            cajaErrors[nameof(tempCaja.SerieNotasCred)] = "La serie de notas de crédito es obligatoria.";
+        else if (!EsSerieValida(valor))
+            cajaErrors[nameof(tempCaja.SerieNotasCred)] = "La serie de notas de crédito debe tener formato 001-001.";
+    }
+
+    private void ValidarCampoCajaSerieGuia()
+    {
+        cajaErrors.Remove(nameof(tempCaja.SerieGuia));
+        var valor = tempCaja.SerieGuia?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(valor))
+            cajaErrors[nameof(tempCaja.SerieGuia)] = "La serie de guía es obligatoria.";
+        else if (!EsSerieValida(valor))
+            cajaErrors[nameof(tempCaja.SerieGuia)] = "La serie de guía debe tener formato 001-001.";
+    }
+
+    private void ValidarCampoCajaSerieCompras()
+    {
+        cajaErrors.Remove(nameof(tempCaja.SerieCompras));
+        var valor = tempCaja.SerieCompras?.Trim() ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(valor) && !EsSerieValida(valor))
+            cajaErrors[nameof(tempCaja.SerieCompras)] = "La serie de compras debe tener formato 001-001.";
+    }
+
+    private void ValidarCampoCajaSerieDebitos()
+    {
+        cajaErrors.Remove(nameof(tempCaja.SerieDebitos));
+        var valor = tempCaja.SerieDebitos?.Trim() ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(valor) && !EsSerieValida(valor))
+            cajaErrors[nameof(tempCaja.SerieDebitos)] = "La serie de débitos debe tener formato 001-001.";
+    }
+
+    private bool EsSerieValida(string valor)
+    {
+        return System.Text.RegularExpressions.Regex.IsMatch(valor, @"^\d{3}-\d{3}$");
+    }
+
+    private async Task GuardarTodo()
+    {
+        errorMessage = null;
+        isSaving = true;
+        bool exito = false;
+
+        try
+        {
+            if (activeTab == "pagos")
+            {
+                tempPago.Codigo = tempPago.Codigo?.Trim() ?? string.Empty;
+                tempPago.Descripcion = tempPago.Descripcion?.Trim() ?? string.Empty;
+                tempPago.DescripcionSri = tempPago.DescripcionSri?.Trim() ?? string.Empty;
+
+                if (!ValidarPagos())
+                {
+                    errorMessage = "Corrige los campos marcados antes de guardar.";
+                    return;
+                }
+
+                exito = await ConfigService.SaveFormasPagoAsync(tempPago);
+            }
+            else if (activeTab == "docs")
+            {
+                tempDoc.Codigo = tempDoc.Codigo?.Trim() ?? string.Empty;
+                tempDoc.Descripcion = tempDoc.Descripcion?.Trim() ?? string.Empty;
+
+                if (!ValidarDocumentos())
+                {
+                    errorMessage = "Corrige los campos marcados antes de guardar.";
+                    return;
+                }
+
+                exito = await ConfigService.SaveTipoDocumentoAsync(tempDoc);
+            }
+            else if (activeTab == "cajas")
+            {
+                tempCaja.SerieFactura = NormalizarSerieCajaInput(tempCaja.SerieFactura);
+                tempCaja.SerieNotasCred = NormalizarSerieCajaInput(tempCaja.SerieNotasCred);
+                tempCaja.SerieGuia = NormalizarSerieCajaInput(tempCaja.SerieGuia);
+                tempCaja.SerieCompras = NormalizarSerieCajaInput(tempCaja.SerieCompras);
+                tempCaja.SerieDebitos = NormalizarSerieCajaInput(tempCaja.SerieDebitos);
+
+                if (!ValidarCajas())
+                {
+                    errorMessage = "Corrige los campos marcados antes de guardar.";
+                    return;
+                }
+
+                bool existe = tempCaja.IdUsuario is > 0
+                    && await ConfigService.UsuarioTieneCajaAsync(tempCaja.IdUsuario.Value, tempCaja.Sec);
+                if (existe)
+                {
+                    errorMessage = "El usuario seleccionado ya posee una caja asignada.";
+                    return;
+                }
+
+                tempCaja.idJefe ??= idUsuarioActual > 0 ? idUsuarioActual : tempCaja.idJefe;
+                exito = await ConfigService.SaveCajaAsync(tempCaja);
+            }
+
+            if (exito)
+            {
+                showModal = false;
+                await Cargar();
+                StateHasChanged();
+            }
+            else if (string.IsNullOrWhiteSpace(errorMessage))
+            {
+                if (activeTab == "pagos")
+                    errorMessage = "No se pudo guardar la forma de pago. Verifica si el código ya existe o si faltan datos.";
+                else if (activeTab == "docs")
+                    errorMessage = "No se pudo guardar el tipo de documento. Verifica si el código o la descripción ya existen.";
+                else
+                    errorMessage = "No se pudo guardar la caja. Verifica si el usuario ya tiene una caja o si las series tienen formato incorrecto.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}

@@ -1,0 +1,636 @@
+@page "/backoffice/renovaciones"
+@page "/backoffice/renovaciones/proximas"
+@using System.Globalization
+@using System.Text.Json
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.DTOs
+@using Simetric.Models
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject NavigationManager NavManager
+
+<PageTitle>Renovaciones - BackOffice | Numerica</PageTitle>
+
+<div class="ren-shell animate__animated animate__fadeIn">
+    <section class="ren-hero">
+        <div>
+            <span class="ren-kicker">BackOffice</span>
+            <h2>Control de renovaciones</h2>
+            <p>Seguimiento centralizado de firmas por vencer y clientes e-Fact que necesitan recarga o reactivacion.</p>
+        </div>
+        <div class="ren-hero-actions">
+            <button type="button" class="ren-btn ren-btn-secondary" @onclick="RecargarAsync" disabled="@isLoading">Actualizar</button>
+            <button type="button" class="ren-btn ren-btn-primary" @onclick='() => NavManager.NavigateTo("/backoffice/suscripciones")'>Ir a suscripciones</button>
+        </div>
+    </section>
+
+    @if (isLoading)
+    {
+        <section class="ren-state">
+            <div class="spinner-border text-primary" role="status"></div>
+            <strong>Cargando renovaciones</strong>
+            <span>Analizando vigencias, saldos y oportunidades activas.</span>
+        </section>
+    }
+    else
+    {
+        <section class="ren-kpis">
+            <article class="ren-kpi kpi-critical">
+                <span>Atencion inmediata</span>
+                <strong>@rowsCriticos</strong>
+                <small>@Money(montoCritico) estimados en riesgo</small>
+            </article>
+            <article class="ren-kpi kpi-warning">
+                <span>e-Sign por vencer</span>
+                <strong>@esignPorVencer</strong>
+                <small>Dentro de @horizonteDias dias</small>
+            </article>
+            <article class="ren-kpi kpi-info">
+                <span>e-Fact por recargar</span>
+                <strong>@efactPorRenovar</strong>
+                <small>Clientes con saldo bajo o agotado</small>
+            </article>
+            <article class="ren-kpi kpi-success">
+                <span>Pipeline total</span>
+                <strong>@filteredRows.Count</strong>
+                <small>@Money(filteredRows.Sum(r => r.MontoEstimado)) potencial estimado</small>
+            </article>
+        </section>
+
+        <section class="ren-toolbar">
+            <div class="ren-search">
+                <i class="bi bi-search"></i>
+                <input @bind="searchTerm" @bind:event="oninput" @bind:after="OnFiltersChanged" placeholder="Buscar cliente, correo, plan o vendedor..." />
+            </div>
+            <select @bind="tipoFiltro" @bind:after="OnFiltersChanged">
+                <option value="ALL">Todos los servicios</option>
+                <option value="e-fact">e-Fact</option>
+                <option value="e-sign">e-Sign</option>
+            </select>
+            <select @bind="urgenciaFiltro" @bind:after="OnFiltersChanged">
+                <option value="ALL">Todas las prioridades</option>
+                <option value="critica">Critica</option>
+                <option value="alta">Alta</option>
+                <option value="media">Media</option>
+            </select>
+            <select @bind="horizonteDias" @bind:after="OnFiltersChanged">
+                <option value="7">7 dias</option>
+                <option value="15">15 dias</option>
+                <option value="30">30 dias</option>
+                <option value="60">60 dias</option>
+            </select>
+        </section>
+
+        <section class="ren-grid">
+            <article class="ren-panel">
+                <div class="ren-panel-head">
+                    <div>
+                        <h3>Resumen operativo</h3>
+                        <p>Distribucion por urgencia y fuente comercial.</p>
+                    </div>
+                </div>
+                <div class="ren-summary-list">
+                    @foreach (var item in summaryCards)
+                    {
+                        <div class="ren-summary-card">
+                            <div>
+                                <strong>@item.Title</strong>
+                                <small>@item.Description</small>
+                            </div>
+                            <span>@item.Value</span>
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <article class="ren-panel">
+                <div class="ren-panel-head">
+                    <div>
+                        <h3>Acciones rapidas</h3>
+                        <p>Accesos directos para resolver renovaciones y cobros.</p>
+                    </div>
+                </div>
+                <div class="ren-actions-grid">
+                    <button type="button" class="ren-action-card" @onclick='() => NavManager.NavigateTo("/backoffice/cobros")'>
+                        <i class="bi bi-cash-coin"></i>
+                        <strong>Registrar cobro</strong>
+                        <small>Gestiona pagos pendientes y conciliaciones.</small>
+                    </button>
+                    <button type="button" class="ren-action-card" @onclick='() => NavManager.NavigateTo("/backoffice/ventas")'>
+                        <i class="bi bi-bag-check"></i>
+                        <strong>Registrar venta</strong>
+                        <small>Genera la renovacion manual desde ventas.</small>
+                    </button>
+                    <button type="button" class="ren-action-card" @onclick='() => NavManager.NavigateTo("/backoffice/suscripciones")'>
+                        <i class="bi bi-grid-1x2"></i>
+                        <strong>Revisar licencias</strong>
+                        <small>Consulta el estado completo de e-Fact y e-Sign.</small>
+                    </button>
+                </div>
+            </article>
+        </section>
+
+        <section class="ren-table-panel">
+            <div class="ren-panel-head">
+                <div>
+                    <h3>Oportunidades de renovacion</h3>
+                    <p>@filteredRows.Count registro(s) encontrados para seguimiento.</p>
+                </div>
+                <span class="ren-badge">@Money(filteredRows.Sum(r => r.MontoEstimado))</span>
+            </div>
+
+            <div class="ren-table-wrap">
+                <table class="ren-table">
+                    <thead>
+                        <tr>
+                            <th>Cliente</th>
+                            <th>Servicio</th>
+                            <th>Plan / vigencia</th>
+                            <th>Referencia</th>
+                            <th>Vence / accion</th>
+                            <th>Prioridad</th>
+                            <th>Vendedor</th>
+                            <th>Monto estimado</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!paginatedRows.Any())
+                        {
+                            <tr>
+                                <td colspan="8" class="ren-empty">No hay renovaciones para los filtros actuales.</td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var row in paginatedRows)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="ren-client-cell">
+                                            <strong>@row.Cliente</strong>
+                                            <small>@row.Email</small>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="ren-product @(row.TipoServicio == "e-sign" ? "esign" : "efact")">@row.TipoServicio.ToUpperInvariant()</span>
+                                    </td>
+                                    <td>
+                                        <div class="ren-plan-cell">
+                                            <strong>@row.Plan</strong>
+                                            <small>@row.EstadoDescripcion</small>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        @if (row.TipoServicio == "e-sign")
+                                        {
+                                            <span>@row.FechaReferencia.ToString("dd/MM/yyyy")</span>
+                                        }
+                                        else
+                                        {
+                                            <span>@row.SaldoDescripcion</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        <div class="ren-date-cell">
+                                            <strong>@row.FechaObjetivo.ToString("dd/MM/yyyy")</strong>
+                                            <small>@row.DiasTexto</small>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="ren-priority @row.Urgencia">@row.UrgenciaVisual</span>
+                                    </td>
+                                    <td>@row.Vendedor</td>
+                                    <td class="ren-money">@Money(row.MontoEstimado)</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (totalPages > 1)
+            {
+                <div class="ren-pagination">
+                    <button type="button" class="ren-page-btn" @onclick="() => SetPage(currentPage - 1)" disabled="@(currentPage == 1)">Anterior</button>
+                    <span>Pagina @currentPage de @totalPages</span>
+                    <button type="button" class="ren-page-btn" @onclick="() => SetPage(currentPage + 1)" disabled="@(currentPage == totalPages)">Siguiente</button>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private bool isLoading = true;
+    private readonly List<RenewalRow> allRows = new();
+    private List<RenewalRow> filteredRows = new();
+    private List<RenewalRow> paginatedRows = new();
+    private List<SummaryCard> summaryCards = new();
+
+    private string searchTerm = string.Empty;
+    private string tipoFiltro = "ALL";
+    private string urgenciaFiltro = "ALL";
+    private int horizonteDias = 30;
+    private int currentPage = 1;
+    private const int pageSize = 12;
+    private int totalPages = 1;
+
+    private int rowsCriticos;
+    private int esignPorVencer;
+    private int efactPorRenovar;
+    private decimal montoCritico;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarAsync();
+    }
+
+    private async Task RecargarAsync()
+    {
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        isLoading = true;
+        allRows.Clear();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            var users = await context.Usuarios
+                .AsNoTracking()
+                .Where(u => u.IdTipoUsuario == 1)
+                .ToListAsync();
+
+            var userIds = users.Select(u => u.IdUsuario).ToList();
+            var invoiceCounts = await context.Facturas
+                .AsNoTracking()
+                .Where(f => f.Idusuario.HasValue && userIds.Contains(f.Idusuario.Value))
+                .GroupBy(f => f.Idusuario!.Value)
+                .Select(g => new { IdUsuario = g.Key, Total = g.Count() })
+                .ToDictionaryAsync(x => x.IdUsuario, x => x.Total);
+            var creditNoteCounts = await context.NotaCreditos
+                .AsNoTracking()
+                .Where(nc => nc.Usuario.HasValue && userIds.Contains(nc.Usuario.Value))
+                .GroupBy(nc => nc.Usuario!.Value)
+                .Select(g => new { IdUsuario = g.Key, Total = g.Count() })
+                .ToDictionaryAsync(x => x.IdUsuario, x => x.Total);
+            var unlimitedSubscriptions = (await context.UsuarioServicioSuscripciones
+                    .AsNoTracking()
+                    .Where(s => userIds.Contains(s.IdUsuario) &&
+                                s.Estado == "ACTIVO" &&
+                                s.PlanActual != null &&
+                                s.PlanActual.ToLower().Contains("ilimitad"))
+                    .ToListAsync())
+                .GroupBy(s => s.IdUsuario)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(s => s.FechaActualizacion ?? s.FechaCreacion).First());
+            var approvedPurchases = users.ToDictionary(
+                u => u.IdUsuario,
+                u => LeerHistorial(u.HistorialComprasDocumentosJson)
+                    .FirstOrDefault(h => h.Estado == "Aprobado" || h.SaldoAplicado));
+            var saleIds = approvedPurchases.Values
+                .Select(purchase => ObtenerIdReporte(purchase?.Descripcion))
+                .Where(id => id.HasValue)
+                .Select(id => id!.Value)
+                .Distinct()
+                .ToList();
+            var sales = saleIds.Count == 0
+                ? new Dictionary<int, ReporteVentaBackOffice>()
+                : await context.ReporteVentasBackOffice
+                    .AsNoTracking()
+                    .Where(v => saleIds.Contains(v.IdReporte))
+                    .ToDictionaryAsync(v => v.IdReporte);
+
+            foreach (var u in users)
+            {
+                var invoicesCount = invoiceCounts.GetValueOrDefault(u.IdUsuario);
+                var creditNotesCount = creditNoteCounts.GetValueOrDefault(u.IdUsuario);
+                var totalConsumed = invoicesCount + creditNotesCount;
+
+                var lastApprovedPurchase = approvedPurchases[u.IdUsuario];
+                unlimitedSubscriptions.TryGetValue(u.IdUsuario, out var activeUnlimitedSub);
+
+                if (activeUnlimitedSub is null)
+                {
+                    var purchased = Math.Max(u.SaldoDocumentos + totalConsumed, lastApprovedPurchase?.Documentos ?? 0);
+
+                    if (purchased > 0)
+                    {
+                        var saldo = u.SaldoDocumentos;
+                        var thresholdMedium = Math.Max(25, (int)Math.Ceiling(purchased * 0.20m));
+                        var thresholdHigh = Math.Max(10, (int)Math.Ceiling(purchased * 0.10m));
+
+                        if (saldo <= thresholdMedium)
+                        {
+                            var urgency = saldo <= 0 ? "critica" : saldo <= thresholdHigh ? "alta" : "media";
+                            var idReporte = ObtenerIdReporte(lastApprovedPurchase?.Descripcion);
+                            sales.TryGetValue(idReporte ?? 0, out var sale);
+                            var vendor = sale?.Vendedor ?? "Sistema";
+                            var plan = !string.IsNullOrWhiteSpace(sale?.PlanPaquete)
+                                ? sale.PlanPaquete
+                                : !string.IsNullOrWhiteSpace(lastApprovedPurchase?.Descripcion)
+                                    ? lastApprovedPurchase.Descripcion
+                                    : $"{purchased} documentos";
+                            var estimatedAmount = lastApprovedPurchase?.MontoTotal ?? EstimarMontoEfact(plan, purchased);
+
+                            allRows.Add(new RenewalRow
+                            {
+                                Cliente = $"{u.Nombres} {u.Apellidos}".Trim(),
+                                Email = u.Email,
+                                TipoServicio = "e-fact",
+                                Plan = plan,
+                                EstadoDescripcion = saldo <= 0 ? "Sin saldo disponible" : "Saldo bajo para continuar facturando",
+                                SaldoDescripcion = $"{saldo} docs disponibles de {purchased}",
+                                FechaReferencia = lastApprovedPurchase?.Fecha ?? (u.FechaCreacion ?? DateTime.Today),
+                                FechaObjetivo = saldo <= 0 ? DateTime.Today : DateTime.Today.AddDays(saldo <= thresholdHigh ? 7 : 15),
+                                Urgencia = urgency,
+                                Vendedor = vendor,
+                                MontoEstimado = estimatedAmount
+                            });
+                        }
+                    }
+                }
+            }
+
+            var signatures = await context.Set<UsuSolicitudFirma>()
+                .AsNoTracking()
+                .Where(s => (s.SolIdEstadoNumerica == 3 || s.SolActivo) && userIds.Contains(s.SolIdUsuarioCliente))
+                .ToListAsync();
+
+            foreach (var s in signatures)
+            {
+                var expirationDate = CalcularExpiracion(s);
+                if (expirationDate > DateTime.Today.AddDays(Math.Max(horizonteDias, 60)))
+                    continue;
+
+                var daysRemaining = (expirationDate - DateTime.Today).Days;
+                var urgency = daysRemaining < 0 ? "critica" : daysRemaining <= 7 ? "alta" : "media";
+
+                allRows.Add(new RenewalRow
+                {
+                    Cliente = $"{s.SolNombres} {s.SolPrimerApellido} {s.SolSegundoApellido}".Trim(),
+                    Email = s.SolCorreo1,
+                    TipoServicio = "e-sign",
+                    Plan = string.IsNullOrWhiteSpace(s.SolFormatoFirma) ? "Firma electronica" : s.SolFormatoFirma,
+                    EstadoDescripcion = daysRemaining < 0 ? "Firma vencida" : "Firma por renovar",
+                    SaldoDescripcion = s.SolVigencia,
+                    FechaReferencia = s.SolFechaAprobacion ?? s.SolFechaSolicitud,
+                    FechaObjetivo = expirationDate,
+                    Urgencia = urgency,
+                    Vendedor = "e-Sign",
+                    MontoEstimado = EstimarMontoEsign(s.SolVigencia)
+                });
+            }
+
+            ActualizarResumenes();
+            AplicarFiltros();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void ActualizarResumenes()
+    {
+        rowsCriticos = allRows.Count(r => r.Urgencia == "critica");
+        esignPorVencer = allRows.Count(r => r.TipoServicio == "e-sign");
+        efactPorRenovar = allRows.Count(r => r.TipoServicio == "e-fact");
+        montoCritico = allRows.Where(r => r.Urgencia == "critica").Sum(r => r.MontoEstimado);
+
+        summaryCards =
+        [
+            new("Criticas", $"{rowsCriticos}", "Casos que requieren llamada o cobro inmediato."),
+            new("Canal asesores", $"{allRows.Count(r => r.Vendedor != "Sistema" && r.Vendedor != "e-Sign")}", "Renovaciones vinculadas a gestion comercial."),
+            new("Saldo agotado", $"{allRows.Count(r => r.TipoServicio == "e-fact" && r.Urgencia == "critica")}", "Clientes e-Fact que ya no pueden seguir emitiendo."),
+            new("Firmas vencidas", $"{allRows.Count(r => r.TipoServicio == "e-sign" && r.Urgencia == "critica")}", "Solicitudes que ya pasaron su fecha de vencimiento.")
+        ];
+    }
+
+    private Task OnFiltersChanged()
+    {
+        currentPage = 1;
+        AplicarFiltros();
+        return Task.CompletedTask;
+    }
+
+    private void AplicarFiltros()
+    {
+        var query = allRows.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            var term = searchTerm.Trim();
+            query = query.Where(r =>
+                r.Cliente.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                r.Email.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                r.Plan.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                r.Vendedor.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.Equals(tipoFiltro, "ALL", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(r => string.Equals(r.TipoServicio, tipoFiltro, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.Equals(urgenciaFiltro, "ALL", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(r => string.Equals(r.Urgencia, urgenciaFiltro, StringComparison.OrdinalIgnoreCase));
+
+        query = query.Where(r =>
+            r.TipoServicio == "e-fact" ||
+            r.FechaObjetivo <= DateTime.Today.AddDays(horizonteDias));
+
+        filteredRows = query
+            .OrderBy(r => UrgencyRank(r.Urgencia))
+            .ThenBy(r => r.FechaObjetivo)
+            .ThenBy(r => r.Cliente)
+            .ToList();
+
+        totalPages = Math.Max(1, (int)Math.Ceiling(filteredRows.Count / (double)pageSize));
+        currentPage = Math.Min(currentPage, totalPages);
+        paginatedRows = filteredRows
+            .Skip((currentPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+    }
+
+    private void SetPage(int page)
+    {
+        if (page < 1 || page > totalPages)
+            return;
+
+        currentPage = page;
+        paginatedRows = filteredRows
+            .Skip((currentPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+    }
+
+    private static int UrgencyRank(string urgency) => urgency switch
+    {
+        "critica" => 0,
+        "alta" => 1,
+        _ => 2
+    };
+
+    private static string Money(decimal value) =>
+        value.ToString("C2", CultureInfo.GetCultureInfo("es-EC"));
+
+    private static decimal EstimarMontoEsign(string? vigencia)
+    {
+        var value = vigencia?.ToLowerInvariant() ?? string.Empty;
+        if (value.Contains("4")) return 57.68m;
+        if (value.Contains("3")) return 46.14m;
+        if (value.Contains("2")) return 34.60m;
+        return 21.91m;
+    }
+
+    private static decimal EstimarMontoEfact(string plan, int purchased)
+    {
+        return EFactDocumentPricing.EstimarMontoEfact(plan, purchased);
+    }
+
+    private static DateTime CalcularExpiracion(UsuSolicitudFirma sol)
+    {
+        var baseDate = sol.SolFechaAprobacion ?? sol.SolFechaSolicitud;
+        var vigencia = sol.SolVigencia?.ToLowerInvariant() ?? string.Empty;
+        if (vigencia.Contains("30") || vigencia.Contains("mes")) return baseDate.AddDays(30);
+        if (vigencia.Contains("2")) return baseDate.AddYears(2);
+        if (vigencia.Contains("3")) return baseDate.AddYears(3);
+        if (vigencia.Contains("4")) return baseDate.AddYears(4);
+        if (vigencia.Contains("5")) return baseDate.AddYears(5);
+        return baseDate.AddYears(1);
+    }
+
+    private static List<CompraDocumentosHistorialItem> LeerHistorial(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new();
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(
+                       json,
+                       new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                   ?? new();
+        }
+        catch
+        {
+            return new();
+        }
+    }
+
+    private static int? ObtenerIdReporte(string? texto)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(texto ?? string.Empty, @"Ref #(\d+)");
+        return match.Success && int.TryParse(match.Groups[1].Value, out var idReporte)
+            ? idReporte
+            : null;
+    }
+
+    private sealed class RenewalRow
+    {
+        public string Cliente { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string TipoServicio { get; set; } = string.Empty;
+        public string Plan { get; set; } = string.Empty;
+        public string EstadoDescripcion { get; set; } = string.Empty;
+        public string SaldoDescripcion { get; set; } = string.Empty;
+        public DateTime FechaReferencia { get; set; }
+        public DateTime FechaObjetivo { get; set; }
+        public string Urgencia { get; set; } = "media";
+        public string Vendedor { get; set; } = "Sistema";
+        public decimal MontoEstimado { get; set; }
+        public string DiasTexto
+        {
+            get
+            {
+                var days = (FechaObjetivo - DateTime.Today).Days;
+                if (TipoServicio == "e-fact" && Urgencia == "critica") return "Accion hoy";
+                if (days < 0) return $"{Math.Abs(days)} dias vencido";
+                if (days == 0) return "Vence hoy";
+                return $"En {days} dias";
+            }
+        }
+
+        public string UrgenciaVisual => Urgencia switch
+        {
+            "critica" => "Critica",
+            "alta" => "Alta",
+            _ => "Media"
+        };
+    }
+
+    private sealed record SummaryCard(string Title, string Value, string Description);
+}
+
+<style>
+    .ren-shell { display:flex; flex-direction:column; gap:1rem; }
+    .ren-hero, .ren-kpi, .ren-toolbar, .ren-panel, .ren-table-panel, .ren-state {
+        background:#fff; border:1px solid #dbe4ee; border-radius:18px; box-shadow:0 14px 36px rgba(15,23,42,.06);
+    }
+    .ren-hero { padding:1.4rem 1.5rem; display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; }
+    .ren-kicker { font-size:.74rem; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.06em; }
+    .ren-hero h2, .ren-panel-head h3 { margin:.25rem 0 0; color:#0f172a; }
+    .ren-hero p, .ren-panel-head p { margin:.35rem 0 0; color:#64748b; }
+    .ren-hero-actions { display:flex; gap:.75rem; flex-wrap:wrap; }
+    .ren-btn { border-radius:12px; padding:.8rem 1rem; font-weight:800; border:1px solid transparent; cursor:pointer; }
+    .ren-btn-primary { background:#0f172a; color:#fff; }
+    .ren-btn-secondary { background:#fff; color:#0f172a; border-color:#cbd5e1; }
+    .ren-state { padding:3rem 1.5rem; display:grid; place-items:center; gap:.75rem; color:#334155; }
+    .ren-kpis { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:1rem; }
+    .ren-kpi { padding:1rem 1.1rem; display:flex; flex-direction:column; gap:.3rem; }
+    .ren-kpi span { color:#64748b; font-size:.78rem; font-weight:800; text-transform:uppercase; letter-spacing:.05em; }
+    .ren-kpi strong { font-size:1.8rem; color:#0f172a; line-height:1; }
+    .ren-kpi small { color:#64748b; }
+    .kpi-critical { border-color:#fecaca; background:#fff7f7; }
+    .kpi-warning { border-color:#fde68a; background:#fffdf1; }
+    .kpi-info { border-color:#bfdbfe; background:#f7fbff; }
+    .kpi-success { border-color:#bbf7d0; background:#f6fff8; }
+    .ren-toolbar { padding:1rem; display:grid; grid-template-columns:minmax(260px, 1.8fr) repeat(3, minmax(150px, .8fr)); gap:.75rem; }
+    .ren-toolbar select, .ren-search input {
+        width:100%; border:1px solid #cbd5e1; border-radius:12px; padding:.8rem .95rem; background:#fff; color:#0f172a;
+    }
+    .ren-search { position:relative; }
+    .ren-search i { position:absolute; left:14px; top:50%; transform:translateY(-50%); color:#94a3b8; }
+    .ren-search input { padding-left:2.3rem; }
+    .ren-grid { display:grid; grid-template-columns:1.2fr .9fr; gap:1rem; }
+    .ren-panel, .ren-table-panel { padding:1rem 1.1rem; }
+    .ren-panel-head { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:.9rem; }
+    .ren-summary-list, .ren-actions-grid { display:grid; gap:.75rem; }
+    .ren-summary-card, .ren-action-card {
+        border:1px solid #e2e8f0; border-radius:14px; background:#f8fbff; padding:.9rem 1rem;
+    }
+    .ren-summary-card { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+    .ren-summary-card strong, .ren-action-card strong { color:#0f172a; display:block; }
+    .ren-summary-card small, .ren-action-card small { color:#64748b; }
+    .ren-summary-card span:last-child { font-size:1.1rem; font-weight:800; color:#0369a1; }
+    .ren-action-card { text-align:left; cursor:pointer; background:#fff; }
+    .ren-action-card i { font-size:1.35rem; color:#2563eb; margin-bottom:.55rem; display:inline-block; }
+    .ren-badge { background:#e0f2fe; color:#075985; padding:.4rem .75rem; border-radius:999px; font-weight:800; }
+    .ren-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:14px; }
+    .ren-table { width:100%; border-collapse:collapse; min-width:980px; }
+    .ren-table th { background:#0f172a; color:#fff; font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; padding:.85rem .9rem; text-align:left; }
+    .ren-table td { padding:.9rem; border-bottom:1px solid #e2e8f0; color:#1e293b; vertical-align:middle; }
+    .ren-client-cell, .ren-plan-cell, .ren-date-cell { display:flex; flex-direction:column; }
+    .ren-client-cell small, .ren-plan-cell small, .ren-date-cell small { color:#64748b; }
+    .ren-product, .ren-priority { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:.25rem .6rem; font-size:.74rem; font-weight:800; }
+    .ren-product.efact { background:#dbeafe; color:#1d4ed8; }
+    .ren-product.esign { background:#ede9fe; color:#6d28d9; }
+    .ren-priority.critica { background:#fee2e2; color:#b91c1c; }
+    .ren-priority.alta { background:#fef3c7; color:#b45309; }
+    .ren-priority.media { background:#dbeafe; color:#1d4ed8; }
+    .ren-money { font-weight:800; color:#0f766e; white-space:nowrap; }
+    .ren-empty { text-align:center; padding:2rem 1rem; color:#64748b; }
+    .ren-pagination { display:flex; justify-content:flex-end; align-items:center; gap:.75rem; padding-top:1rem; }
+    .ren-page-btn { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:10px; padding:.55rem .85rem; font-weight:700; }
+    @@media (max-width: 1080px) {
+        .ren-kpis, .ren-grid, .ren-toolbar { grid-template-columns:1fr 1fr; }
+    }
+    @@media (max-width: 720px) {
+        .ren-hero, .ren-toolbar, .ren-kpis, .ren-grid { grid-template-columns:1fr; display:grid; }
+        .ren-hero { display:flex; flex-direction:column; }
+    }
+</style>

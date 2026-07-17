@@ -1,0 +1,110 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using Simetric.Services
+@implements IDisposable
+@inject NavigationManager NavManager
+@inject TutorialRegistryService TutorialRegistry
+
+<button type="button"
+        class="tutorial-fab @(MenuMode ? "tutorial-menu-entry" : string.Empty) @(_currentTutorial is not null ? "is-contextual" : "is-catalog")"
+        title="@ButtonText"
+        aria-label="@ButtonText"
+        @onclick="HandleClick">
+    <span class="tutorial-fab-icon" aria-hidden="true"><i class="bi bi-play-circle-fill"></i></span>
+    <span class="tutorial-fab-label">Tutoriales</span>
+</button>
+
+@code {
+    [Parameter] public bool MenuMode { get; set; }
+
+    private const string TutorialCatalogRoute = "/ayuda/tutoriales";
+    private TutorialDefinition? _currentTutorial;
+
+    private string ButtonText =>
+        _currentTutorial is not null
+            ? $"Abrir tutorial: {_currentTutorial.Title}"
+            : "Abrir centro de tutoriales";
+
+    protected override void OnInitialized()
+    {
+        UpdateCurrentTutorial(NavManager.Uri);
+        NavManager.LocationChanged += OnLocationChanged;
+    }
+
+    public void Dispose()
+    {
+        NavManager.LocationChanged -= OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        UpdateCurrentTutorial(e.Location);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleClick()
+    {
+        if (_currentTutorial is null)
+        {
+            NavManager.NavigateTo(TutorialCatalogRoute);
+            return;
+        }
+
+        NavManager.NavigateTo(BuildTutorialLaunchUrl(_currentTutorial.Id));
+    }
+
+    private void UpdateCurrentTutorial(string location)
+    {
+        var routePath = NormalizeRoutePath(location);
+        _currentTutorial = TutorialRegistry.GetByRoute(routePath);
+    }
+
+    private string BuildTutorialLaunchUrl(string tutorialId)
+    {
+        var currentUri = NavManager.ToAbsoluteUri(NavManager.Uri);
+        var queryParameters = QueryHelpers.ParseQuery(currentUri.Query);
+        var preservedParameters = new List<KeyValuePair<string, string?>>();
+
+        foreach (var parameter in queryParameters)
+        {
+            if (string.Equals(parameter.Key, "tutorial", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(parameter.Key, "forceTutorial", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (var value in parameter.Value)
+            {
+                preservedParameters.Add(new KeyValuePair<string, string?>(parameter.Key, value));
+            }
+        }
+
+        preservedParameters.Add(new KeyValuePair<string, string?>("tutorial", tutorialId));
+        preservedParameters.Add(new KeyValuePair<string, string?>("forceTutorial", "true"));
+
+        var destination = QueryHelpers.AddQueryString(
+            currentUri.GetLeftPart(UriPartial.Path),
+            preservedParameters);
+
+        return string.IsNullOrWhiteSpace(currentUri.Fragment)
+            ? destination
+            : $"{destination}{currentUri.Fragment}";
+    }
+
+    private string NormalizeRoutePath(string location)
+    {
+        var relativePath = NavManager.ToBaseRelativePath(location);
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return "/";
+
+        var separatorIndex = relativePath.IndexOfAny(new[] { '?', '#' });
+        var pathOnly = (separatorIndex >= 0 ? relativePath[..separatorIndex] : relativePath).Trim();
+
+        if (string.IsNullOrWhiteSpace(pathOnly))
+            return "/";
+
+        return pathOnly.StartsWith("/", StringComparison.Ordinal)
+            ? pathOnly
+            : $"/{pathOnly}";
+    }
+}

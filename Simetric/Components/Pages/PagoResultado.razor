@@ -1,0 +1,140 @@
+@page "/solicitud/pago/resultado"
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@attribute [AllowAnonymous]
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Resultado de pago | Numerica E-Sign</PageTitle>
+
+<div class="pago-resultado-shell">
+    <section class="pago-resultado-panel @EstadoClass">
+        <span class="pago-resultado-kicker">Firma electrónica</span>
+        <h2>@Titulo</h2>
+        <p>@Mensaje</p>
+
+        <div class="pago-resultado-details">
+            @if (cargandoSolicitud)
+            {
+                <span>Consultando el estado del pago en Simetric...</span>
+            }
+            else if (!string.IsNullOrWhiteSpace(errorSolicitud))
+            {
+                <span>@errorSolicitud</span>
+            }
+
+            @if (SolId is not null)
+            {
+                <span>Solicitud: <strong>@SolId</strong></span>
+            }
+            @if (solicitud is not null)
+            {
+                <span>Pago en Simetric: <strong>@GetEstadoPago(solicitud)</strong></span>
+
+                @if (!string.IsNullOrWhiteSpace(solicitud.SolIdTransaccionPago))
+                {
+                    <span>Transaccion registrada: <strong>@solicitud.SolIdTransaccionPago</strong></span>
+                }
+
+                @if (solicitud.SolFechaPago is not null)
+                {
+                    <span>Fecha de pago: <strong>@solicitud.SolFechaPago.Value.ToString("dd/MM/yyyy HH:mm")</strong></span>
+                }
+            }
+            @if (!string.IsNullOrWhiteSpace(Reference))
+            {
+                <span>Referencia: <strong>@Reference</strong></span>
+            }
+            @if (!string.IsNullOrWhiteSpace(Authorization))
+            {
+                <span>Autorizacion: <strong>@Authorization</strong></span>
+            }
+        </div>
+
+        <div class="pago-resultado-actions">
+            <a href="/solicitud/nueva">Nueva solicitud</a>
+            <a href="/solicitud/pagos">Ver mis pagos</a>
+        </div>
+    </section>
+</div>
+
+@code {
+    private UsuSolicitudFirma? solicitud;
+    private bool cargandoSolicitud;
+    private string? errorSolicitud;
+
+    [SupplyParameterFromQuery(Name = "solId")]
+    public int? SolId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "estado")]
+    public string? Estado { get; set; }
+
+    [SupplyParameterFromQuery(Name = "reference")]
+    public string? Reference { get; set; }
+
+    [SupplyParameterFromQuery(Name = "authorization")]
+    public string? Authorization { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        solicitud = null;
+        errorSolicitud = null;
+
+        if (SolId is null or <= 0)
+        {
+            return;
+        }
+
+        cargandoSolicitud = true;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            solicitud = await context.UsuSolicitudFirma
+                .AsNoTracking()
+                .FirstOrDefaultAsync(item => item.SolId == SolId);
+
+            if (solicitud is null)
+            {
+                errorSolicitud = "No se encontro la solicitud en Simetric.";
+            }
+        }
+        catch
+        {
+            errorSolicitud = "No se pudo consultar el estado guardado del pago.";
+        }
+        finally
+        {
+            cargandoSolicitud = false;
+        }
+    }
+
+    private bool PagoAprobado =>
+        solicitud?.SolPagoExitoso == true ||
+        string.Equals(Estado, "aprobado", StringComparison.OrdinalIgnoreCase);
+
+    private string EstadoClass => PagoAprobado ? "is-approved" : "is-pending";
+
+    private string Titulo => PagoAprobado
+        ? "Pago aprobado"
+        : "Pago recibido para revision";
+
+    private string Mensaje => PagoAprobado
+        ? "La transaccion fue aprobada y la solicitud quedo marcada como pagada en Simetric."
+        : "Recibimos el retorno de Pagomedios, pero no llego como aprobacion. Puedes revisar el detalle en tus pagos.";
+
+    private static string GetEstadoPago(UsuSolicitudFirma sol) =>
+        sol.SolPagoExitoso == true ? "Pagado" : "Pendiente o no aprobado";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync("e-sign");
+        }
+    }
+}

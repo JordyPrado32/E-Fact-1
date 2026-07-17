@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html lang="es-EC">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="bootstrap/bootstrap.min.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="css/edeclara/edeclara-theme.css" />
+    <link rel="stylesheet" href="Simetric.styles.css?v=@Guid.NewGuid().ToString()" />
+    @* <link rel="stylesheet" href="http://efact.numericasoftware.com/Simetric.styles.css" /> *@
+    <link rel="icon" type="image/svg+xml" href="images/LogoNumerica.svg" />
+    @* Sin prerender para evitar inconsistencias entre el circuito y el estado del navegador. *@
+    <HeadOutlet @rendermode="new InteractiveServerRenderMode(prerender: false)" />
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet" />
+    <link rel="stylesheet" href="profile-shared.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+</head>
+
+    <body>
+
+        <Routes @rendermode="new InteractiveServerRenderMode(prerender: false)" />
+    <script src="/js/numericaDigits.js"></script>
+    <script>
+        window.authInterop = window.authInterop || {};
+
+        window.authInterop.clearClientSession = window.authInterop.clearClientSession || function () {
+            try {
+                localStorage.removeItem("userSession");
+                localStorage.removeItem("numerica:last-activity");
+                localStorage.removeItem("numerica:current-service");
+                localStorage.removeItem("selectedAppService");
+                sessionStorage.removeItem("numerica:session-expired");
+            } catch {
+            }
+        };
+
+        window.authInterop.postJson = window.authInterop.postJson || async function (url, payload) {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify(payload)
+            });
+
+            const text = await response.text();
+
+            if (!text) {
+                return {
+                    ok: response.ok,
+                    status: response.status,
+                    statusText: response.statusText,
+                    message: response.ok ? "" : `HTTP ${response.status} ${response.statusText}`
+                };
+            }
+
+            try {
+                const data = JSON.parse(text);
+                return {
+                    ok: response.ok,
+                    status: response.status,
+                    statusText: response.statusText,
+                    ...data
+                };
+            } catch {
+                return {
+                    ok: response.ok,
+                    status: response.status,
+                    statusText: response.statusText,
+                    message: text
+                };
+            }
+        };
+
+        window.authInterop.login = window.authInterop.login || function (payload) {
+            return window.authInterop.postJson("/api/auth/login", payload);
+        };
+
+        window.authInterop.check = window.authInterop.check || async function () {
+            try {
+                const response = await fetch("/api/auth/check", {
+                    method: "GET",
+                    credentials: "include"
+                });
+                return await response.json();
+            } catch {
+                return { authenticated: false, idUsuario: 0 };
+            }
+        };
+
+        window.authInterop.mfaLogin = window.authInterop.mfaLogin || function (payload) {
+            return window.authInterop.postJson("/api/auth/mfa-login", payload);
+        };
+
+        window.authInterop.logout = window.authInterop.logout || async function () {
+            try {
+                return await window.authInterop.postJson("/api/auth/logout", {});
+            } finally {
+                window.authInterop.clearClientSession();
+            }
+        };
+    </script>
+    <script src="/js/auth.js?v=20260716-auth-shim"></script>
+    <script>
+        window.numericaLogoutAndRedirect = async function (url) {
+            try {
+                if (window.authInterop && typeof window.authInterop.logout === "function") {
+                    await window.authInterop.logout();
+                } else {
+                    localStorage.removeItem("userSession");
+                    localStorage.removeItem("numerica:last-activity");
+                    localStorage.removeItem("numerica:current-service");
+                    localStorage.removeItem("selectedAppService");
+                    sessionStorage.removeItem("numerica:session-expired");
+                }
+            } finally {
+                window.location.replace(url || "/login");
+            }
+        };
+
+        window.backOfficeLogoutAndRedirect = async function () {
+            try {
+                await fetch("/api/auth/logout", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: "{}"
+                });
+            } catch {
+            } finally {
+                try {
+                    localStorage.removeItem("userSession");
+                    localStorage.removeItem("numerica:last-activity");
+                    localStorage.removeItem("numerica:current-service");
+                    localStorage.removeItem("selectedAppService");
+                    sessionStorage.removeItem("numerica:session-expired");
+                } catch {
+                }
+
+                window.location.replace("/login");
+            }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>
+        window.numericaUi = window.numericaUi || {};
+
+        window.numericaUi.getLocalStorageItems = function (keys) {
+            const result = {};
+
+            if (!Array.isArray(keys)) {
+                return result;
+            }
+
+            keys.forEach(function (key) {
+                if (typeof key === "string" && key.length > 0) {
+                    result[key] = localStorage.getItem(key);
+                }
+            });
+
+            return result;
+        };
+
+        window.numericaUi.mergeClassNames = function () {
+            return Array.from(arguments)
+                .flatMap(value => (value || "").toString().split(" "))
+                .map(value => value.trim())
+                .filter(Boolean)
+                .filter((value, index, list) => list.indexOf(value) === index)
+                .join(" ");
+        };
+
+        window.numericaUi.getSwalThemeOptions = function (options) {
+            const settings = options && typeof options === "object" ? { ...options } : {};
+            const icon = (settings.icon || "").toString().toLowerCase();
+            const confirmLabel = (settings.confirmButtonText || "").toString().toLowerCase();
+            const denyLabel = (settings.denyButtonText || "").toString().toLowerCase();
+            const isDanger = icon === "warning"
+                || icon === "error"
+                || confirmLabel.includes("eliminar")
+                || confirmLabel.includes("borrar")
+                || confirmLabel.includes("anular")
+                || denyLabel.includes("eliminar");
+
+            const existingClasses = settings.customClass || {};
+
+            settings.buttonsStyling = false;
+            settings.confirmButtonColor = undefined;
+            settings.cancelButtonColor = undefined;
+            settings.customClass = {
+                ...existingClasses,
+                popup: window.numericaUi.mergeClassNames("numerica-swal-popup", existingClasses.popup),
+                title: window.numericaUi.mergeClassNames("numerica-swal-title", existingClasses.title),
+                htmlContainer: window.numericaUi.mergeClassNames("numerica-swal-body", existingClasses.htmlContainer),
+                actions: window.numericaUi.mergeClassNames("numerica-swal-actions", existingClasses.actions),
+                confirmButton: window.numericaUi.mergeClassNames(
+                    "numerica-swal-confirm",
+                    isDanger ? "numerica-swal-confirm-danger" : "numerica-swal-confirm-primary",
+                    existingClasses.confirmButton),
+                cancelButton: window.numericaUi.mergeClassNames("numerica-swal-cancel", existingClasses.cancelButton),
+                closeButton: window.numericaUi.mergeClassNames("numerica-swal-close", existingClasses.closeButton),
+                icon: window.numericaUi.mergeClassNames("numerica-swal-icon", existingClasses.icon)
+            };
+
+            return settings;
+        };
+
+        window.numericaUi.patchSweetAlert = function () {
+            if (!window.Swal || typeof window.Swal.fire !== "function" || window.numericaUi.__swalPatched) {
+                return;
+            }
+
+            const originalFire = window.Swal.fire.bind(window.Swal);
+            window.numericaUi.__originalSwalFire = originalFire;
+
+            window.Swal.fire = function () {
+                if (arguments.length === 1 && arguments[0] && typeof arguments[0] === "object" && !Array.isArray(arguments[0])) {
+                    return originalFire(window.numericaUi.getSwalThemeOptions(arguments[0]));
+                }
+
+                if (arguments.length >= 1) {
+                    const title = arguments[0];
+                    const html = arguments.length >= 2 ? arguments[1] : undefined;
+                    const icon = arguments.length >= 3 ? arguments[2] : undefined;
+
+                    return originalFire(window.numericaUi.getSwalThemeOptions({
+                        title,
+                        html,
+                        icon
+                    }));
+                }
+
+                return originalFire();
+            };
+
+            window.numericaUi.__swalPatched = true;
+        };
+
+        window.numericaUi.toggleBodyScrollLock = function (locked) {
+            const body = document.body;
+            const html = document.documentElement;
+
+            if (!body || !html) {
+                return;
+            }
+
+            const currentLocks = Number(body.dataset.modalScrollLocks || "0");
+
+            if (locked) {
+                if (currentLocks === 0) {
+                    html.classList.add("n-body-scroll-locked");
+                    body.classList.add("n-body-scroll-locked");
+                }
+
+                body.dataset.modalScrollLocks = String(currentLocks + 1);
+                return;
+            }
+
+            const nextLocks = Math.max(0, currentLocks - 1);
+
+            if (nextLocks > 0) {
+                body.dataset.modalScrollLocks = String(nextLocks);
+                return;
+            }
+
+            html.classList.remove("n-body-scroll-locked");
+            body.classList.remove("n-body-scroll-locked");
+            body.removeAttribute("data-modal-scroll-locks");
+        };
+
+        window.numericaUi.outsideClickHandlers = window.numericaUi.outsideClickHandlers || {};
+
+        window.numericaUi.registerOutsideClick = function (key, element, dotNetRef, methodName) {
+            window.numericaUi.unregisterOutsideClick(key);
+
+            const handler = function (event) {
+                if (!element || element.contains(event.target)) {
+                    return;
+                }
+
+                dotNetRef.invokeMethodAsync(methodName).catch(() => {});
+            };
+
+            document.addEventListener("pointerdown", handler, true);
+            window.numericaUi.outsideClickHandlers[key] = handler;
+        };
+
+        window.numericaUi.unregisterOutsideClick = function (key) {
+            const handler = window.numericaUi.outsideClickHandlers[key];
+            if (!handler) {
+                return;
+            }
+
+            document.removeEventListener("pointerdown", handler, true);
+            delete window.numericaUi.outsideClickHandlers[key];
+        };
+
+        window.numericaUi.enableBackdropDismiss = function () {
+            if (window.numericaUi.__backdropDismissEnabled) {
+                return;
+            }
+
+            const closeSelectors = [
+                "[data-modal-dismiss]",
+                "button[aria-label*='cerrar' i]",
+                "button[title*='cerrar' i]",
+                ".modal-close",
+                ".btn-close",
+                ".welcome-close",
+                ".solicitud-notification-close"
+            ].join(",");
+
+            document.addEventListener("click", function (event) {
+                const clickedElement = event.target;
+                if (!(clickedElement instanceof HTMLElement)) {
+                    return;
+                }
+
+                if (clickedElement.closest("[data-no-backdrop-dismiss]")) {
+                    return;
+                }
+
+                const classNames = Array.from(clickedElement.classList);
+                const isBackdrop = classNames.some(className => className.toLowerCase().includes("backdrop"));
+                const ignoredBackdrop = classNames.some(className =>
+                    className === "n-loader-backdrop" ||
+                    className === "tutorial-overlay-backdrop" ||
+                    className === "tutorial-overlay-backdrop-segment" ||
+                    className === "mfa-story-backdrop");
+
+                const style = window.getComputedStyle(clickedElement);
+                const rect = clickedElement.getBoundingClientRect();
+                const coversViewport = rect.width >= window.innerWidth * 0.85 &&
+                    rect.height >= window.innerHeight * 0.85;
+                const isModalSurface = !isBackdrop &&
+                    (style.position === "fixed" || coversViewport) &&
+                    classNames.some(className =>
+                        className.toLowerCase() === "modal" ||
+                        className.toLowerCase().endsWith("-modal")) &&
+                    clickedElement.querySelector(closeSelectors);
+
+                if ((!isBackdrop && !isModalSurface) || ignoredBackdrop) {
+                    return;
+                }
+
+                const isVisible = element => {
+                    const elementStyle = window.getComputedStyle(element);
+                    const elementRect = element.getBoundingClientRect();
+                    return elementStyle.display !== "none" &&
+                        elementStyle.visibility !== "hidden" &&
+                        elementRect.width > 0 &&
+                        elementRect.height > 0;
+                };
+
+                let modalScope = isModalSurface ? clickedElement : null;
+                let sibling = clickedElement.nextElementSibling;
+
+                while (!modalScope && sibling) {
+                    if (isVisible(sibling) && sibling.querySelector(closeSelectors)) {
+                        modalScope = sibling;
+                        break;
+                    }
+
+                    sibling = sibling.nextElementSibling;
+                }
+
+                modalScope ||= clickedElement.parentElement;
+
+                const localCandidates = Array.from(modalScope?.querySelectorAll(closeSelectors) || []);
+                const globalCandidates = Array.from(document.querySelectorAll(closeSelectors));
+                const closeButton = localCandidates.find(isVisible) ||
+                    Array.from(modalScope?.querySelectorAll("button") || [])
+                        .find(button => isVisible(button) && /^(cerrar|cancelar|salir)$/i.test(button.textContent.trim())) ||
+                    globalCandidates.reverse().find(isVisible);
+
+                closeButton?.click();
+            }, true);
+
+            window.numericaUi.__backdropDismissEnabled = true;
+        };
+
+        window.numericaUi.showAlert = async function (options) {
+            const settings = typeof options === "string"
+                ? { text: options }
+                : (options || {});
+
+            const icon = settings.icon || "info";
+            const title = settings.title || (
+                icon === "success" ? "Proceso completado" :
+                icon === "error" ? "Revisa la información" :
+                icon === "warning" ? "Atención" :
+                "Información");
+
+            const text = settings.text || "";
+            const html = settings.html || null;
+
+            if (window.Swal && typeof window.Swal.fire === "function") {
+                window.numericaUi.patchSweetAlert();
+
+                return await window.Swal.fire({
+                    title,
+                    text: html ? undefined : text,
+                    html,
+                    icon,
+                    confirmButtonText: settings.confirmButtonText || "Entendido",
+                    allowOutsideClick: settings.allowOutsideClick ?? true,
+                    allowEscapeKey: settings.allowEscapeKey ?? true
+                });
+            }
+
+            window.alert(text || title || "Mensaje");
+            return null;
+        };
+
+        window.numericaUi.patchSweetAlert();
+        window.numericaUi.enableBackdropDismiss();
+
+        window.numericaUi.downloadTextFile = function (fileName, content, mimeType) {
+            const blob = new Blob([content ?? ""], {
+                type: mimeType || "text/plain;charset=utf-8"
+            });
+
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = fileName || "reporte.txt";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+        };
+
+        window.numericaUi.openPdfPreviewFromStream = async function (contentStreamReference) {
+            if (!contentStreamReference) {
+                return null;
+            }
+
+            const arrayBuffer = await contentStreamReference.arrayBuffer();
+            const blob = new Blob([arrayBuffer], { type: "application/pdf" });
+            const url = URL.createObjectURL(blob);
+            return url;
+        };
+
+        window.numericaUi.revokeObjectUrl = function (url) {
+            if (url) {
+                URL.revokeObjectURL(url);
+            }
+        };
+
+        window.numericaUi.readInputValue = function (selectorOrId) {
+            if (!selectorOrId) {
+                return "";
+            }
+
+            let element = null;
+            if (selectorOrId.startsWith("#") || selectorOrId.startsWith(".") || selectorOrId.includes("[") || selectorOrId.includes(" ")) {
+                element = document.querySelector(selectorOrId);
+            } else {
+                element = document.getElementById(selectorOrId);
+            }
+
+            if (!element || typeof element.value !== "string") {
+                return "";
+            }
+
+            return element.value || "";
+        };
+
+        window.numericaUi.isSpeechRecognitionAvailable = function () {
+            return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+        };
+
+        window.numericaUi.getMicrophonePermissionState = async function () {
+            try {
+                if (!navigator.permissions || typeof navigator.permissions.query !== "function") {
+                    return "unknown";
+                }
+
+                const result = await navigator.permissions.query({ name: "microphone" });
+                return result && result.state ? result.state : "unknown";
+            } catch {
+                return "unknown";
+            }
+        };
+
+        window.numericaUi.startSpeechRecognition = function (dotNetRef, culture, phraseHints) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+            if (!SpeechRecognition) {
+                dotNetRef?.invokeMethodAsync("HandleSpeechError", "Tu navegador no soporta reconocimiento de voz.");
+                return;
+            }
+
+            if (window.numericaUi.__speechRecognitionInstance) {
+                try {
+                    window.numericaUi.__speechRecognitionStoppedManually = true;
+                    window.numericaUi.__speechRecognitionInstance.stop();
+                } catch {
+                }
+            }
+
+            const recognition = new SpeechRecognition();
+            window.numericaUi.__speechRecognitionStoppedManually = false;
+            window.numericaUi.__speechRecognitionLastError = null;
+            recognition.lang = culture || "es-EC";
+            recognition.interimResults = true;
+            recognition.continuous = false;
+            recognition.maxAlternatives = 1;
+
+            if (Array.isArray(phraseHints) && phraseHints.length > 0) {
+                if ("phrases" in recognition) {
+                    try {
+                        recognition.phrases = phraseHints
+                            .filter(text => typeof text === "string" && text.trim().length > 1)
+                            .slice(0, 100)
+                            .map(text => ({ text: text.trim(), boost: 10.0 }));
+                    } catch {
+                    }
+                }
+            }
+
+            let finalTranscript = "";
+
+            recognition.onresult = function (event) {
+                let interimTranscript = "";
+
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const result = event.results[i];
+                    const transcript = result[0]?.transcript || "";
+
+                    if (result.isFinal) {
+                        finalTranscript += transcript + " ";
+                    } else {
+                        interimTranscript += transcript;
+                    }
+                }
+
+                const combined = (finalTranscript + interimTranscript).trim();
+                if (combined) {
+                    dotNetRef?.invokeMethodAsync("HandleSpeechPartial", combined);
+                }
+            };
+
+            recognition.onerror = function (event) {
+                window.numericaUi.__speechRecognitionLastError = event.error || null;
+                const messages = {
+                    "no-speech": "No detecté voz. Intenta otra vez.",
+                    "audio-capture": "No pude acceder al micrófono.",
+                    "not-allowed": "El navegador no tiene permiso para usar el micrófono.",
+                    "network": "Hubo un problema de red con el reconocimiento de voz."
+                };
+
+                dotNetRef?.invokeMethodAsync("HandleSpeechError", messages[event.error] || "No pude transcribir el audio.");
+            };
+
+            recognition.onend = function () {
+                const transcript = finalTranscript.trim();
+                const manualStop = !!window.numericaUi.__speechRecognitionStoppedManually;
+                const lastError = window.numericaUi.__speechRecognitionLastError;
+
+                if (transcript) {
+                    dotNetRef?.invokeMethodAsync("HandleSpeechFinal", transcript);
+                } else if (!manualStop && lastError !== "no-speech") {
+                    dotNetRef?.invokeMethodAsync("HandleSpeechEnd");
+                }
+
+                window.numericaUi.__speechRecognitionStoppedManually = false;
+                window.numericaUi.__speechRecognitionLastError = null;
+                window.numericaUi.__speechRecognitionInstance = null;
+            };
+
+            window.numericaUi.__speechRecognitionInstance = recognition;
+            recognition.start();
+        };
+
+        window.numericaUi.stopSpeechRecognition = function () {
+            const recognition = window.numericaUi.__speechRecognitionInstance;
+            if (!recognition) {
+                return;
+            }
+
+            try {
+                window.numericaUi.__speechRecognitionStoppedManually = true;
+                recognition.stop();
+            } catch {
+            }
+        };
+
+        window.numericaUi.scrollElementToBottom = function (element) {
+            if (!element) {
+                return;
+            }
+
+            element.scrollTop = element.scrollHeight;
+        };
+
+        window.numericaUi.openAsistenteFacturacion = function (query) {
+            const panel = document.querySelector(".ia-fact-panel");
+            if (!panel) {
+                const launcher = document.querySelector(".ia-fact-fab");
+                if (launcher) {
+                    launcher.click();
+                }
+            }
+            if (query === "soporte_faqs") {
+                if (window.numericaUi.asistenteDotNetRef) {
+                    window.numericaUi.asistenteDotNetRef.invokeMethodAsync("ActivarPreguntasSoporte");
+                }
+            } else if (query) {
+                if (window.numericaUi.asistenteDotNetRef) {
+                    window.numericaUi.asistenteDotNetRef.invokeMethodAsync("LimpiarPreguntasSoporte");
+                }
+                setTimeout(() => {
+                    const input = document.querySelector(".ia-fact-footer input");
+                    if (input) {
+                        input.value = query;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.focus();
+                    }
+                }, 150);
+            } else {
+                if (window.numericaUi.asistenteDotNetRef) {
+                    window.numericaUi.asistenteDotNetRef.invokeMethodAsync("LimpiarPreguntasSoporte");
+                }
+            }
+        };
+
+        window.numericaUi.registerAsistenteDotNetRef = function (dotNetRef) {
+            window.numericaUi.asistenteDotNetRef = dotNetRef;
+        };
+
+        window.numericaUi.__draggableElements = window.numericaUi.__draggableElements || new WeakMap();
+
+        window.numericaUi.makeDraggable = function (element, storageKey, handleSelector) {
+            if (!element || window.numericaUi.__draggableElements.has(element)) {
+                return;
+            }
+
+            const handle = handleSelector ? element.querySelector(handleSelector) : element;
+            if (!handle) {
+                return;
+            }
+
+            let dragging = false;
+            let moved = false;
+            let suppressClick = false;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            const clampPosition = function (left, top) {
+                const rect = handle.getBoundingClientRect();
+                const padding = 10;
+                return {
+                    left: Math.min(Math.max(padding, left), Math.max(padding, window.innerWidth - rect.width - padding)),
+                    top: Math.min(Math.max(padding, top), Math.max(padding, window.innerHeight - rect.height - padding))
+                };
+            };
+
+            const applyPosition = function (left, top, persist) {
+                const position = clampPosition(left, top);
+                element.style.left = `${position.left}px`;
+                element.style.top = `${position.top}px`;
+                element.style.right = "auto";
+                element.style.bottom = "auto";
+                element.dataset.panelVertical = position.top > (window.innerHeight / 2) ? "above" : "below";
+                element.dataset.panelHorizontal = position.left > (window.innerWidth / 2) ? "left" : "right";
+
+                if (persist && storageKey) {
+                    localStorage.setItem(storageKey, JSON.stringify(position));
+                }
+            };
+
+            if (storageKey) {
+                try {
+                    const stored = JSON.parse(localStorage.getItem(storageKey) || "null");
+                    if (stored && Number.isFinite(stored.left) && Number.isFinite(stored.top)) {
+                        applyPosition(stored.left, stored.top, false);
+                    }
+                } catch {
+                }
+            }
+
+            const onPointerDown = function (event) {
+                if (event.button !== 0) {
+                    return;
+                }
+
+                const rect = element.getBoundingClientRect();
+                dragging = true;
+                moved = false;
+                offsetX = event.clientX - rect.left;
+                offsetY = event.clientY - rect.top;
+                handle.setPointerCapture?.(event.pointerId);
+            };
+
+            const onPointerMove = function (event) {
+                if (!dragging) {
+                    return;
+                }
+
+                if (Math.abs(event.movementX) > 1 || Math.abs(event.movementY) > 1) {
+                    moved = true;
+                }
+
+                if (moved) {
+                    event.preventDefault();
+                    applyPosition(event.clientX - offsetX, event.clientY - offsetY, false);
+                }
+            };
+
+            const onPointerUp = function (event) {
+                if (!dragging) {
+                    return;
+                }
+
+                dragging = false;
+                handle.releasePointerCapture?.(event.pointerId);
+
+                if (moved) {
+                    const rect = element.getBoundingClientRect();
+                    applyPosition(rect.left, rect.top, true);
+                    suppressClick = true;
+                    window.setTimeout(() => suppressClick = false, 0);
+                }
+            };
+
+            const onClick = function (event) {
+                if (!suppressClick) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            };
+
+            const onResize = function () {
+                if (element.style.left && element.style.top) {
+                    const rect = element.getBoundingClientRect();
+                    applyPosition(rect.left, rect.top, true);
+                }
+            };
+
+            handle.style.touchAction = "none";
+            handle.addEventListener("pointerdown", onPointerDown);
+            handle.addEventListener("pointermove", onPointerMove);
+            handle.addEventListener("pointerup", onPointerUp);
+            handle.addEventListener("pointercancel", onPointerUp);
+            handle.addEventListener("click", onClick, true);
+            window.addEventListener("resize", onResize);
+
+            window.numericaUi.__draggableElements.set(element, function () {
+                handle.removeEventListener("pointerdown", onPointerDown);
+                handle.removeEventListener("pointermove", onPointerMove);
+                handle.removeEventListener("pointerup", onPointerUp);
+                handle.removeEventListener("pointercancel", onPointerUp);
+                handle.removeEventListener("click", onClick, true);
+                window.removeEventListener("resize", onResize);
+            });
+        };
+
+        window.numericaUi.releaseDraggable = function (element) {
+            const release = element && window.numericaUi.__draggableElements.get(element);
+            if (release) {
+                release();
+                window.numericaUi.__draggableElements.delete(element);
+            }
+        };
+
+        window.numericaUi.isSpeechSynthesisAvailable = function () {
+            return !!window.speechSynthesis;
+        };
+
+        window.numericaUi.stopSpeaking = function () {
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+        };
+
+        window.numericaUi.speakText = function (text, culture) {
+            return new Promise(resolve => {
+                if (!window.speechSynthesis || !text) {
+                    resolve();
+                    return;
+                }
+
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(String(text));
+                utterance.lang = culture || "es-EC";
+                utterance.rate = 0.95;
+                utterance.pitch = 1.05;
+                utterance.volume = 1;
+
+                const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+                const preferredVoice =
+                    voices.find(v => v.lang && v.lang.toLowerCase().startsWith("es-ec")) ||
+                    voices.find(v => v.lang && v.lang.toLowerCase().startsWith("es")) ||
+                    null;
+
+                if (preferredVoice) {
+                    utterance.voice = preferredVoice;
+                }
+
+                utterance.onend = function () { resolve(); };
+                utterance.onerror = function () { resolve(); };
+
+                window.speechSynthesis.speak(utterance);
+            });
+        };
+
+        window.downloadFileFromStream = async function (fileName, contentStreamReference, contentType) {
+            if (!contentStreamReference) {
+                return;
+            }
+
+            const arrayBuffer = await contentStreamReference.arrayBuffer();
+            const blob = new Blob([arrayBuffer], {
+                type: contentType || "application/octet-stream"
+            });
+
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = fileName || "archivo";
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+        };
+
+        window.numericaUi.scrollTutorialTargetIntoView = function (selector) {
+            if (!selector) {
+                return false;
+            }
+
+            const target = resolveTutorialTarget(selector);
+
+            if (!target) {
+                return false;
+            }
+
+            target.scrollIntoView({
+                behavior: "auto",
+                block: "center",
+                inline: "nearest"
+            });
+
+            return true;
+        };
+
+        const buildTutorialTargetMetrics = function (rect, padding, shape) {
+            if (!rect || !rect.width || !rect.height) {
+                return null;
+            }
+
+            const safePadding = Number.isFinite(padding) ? padding : 16;
+            const safeShape = typeof shape === "string" && shape.trim().length > 0 ? shape.trim().toLowerCase() : "rounded";
+            const viewportPadding = 8;
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+
+            if (safeShape === "circle") {
+                const availableWidth = Math.max(0, viewportWidth - (viewportPadding * 2));
+                const availableHeight = Math.max(0, viewportHeight - (viewportPadding * 2));
+                let size = Math.max(rect.width + (safePadding * 2), rect.height + (safePadding * 2));
+                size = Math.min(size, availableWidth, availableHeight);
+
+                const centerX = rect.left + (rect.width / 2);
+                const centerY = rect.top + (rect.height / 2);
+                const maxLeft = Math.max(viewportPadding, viewportWidth - size - viewportPadding);
+                const maxTop = Math.max(viewportPadding, viewportHeight - size - viewportPadding);
+
+                return {
+                    top: Math.min(Math.max(viewportPadding, centerY - (size / 2)), maxTop),
+                    left: Math.min(Math.max(viewportPadding, centerX - (size / 2)), maxLeft),
+                    width: size,
+                    height: size,
+                    viewportWidth: viewportWidth,
+                    viewportHeight: viewportHeight,
+                    shape: safeShape
+                };
+            }
+
+            const left = Math.max(viewportPadding, rect.left - safePadding);
+            const top = Math.max(viewportPadding, rect.top - safePadding);
+            const right = Math.min(viewportWidth - viewportPadding, rect.right + safePadding);
+            const bottom = Math.min(viewportHeight - viewportPadding, rect.bottom + safePadding);
+
+            return {
+                top: top,
+                left: left,
+                width: Math.max(0, right - left),
+                height: Math.max(0, bottom - top),
+                viewportWidth: viewportWidth,
+                viewportHeight: viewportHeight,
+                shape: safeShape
+            };
+        };
+
+        const readTutorialRect = function (target) {
+            const rect = target.getBoundingClientRect();
+
+            return {
+                top: rect.top,
+                left: rect.left,
+                width: rect.width,
+                height: rect.height,
+                right: rect.right,
+                bottom: rect.bottom
+            };
+        };
+
+        const isTutorialTargetCandidate = function (target) {
+            if (!target || typeof target.getBoundingClientRect !== "function") {
+                return false;
+            }
+
+            if (target.closest(".workspace-header")) {
+                return false;
+            }
+
+            const rect = readTutorialRect(target);
+
+            if (!rect.width || !rect.height || target.getClientRects().length === 0) {
+                return false;
+            }
+
+            const styles = window.getComputedStyle(target);
+
+            return styles.display !== "none" &&
+                styles.visibility !== "hidden" &&
+                styles.visibility !== "collapse" &&
+                Number(styles.opacity || "1") > 0;
+        };
+
+        const getTutorialTargetVisibleArea = function (rect) {
+            if (!rect) {
+                return 0;
+            }
+
+            const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+            const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+            return visibleWidth * visibleHeight;
+        };
+
+        const getTutorialTargetDistanceFromViewportCenter = function (rect) {
+            if (!rect) {
+                return Number.MAX_SAFE_INTEGER;
+            }
+
+            const rectCenterX = rect.left + (rect.width / 2);
+            const rectCenterY = rect.top + (rect.height / 2);
+            const viewportCenterX = window.innerWidth / 2;
+            const viewportCenterY = window.innerHeight / 2;
+
+            return Math.abs(rectCenterX - viewportCenterX) + Math.abs(rectCenterY - viewportCenterY);
+        };
+
+        const resolveTutorialTarget = function (selector) {
+            if (!selector) {
+                return null;
+            }
+
+            const matches = Array.from(document.querySelectorAll(selector));
+
+            if (!matches.length) {
+                return null;
+            }
+
+            const candidates = matches
+                .filter(isTutorialTargetCandidate)
+                .map(target => ({
+                    target: target,
+                    rect: readTutorialRect(target)
+                }));
+
+            if (!candidates.length) {
+                return null;
+            }
+
+            candidates.sort((a, b) => {
+                const visibleAreaDiff = getTutorialTargetVisibleArea(b.rect) - getTutorialTargetVisibleArea(a.rect);
+                if (Math.abs(visibleAreaDiff) > 0.5) {
+                    return visibleAreaDiff;
+                }
+
+                const distanceDiff = getTutorialTargetDistanceFromViewportCenter(a.rect) - getTutorialTargetDistanceFromViewportCenter(b.rect);
+                if (Math.abs(distanceDiff) > 0.5) {
+                    return distanceDiff;
+                }
+
+                return (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height);
+            });
+
+            return candidates[0].target;
+        };
+
+        const isTutorialRectStable = function (currentRect, previousRect) {
+            if (!currentRect || !previousRect) {
+                return false;
+            }
+
+            return Math.abs(currentRect.top - previousRect.top) < 0.5 &&
+                Math.abs(currentRect.left - previousRect.left) < 0.5 &&
+                Math.abs(currentRect.width - previousRect.width) < 0.5 &&
+                Math.abs(currentRect.height - previousRect.height) < 0.5;
+        };
+
+        const shouldTutorialTargetScroll = function (rect) {
+            if (!rect) {
+                return false;
+            }
+
+            const verticalMargin = 96;
+            const horizontalMargin = 32;
+
+            return rect.top < verticalMargin ||
+                rect.bottom > window.innerHeight - verticalMargin ||
+                rect.left < horizontalMargin ||
+                rect.right > window.innerWidth - horizontalMargin;
+        };
+
+        const getTutorialScrollableAncestors = function (target) {
+            const ancestors = [];
+            let current = target.parentElement;
+
+            while (current) {
+                if (current !== document.body && current !== document.documentElement) {
+                    const styles = window.getComputedStyle(current);
+                    const canScrollY = /(auto|scroll|overlay)/.test(styles.overflowY) && current.scrollHeight > current.clientHeight + 1;
+                    const canScrollX = /(auto|scroll|overlay)/.test(styles.overflowX) && current.scrollWidth > current.clientWidth + 1;
+
+                    if (canScrollY || canScrollX) {
+                        ancestors.push(current);
+                    }
+                }
+
+                current = current.parentElement;
+            }
+
+            return ancestors;
+        };
+
+        const scrollTutorialAncestorIntoView = function (target, ancestor) {
+            const targetRect = target.getBoundingClientRect();
+            const ancestorRect = ancestor.getBoundingClientRect();
+            const padding = 24;
+            let nextScrollTop = ancestor.scrollTop;
+            let nextScrollLeft = ancestor.scrollLeft;
+
+            if (targetRect.top < ancestorRect.top + padding) {
+                nextScrollTop -= (ancestorRect.top + padding) - targetRect.top;
+            }
+            else if (targetRect.bottom > ancestorRect.bottom - padding) {
+                nextScrollTop += targetRect.bottom - (ancestorRect.bottom - padding);
+            }
+
+            if (targetRect.left < ancestorRect.left + padding) {
+                nextScrollLeft -= (ancestorRect.left + padding) - targetRect.left;
+            }
+            else if (targetRect.right > ancestorRect.right - padding) {
+                nextScrollLeft += targetRect.right - (ancestorRect.right - padding);
+            }
+
+            if (Math.abs(nextScrollTop - ancestor.scrollTop) > 0.5 || Math.abs(nextScrollLeft - ancestor.scrollLeft) > 0.5) {
+                ancestor.scrollTo({
+                    top: nextScrollTop,
+                    left: nextScrollLeft,
+                    behavior: "auto"
+                });
+            }
+        };
+
+        const scrollTutorialViewportIntoView = function (rect) {
+            if (!shouldTutorialTargetScroll(rect)) {
+                return;
+            }
+
+            const verticalMargin = 96;
+            const horizontalMargin = 32;
+            let nextScrollY = window.scrollY;
+            let nextScrollX = window.scrollX;
+
+            if (rect.top < verticalMargin) {
+                nextScrollY += rect.top - verticalMargin;
+            }
+            else if (rect.bottom > window.innerHeight - verticalMargin) {
+                nextScrollY += rect.bottom - (window.innerHeight - verticalMargin);
+            }
+
+            if (rect.left < horizontalMargin) {
+                nextScrollX += rect.left - horizontalMargin;
+            }
+            else if (rect.right > window.innerWidth - horizontalMargin) {
+                nextScrollX += rect.right - (window.innerWidth - horizontalMargin);
+            }
+
+            if (Math.abs(nextScrollY - window.scrollY) > 0.5 || Math.abs(nextScrollX - window.scrollX) > 0.5) {
+                window.scrollTo({
+                    top: nextScrollY,
+                    left: nextScrollX,
+                    behavior: "auto"
+                });
+            }
+        };
+
+        const ensureTutorialTargetVisible = function (target) {
+            const ancestors = getTutorialScrollableAncestors(target);
+
+            for (const ancestor of ancestors) {
+                scrollTutorialAncestorIntoView(target, ancestor);
+            }
+
+            scrollTutorialViewportIntoView(readTutorialRect(target));
+        };
+
+        const waitForTutorialFrame = function () {
+            return new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+        };
+
+        window.numericaUi.getTutorialTargetMetrics = function (selector, padding, shape) {
+            if (!selector) {
+                return null;
+            }
+
+            const target = resolveTutorialTarget(selector);
+
+            if (!target) {
+                return null;
+            }
+
+            return buildTutorialTargetMetrics(target.getBoundingClientRect(), padding, shape);
+        };
+
+        window.numericaUi.measureTutorialTarget = async function (selector, padding, shape) {
+            if (!selector) {
+                return null;
+            }
+
+            let target = resolveTutorialTarget(selector);
+
+            if (!target) {
+                return null;
+            }
+
+            let rect = readTutorialRect(target);
+
+            if (!rect.width || !rect.height) {
+                return null;
+            }
+
+            ensureTutorialTargetVisible(target);
+
+            let previousRect = null;
+            let stableFrames = 0;
+
+            for (let attempt = 0; attempt < 12; attempt++) {
+                await waitForTutorialFrame();
+                target = resolveTutorialTarget(selector) || target;
+                rect = readTutorialRect(target);
+
+                if (!rect.width || !rect.height) {
+                    return null;
+                }
+
+                if (!shouldTutorialTargetScroll(rect) && isTutorialRectStable(rect, previousRect)) {
+                    stableFrames += 1;
+
+                    if (stableFrames >= 2) {
+                        break;
+                    }
+                }
+                else {
+                    stableFrames = 0;
+                }
+
+                ensureTutorialTargetVisible(target);
+                previousRect = rect;
+            }
+
+            return buildTutorialTargetMetrics(rect, padding, shape);
+        };
+
+        window.numericaUi.waitForTutorialTarget = async function (selector, timeoutMs) {
+            if (!selector) {
+                return true;
+            }
+
+            const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 3000;
+            const startedAt = Date.now();
+            const hasVisibleTarget = function () {
+                const target = resolveTutorialTarget(selector);
+
+                if (!target) {
+                    return false;
+                }
+
+                const rect = target.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+
+            if (hasVisibleTarget()) {
+                return true;
+            }
+
+            return await new Promise(resolve => {
+                let observer = null;
+                let settled = false;
+
+                const complete = function (result) {
+                    if (settled) {
+                        return;
+                    }
+
+                    settled = true;
+
+                    if (observer) {
+                        observer.disconnect();
+                    }
+
+                    resolve(result);
+                };
+
+                const tick = function () {
+                    if (settled) {
+                        return;
+                    }
+
+                    if (hasVisibleTarget()) {
+                        complete(true);
+                        return;
+                    }
+
+                    if ((Date.now() - startedAt) > timeout) {
+                        complete(false);
+                        return;
+                    }
+
+                    window.requestAnimationFrame(tick);
+                };
+
+                if (typeof MutationObserver !== "undefined" && document.body) {
+                    observer = new MutationObserver(() => {
+                        if (hasVisibleTarget()) {
+                            complete(true);
+                        }
+                    });
+
+                    observer.observe(document.body, {
+                        childList: true,
+                        subtree: true,
+                        attributes: true,
+                        attributeFilter: ["class", "style", "hidden", "aria-hidden"]
+                    });
+                }
+
+                window.requestAnimationFrame(tick);
+            });
+        };
+
+        window.downloadPdfReport = function (elementId, filename) {
+            const element = document.getElementById(elementId);
+            if (!element) return;
+            
+            element.classList.add('is-pdf-exporting');
+            
+            const opt = {
+                margin:       [6, 6, 6, 6],
+                filename:     filename,
+                image:        { type: 'jpeg', quality: 0.98 },
+                html2canvas:  { scale: 2, useCORS: true, logging: false },
+                jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' },
+                pagebreak:    { mode: ['css', 'legacy'], avoid: ['.user-report-card-wrapper', '.chart-card', '.kpi-card'] }
+            };
+            
+            html2pdf().set(opt).from(element).save().then(function() {
+                element.classList.remove('is-pdf-exporting');
+            }).catch(function(err) {
+                element.classList.remove('is-pdf-exporting');
+                console.error(err);
+            });
+        };
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="/js/dashboardCharts.js?v=6"></script>
+    <script src="/js/carteraAbonosCharts.js?v=1"></script>
+    <script src="/js/tutorialCharts.js?v=1"></script>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+
+</html>

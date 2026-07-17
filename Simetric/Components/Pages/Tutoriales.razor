@@ -1,0 +1,545 @@
+@page "/ayuda/tutoriales"
+@page "/tutoriales"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using Simetric.Services
+@using System.Security.Claims
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IMenuService MenuService
+@inject TutorialRegistryService TutorialRegistry
+@inject TutorialStateService TutorialStateService
+@inject NavigationManager NavManager
+@inject IJSRuntime JSRuntime
+
+@{
+    var categorias = CategoriasDisponibles.ToList();
+    var tutoriales = TutorialesFiltrados.ToList();
+    var todosLosTutoriales = TutorialesPermitidos.ToList();
+    var totalTutoriales = todosLosTutoriales.Count;
+    var completados = todosLosTutoriales.Count(t => ObtenerProgreso(t.Id).Completed);
+    var pendientes = Math.Max(totalTutoriales - completados, 0);
+    var porcentajeCompletado = totalTutoriales == 0 ? 0 : (int)Math.Round(completados * 100m / totalTutoriales);
+    var tutorialDestacado = ObtenerTutorialDestacado(tutoriales);
+}
+
+<PageTitle>Tutoriales | Numerica e-fact</PageTitle>
+
+<div class="tutorials-shell" data-tour="tutoriales.page">
+    <div class="tutorials-layout">
+        <main class="tutorials-main">
+            <header class="tutorials-hero">
+                <div class="tutorials-hero-copy">
+                    <h1>Tutoriales y guias</h1>
+                    <p>Aprende a usar e-fact de forma sencilla con guias paso a paso, rutas de aprendizaje y documentacion practica.</p>
+                </div>
+                <div class="tutorials-hero-art" aria-hidden="true">
+                    <img src="/images/tutoriales-hero.png" alt="" />
+                </div>
+            </header>
+
+            <section class="tutorial-filters" aria-label="Filtros de tutoriales">
+                <label class="tutorial-search-box">
+                    <i class="ri-search-line" aria-hidden="true"></i>
+                    <input type="search"
+                           placeholder="Buscar guias, temas o funciones..."
+                           value="@filtroTutorialTema"
+                           @oninput="OnFiltroTutorialInput" />
+                </label>
+
+                <div class="tutorial-select-wrap">
+                    <select value="@categoriaSeleccionada" @onchange="OnCategoriaChanged" aria-label="Filtrar por modulo">
+                        <option value="">Todos los modulos</option>
+                        @foreach (var categoria in categorias)
+                        {
+                            <option value="@categoria">@categoria</option>
+                        }
+                    </select>
+                    <i class="ri-arrow-down-s-line" aria-hidden="true"></i>
+                </div>
+
+            </section>
+
+            @if (_cargandoEstados)
+            {
+                <section class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border" role="status" aria-hidden="true"></span>
+                    </div>
+                    <h3>Cargando tutoriales</h3>
+                    <p>Estamos consultando tus permisos y preferencias para mostrar tus guias disponibles.</p>
+                </section>
+            }
+            else if (totalTutoriales == 0)
+            {
+                <section class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="ri-book-open-line" aria-hidden="true"></i>
+                    </div>
+                    <h3>No hay tutoriales disponibles</h3>
+                    <p>Tu rol no tiene tutoriales activos para las vistas disponibles.</p>
+                </section>
+            }
+            else
+            {
+                <section class="tutorial-stats" aria-label="Resumen de tutoriales">
+                    <article class="tutorial-stat-card is-blue">
+                        <span class="stat-icon"><i class="ri-graduation-cap-line" aria-hidden="true"></i></span>
+                        <span class="stat-label">Totales</span>
+                        <strong>@totalTutoriales</strong>
+                        <small>Guias disponibles</small>
+                    </article>
+
+                    <article class="tutorial-stat-card is-green">
+                        <span class="stat-icon"><i class="ri-checkbox-circle-line" aria-hidden="true"></i></span>
+                        <span class="stat-label">Completados</span>
+                        <strong>@completados</strong>
+                        <small>Guias completadas</small>
+                    </article>
+
+                    <article class="tutorial-stat-card is-orange">
+                        <span class="stat-icon"><i class="ri-checkbox-blank-circle-line" aria-hidden="true"></i></span>
+                        <span class="stat-label">Pendientes</span>
+                        <strong>@pendientes</strong>
+                        <small>Guias por completar</small>
+                    </article>
+                </section>
+
+                @if (tutorialDestacado is not null)
+                {
+                    var progresoDestacado = ObtenerProgreso(tutorialDestacado.Id);
+                    var pasosDestacado = Math.Max(tutorialDestacado.Steps.Count, 1);
+                    var pasosCompletadosDestacado = ObtenerPasosVistos(progresoDestacado, pasosDestacado);
+                    var porcentajeDestacado = ObtenerPorcentajeProgreso(progresoDestacado, pasosDestacado);
+
+                    <section class="tutorial-continue @ObtenerCategoriaClase(tutorialDestacado.Category)">
+                        <div class="continue-icon" aria-hidden="true">
+                            <i class="@ObtenerIconoCategoria(tutorialDestacado.Category)"></i>
+                        </div>
+                        <div class="continue-content">
+                            <span>Continua donde lo dejaste</span>
+                            <h2>@tutorialDestacado.Title</h2>
+                            <p>@tutorialDestacado.Description</p>
+                            <div class="continue-progress" aria-label="@porcentajeDestacado% completado">
+                                <span style="width:@porcentajeDestacado%"></span>
+                            </div>
+                            <small>@ObtenerTextoAvance(progresoDestacado, pasosCompletadosDestacado, pasosDestacado)</small>
+                        </div>
+                        <button type="button" class="primary-btn" @onclick="() => AbrirTutorialAsync(tutorialDestacado)">
+                            <span>Continuar guia</span>
+                            <i class="ri-arrow-right-line" aria-hidden="true"></i>
+                        </button>
+                    </section>
+                }
+
+                <section class="tutorial-list-section" data-tour="tutoriales.grid">
+                    <div class="tutorial-section-heading">
+                        <h2>Explora por modulo</h2>
+                        <span>@tutoriales.Count @(tutoriales.Count == 1 ? "guia visible" : "guias visibles")</span>
+                    </div>
+
+                    @if (!tutoriales.Any())
+                    {
+                        <div class="state-card state-card-empty is-compact">
+                            <div class="state-icon">
+                                <i class="ri-search-line" aria-hidden="true"></i>
+                            </div>
+                            <h3>No encontramos guias con esos filtros</h3>
+                            <p>Prueba con otro modulo o palabra clave.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="tutorials-grid">
+                            @foreach (var tutorialEntry in tutoriales.Select((tutorial, index) => new { Tutorial = tutorial, Index = index }))
+                            {
+                                var tutorial = tutorialEntry.Tutorial;
+                                var progreso = ObtenerProgreso(tutorial.Id);
+                                <article class="tutorial-card @ObtenerCategoriaClase(tutorial.Category)">
+                                    <div class="tutorial-card-icon" aria-hidden="true">
+                                        <i class="@ObtenerIconoCategoria(tutorial.Category)"></i>
+                                    </div>
+
+                                    <div class="tutorial-card-body">
+                                        <span class="tutorial-category">@tutorial.Category</span>
+                                        <h3>@tutorial.Title</h3>
+                                        <p>@tutorial.Description</p>
+                                    </div>
+
+                                    <div class="tutorial-card-meta">
+                                        <span><i class="ri-list-check-2" aria-hidden="true"></i> @tutorial.Steps.Count pasos</span>
+                                    </div>
+
+                                    <div class="tutorial-card-actions">
+                                        <span class="tutorial-status @ObtenerEstadoClase(progreso)">@ObtenerEstadoTexto(progreso)</span>
+                                        <button type="button"
+                                                class="link-btn"
+                                                data-tour="@(tutorialEntry.Index == 0 ? "tutoriales.first-action" : null)"
+                                                @onclick="() => AbrirTutorialAsync(tutorial)">
+                                            <span>Ver guia</span>
+                                            <i class="ri-arrow-right-line" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+        </main>
+
+        <aside class="tutorials-sidebar" aria-label="Centro de ayuda">
+            <section class="side-card help-center-card">
+                <h2>Centro de ayuda</h2>
+                <a href="/tutoriales" class="help-option">
+                    <span><i class="ri-book-open-line" aria-hidden="true"></i></span>
+                    <strong>Como empezar</strong>
+                    <small>Primeros pasos en e-fact</small>
+                </a>
+                <a href="/soporte" class="help-option">
+                    <span><i class="ri-question-answer-line" aria-hidden="true"></i></span>
+                    <strong>Preguntas frecuentes</strong>
+                    <small>Resuelve tus dudas rapidas</small>
+                </a>
+                <a href="/soporte" class="help-option">
+                    <span><i class="ri-customer-service-2-line" aria-hidden="true"></i></span>
+                    <strong>Contacto con soporte</strong>
+                    <small>Estamos para ayudarte</small>
+                </a>
+                <a href="/soporte" class="help-all-link">
+                    <span>Ver todas las opciones</span>
+                    <i class="ri-arrow-right-line" aria-hidden="true"></i>
+                </a>
+            </section>
+
+            @if (!_cargandoEstados && totalTutoriales > 0)
+            {
+                <section class="side-card progress-card">
+                    <h2>Tu progreso general</h2>
+                    <div class="progress-summary">
+                        <div class="summary-chart-wrap">
+                            <canvas id="tutorialProgressChart" aria-label="Progreso general de tutoriales" role="img"></canvas>
+                            <div class="summary-chart-center" aria-hidden="true">
+                                <strong>@porcentajeCompletado%</strong>
+                            </div>
+                        </div>
+                        <div class="progress-stats">
+                            <span><strong>@completados</strong>Completadas</span>
+                            <span><strong>@pendientes</strong>Pendientes</span>
+                        </div>
+                    </div>
+                </section>
+            }
+        </aside>
+    </div>
+</div>
+
+@code {
+    private bool _cargandoEstados = true;
+    private bool _renderizarGraficoPendiente;
+    private bool _esAdministrador;
+    private HashSet<string> _rutasPermitidas = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, TutorialProgress> _progresoPorTutorial = new(StringComparer.OrdinalIgnoreCase);
+    private string filtroTutorialTema = string.Empty;
+    private string categoriaSeleccionada = string.Empty;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, CachedTutorialRoutes> _rutasMenuCache = new();
+    private sealed record CachedTutorialRoutes(DateTimeOffset ExpiresAt, IReadOnlyList<string> Routes);
+
+    private IEnumerable<string> CategoriasDisponibles =>
+        TutorialesPermitidos
+            .Select(t => t.Category)
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(c => c);
+
+    private IEnumerable<TutorialDefinition> TutorialesPermitidos =>
+        TutorialRegistry.GetAll().Where(PuedeVerTutorial);
+
+    private IEnumerable<TutorialDefinition> TutorialesFiltrados
+    {
+        get
+        {
+            var tutoriales = TutorialesPermitidos.ToList();
+            var filtro = (filtroTutorialTema ?? string.Empty).Trim();
+            var categoria = (categoriaSeleccionada ?? string.Empty).Trim();
+
+            if (!string.IsNullOrWhiteSpace(categoria))
+            {
+                tutoriales = tutoriales
+                    .Where(t => string.Equals(t.Category, categoria, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            if (string.IsNullOrWhiteSpace(filtro))
+                return tutoriales;
+
+            return tutoriales.Where(t =>
+                ContieneTema(t.Title, filtro) ||
+                ContieneTema(t.Description, filtro) ||
+                ContieneTema(t.Category, filtro) ||
+                t.Steps.Any(s => ContieneTema(s.Title, filtro) || ContieneTema(s.Description, filtro)));
+        }
+    }
+
+    private void OnFiltroTutorialInput(ChangeEventArgs e)
+    {
+        filtroTutorialTema = e.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnCategoriaChanged(ChangeEventArgs e)
+    {
+        SeleccionarCategoria(e.Value?.ToString() ?? string.Empty);
+    }
+
+    private void SeleccionarCategoria(string categoria)
+    {
+        categoriaSeleccionada = categoria;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await CargarRutasPermitidasAsync();
+            var tutoriales = TutorialesPermitidos.ToList();
+            _progresoPorTutorial = await TutorialStateService.GetProgressMapAsync(tutoriales.Select(x => x.Id));
+            _cargandoEstados = false;
+            _renderizarGraficoPendiente = true;
+
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        if (!_renderizarGraficoPendiente)
+            return;
+
+        _renderizarGraficoPendiente = false;
+        await RenderizarGraficoProgresoAsync();
+    }
+
+    private async Task RenderizarGraficoProgresoAsync()
+    {
+        var tutoriales = TutorialesPermitidos.ToList();
+        var total = tutoriales.Count;
+        var completados = tutoriales.Count(t => ObtenerProgreso(t.Id).Completed);
+        var pendientes = Math.Max(total - completados, 0);
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("tutorialCharts.renderProgress", "tutorialProgressChart", completados, pendientes);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task CargarRutasPermitidasAsync()
+    {
+        _rutasPermitidas = ObtenerRutasBasePermitidas();
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated != true)
+                return;
+
+            var claimValue = user.FindFirst("IdTipoUsuario")?.Value
+                ?? user.FindFirst(ClaimTypes.Role)?.Value;
+
+            _esAdministrador = string.Equals(claimValue, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase);
+
+            if (!int.TryParse(claimValue, out var idTipoUsuario) || idTipoUsuario <= 0)
+                return;
+
+            foreach (var ruta in await ObtenerRutasMenuPorRolAsync(idTipoUsuario))
+            {
+                _rutasPermitidas.Add(NormalizarRuta(ruta));
+            }
+        }
+        catch
+        {
+            _esAdministrador = false;
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> ObtenerRutasMenuPorRolAsync(int idTipoUsuario)
+    {
+        var ahora = DateTimeOffset.UtcNow;
+
+        if (_rutasMenuCache.TryGetValue(idTipoUsuario, out var cached) && cached.ExpiresAt > ahora)
+            return cached.Routes;
+
+        var menus = await MenuService.GetMenusByRol(idTipoUsuario);
+        var rutas = menus
+            .Select(x => x.RutaMenu)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _rutasMenuCache[idTipoUsuario] = new CachedTutorialRoutes(ahora.AddMinutes(10), rutas);
+        return rutas;
+    }
+
+    private bool PuedeVerTutorial(TutorialDefinition tutorial)
+    {
+        if (_esAdministrador)
+            return true;
+
+        return ObtenerRutasTutorial(tutorial).Any(RutaPermitida);
+    }
+
+    private bool RutaPermitida(string rutaTutorial)
+    {
+        var ruta = NormalizarRuta(rutaTutorial);
+
+        return _rutasPermitidas.Contains(ruta);
+    }
+
+    private static IEnumerable<string> ObtenerRutasTutorial(TutorialDefinition tutorial)
+    {
+        yield return tutorial.Route;
+
+        foreach (var alias in tutorial.RouteAliases.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            yield return alias;
+        }
+    }
+
+    private static HashSet<string> ObtenerRutasBasePermitidas() =>
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "/dashboard",
+            "/tutoriales",
+            "/ayuda/tutoriales",
+            "/perfil"
+        };
+
+    private static string NormalizarRuta(string ruta)
+    {
+        var separatorIndex = ruta.IndexOfAny(new[] { '?', '#' });
+        var cleanRoute = (separatorIndex >= 0 ? ruta[..separatorIndex] : ruta).Trim();
+
+        if (string.IsNullOrWhiteSpace(cleanRoute))
+            return "/";
+
+        cleanRoute = cleanRoute.StartsWith("/", StringComparison.Ordinal)
+            ? cleanRoute
+            : $"/{cleanRoute}";
+
+        return cleanRoute.TrimEnd('/').ToLowerInvariant();
+    }
+
+    private TutorialProgress ObtenerProgreso(string tutorialId) =>
+        _progresoPorTutorial.TryGetValue(tutorialId, out var progreso)
+            ? progreso
+            : new TutorialProgress();
+
+    private async Task AbrirTutorialAsync(TutorialDefinition tutorial)
+    {
+        await TutorialStateService.MarkOpenedAsync(tutorial.Id);
+
+        var separador = tutorial.Route.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+        var url = $"{tutorial.Route}{separador}tutorial={Uri.EscapeDataString(tutorial.Id)}&forceTutorial=true";
+        NavManager.NavigateTo(url);
+    }
+
+    private static string ObtenerEstadoTexto(TutorialProgress progreso)
+    {
+        if (progreso.Completed)
+            return "Completado";
+
+        return "Disponible";
+    }
+
+    private static string ObtenerEstadoClase(TutorialProgress progreso)
+    {
+        if (progreso.Completed)
+            return "is-completed";
+
+        return "is-pending";
+    }
+
+    private TutorialDefinition? ObtenerTutorialDestacado(IReadOnlyCollection<TutorialDefinition> tutoriales)
+    {
+        if (tutoriales.Count == 0)
+            return null;
+
+        return tutoriales
+            .Where(t => !ObtenerProgreso(t.Id).Completed)
+            .OrderByDescending(t => ObtenerProgreso(t.Id).LastOpenedAt ?? DateTimeOffset.MinValue)
+            .ThenBy(t => t.Title)
+            .FirstOrDefault()
+            ?? tutoriales.OrderByDescending(t => ObtenerProgreso(t.Id).LastOpenedAt ?? DateTimeOffset.MinValue).FirstOrDefault();
+    }
+
+    private static int ObtenerPasosVistos(TutorialProgress progreso, int totalPasos)
+    {
+        if (progreso.Completed)
+            return totalPasos;
+
+        if (progreso.LastStepIndex.HasValue)
+            return Math.Clamp(progreso.LastStepIndex.Value + 1, 1, totalPasos);
+
+        return 0;
+    }
+
+    private static int ObtenerPorcentajeProgreso(TutorialProgress progreso, int totalPasos)
+    {
+        if (totalPasos <= 0)
+            return 0;
+
+        return (int)Math.Round(ObtenerPasosVistos(progreso, totalPasos) * 100m / totalPasos);
+    }
+
+    private static string ObtenerTextoAvance(TutorialProgress progreso, int pasosVistos, int totalPasos)
+    {
+        if (progreso.Completed)
+            return $"{totalPasos} de {totalPasos} pasos completados";
+
+        if (pasosVistos > 0)
+            return $"Ultima vez: paso {pasosVistos} de {totalPasos}";
+
+        return $"Sin iniciar - {totalPasos} pasos disponibles";
+    }
+
+    private static string ObtenerIconoCategoria(string? categoria) =>
+        categoria?.Trim().ToLowerInvariant() switch
+        {
+            "administracion" => "ri-user-settings-line",
+            "ayuda" => "ri-graduation-cap-line",
+            "catalogos" => "ri-archive-drawer-line",
+            "compras" => "ri-shopping-cart-line",
+            "configuracion" => "ri-settings-3-line",
+            "cuenta" => "ri-user-line",
+            "facturacion" => "ri-file-list-3-line",
+            "operacion" => "ri-dashboard-3-line",
+            "reportes" => "ri-bar-chart-2-line",
+            "seguridad" => "ri-shield-user-line",
+            "soporte" => "ri-customer-service-2-line",
+            _ => "ri-book-open-line"
+        };
+
+    private static string ObtenerCategoriaClase(string? categoria) =>
+        categoria?.Trim().ToLowerInvariant() switch
+        {
+            "ayuda" => "is-green",
+            "catalogos" => "is-purple",
+            "compras" => "is-orange",
+            "configuracion" => "is-teal",
+            "cuenta" => "is-blue",
+            "facturacion" => "is-indigo",
+            "reportes" => "is-cyan",
+            "seguridad" => "is-slate",
+            "soporte" => "is-rose",
+            _ => "is-blue"
+        };
+
+    private static bool ContieneTema(string? origen, string filtro) =>
+        !string.IsNullOrWhiteSpace(origen) &&
+        origen.Contains(filtro, StringComparison.OrdinalIgnoreCase);
+}

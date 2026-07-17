@@ -1,0 +1,2126 @@
+@page "/e-declara/contribuyentes"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Controllers
+@using Simetric.Components
+@using Simetric.Models
+@inject AuthenticationStateProvider AuthStateProvider
+@inject HttpClient Http
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
+
+<PageTitle>Contribuyentes | E-Declara</PageTitle>
+
+<div class="entity-shell edeclara-contribuyentes">
+    <section class="toolbar-card">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker" style="color:#6C63FF">Búsqueda y control</span>
+            <h3>Consulta y administra tus contribuyentes</h3>
+        </div>
+        <div class="toolbar-actions">
+            <div class="search-box">
+                <span class="search-icon"><i class="ri-search-line"></i></span>
+                <input class="search-input"
+                       placeholder="Buscar por nombre o identificación"
+                       value="@filtro"
+                       @oninput='e => { filtro = e.Value?.ToString() ?? ""; paginaActual = 1; }' />
+            </div>
+            <div class="toolbar-secondary-actions">
+                <div class="filter-box">
+                    <label class="filter-label" style="color:#6C63FF">Tipo</label>
+                    <select class="filter-select" value="@filtroTipoContribuyente"
+                            @onchange='e => { filtroTipoContribuyente = e.Value?.ToString() ?? "todos"; paginaActual = 1; }'>
+                        <option value="todos">Todos</option>
+                        <option value="natural">Persona Natural</option>
+                        <option value="sociedad">Sociedad / Persona Jurídica</option>
+                    </select>
+                </div>
+                <div class="filter-box">
+                    <label class="filter-label" style="color:#6C63FF">Registros</label>
+                    <select class="filter-select" value="@registrosPorPagina"
+                            @onchange='e => { registrosPorPagina = int.Parse(e.Value?.ToString() ?? "10"); paginaActual = 1; }'>
+                        <option value="5">5</option>
+                        <option value="10">10</option>
+                        <option value="20">20</option>
+                    </select>
+                </div>
+                <button type="button" class="secondary-btn" @onclick="() => CargarTodo(true)">
+                    <i class="ri-refresh-line"></i> Refrescar
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="entity-grid">
+
+        @* ── Tabla (Columna Izquierda) ── *@
+        <div class="grid-left-col">
+            <section class="table-card">
+                <div class="table-card-head">
+                    <div>
+                        <span class="table-kicker" style="color:#6C63FF">Listado activo</span>
+                        <h3>Contribuyentes registrados</h3>
+                    </div>
+                    <span class="table-badge" style="background:rgba(108,99,255,0.1);color:#6C63FF">
+                        @ContribuFiltrados.Count() registros
+                    </span>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(mensaje))
+                {
+                    <div class="status-banner status-banner-info"><i class="ri-information-line"></i> @mensaje</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(errorMsg))
+                {
+                    <div class="status-banner status-banner-error"><i class="ri-error-warning-line"></i> @errorMsg</div>
+                }
+
+                @if (cargando)
+                {
+                    <div class="state-card">
+                        <span class="spinner-border" role="status" style="color:#6C63FF"></span>
+                        <h3 class="mt-2">Cargando contribuyentes</h3>
+                    </div>
+                }
+                else if (!ContribuFiltrados.Any())
+                {
+                    <div class="state-card state-card-empty">
+                        <div class="state-icon"><i class="ri-user-star-line"></i></div>
+                        <h3>No hay contribuyentes para mostrar</h3>
+                        <p>Ajusta la búsqueda o registra un nuevo contribuyente.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="table-wrap">
+                        <table class="table entity-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width:70px">ID</th>
+                                    <th>Contribuyente</th>
+                                    <th>Identificación</th>
+                                    <th>Estado</th>
+                                    <th class="text-center col-acciones">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var c in ContribuPaginados)
+                                {
+                                    <tr>
+                                        <td>
+                                            <span class="code-pill code-pill-id">#@c.CodContribuyente</span>
+                                        </td>
+                                        <td>
+                                            <div class="cell-main cell-main-stacked">
+                                                <strong>@NombreCompleto(c)</strong>
+                                                @if (!string.IsNullOrWhiteSpace(c.Nombrecomercial))
+                                                {
+                                                    <span class="meta-line">
+                                                        <i class="ri-building-line"></i>
+                                                        <span>@c.Nombrecomercial</span>
+                                                    </span>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(c.Correo))
+                                                {
+                                                    <span class="meta-line">
+                                                        <i class="ri-mail-line"></i>
+                                                        <span>@c.Correo</span>
+                                                    </span>
+                                                }
+                                                @if (c.CorreosAdicionales.Any())
+                                                {
+                                                    @foreach (var extra in c.CorreosAdicionales)
+                                                    {
+                                                        <span class="meta-line">
+                                                            <i class="ri-mail-add-line"></i>
+                                                            <span>@extra</span>
+                                                        </span>
+                                                    }
+                                                }
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="code-pill">
+                                                @(string.IsNullOrWhiteSpace(c.Numeroidentificacion) ? "Sin ID" : c.Numeroidentificacion)
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="@(c.Estado == true ? "mini-status" : "mini-status mini-status-inactive")">
+                                                @(c.Estado == true ? "Activo" : "Inactivo")
+                                            </span>
+                                        </td>
+                                        <td class="text-center col-acciones">
+                                            <div class="action-group">
+                                                <button type="button" class="action-btn action-view" title="Ver"
+                                                        @onclick="() => { enVista = c; }">
+                                                    <i class="ri-eye-line"></i>
+                                                </button>
+                                                <button type="button" class="action-btn action-edit" title="Editar"
+                                                        @onclick="() => CargarEdicion(c)">
+                                                    <i class="ri-pencil-line"></i>
+                                                </button>
+                                                @if (c.Estado == true)
+                                                {
+                                                    <button type="button" class="action-btn action-delete" title="Desactivar"
+                                                            @onclick="() => ConfirmarDesactivar(c)">
+                                                        <i class="ri-delete-bin-line"></i>
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <button type="button" class="action-btn action-activate" title="Activar"
+                                                            @onclick="() => ConfirmarActivar(c)">
+                                                        <i class="ri-checkbox-circle-line"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="table-pagination">
+                        <span>Mostrando @PrimerReg-@UltimoReg de @TotalFiltrados registros</span>
+                        <div class="pagination-actions">
+                            <button class="pagination-btn" disabled="@(paginaActual <= 1)"
+                                    @onclick="() => paginaActual--">
+                                <i class="ri-arrow-left-s-line"></i>
+                            </button>
+                            <strong>@paginaActual / @TotalPaginas</strong>
+                            <button class="pagination-btn" disabled="@(paginaActual >= TotalPaginas)"
+                                    @onclick="() => paginaActual++">
+                                <i class="ri-arrow-right-s-line"></i>
+                            </button>
+                        </div>
+                    </div>
+                }
+            </section>
+        </div>
+
+        @* ── Columna Derecha (Formulario O Vista de Detalle) ── *@
+        <div class="grid-right-col">
+            @if (enVista is not null)
+            {
+                @* Vista de Detalle (Reemplaza al formulario) *@
+                <section class="editor-card entity-editor-card detail-card-interactive">
+                    <div class="editor-head" style="border-bottom: 1px solid rgba(108, 99, 255, 0.15)">
+                        <div>
+                            <span class="panel-kicker" style="color:#6C63FF">Detalle contribuyente</span>
+                            <h3>@NombreCompleto(enVista)</h3>
+                            <p>Código contribuyente: #@enVista.CodContribuyente</p>
+                        </div>
+                        <button class="detail-close-btn" @onclick="() => enVista = null">&times;</button>
+                    </div>
+
+                    <div class="editor-body">
+                        <div class="detail-sections">
+                            <section class="detail-section">
+                                <h4 class="detail-section-title">Datos principales</h4>
+                                <div class="detail-grid">
+                                    <div class="detail-item">
+                                        <span>Identificación</span>
+                                        <strong>@(enVista.Numeroidentificacion ?? "Sin datos")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Estado</span>
+                                        <strong>@(enVista.Estado == true ? "Activo" : "Inactivo")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Correo</span>
+                                        <strong>@(enVista.Correo ?? "Sin correo")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Obligado contabilidad</span>
+                                        <strong>@(enVista.Oblgconta ?? "No definido")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Persona natural</span>
+                                        <strong>@(enVista.PersonaNatural == true ? "Sí" : "No")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Contribuyente especial</span>
+                                        <strong>@(enVista.ContribuyenteEspecial == true ? "Sí" : "No")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>N° Contribuyente</span>
+                                        <strong>@(enVista.NumContribuyente ?? "Sin datos")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Periodicidad IVA</span>
+                                        <strong>@(enVista.PeriodicidadIva ?? "Sin datos")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Periodicidad Renta</span>
+                                        <strong>@(enVista.PeriodicidadRenta ?? "Sin datos")</strong>
+                                    </div>
+                                    <div class="detail-item detail-item-full">
+                                        <span>Fecha Declaración</span>
+                                        <strong>@(enVista.FechaDeclaracion?.ToString("dd/MM/yyyy") ?? "Sin datos")</strong>
+                                    </div>
+                                    <div class="detail-item detail-item-full">
+                                        <span>Actividad</span>
+                                        <strong>@(enVista.ActividadContribuyente ?? "Sin datos")</strong>
+                                    </div>
+                                </div>
+                            </section>
+                            
+                            @if (enVista.CorreosAdicionales.Any())
+                            {
+                                <section class="detail-section">
+                                    <h4 class="detail-section-title">Correos Adicionales</h4>
+                                    <div class="detail-note">
+                                        @foreach (var extra in enVista.CorreosAdicionales)
+                                        {
+                                            <div style="margin-bottom: 0.25rem;">
+                                                <strong><i class="ri-mail-line"></i> @extra</strong>
+                                            </div>
+                                        }
+                                    </div>
+                                </section>
+                            }
+
+                            <section class="detail-section">
+                                <h4 class="detail-section-title">Contacto</h4>
+                                <div class="detail-grid">
+                                    <div class="detail-item">
+                                        <span>Teléfono</span>
+                                        <strong>@(enVista.Telefonoconvencional ?? "Sin datos")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Celular</span>
+                                        <strong>@(enVista.Celular ?? "Sin datos")</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>País</span>
+                                        <strong>@(string.IsNullOrWhiteSpace(GetPaisNombre(enVista.Pais)) ? "Sin país" : GetPaisNombre(enVista.Pais))</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Provincia</span>
+                                        <strong>@(string.IsNullOrWhiteSpace(GetProvinciaNombre(enVista.Provincia)) ? "Sin provincia" : GetProvinciaNombre(enVista.Provincia))</strong>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span>Ciudad</span>
+                                        <strong>@(string.IsNullOrWhiteSpace(GetCiudadNombre(enVista.Ciudad)) ? "Sin ciudad" : GetCiudadNombre(enVista.Ciudad))</strong>
+                                    </div>
+                                    <div class="detail-item detail-item-full">
+                                        <span>Dirección</span>
+                                        <strong>@(enVista.Direccion ?? "Sin datos")</strong>
+                                    </div>
+                                </div>
+                            </section>
+                            
+                            @if (!string.IsNullOrWhiteSpace(enVista.Observaciones))
+                            {
+                                <div class="detail-note">
+                                    <span>Observaciones</span>
+                                    <strong>@enVista.Observaciones</strong>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                    <div class="detail-modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid rgba(108, 99, 255, 0.15); display: flex; justify-content: flex-end; gap: 0.75rem;">
+                        <button class="secondary-btn" @onclick="() => CargarEdicion(enVista)">Editar Datos</button>
+                        <button class="primary-btn" style="background:#6C63FF" @onclick="() => enVista = null">Cerrar</button>
+                    </div>
+                </section>
+            }
+            else
+            {
+                @* Formulario de Registro / Edición *@
+                <section class="editor-card entity-editor-card">
+                    <div class="editor-head">
+                        <div>
+                            <span class="panel-kicker" style="color:#6C63FF">Formulario</span>
+                            <h3>@(editando ? "Editar contribuyente" : "Registrar contribuyente")</h3>
+                            <p>Completa la información del contribuyente para el módulo tributario.</p>
+                        </div>
+                        <span class="editor-badge @(editando ? "editor-badge-edit" : "editor-badge-new")">
+                            @(editando ? "Edición" : "Nuevo")
+                        </span>
+                    </div>
+
+                    <div class="editor-body entity-form-legacy">
+                        <EditForm EditContext="editContext" OnSubmit="Guardar">
+                            <DataAnnotationsValidator />
+                            <ValidationSummary class="text-danger small mb-3 fw-semibold" />
+
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">Tipo de Contribuyente *</label>
+                                <InputSelect class="form-select form-select-sm" @bind-Value="modeloPersonaNaturalString" style="border-color:#6C63FF">
+                                    <option value="true">Persona Natural</option>
+                                    <option value="false">Sociedad / Persona Jurídica</option>
+                                </InputSelect>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Tipo identificación *</label>
+                                    <InputSelect class="form-select form-select-sm"
+                                                 Value="@modelo.Tipoidentificacion"
+                                                 ValueExpression="() => modelo.Tipoidentificacion"
+                                                 ValueChanged="(string val) => { modelo.Tipoidentificacion = val; CalcularFechaDeclaracion(); }">
+                                        <option value="">-- Seleccione --</option>
+                                        @foreach (var id in identificaciones)
+                                        {
+                                            <option value="@id.Codigo">@id.Descripcion</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => modelo.Tipoidentificacion)" class="text-danger small" />
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small fw-bold">N° Identificación *</label>
+                                    <InputText class="form-control form-control-sm" 
+                                               Value="@modelo.Numeroidentificacion" 
+                                               ValueExpression="() => modelo.Numeroidentificacion" 
+                                               ValueChanged="OnIdentificacionInput" />
+                                    <ValidationMessage For="@(() => modelo.Numeroidentificacion)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            @if (modeloPersonaNatural)
+                            {
+                                <div class="row mb-2">
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Apellidos * </label>
+                                        <InputText class="form-control form-control-sm" 
+                                                   Value="@modelo.Apellidos" 
+                                                   ValueExpression="() => modelo.Apellidos" 
+                                                   ValueChanged="OnApellidosInput" 
+                                                   placeholder="Ej: Pérez Gómez" />
+                                        <ValidationMessage For="@(() => modelo.Apellidos)" class="text-danger small" />
+                                    </div>
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Nombres *</label>
+                                        <InputText class="form-control form-control-sm" 
+                                                   Value="@modelo.Nombres" 
+                                                   ValueExpression="() => modelo.Nombres" 
+                                                   ValueChanged="OnNombresInput" 
+                                                   placeholder="Ej: Juan Carlos" />
+                                        <ValidationMessage For="@(() => modelo.Nombres)" class="text-danger small" />
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="row mb-2">
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Nombre comercial *</label>
+                                        <InputText class="form-control form-control-sm" @bind-Value="modelo.Nombrecomercial" />
+                                        <ValidationMessage For="@(() => modelo.Nombrecomercial)" class="text-danger small" />
+                                    </div>
+                                    <div class="col">
+                                        <label class="form-label small fw-bold">Razón social *</label>
+                                        <InputText class="form-control form-control-sm" @bind-Value="modelo.Nombrerazonsocial" />
+                                        <ValidationMessage For="@(() => modelo.Nombrerazonsocial)" class="text-danger small" />
+                                    </div>
+                                </div>
+                            }
+
+                            @* Sección de correos múltiples *@
+                            <div class="email-fields-shell mb-3">
+                                <div class="form-group">
+                                    <label class="form-label small fw-bold">Correo Principal *</label>
+                                    <div class="email-primary-row">
+                                        <InputText type="email" @bind-Value="modelo.Correo" class="form-control form-control-sm" placeholder="correo@empresa.com" />
+                                        <button type="button" class="email-add-icon-btn" @onclick="AgregarCorreoCampo" title="Agregar correo adicional">
+                                            <i class="ri-add-line"></i>
+                                        </button>
+                                    </div>
+                                    <ValidationMessage For="@(() => modelo.Correo)" class="text-danger small" />
+                                </div>
+
+                                @if (modelo.CorreosAdicionales.Any())
+                                {
+                                    <div class="email-extra-shell">
+                                        <div class="email-extra-head">
+                                            <label class="form-label small fw-bold mb-0">Correos adicionales</label>
+                                            <button type="button" class="email-add-btn" @onclick="AgregarCorreoCampo">
+                                                <i class="ri-add-line"></i>
+                                                <span>Agregar otro correo</span>
+                                            </button>
+                                        </div>
+
+                                        @for (var i = 0; i < modelo.CorreosAdicionales.Count; i++)
+                                        {
+                                            var index = i;
+                                            <div class="email-extra-row">
+                                                <InputText type="email" @bind-Value="modelo.CorreosAdicionales[index]" class="form-control form-control-sm" placeholder="adicional@empresa.com" />
+                                                <button type="button" class="email-remove-btn" @onclick="() => EliminarCorreoAdicional(index)" title="Eliminar correo adicional">
+                                                    <i class="ri-delete-bin-line"></i>
+                                                </button>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small">Teléfono Convencional</label>
+                                    <InputText class="form-control form-control-sm" 
+                                               Value="@modelo.Telefonoconvencional" 
+                                               ValueExpression="() => modelo.Telefonoconvencional" 
+                                               ValueChanged="OnTelefonoInput" />
+                                    <ValidationMessage For="@(() => modelo.Telefonoconvencional)" class="text-danger small" />
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Celular *</label>
+                                    <InputText class="form-control form-control-sm" 
+                                               Value="@modelo.Celular" 
+                                               ValueExpression="() => modelo.Celular" 
+                                               ValueChanged="OnCelularInput" />
+                                    <ValidationMessage For="@(() => modelo.Celular)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Obligado contabilidad *</label>
+                                    <InputSelect class="form-select form-select-sm" @bind-Value="modelo.Oblgconta">
+                                        <option value="">-- Seleccione --</option>
+                                        <option value="SI">SI</option>
+                                        <option value="NO">NO</option>
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => modelo.Oblgconta)" class="text-danger small" />
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small">N° Contribuyente</label>
+                                    <InputText class="form-control form-control-sm" 
+                                               Value="@modelo.NumContribuyente" 
+                                               ValueExpression="() => modelo.NumContribuyente" 
+                                               ValueChanged="OnNumContribuyenteInput" />
+                                    <ValidationMessage For="@(() => modelo.NumContribuyente)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Periodicidad IVA *</label>
+                                    <InputSelect class="form-select form-select-sm" @bind-Value="modelo.PeriodicidadIva">
+                                        <option value="">-- Seleccione --</option>
+                                        <option value="Mensual">Mensual</option>
+                                        <option value="Semestral">Semestral</option>
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => modelo.PeriodicidadIva)" class="text-danger small" />
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Periodicidad Renta *</label>
+                                    <InputSelect class="form-select form-select-sm" @bind-Value="modelo.PeriodicidadRenta">
+                                        <option value="">-- Seleccione --</option>
+                                        <option value="Régimen General">Régimen General</option>
+                                        <option value="Régimen Emprendedor">Régimen Emprendedor</option>
+                                        <option value="Régimen Negocio Popular">Régimen Negocio Popular</option>
+                                        <option value="Régimen Mixto">Régimen Mixto</option>
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => modelo.PeriodicidadRenta)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold">Fecha Declaración *</label>
+                                <InputDate class="form-control form-control-sm" @bind-Value="modelo.FechaDeclaracion" />
+                                <ValidationMessage For="@(() => modelo.FechaDeclaracion)" class="text-danger small" />
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small fw-bold">País *</label>
+                                    <InputSelect class="form-select form-select-sm"
+                                                 Value="@modelo.Pais"
+                                                 ValueExpression="() => modelo.Pais"
+                                                 ValueChanged="async (int? val) => { modelo.Pais = val; await OnPaisChangedAsync(); }">
+                                        <option value="">-- Seleccione País --</option>
+                                        @foreach (var p in paises)
+                                        {
+                                            <option value="@p.IdPais">@p.Descripcion</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => modelo.Pais)" class="text-danger small" />
+                                </div>
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Provincia *</label>
+                                    <InputSelect class="form-select form-select-sm"
+                                                 Value="@modelo.Provincia"
+                                                 ValueExpression="() => modelo.Provincia"
+                                                 ValueChanged="async (int? val) => { modelo.Provincia = val; await OnProvinciaChangedAsync(); }"
+                                                 disabled="@(modelo.Pais is null)">
+                                        <option value="">-- Seleccione Provincia --</option>
+                                        @foreach (var pr in ProvinciasDisponibles)
+                                        {
+                                            <option value="@pr.IdProvincia">@pr.Descripcion</option>
+                                        }
+                                    </InputSelect>
+                                    <ValidationMessage For="@(() => modelo.Provincia)" class="text-danger small" />
+                                </div>
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold">Ciudad *</label>
+                                <InputSelect class="form-select form-select-sm"
+                                             @bind-Value="modelo.Ciudad"
+                                             disabled="@(modelo.Provincia is null || !CiudadesDisponibles.Any())">
+                                    <option value="">@(modelo.Provincia.HasValue ? "-- Seleccione Ciudad --" : "-- Seleccione una provincia --")</option>
+                                    @foreach (var c in CiudadesDisponibles)
+                                    {
+                                        <option value="@c.IdCiudad">@c.Descripcion</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="@(() => modelo.Ciudad)" class="text-danger small" />
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold">Dirección *</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="modelo.Direccion" />
+                                <ValidationMessage For="@(() => modelo.Direccion)" class="text-danger small" />
+                            </div>
+
+                            <div class="mb-2 d-flex align-items-center gap-3 pt-2">
+                                <div class="form-check">
+                                    <InputCheckbox class="form-check-input" @bind-Value="modeloEspecial" id="chkEspecial" />
+                                    <label class="form-check-label small" for="chkEspecial">Contribuyente especial</label>
+                                </div>
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="form-label small">Actividad del contribuyente</label>
+                                <InputTextArea class="form-control form-control-sm" rows="2"
+                                               @bind-Value="modelo.ActividadContribuyente" />
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label small">Observaciones</label>
+                                <InputTextArea class="form-control form-control-sm" rows="2"
+                                               @bind-Value="modelo.Observaciones" />
+                            </div>
+
+                            @if (!editando && limiteExcedido)
+                            {
+                                <div class="status-banner status-banner-error mb-3" style="border-radius:12px; margin-bottom: 1rem; padding: 0.75rem;">
+                                    <i class="ri-error-warning-line"></i>
+                                    <span>Has alcanzado el límite de <strong>@limiteContribuyentes</strong> contribuyente(s) activo(s) para tu plan actual. Para agregar más, debes actualizar tu plan en la sección de Suscripción.</span>
+                                </div>
+                            }
+
+                            <div class="form-actions entity-form-actions">
+                                <button type="button" class="secondary-btn" @onclick="Limpiar">Limpiar</button>
+                                <button type="submit" class="primary-btn"
+                                        disabled="@(!editando && limiteExcedido)"
+                                        style="background:#6C63FF;background-image:linear-gradient(135deg,#6C63FF,#8c85ff)">
+                                    <i class="ri-save-line"></i>
+                                    @(editando ? "Guardar cambios" : "Crear contribuyente")
+                                </button>
+                            </div>
+                        </EditForm>
+                    </div>
+                </section>
+            }
+        </div>
+    </section>
+</div>
+
+@* Estilos en línea para evitar problemas de caché de CSS y forzar el diseño idéntico al de Clientes *@
+<style>
+    .edeclara-contribuyentes.entity-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        padding-bottom: 2rem;
+        font-family: 'Montserrat', sans-serif;
+    }
+
+    .edeclara-contribuyentes .entity-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+        gap: 1.5rem;
+        padding: 1.5rem;
+        border: 1px solid rgba(108, 99, 255, 0.15);
+        border-radius: 28px;
+        background: radial-gradient(circle at top left, rgba(108, 99, 255, 0.08), transparent 34%), #ffffff;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+    }
+
+    .edeclara-contribuyentes .hero-copy h2 {
+        font-size: 1.8rem;
+        font-weight: 800;
+        color: #1e293b;
+        margin: 0.25rem 0 0.5rem;
+    }
+
+    .edeclara-contribuyentes .hero-summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.75rem;
+    }
+
+    .edeclara-contribuyentes .summary-card {
+        padding: 1rem;
+        border-radius: 20px;
+        border: 1px solid rgba(108, 99, 255, 0.15);
+        background: linear-gradient(180deg, #ffffff, #fdfdff);
+        box-shadow: 0 8px 20px rgba(108, 99, 255, 0.02);
+    }
+
+    .edeclara-contribuyentes .summary-card strong {
+        font-size: 1.5rem;
+        font-weight: 800;
+    }
+
+    .edeclara-contribuyentes .toolbar-card {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.25rem;
+        border-radius: 24px;
+        border: 1px solid rgba(108, 99, 255, 0.15);
+        background: #ffffff;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.03);
+    }
+
+    .edeclara-contribuyentes .toolbar-copy h3 {
+        font-size: 1.2rem;
+        font-weight: 800;
+        margin: 0.25rem 0 0;
+        color: #1e293b;
+    }
+
+    .edeclara-contribuyentes .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .edeclara-contribuyentes .search-box {
+        display: flex;
+        align-items: center;
+        padding: 0.5rem 1rem;
+        border-radius: 18px;
+        border: 1px solid rgba(108, 99, 255, 0.2);
+        background: #ffffff;
+        width: 320px;
+    }
+
+    .edeclara-contribuyentes .search-input {
+        border: none;
+        outline: none;
+        width: 100%;
+        margin-left: 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .edeclara-contribuyentes .toolbar-secondary-actions {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+    }
+
+    .edeclara-contribuyentes .filter-box {
+        display: flex;
+        flex-direction: column;
+        padding: 0.25rem 0.75rem;
+        border: 1px solid rgba(108, 99, 255, 0.2);
+        border-radius: 16px;
+        background: #ffffff;
+    }
+
+    .edeclara-contribuyentes .filter-label {
+        font-size: 0.65rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        color: #64748b;
+    }
+
+    .edeclara-contribuyentes .filter-select {
+        border: none;
+        outline: none;
+        font-weight: 700;
+        font-size: 0.85rem;
+        color: #1e293b;
+        background: transparent;
+    }
+
+    /* Diseño Grid de Dos Columnas Estilo Clientes */
+    .edeclara-contribuyentes .entity-grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 1.5rem;
+        align-items: start;
+    }
+
+    .edeclara-contribuyentes .table-card, 
+    .edeclara-contribuyentes .editor-card {
+        border-radius: 24px;
+        border: 1px solid rgba(108, 99, 255, 0.15);
+        background: #ffffff;
+        box-shadow: 0 12px 36px rgba(108, 99, 255, 0.03);
+        overflow: hidden;
+    }
+
+    .edeclara-contribuyentes .editor-card {
+        border-top: 5px solid #6C63FF;
+    }
+
+    .edeclara-contribuyentes .table-card-head,
+    .edeclara-contribuyentes .editor-head {
+        padding: 1.25rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #edf2f7;
+    }
+
+    .edeclara-contribuyentes .table-badge,
+    .edeclara-contribuyentes .editor-badge {
+        padding: 0.35rem 0.9rem;
+        border-radius: 99px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    .edeclara-contribuyentes .table-badge {
+        background: rgba(108, 99, 255, 0.1);
+        color: #6C63FF;
+    }
+
+    .edeclara-contribuyentes .editor-badge-new {
+        background: rgba(108, 99, 255, 0.1);
+        color: #6C63FF;
+    }
+
+    .edeclara-contribuyentes .editor-badge-edit {
+        background: rgba(245, 158, 11, 0.14);
+        color: #b45309;
+    }
+
+    .edeclara-contribuyentes .entity-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .edeclara-contribuyentes .entity-table th {
+        background: #fcfdfe;
+        color: #475569;
+        font-size: 0.75rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid #edf2f7;
+    }
+
+    .edeclara-contribuyentes .entity-table td {
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid #edf2f7;
+        vertical-align: middle;
+    }
+
+    .edeclara-contribuyentes .entity-table th.text-center,
+    .edeclara-contribuyentes .entity-table td.text-center {
+        text-align: center;
+    }
+
+    .edeclara-contribuyentes .entity-table tbody tr:hover td {
+        background: rgba(108, 99, 255, 0.02);
+    }
+
+    .edeclara-contribuyentes .code-pill {
+        padding: 0.25rem 0.75rem;
+        border-radius: 99px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        background: #f1f5f9;
+        color: #334155;
+    }
+
+    .edeclara-contribuyentes .code-pill-id {
+        background: rgba(108, 99, 255, 0.1);
+        color: #6C63FF;
+    }
+
+    .edeclara-contribuyentes .mini-status {
+        padding: 0.25rem 0.6rem;
+        border-radius: 99px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        background: #dcfce7;
+        color: #15803d;
+    }
+
+    .edeclara-contribuyentes .mini-status-inactive {
+        background: #fee2e2;
+        color: #b91c1c;
+    }
+
+    .edeclara-contribuyentes .action-group {
+        display: inline-flex;
+        gap: 0.35rem;
+        padding: 0.25rem;
+        border: 1px solid rgba(108, 99, 255, 0.12);
+        border-radius: 14px;
+        background: #ffffff;
+        box-shadow: 0 4px 12px rgba(108, 99, 255, 0.03);
+    }
+
+    .edeclara-contribuyentes .action-btn {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .edeclara-contribuyentes .action-btn i {
+        font-size: 1.15rem;
+        line-height: 1;
+        display: inline-flex;
+    }
+
+    .edeclara-contribuyentes .action-view {
+        background: rgba(108, 99, 255, 0.08);
+        color: #6C63FF;
+    }
+    .edeclara-contribuyentes .action-view:hover {
+        background: rgba(108, 99, 255, 0.16);
+        color: #554ae0;
+    }
+
+    .edeclara-contribuyentes .action-edit {
+        background: rgba(25, 135, 84, 0.08);
+        color: #198754;
+    }
+    .edeclara-contribuyentes .action-edit:hover {
+        background: rgba(25, 135, 84, 0.16);
+        color: #146c43;
+    }
+
+    .edeclara-contribuyentes .action-delete {
+        background: rgba(220, 53, 69, 0.08);
+        color: #dc3545;
+    }
+    .edeclara-contribuyentes .action-delete:hover {
+        background: rgba(220, 53, 69, 0.16);
+        color: #b02a37;
+    }
+
+    .edeclara-contribuyentes .action-activate {
+        background: rgba(13, 110, 253, 0.08);
+        color: #0d6efd;
+    }
+    .edeclara-contribuyentes .action-activate:hover {
+        background: rgba(13, 110, 253, 0.16);
+        color: #0a58ca;
+    }
+
+    .edeclara-contribuyentes .table-pagination {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.25rem;
+        background: #fafafa;
+        border-top: 1px solid #edf2f7;
+        font-size: 0.8rem;
+        color: #64748b;
+    }
+
+    .edeclara-contribuyentes .pagination-btn {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+        background: #ffffff;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .edeclara-contribuyentes .pagination-btn:hover:not(:disabled) {
+        border-color: #6C63FF;
+        color: #6C63FF;
+    }
+
+    .edeclara-contribuyentes .editor-body {
+        padding: 1.5rem;
+        background: #ffffff;
+    }
+
+    .edeclara-contribuyentes .form-label {
+        color: #334155;
+        margin-bottom: 0.25rem;
+    }
+
+    .edeclara-contribuyentes .form-control,
+    .edeclara-contribuyentes .form-select {
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 0.5rem 0.75rem;
+        font-size: 0.88rem;
+        transition: all 0.2s;
+    }
+
+    .edeclara-contribuyentes .form-control:focus,
+    .edeclara-contribuyentes .form-select:focus {
+        border-color: #6C63FF;
+        box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.15);
+    }
+
+    /* Correos Múltiples UI Estilo Clientes */
+    .edeclara-contribuyentes .email-fields-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .edeclara-contribuyentes .email-primary-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .edeclara-contribuyentes .email-add-icon-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        background: rgba(108, 99, 255, 0.1);
+        color: #6C63FF;
+        border: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    }
+
+    .edeclara-contribuyentes .email-extra-shell {
+        border: 1px solid rgba(108, 99, 255, 0.15);
+        border-radius: 14px;
+        padding: 0.75rem;
+        background: #fcfcff;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+    }
+
+    .edeclara-contribuyentes .email-extra-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .edeclara-contribuyentes .email-add-btn {
+        background: rgba(108, 99, 255, 0.1);
+        color: #6C63FF;
+        border: none;
+        padding: 0.25rem 0.75rem;
+        border-radius: 8px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    .edeclara-contribuyentes .email-extra-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .edeclara-contribuyentes .email-remove-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        background: rgba(239, 68, 68, 0.1);
+        color: #ef4444;
+        border: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    }
+
+    .edeclara-contribuyentes .confirm-card {
+        background: #fff8f8;
+        border: 1px solid #fee2e2;
+        border-radius: 18px;
+        padding: 1rem;
+        margin-top: 1rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .edeclara-contribuyentes .detail-card-interactive {
+        border-top: 5px solid #6C63FF;
+    }
+
+    .edeclara-contribuyentes .detail-close-btn {
+        background: transparent;
+        border: none;
+        font-size: 1.5rem;
+        color: #64748b;
+        cursor: pointer;
+    }
+
+    .edeclara-contribuyentes .detail-close-btn:hover {
+        color: #ef4444;
+    }
+
+    .edeclara-contribuyentes .detail-sections {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+
+    .edeclara-contribuyentes .detail-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .edeclara-contribuyentes .detail-section-title {
+        font-size: 0.85rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        color: #64748b;
+        margin: 0;
+        letter-spacing: 0.05em;
+    }
+
+    .edeclara-contribuyentes .detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+    }
+
+    .edeclara-contribuyentes .detail-item {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .edeclara-contribuyentes .detail-item span {
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: #64748b;
+        text-transform: uppercase;
+    }
+
+    .edeclara-contribuyentes .detail-item strong {
+        font-size: 0.85rem;
+        color: #1e293b;
+    }
+
+    .edeclara-contribuyentes .detail-item-full {
+        grid-column: 1 / -1;
+    }
+
+    .edeclara-contribuyentes .detail-note {
+        background: #fcfcff;
+        border: 1px dashed rgba(108, 99, 255, 0.3);
+        border-radius: 14px;
+        padding: 0.75rem;
+    }
+
+    .edeclara-contribuyentes .detail-note span {
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: #6C63FF;
+        text-transform: uppercase;
+        display: block;
+        margin-bottom: 0.25rem;
+    }
+
+    .edeclara-contribuyentes .detail-note strong {
+        font-size: 0.85rem;
+        color: #1e293b;
+    }
+
+    /* Responsividad */
+    @@media (max-width: 1024px) {
+        .edeclara-contribuyentes .entity-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+@code {
+    private int userId;
+    private bool cargando = true;
+    private string? mensaje;
+    private string? errorMsg;
+
+    private int limiteContribuyentes = 0;
+    private int actualContribuyentesActivos = 0;
+    private bool limiteExcedido = false;
+
+    private string filtro = "";
+    private int registrosPorPagina = 10;
+    private int paginaActual = 1;
+
+    private ContribuyenteDto? enVista;
+    private bool editando;
+
+    private List<ContribuyenteDto> contribuyentes = new();
+
+    // Modelo formulario
+    private ContribuyenteUpsertDto modelo = new();
+    private bool modeloPersonaNatural = true;
+    private bool modeloEspecial;
+
+    private EditContext? editContext;
+    private ValidationMessageStore? messageStore;
+
+    private List<PaisLookupDto> paises = new();
+    private List<ProvinciaLookupDto> provincias = new();
+    private List<CiudadLookupDto> ciudades = new();
+    private int? ecuadorPaisId;
+
+    private IEnumerable<ProvinciaLookupDto> ProvinciasDisponibles =>
+        provincias
+            .Where(x => x.IdPais == modelo.Pais)
+            .OrderBy(GetOrdenProvincia)
+            .ThenBy(x => x.Descripcion);
+
+    private IEnumerable<CiudadLookupDto> CiudadesDisponibles =>
+        ciudades
+            .Where(x => x.IdProvincia == modelo.Provincia)
+            .OrderBy(x => x.Descripcion);
+
+    private class PaisLookupDto
+    {
+        public int IdPais { get; set; }
+        public string Descripcion { get; set; } = "";
+    }
+
+    private class ProvinciaLookupDto
+    {
+        public int IdProvincia { get; set; }
+        public string Descripcion { get; set; } = "";
+        public int? IdPais { get; set; }
+    }
+
+    private class CiudadLookupDto
+    {
+        public int IdCiudad { get; set; }
+        public string Descripcion { get; set; } = "";
+        public int? IdProvincia { get; set; }
+    }
+
+    // Toggle string para bindeo del dropdown de tipo de contribuyente
+    private string modeloPersonaNaturalString
+    {
+        get => modeloPersonaNatural.ToString().ToLowerInvariant();
+        set
+        {
+            if (bool.TryParse(value, out var parsed))
+            {
+                modeloPersonaNatural = parsed;
+                modelo.PersonaNatural = parsed;
+                if (parsed)
+                {
+                    modelo.Nombrecomercial = null;
+                    modelo.Nombrerazonsocial = null;
+                }
+                else
+                {
+                    modelo.Apellidos = null;
+                    modelo.Nombres = null;
+                }
+                editContext?.Validate();
+                StateHasChanged();
+            }
+        }
+    }
+
+    // Lookups de identificaciones
+    private List<IdentificacionItem> identificaciones = new();
+    private record IdentificacionItem(string Codigo, string Descripcion);
+
+    // Paginación y Filtros
+    private string filtroTipoContribuyente = "todos";
+
+    private IEnumerable<ContribuyenteDto> ContribuFiltrados =>
+        contribuyentes.Where(c =>
+            (string.IsNullOrWhiteSpace(filtro) ||
+             $"{c.Apellidos} {c.Nombres}".Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+             (c.Numeroidentificacion ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+             (c.Correo ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+             (c.Nombrerazonsocial ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+             (c.Nombrecomercial ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase)) &&
+            (filtroTipoContribuyente == "todos" ||
+             (filtroTipoContribuyente == "natural" && c.PersonaNatural == true) ||
+             (filtroTipoContribuyente == "sociedad" && c.PersonaNatural != true))
+        );
+
+    private int TotalFiltrados => ContribuFiltrados.Count();
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(TotalFiltrados / (double)registrosPorPagina));
+    private int PrimerReg => TotalFiltrados == 0 ? 0 : ((paginaActual - 1) * registrosPorPagina) + 1;
+    private int UltimoReg => Math.Min(paginaActual * registrosPorPagina, TotalFiltrados);
+
+    private IEnumerable<ContribuyenteDto> ContribuPaginados =>
+        ContribuFiltrados.Skip((paginaActual - 1) * registrosPorPagina).Take(registrosPorPagina);
+
+    protected override void OnInitialized()
+    {
+        ReinitValidation();
+    }
+
+    private void ReinitValidation()
+    {
+        if (editContext != null)
+        {
+            editContext.OnValidationRequested -= HandleValidationRequested;
+            editContext.OnFieldChanged -= HandleFieldChanged;
+        }
+        editContext = new EditContext(modelo);
+        messageStore = new ValidationMessageStore(editContext);
+        editContext.OnValidationRequested += HandleValidationRequested;
+        editContext.OnFieldChanged += HandleFieldChanged;
+    }
+
+    private void HandleFieldChanged(object? sender, FieldChangedEventArgs e)
+    {
+        messageStore?.Clear(e.FieldIdentifier);
+    }
+
+    private void HandleValidationRequested(object? sender, ValidationRequestedEventArgs e)
+    {
+        messageStore?.Clear();
+
+        // 1. Validación de Identificación Ecuatoriana (si el país es Ecuador)
+        if (modelo.Pais == ecuadorPaisId && !string.IsNullOrWhiteSpace(modelo.Numeroidentificacion))
+        {
+            var ident = modelo.Numeroidentificacion.Trim();
+            if (ident.All(char.IsDigit))
+            {
+                if (modelo.Tipoidentificacion == "05") // Cédula
+                {
+                    if (ident.Length != 10)
+                    {
+                        messageStore?.Add(() => modelo.Numeroidentificacion!, "La cédula debe tener exactamente 10 dígitos.");
+                    }
+                    else if (!ValidarCedulaEcuatoriana(ident))
+                    {
+                        messageStore?.Add(() => modelo.Numeroidentificacion!, "La cédula ecuatoriana ingresada no es válida.");
+                    }
+                }
+                else if (modelo.Tipoidentificacion == "04") // RUC
+                {
+                    if (ident.Length != 13)
+                    {
+                        messageStore?.Add(() => modelo.Numeroidentificacion!, "El RUC debe tener exactamente 13 dígitos.");
+                    }
+                    else if (!ValidarRucEcuatoriano(ident))
+                    {
+                        messageStore?.Add(() => modelo.Numeroidentificacion!, "El RUC ecuatoriano ingresado no es válido.");
+                    }
+                }
+            }
+        }
+
+        // 2. Validación de duplicados local en el listado
+        if (!string.IsNullOrWhiteSpace(modelo.Numeroidentificacion))
+        {
+            var ident = modelo.Numeroidentificacion.Trim();
+            var duplicado = contribuyentes.Any(c => 
+                string.Equals(c.Numeroidentificacion?.Trim(), ident, StringComparison.OrdinalIgnoreCase) && 
+                (!editando || c.CodContribuyente != _editandoId));
+            if (duplicado)
+            {
+                messageStore?.Add(() => modelo.Numeroidentificacion!, "El número de identificación ya está registrado.");
+            }
+        }
+
+        // 3. País, Provincia y Ciudad (no definidos en el DTO)
+        if (!modelo.Pais.HasValue || modelo.Pais <= 0)
+        {
+            messageStore?.Add(() => modelo.Pais!, "Debe seleccionar un país.");
+        }
+        else
+        {
+            if (!modelo.Provincia.HasValue || modelo.Provincia <= 0)
+            {
+                messageStore?.Add(() => modelo.Provincia!, "Debe seleccionar una provincia.");
+            }
+            if (!modelo.Ciudad.HasValue || modelo.Ciudad <= 0)
+            {
+                messageStore?.Add(() => modelo.Ciudad!, "Debe seleccionar una ciudad.");
+            }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var idStr = user.FindFirst("IdUsuario")?.Value ?? user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        if (!int.TryParse(idStr, out userId) || userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        await CargarIdentificaciones();
+        await CargarTodo();
+    }
+
+    private async Task CargarIdentificaciones()
+    {
+        try
+        {
+            var resp = await Http.GetAsync("api/clientes/lookups");
+            if (!resp.IsSuccessStatusCode) return;
+
+            var body = await resp.Content.ReadAsStringAsync();
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+
+            if (doc.RootElement.TryGetProperty("identificaciones", out var idElem))
+            {
+                identificaciones = idElem.EnumerateArray().Select(i => new IdentificacionItem(
+                    i.TryGetProperty("ideCodigo", out var cod) ? cod.GetString() ?? "" : "",
+                    i.TryGetProperty("ideDescripcion", out var desc) ? desc.GetString() ?? "" : ""
+                )).ToList();
+            }
+        }
+        catch { /* silencioso */ }
+    }
+
+    private async Task CargarTodo(bool esRefresco = false)
+    {
+        cargando = true;
+        mensaje = null;
+        errorMsg = null;
+        StateHasChanged();
+
+        try
+        {
+            await CargarPaises();
+            await CargarUbicacionEcuador();
+
+            if (!modelo.Pais.HasValue && ecuadorPaisId.HasValue)
+                modelo.Pais = ecuadorPaisId;
+
+            // Cargar límite de contribuyentes
+            try
+            {
+                var limiteResp = await Http.GetAsync($"api/contribuyentes-edeclara/limite-estado?userId={userId}");
+                if (limiteResp.IsSuccessStatusCode)
+                {
+                    var limitBody = await limiteResp.Content.ReadAsStringAsync();
+                    using var limitDoc = System.Text.Json.JsonDocument.Parse(limitBody);
+                    var root = limitDoc.RootElement;
+                    limiteContribuyentes = root.GetProperty("limite").GetInt32();
+                    actualContribuyentesActivos = root.GetProperty("actual").GetInt32();
+                    limiteExcedido = root.GetProperty("excedido").GetBoolean();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al cargar límite de contribuyentes: {ex.Message}");
+            }
+
+            var resp = await Http.GetAsync($"api/contribuyentes-edeclara?userId={userId}");
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"HTTP {(int)resp.StatusCode}: {body}");
+
+            contribuyentes = System.Text.Json.JsonSerializer.Deserialize<List<ContribuyenteDto>>(
+                body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+
+            await PrepararLookupsUbicacionParaListado();
+
+            if (esRefresco) mensaje = "Datos actualizados.";
+        }
+        catch (Exception ex)
+        {
+            errorMsg = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CargarEdicion(ContribuyenteDto c)
+    {
+        // Al cargar edición cerramos vista detallada
+        enVista = null;
+
+        modelo = new ContribuyenteUpsertDto
+        {
+            Apellidos = c.Apellidos,
+            Nombres = c.Nombres,
+            Nombrecomercial = c.Nombrecomercial,
+            Nombrerazonsocial = c.Nombrerazonsocial,
+            Tipoidentificacion = c.Tipoidentificacion,
+            Numeroidentificacion = c.Numeroidentificacion,
+            Direccion = c.Direccion,
+            Telefonoconvencional = c.Telefonoconvencional,
+            Celular = c.Celular,
+            Correo = c.Correo,
+            CorreosAdicionales = new List<string>(c.CorreosAdicionales),
+            TipoCliente = c.TipoCliente,
+            Oblgconta = c.Oblgconta,
+            Estado = c.Estado,
+            Observaciones = c.Observaciones,
+            Pais = c.Pais,
+            Provincia = c.Provincia,
+            Ciudad = c.Ciudad,
+            PersonaNatural = c.PersonaNatural,
+            ContribuyenteEspecial = c.ContribuyenteEspecial,
+            ActividadContribuyente = c.ActividadContribuyente,
+            NumContribuyente = c.NumContribuyente,
+            PeriodicidadIva = c.PeriodicidadIva,
+            PeriodicidadRenta = c.PeriodicidadRenta,
+            FechaDeclaracion = c.FechaDeclaracion,
+        };
+        modeloPersonaNatural = c.PersonaNatural ?? true;
+        modeloEspecial = c.ContribuyenteEspecial ?? false;
+        _editandoId = c.CodContribuyente;
+        editando = true;
+
+        TriggerLoadingLocationDataForModel();
+
+        CalcularFechaDeclaracion();
+
+        ReinitValidation();
+        StateHasChanged();
+    }
+
+    private async void TriggerLoadingLocationDataForModel()
+    {
+        if (modelo.Pais.HasValue && modelo.Pais != ecuadorPaisId)
+        {
+            await CargarProvincias(modelo.Pais.Value);
+            if (modelo.Provincia.HasValue)
+            {
+                await CargarCiudades(modelo.Provincia.Value);
+            }
+            StateHasChanged();
+        }
+    }
+
+    private int _editandoId;
+
+    private async Task Guardar()
+    {
+        modelo.PersonaNatural = modeloPersonaNatural;
+        modelo.ContribuyenteEspecial = modeloEspecial;
+        modelo.Oblgconta = (modelo.Oblgconta ?? "").Trim().ToUpperInvariant();
+
+        var isValid = editContext?.Validate() ?? false;
+        if (!isValid)
+        {
+            var errores = editContext?.GetValidationMessages().Select(x => x).ToList() ?? new();
+            await JS.ShowAlertAsync("Revisa la información", string.Join("\n", errores), "warning");
+            return;
+        }
+
+        try
+        {
+            HttpResponseMessage resp;
+            if (editando)
+                resp = await Http.PutAsJsonAsync($"api/contribuyentes-edeclara/{_editandoId}?userId={userId}", modelo);
+            else
+                resp = await Http.PostAsJsonAsync($"api/contribuyentes-edeclara?userId={userId}", modelo);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                await JS.ShowAlertAsync("Error al guardar", $"No se pudo completar la operación: {body}", "error");
+                return;
+            }
+
+            var msjExito = editando ? "Contribuyente actualizado con éxito." : "Contribuyente creado con éxito.";
+            await JS.ShowAlertAsync("Completado", msjExito, "success");
+            Limpiar();
+            await CargarTodo();
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("Error", $"Ocurrió un error inesperado: {ex.Message}", "error");
+        }
+    }
+
+    private async Task ConfirmarDesactivar(ContribuyenteDto c)
+    {
+        bool confirmado = await JS.ConfirmDeleteAsync("¿Desactivar contribuyente?", $"¿Está seguro de desactivar a {NombreCompleto(c)}?", "Sí, desactivar");
+        if (confirmado)
+        {
+            await DesactivarConfirmado(c);
+        }
+    }
+
+    private async Task ConfirmarActivar(ContribuyenteDto c)
+    {
+        bool confirmado = await JS.ConfirmDeleteAsync("¿Activar contribuyente?", $"¿Está seguro de activar a {NombreCompleto(c)}?", "Sí, activar");
+        if (confirmado)
+        {
+            await ActivarConfirmado(c);
+        }
+    }
+
+    private async Task DesactivarConfirmado(ContribuyenteDto c)
+    {
+        try
+        {
+            var resp = await Http.PutAsync($"api/contribuyentes-edeclara/{c.CodContribuyente}/desactivar?userId={userId}", null);
+            if (resp.IsSuccessStatusCode)
+            {
+                await JS.ShowAlertAsync("Éxito", "Contribuyente desactivado correctamente.", "success");
+                await CargarTodo();
+            }
+            else
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                await JS.ShowAlertAsync("Error", $"No se pudo desactivar el contribuyente: {body}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("Error", ex.Message, "error");
+        }
+    }
+
+    private async Task ActivarConfirmado(ContribuyenteDto c)
+    {
+        try
+        {
+            var resp = await Http.PutAsync($"api/contribuyentes-edeclara/{c.CodContribuyente}/activar?userId={userId}", null);
+            if (resp.IsSuccessStatusCode)
+            {
+                await JS.ShowAlertAsync("Éxito", "Contribuyente activado correctamente.", "success");
+                await CargarTodo();
+            }
+            else
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                await JS.ShowAlertAsync("Error", $"No se pudo activar el contribuyente: {body}", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("Error", ex.Message, "error");
+        }
+    }
+
+    private void Limpiar()
+    {
+        modelo = new();
+        if (ecuadorPaisId.HasValue)
+            modelo.Pais = ecuadorPaisId;
+
+        modeloPersonaNatural = true;
+        modeloEspecial = false;
+        editando = false;
+        _editandoId = 0;
+        mensaje = null;
+        errorMsg = null;
+        enVista = null;
+        ReinitValidation();
+    }
+
+    private void AgregarCorreoCampo()
+    {
+        modelo.CorreosAdicionales.Add("");
+        StateHasChanged();
+    }
+
+    private void EliminarCorreoAdicional(int index)
+    {
+        if (index >= 0 && index < modelo.CorreosAdicionales.Count)
+        {
+            modelo.CorreosAdicionales.RemoveAt(index);
+            StateHasChanged();
+        }
+    }
+
+    private static string NombreCompleto(ContribuyenteDto c)
+    {
+        if (c.PersonaNatural == false && !string.IsNullOrWhiteSpace(c.Nombrerazonsocial)) 
+            return c.Nombrerazonsocial.Trim();
+        var nombre = $"{c.Apellidos} {c.Nombres}".Trim();
+        return string.IsNullOrWhiteSpace(nombre) ? $"Contribuyente #{c.CodContribuyente}" : nombre;
+    }
+
+    // Métodos de Sanitización y Bindings Personalizados
+    private void OnCelularInput(string val)
+    {
+        var cleaned = new string(val.Where(char.IsDigit).ToArray());
+        if (cleaned.Length > 10) cleaned = cleaned[..10];
+        modelo.Celular = cleaned;
+    }
+
+    private void OnTelefonoInput(string val)
+    {
+        var cleaned = new string(val.Where(char.IsDigit).ToArray());
+        if (cleaned.Length > 10) cleaned = cleaned[..10];
+        modelo.Telefonoconvencional = cleaned;
+    }
+
+    private void OnIdentificacionInput(string val)
+    {
+        int maxLength = 13;
+        bool onlyDigits = true;
+
+        if (modelo.Tipoidentificacion == "05") // Cédula
+        {
+            maxLength = 10;
+        }
+        else if (modelo.Tipoidentificacion == "04") // RUC
+        {
+            maxLength = 13;
+        }
+        else if (modelo.Tipoidentificacion == "06") // Pasaporte
+        {
+            onlyDigits = false;
+            maxLength = 20;
+        }
+
+        string cleaned = val;
+        if (onlyDigits)
+        {
+            cleaned = new string(val.Where(char.IsDigit).ToArray());
+        }
+        if (cleaned.Length > maxLength)
+        {
+            cleaned = cleaned[..maxLength];
+        }
+
+        modelo.Numeroidentificacion = cleaned;
+
+        CalcularFechaDeclaracion();
+
+        if (editContext != null)
+        {
+            editContext.NotifyFieldChanged(editContext.Field(nameof(modelo.Numeroidentificacion)));
+        }
+    }
+
+    private void CalcularFechaDeclaracion()
+    {
+        if (string.IsNullOrWhiteSpace(modelo.Numeroidentificacion)) return;
+
+        bool esEcuador = (modelo.Tipoidentificacion == "05" || modelo.Tipoidentificacion == "04") ||
+                         (modelo.Pais == ecuadorPaisId || !modelo.Pais.HasValue || ecuadorPaisId == null);
+
+        if (!esEcuador)
+        {
+            return;
+        }
+
+        var cleaned = new string(modelo.Numeroidentificacion.Where(char.IsDigit).ToArray());
+        if (cleaned.Length >= 9)
+        {
+            if (char.IsDigit(cleaned[8]))
+            {
+                int novenoDigito = cleaned[8] - '0';
+                int dia = (novenoDigito == 0) ? 28 : (novenoDigito * 2) + 8;
+                
+                var baseDate = modelo.FechaDeclaracion ?? DateOnly.FromDateTime(DateTime.Today);
+                modelo.FechaDeclaracion = new DateOnly(baseDate.Year, baseDate.Month, dia);
+
+                if (editContext != null)
+                {
+                    editContext.NotifyFieldChanged(editContext.Field(nameof(modelo.FechaDeclaracion)));
+                }
+            }
+        }
+    }
+
+    private void OnNombresInput(string val)
+    {
+        var cleaned = new string(val.Where(c => !char.IsDigit(c)).ToArray());
+        modelo.Nombres = cleaned;
+    }
+
+    private void OnApellidosInput(string val)
+    {
+        var cleaned = new string(val.Where(c => !char.IsDigit(c)).ToArray());
+        modelo.Apellidos = cleaned;
+    }
+
+    private void OnNumContribuyenteInput(string val)
+    {
+        var cleaned = new string(val.Where(char.IsDigit).ToArray());
+        if (cleaned.Length > 20) cleaned = cleaned[..20];
+        modelo.NumContribuyente = cleaned;
+    }
+
+    // Métodos de Validación Ecuatoriana Oficiales
+    private static bool ValidarCedulaEcuatoriana(string cedula)
+    {
+        cedula = new string((cedula ?? "").Where(char.IsDigit).ToArray());
+
+        if (cedula.Length != 10)
+            return false;
+
+        int[] coeficientes = { 2, 1, 2, 1, 2, 1, 2, 1, 2 };
+        
+        if (!int.TryParse(cedula[..2], out var provincia) || provincia < 1 || provincia > 24)
+            return false;
+
+        var tercerDigito = cedula[2] - '0';
+        if (tercerDigito > 5)
+            return false;
+
+        var suma = 0;
+        for (var i = 0; i < 9; i++)
+        {
+            var valor = (cedula[i] - '0') * coeficientes[i];
+            suma += valor > 9 ? valor - 9 : valor;
+        }
+
+        var digitoRecibido = cedula[9] - '0';
+        var digitoCalculado = (10 - (suma % 10)) % 10;
+        return digitoCalculado == digitoRecibido;
+    }
+
+    private static bool ValidarRucEcuatoriano(string ruc)
+    {
+        ruc = new string((ruc ?? "").Where(char.IsDigit).ToArray());
+
+        if (ruc.Length != 13)
+            return false;
+
+        if (!int.TryParse(ruc[..2], out var provincia) || provincia < 1 || provincia > 24)
+            return false;
+
+        var tercerDigito = ruc[2] - '0';
+
+        return tercerDigito switch
+        {
+            <= 5 => ValidarCedulaEcuatoriana(ruc[..10]) && ruc.EndsWith("001", StringComparison.Ordinal),
+            6 => ValidarRucPublico(ruc),
+            9 => ValidarRucPrivado(ruc),
+            _ => false
+        };
+    }
+
+    private static bool ValidarRucPrivado(string ruc)
+    {
+        int[] coeficientes = { 4, 3, 2, 7, 6, 5, 4, 3, 2 };
+        var suma = 0;
+
+        for (var i = 0; i < coeficientes.Length; i++)
+            suma += (ruc[i] - '0') * coeficientes[i];
+
+        var residuo = suma % 11;
+        var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
+        var digitoRecibido = ruc[9] - '0';
+
+        return digitoCalculado == digitoRecibido && ruc[10..] != "000";
+    }
+
+    private static bool ValidarRucPublico(string ruc)
+    {
+        int[] coeficientes = { 3, 2, 7, 6, 5, 4, 3, 2 };
+        var suma = 0;
+
+        for (var i = 0; i < coeficientes.Length; i++)
+            suma += (ruc[i] - '0') * coeficientes[i];
+
+        var residuo = suma % 11;
+        var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
+        var digitoRecibido = ruc[8] - '0';
+
+        return digitoCalculado == digitoRecibido && ruc[9..] != "0000";
+    }
+
+    // Cargas Geográficas del API y Relacionales
+    private string GetPaisNombre(int? id) =>
+        paises.FirstOrDefault(x => x.IdPais == id)?.Descripcion ?? (id.HasValue ? $"País #{id}" : "");
+
+    private string GetProvinciaNombre(int? id) =>
+        provincias.FirstOrDefault(x => x.IdProvincia == id)?.Descripcion ?? (id.HasValue ? $"Provincia #{id}" : "");
+
+    private string GetCiudadNombre(int? id) =>
+        ciudades.FirstOrDefault(x => x.IdCiudad == id)?.Descripcion ?? (id.HasValue ? $"Ciudad #{id}" : "");
+
+    private async Task CargarPaises()
+    {
+        try
+        {
+            if (paises.Any())
+            {
+                ActualizarPaisEcuadorId();
+                return;
+            }
+
+            var resp = await Http.GetAsync("api/clientes/lookups");
+            var body = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"PAISES -> HTTP {(int)resp.StatusCode}: {body}");
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            paises = new();
+
+            if (doc.RootElement.TryGetProperty("paises", out var paisesElem) &&
+                paisesElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var p in paisesElem.EnumerateArray())
+                {
+                    var idPais = p.TryGetProperty("idPais", out var pid) ? pid.GetInt32() : 0;
+                    var desc = p.TryGetProperty("descripcion", out var pd) ? pd.GetString() ?? "" : "";
+                    paises.Add(new PaisLookupDto { IdPais = idPais, Descripcion = desc });
+                }
+            }
+
+            ActualizarPaisEcuadorId();
+        }
+        catch (Exception ex)
+        {
+            errorMsg = ex.Message;
+        }
+    }
+
+    private void ActualizarPaisEcuadorId()
+    {
+        ecuadorPaisId = paises
+            .FirstOrDefault(p => string.Equals(p.Descripcion?.Trim(), "ECUADOR", StringComparison.OrdinalIgnoreCase))
+            ?.IdPais;
+    }
+
+    private async Task CargarUbicacionEcuador()
+    {
+        try
+        {
+            if (ecuadorPaisId is null || ecuadorPaisId <= 0)
+                return;
+
+            var resp = await Http.GetAsync("api/clientes/ubicacion-ecuador");
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"UBICACION ECUADOR -> HTTP {(int)resp.StatusCode}: {body}");
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+
+            if (doc.RootElement.TryGetProperty("provincias", out var provinciasElem) &&
+                provinciasElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in provinciasElem.EnumerateArray())
+                {
+                    var idProvincia = item.TryGetProperty("idProvincia", out var idProp) ? idProp.GetInt32() : 0;
+                    if (idProvincia <= 0 || provincias.Any(p => p.IdProvincia == idProvincia))
+                        continue;
+
+                    provincias.Add(new ProvinciaLookupDto
+                    {
+                        IdProvincia = idProvincia,
+                        Descripcion = item.TryGetProperty("descripcion", out var descProp) ? descProp.GetString() ?? "" : "",
+                        IdPais = item.TryGetProperty("idPais", out var paisProp) ? paisProp.GetInt32() : ecuadorPaisId
+                    });
+                }
+            }
+
+            OrdenarProvinciasEcuador();
+
+            if (doc.RootElement.TryGetProperty("ciudades", out var ciudadesElem) &&
+                ciudadesElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in ciudadesElem.EnumerateArray())
+                {
+                    var idCiudad = item.TryGetProperty("idCiudad", out var idProp) ? idProp.GetInt32() : 0;
+                    if (idCiudad <= 0 || ciudades.Any(c => c.IdCiudad == idCiudad))
+                        continue;
+
+                    ciudades.Add(new CiudadLookupDto
+                    {
+                        IdCiudad = idCiudad,
+                        Descripcion = item.TryGetProperty("descripcion", out var descProp) ? descProp.GetString() ?? "" : "",
+                        IdProvincia = item.TryGetProperty("idProvincia", out var provProp) ? provProp.GetInt32() : null
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMsg = ex.Message;
+        }
+    }
+
+    private void OrdenarProvinciasEcuador()
+    {
+        if (ecuadorPaisId is null || ecuadorPaisId <= 0)
+            return;
+
+        var ordenCatalogo = CatalogoUbicacionEcuador.Provincias
+            .Select((provincia, index) => new { provincia.Nombre, index })
+            .ToDictionary(x => NormalizarClaveUbicacion(x.Nombre), x => x.index);
+
+        provincias = provincias
+            .OrderBy(p =>
+            {
+                if (p.IdPais != ecuadorPaisId)
+                    return int.MaxValue - 1;
+
+                var clave = NormalizarClaveUbicacion(p.Descripcion);
+                return ordenCatalogo.TryGetValue(clave, out var orden) ? orden : int.MaxValue;
+            })
+            .ThenBy(p => p.Descripcion)
+            .ToList();
+    }
+
+    private int GetOrdenProvincia(ProvinciaLookupDto provincia)
+    {
+        if (provincia.IdPais != ecuadorPaisId)
+            return int.MaxValue;
+
+        var clave = NormalizarClaveUbicacion(provincia.Descripcion);
+        var indice = 0;
+        foreach (var item in CatalogoUbicacionEcuador.Provincias)
+        {
+            if (NormalizarClaveUbicacion(item.Nombre) == clave)
+                return indice;
+
+            indice++;
+        }
+
+        return int.MaxValue;
+    }
+
+    private static string NormalizarClaveUbicacion(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return string.Empty;
+
+        var normalizado = valor.Trim().Normalize(System.Text.NormalizationForm.FormD);
+        var builder = new System.Text.StringBuilder(normalizado.Length);
+
+        foreach (var caracter in normalizado)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(caracter) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                builder.Append(char.ToUpperInvariant(caracter));
+        }
+
+        return builder.ToString();
+    }
+
+    private async Task CargarProvincias(int paisId)
+    {
+        try
+        {
+            if (provincias.Any(p => p.IdPais == paisId))
+                return;
+
+            var resp = await Http.GetAsync($"api/clientes/provincias?paisId={paisId}");
+            var body = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"PROVINCIAS -> HTTP {(int)resp.StatusCode}: {body}");
+
+            var data = System.Text.Json.JsonSerializer.Deserialize<List<ProvinciaLookupDto>>(
+                body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            var nuevas = data ?? new();
+            foreach (var x in nuevas)
+            {
+                x.IdPais = paisId;
+                if (!provincias.Any(p => p.IdProvincia == x.IdProvincia))
+                    provincias.Add(x);
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMsg = ex.Message;
+        }
+    }
+
+    private async Task CargarCiudades(int provinciaId)
+    {
+        try
+        {
+            if (ciudades.Any(c => c.IdProvincia == provinciaId))
+                return;
+
+            var resp = await Http.GetAsync($"api/clientes/ciudades?provinciaId={provinciaId}");
+            var body = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"CIUDADES -> HTTP {(int)resp.StatusCode}: {body}");
+
+            var data = System.Text.Json.JsonSerializer.Deserialize<List<CiudadLookupDto>>(
+                body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            var nuevas = data ?? new();
+            foreach (var x in nuevas)
+            {
+                x.IdProvincia = provinciaId;
+                if (!ciudades.Any(c => c.IdCiudad == x.IdCiudad))
+                    ciudades.Add(x);
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMsg = ex.Message;
+        }
+    }
+
+    private async Task OnPaisChangedAsync()
+    {
+        modelo.Provincia = null;
+        modelo.Ciudad = null;
+
+        if (!modelo.Pais.HasValue || modelo.Pais <= 0)
+        {
+            modelo.Pais = null;
+            return;
+        }
+
+        if (modelo.Pais != ecuadorPaisId)
+            await CargarProvincias(modelo.Pais.Value);
+
+        CalcularFechaDeclaracion();
+    }
+
+    private async Task OnProvinciaChangedAsync()
+    {
+        modelo.Ciudad = null;
+
+        if (!modelo.Provincia.HasValue || modelo.Provincia <= 0)
+        {
+            modelo.Provincia = null;
+            return;
+        }
+
+        if (modelo.Pais != ecuadorPaisId)
+            await CargarCiudades(modelo.Provincia.Value);
+    }
+
+    private async Task PrepararLookupsUbicacionParaListado()
+    {
+        var paisIds = contribuyentes.Where(x => x.Pais.HasValue).Select(x => x.Pais!.Value).Distinct().ToList();
+        foreach (var pid in paisIds)
+        {
+            if (!provincias.Any(p => p.IdPais == pid))
+                await CargarProvincias(pid);
+        }
+
+        var provIds = contribuyentes.Where(x => x.Provincia.HasValue).Select(x => x.Provincia!.Value).Distinct().ToList();
+        foreach (var prId in provIds)
+        {
+            if (!ciudades.Any(c => c.IdProvincia == prId))
+                await CargarCiudades(prId);
+        }
+    }
+}

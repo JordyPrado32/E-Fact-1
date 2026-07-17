@@ -1,0 +1,2690 @@
+@page "/register"
+@attribute [AllowAnonymous]
+@layout Simetric.Components.Layout.EmptyLayout
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.WebUtilities
+@using Simetric.Components.Helpers
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@using System.ComponentModel.DataAnnotations
+@using System.IO
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject Simetric.Services.ClienteService ClienteService
+@inject IWebHostEnvironment Env
+@inject AppAccessService AppAccessService
+@inject VendedorBackOfficeService VendedorBackOfficeService
+@inject IEmailService EmailService
+@implements IAsyncDisposable
+
+<PageTitle>Registro | Numerica software</PageTitle>
+
+<style>
+    @@font-face {
+        font-family: "Conthrax SemiBold";
+        src: url("/fonts/Conthrax-SemiBold.otf") format("opentype");
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+    }
+
+    :root {
+        --n-blue: #006bb5;
+        --n-blue-dark: #004a7c;
+        --n-blue-light: #e6f0f8;
+        --n-dark: #2c3e50;
+        --white: #ffffff;
+        --bg-color: #f4f7f6;
+    }
+
+    body {
+        font-family: "Montserrat", sans-serif;
+        background-color: var(--bg-color);
+        margin: 0;
+        min-height: 100dvh;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(10px);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+        color: var(--n-blue);
+    }
+
+    .loading-shell {
+        width: min(92vw, 28rem);
+        padding: 2rem 1.75rem;
+        border-radius: 28px;
+        background: linear-gradient(155deg, rgba(255, 255, 255, 0.96), rgba(237, 246, 255, 0.92));
+        box-shadow: 0 28px 70px rgba(0, 63, 114, 0.18);
+        border: 1px solid rgba(0, 107, 181, 0.1);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: 1rem;
+    }
+
+    .swal2-container {
+        z-index: 20000 !important;
+    }
+
+    .loading-logo {
+        width: 6rem;
+        max-width: 100%;
+        object-fit: contain;
+        filter: drop-shadow(0 12px 20px rgba(0, 107, 181, 0.18));
+    }
+
+    .loading-progress {
+        width: 100%;
+        height: 0.55rem;
+        border-radius: 999px;
+        background: rgba(0, 107, 181, 0.1);
+        overflow: hidden;
+    }
+
+    .loading-progress::after {
+        content: "";
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #1f8fe5, #0d6efd, #57b2ff);
+        animation: registerLoadProgress 1.3s ease-in-out infinite;
+    }
+
+    @@keyframes registerLoadProgress {
+        0% {
+            transform: translateX(-110%);
+        }
+
+        100% {
+            transform: translateX(260%);
+        }
+    }
+
+    .main-viewport {
+        display: flex;
+        min-height: max(100vh, 100dvh);
+        height: auto;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-y: visible;
+    }
+
+    .brand-side {
+        flex: 1 1 56%;
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: clamp(2.5rem, 4vw, 5rem);
+        position: relative;
+        overflow: hidden;
+        min-width: 0;
+        min-height: 0;
+    }
+
+    .brand-side::before,
+    .brand-side::after {
+        content: "";
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.04);
+        z-index: 0;
+    }
+
+    .brand-side::before {
+        width: 400px;
+        height: 400px;
+        top: -100px;
+        left: -100px;
+    }
+
+    .brand-side::after {
+        width: 600px;
+        height: 600px;
+        bottom: -200px;
+        right: -150px;
+    }
+
+    .numeric-digits-layer {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    .numerica-digit {
+        position: absolute;
+        z-index: 1;
+        color: rgba(255, 255, 255, 0.5);
+        line-height: 1;
+        user-select: none;
+        mix-blend-mode: screen;
+        text-shadow: 0 0 20px rgba(255, 255, 255, 0.34), 0 0 42px rgba(255, 255, 255, 0.22), 0 0 64px rgba(184, 220, 255, 0.1);
+        font-variant-numeric: tabular-nums;
+        will-change: transform, opacity;
+    }
+
+    @@keyframes numericaDigitFloat {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 18px, 0) scale(0.88) rotate(var(--rotate, 0deg));
+        }
+
+        18% {
+            opacity: var(--peak-opacity, 0.42);
+        }
+
+        72% {
+            opacity: calc(var(--peak-opacity, 0.42) * 0.7);
+        }
+
+        100% {
+            opacity: 0;
+            transform: translate3d(var(--drift-x, 0px), var(--drift-y, -38px), 0) scale(1.05) rotate(calc(var(--rotate, 0deg) + 6deg));
+        }
+    }
+
+    .numeric-digits-layer::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background: radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.14), transparent 34%), radial-gradient(circle at 74% 72%, rgba(255, 255, 255, 0.11), transparent 30%);
+        opacity: 0.78;
+    }
+
+    .glass-card {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 24px;
+        padding: clamp(2.15rem, 3vw, 3.25rem);
+        width: min(100%, 38rem);
+        max-width: 38rem;
+        min-height: clamp(23rem, 50vh, 27rem);
+        position: relative;
+        z-index: 2;
+        box-shadow: 0 25px 50px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: clamp(1.35rem, 2vw, 1.9rem);
+        text-align: center;
+    }
+
+    .brand-logo-shell {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: fit-content;
+        max-width: 100%;
+        padding: 0.8rem 1.1rem;
+        border-radius: 18px;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08));
+        border: 1px solid rgba(255, 255, 255, 0.26);
+        box-shadow: 0 16px 30px rgba(2, 35, 66, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+        backdrop-filter: blur(10px);
+    }
+
+    .brand-lockup {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: clamp(0.95rem, 1.4vw, 1.25rem);
+        max-width: 100%;
+    }
+
+    .brand-logo {
+        width: clamp(4.6rem, 8vw, 5.75rem);
+        height: clamp(4.6rem, 8vw, 5.75rem);
+        max-width: 100%;
+        display: block;
+        object-fit: contain;
+        filter: drop-shadow(0 8px 18px rgba(1, 21, 40, 0.24)) saturate(1.04) contrast(1.04);
+    }
+
+    .login-brand-heading {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-weight: 600;
+        font-size: clamp(2rem, 3.2vw, 2.85rem);
+        letter-spacing: 0;
+        line-height: 0.96;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        text-align: left;
+    }
+
+    .brand-tagline {
+        margin: 0;
+        max-width: 28rem;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: clamp(1.08rem, 1.55vw, 1.35rem);
+        font-weight: 400;
+        line-height: 1.55;
+    }
+
+    .brand-version-row {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+    }
+
+    .brand-mobile-lockup {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+    }
+
+    .brand-mobile-logo {
+        width: 58px;
+        height: 58px;
+        display: inline-block;
+        object-fit: contain;
+        filter: drop-shadow(0 10px 18px rgba(37, 76, 205, 0.2));
+    }
+
+    .brand-mobile-name {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-size: 1.15rem;
+        font-weight: 600;
+        line-height: 0.98;
+        color: var(--n-dark);
+        display: flex;
+        flex-direction: column;
+        text-align: left;
+    }
+
+    .form-side {
+        flex: 1 1 52%;
+        background: var(--white);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: clamp(1rem, 2vw, 2rem);
+        min-width: 0;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .login-container-pro {
+        width: 100%;
+        max-width: 720px;
+        animation: slideUp 0.6s ease-out forwards;
+        background: white;
+        padding: clamp(1.35rem, 2vw, 2rem);
+        border-radius: 24px;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.04);
+        border: 1px solid rgba(0, 0, 0, 0.02);
+        overflow: visible;
+    }
+
+    .login-container-pro .mb-5 {
+        margin-bottom: 1.4rem !important;
+    }
+
+    .login-container-pro .mb-4 {
+        margin-bottom: 0.9rem !important;
+    }
+
+    .login-container-pro > .text-center.mb-5 h2 {
+        font-size: clamp(1.45rem, 1.9vw, 1.68rem);
+    }
+
+    .login-container-pro > .text-center.mb-5 .text-muted.small {
+        font-size: 0.76rem !important;
+    }
+
+    .register-section {
+        border: 1px solid #eef2f7;
+        border-radius: 18px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        background: #ffffff;
+    }
+
+    .register-stepper {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .register-step {
+        border-radius: 16px;
+        border: 1.5px solid #e8eef5;
+        background: #f8fafc;
+        padding: 0.95rem 1.15rem;
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+
+    .register-step.is-active {
+        border-color: var(--n-blue);
+        background: linear-gradient(135deg, rgba(0, 107, 181, 0.05) 0%, rgba(0, 107, 181, 0.02) 100%);
+        box-shadow: 0 10px 25px rgba(0, 107, 181, 0.08);
+        transform: translateY(-1px);
+    }
+
+    .register-step.is-complete {
+        border-color: rgba(25, 135, 84, 0.25);
+        background: rgba(25, 135, 84, 0.03);
+    }
+
+    .register-step-index {
+        width: 2.2rem;
+        height: 2.2rem;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.88rem;
+        font-weight: 700;
+        color: var(--n-blue);
+        background: rgba(0, 107, 181, 0.08);
+        transition: all 0.3s ease;
+        flex: none;
+    }
+
+    .register-step.is-active .register-step-index {
+        background: var(--n-blue);
+        color: white;
+        box-shadow: 0 0 12px rgba(0, 107, 181, 0.3);
+    }
+
+    .register-step.is-complete .register-step-index {
+        color: #198754;
+        background: rgba(25, 135, 84, 0.12);
+    }
+
+    .register-step-copy {
+        display: flex;
+        align-items: center;
+    }
+
+    .register-step-copy strong {
+        color: var(--n-dark);
+        font-size: 0.88rem;
+    }
+
+    .register-section-title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--n-dark);
+        font-size: 0.82rem;
+        font-weight: 700;
+        margin-bottom: 0.85rem;
+    }
+
+    .register-section-title i {
+        color: var(--n-blue);
+    }
+
+    .register-form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem;
+    }
+
+    .form-field {
+        min-width: 0;
+    }
+
+    .form-field--full {
+        grid-column: 1 / -1;
+    }
+
+    .avatar-picker-shell {
+        display: grid;
+        grid-template-columns: minmax(13rem, 0.78fr) minmax(13rem, 1fr);
+        gap: 0.85rem;
+        align-items: stretch;
+    }
+
+    .avatar-preview-card {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        padding: 0.9rem 1rem;
+        margin-bottom: 0;
+        border-radius: 18px;
+        border: 1px solid #e6edf5;
+        background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 100%);
+    }
+
+    .avatar-preview-image {
+        width: 3.6rem;
+        height: 3.6rem;
+        border-radius: 18px;
+        object-fit: cover;
+        border: 2px solid rgba(0, 107, 181, 0.18);
+        box-shadow: 0 10px 18px rgba(0, 107, 181, 0.12);
+    }
+
+    .avatar-preview-image[src*="Bandera-"] {
+        object-fit: contain !important;
+        background-color: #ffffff;
+    }
+
+    .avatar-preview-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+
+    .avatar-preview-copy strong {
+        color: var(--n-dark);
+        font-size: 0.88rem;
+    }
+
+    .avatar-preview-copy span {
+        color: #6f7d8b;
+        font-size: 0.75rem;
+        line-height: 1.35;
+    }
+
+    .avatar-scroll {
+        max-height: 8.9rem;
+        overflow-y: auto;
+        padding: 0.25rem 0.35rem 0.25rem 0.25rem;
+        border: 1px solid #edf2f7;
+        border-radius: 18px;
+        background: #f8fafc;
+    }
+
+    .avatar-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+        gap: 0.55rem;
+    }
+
+    .avatar-option {
+        border: 2px solid #e6edf5;
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 0.25rem;
+        aspect-ratio: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .avatar-option:hover {
+        transform: translateY(-2px);
+        border-color: rgba(0, 107, 181, 0.42);
+        box-shadow: 0 10px 18px rgba(0, 107, 181, 0.12);
+    }
+
+    .avatar-option.is-selected {
+        border-color: #006bb5;
+        box-shadow: 0 0 0 4px rgba(0, 107, 181, 0.12);
+    }
+
+    .avatar-option img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 12px;
+    }
+
+    .avatar-option img[src*="Bandera-"] {
+        object-fit: contain !important;
+        background-color: #ffffff;
+    }
+
+    .input-wrapper .input-n-premium[type="date"] {
+        appearance: none;
+        color-scheme: light;
+    }
+
+    .form-label-n {
+        font-weight: 600;
+        font-size: 0.76rem;
+        color: var(--n-dark);
+        margin-bottom: 7px;
+        display: block;
+        letter-spacing: 0.5px;
+    }
+
+    .input-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+
+    .input-n-premium {
+        width: 100%;
+        padding: 14px 45px 14px 45px;
+        border: 2px solid #edf2f7;
+        border-radius: 12px;
+        background: #f8fafc;
+        font-size: 0.87rem;
+        color: var(--n-dark);
+        transition: all 0.3s ease;
+    }
+
+    .input-n-premium:focus {
+        border-color: var(--n-blue);
+        background: white;
+        box-shadow: 0 0 0 4px rgba(0, 107, 181, 0.1);
+        outline: none;
+    }
+
+    .input-icon-n {
+        position: absolute;
+        left: 16px;
+        color: #a0aec0;
+        font-size: 1.2rem;
+        transition: color 0.3s ease;
+    }
+
+    .btn-eye-n {
+        position: absolute;
+        right: 16px;
+        background: transparent;
+        border: none;
+        color: #a0aec0;
+        font-size: 1.2rem;
+        cursor: pointer;
+        transition: color 0.3s ease;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .btn-eye-n:hover {
+        color: var(--n-blue);
+    }
+
+    .btn-n-login {
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        padding: 16px;
+        border-radius: 12px;
+        width: 100%;
+        border: none;
+        font-weight: 600;
+        font-size: 0.91rem;
+        letter-spacing: 0.5px;
+        box-shadow: 0 8px 20px rgba(0, 107, 181, 0.25);
+        transition: all 0.3s ease;
+        margin-top: 1rem;
+    }
+
+    .btn-n-login:hover:not(:disabled) {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 25px rgba(0, 107, 181, 0.35);
+    }
+
+    .btn-n-login:disabled {
+        opacity: 0.75;
+        cursor: not-allowed;
+    }
+
+    .back-link-n {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.35rem;
+        margin-top: 0.85rem;
+        color: #7a8794;
+        text-decoration: none;
+        font-size: 0.8rem;
+        font-weight: 600;
+        background: transparent;
+        border: none;
+        width: 100%;
+        padding: 0.25rem 0;
+    }
+
+    .back-link-n:hover {
+        color: var(--n-blue);
+    }
+
+    .auth-footer {
+        margin-top: 1.25rem;
+    }
+
+    .service-selector-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.9rem;
+    }
+
+    .service-selector-card {
+        border: 1px solid #e7eef6;
+        border-radius: 20px;
+        background: #fff;
+        padding: 1rem;
+        text-align: left;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+
+    .service-selector-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(0, 107, 181, 0.32);
+        box-shadow: 0 14px 28px rgba(0, 107, 181, 0.1);
+    }
+
+    .service-selector-card.is-free {
+        background: linear-gradient(135deg, #f3fbf6 0%, #ffffff 100%);
+        border-color: rgba(25, 135, 84, 0.22);
+    }
+
+    .service-selector-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .service-selector-icon {
+        width: 2.8rem;
+        height: 2.8rem;
+        border-radius: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        color: #fff;
+        background: var(--service-color, var(--n-blue));
+        box-shadow: 0 12px 24px color-mix(in srgb, var(--service-color, var(--n-blue)) 22%, transparent);
+    }
+
+    .service-selector-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border-radius: 999px;
+        padding: 0.32rem 0.62rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        background: #eef3f8;
+        color: #35516d;
+    }
+
+    .service-selector-title {
+        margin: 0 0 0.35rem 0;
+        color: var(--n-dark);
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    .service-selector-copy {
+        color: #6c7a89;
+        font-size: 0.8rem;
+        line-height: 1.5;
+        margin-bottom: 0.9rem;
+        min-height: 4.8rem;
+    }
+
+    .service-selector-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        color: var(--service-color, var(--n-blue));
+        font-size: 0.79rem;
+        font-weight: 700;
+    }
+
+    .subscription-summary-card {
+        border-radius: 20px;
+        border: 1px solid #e8eef5;
+        background: linear-gradient(135deg, #f8fbff 0%, #ffffff 100%);
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .subscription-summary-card h3 {
+        margin: 0 0 0.35rem 0;
+        color: var(--n-dark);
+        font-size: 1rem;
+    }
+
+    .subscription-summary-card p {
+        margin: 0;
+        color: #6c7a89;
+        font-size: 0.82rem;
+        line-height: 1.5;
+    }
+
+    .subscription-plan-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.8rem;
+        margin-top: 1rem;
+    }
+
+    .subscription-plan-card {
+        border-radius: 18px;
+        border: 1px solid #e8eef5;
+        background: #fff;
+        padding: 0.95rem;
+    }
+
+    .subscription-plan-card strong {
+        display: block;
+        margin-bottom: 0.35rem;
+        color: var(--n-dark);
+        font-size: 0.85rem;
+    }
+
+    .subscription-plan-card span {
+        color: #718096;
+        font-size: 0.76rem;
+        line-height: 1.45;
+    }
+
+    .service-hero-card {
+        position: relative;
+        overflow: hidden;
+        border-radius: 28px;
+        padding: 1.45rem;
+        background:
+            radial-gradient(circle at top right, rgba(110, 190, 255, 0.32), transparent 32%),
+            linear-gradient(145deg, #0d6efd 0%, #005fa3 58%, #003d6b 100%);
+        color: #fff;
+        box-shadow: 0 26px 60px rgba(0, 83, 145, 0.18);
+        margin-bottom: 1.15rem;
+    }
+
+    .service-hero-card::after {
+        content: "";
+        position: absolute;
+        inset: auto -2rem -2rem auto;
+        width: 10rem;
+        height: 10rem;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .service-hero-top {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .service-hero-logo {
+        width: 4.2rem;
+        height: 4.2rem;
+        padding: 0.7rem;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.18);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(10px);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    }
+
+    .service-hero-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+    }
+
+    .service-hero-copy h3 {
+        margin: 0;
+        font-size: 1.25rem;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+    }
+
+    .service-hero-copy p {
+        margin: 0.35rem 0 0;
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 0.92rem;
+        line-height: 1.55;
+    }
+
+    .service-hero-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-top: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .service-hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.45rem 0.8rem;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.13);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+    }
+
+    .register-note-card {
+        border-radius: 20px;
+        background: linear-gradient(180deg, #f8fbff, #eef6ff);
+        border: 1px solid rgba(0, 107, 181, 0.1);
+        padding: 1rem 1.1rem;
+        display: grid;
+        gap: 0.7rem;
+        margin-bottom: 1rem;
+    }
+
+    .register-note-card strong {
+        color: #12314b;
+        font-size: 0.95rem;
+    }
+
+    .register-note-card span {
+        color: #58718a;
+        font-size: 0.84rem;
+        line-height: 1.5;
+    }
+
+    .service-highlight-list {
+        display: grid;
+        gap: 0.6rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .service-highlight-list li {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        color: #36506a;
+        font-size: 0.84rem;
+        font-weight: 600;
+    }
+
+    .service-highlight-list i {
+        width: 1.8rem;
+        height: 1.8rem;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(13, 110, 253, 0.1);
+        color: #0d6efd;
+        flex-shrink: 0;
+    }
+
+
+    .register-complete-head {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .register-complete-mark {
+        width: 4.3rem;
+        height: 4.3rem;
+        border-radius: 22px;
+        background: linear-gradient(145deg, #0d6efd, #33a1ff);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 20px 30px rgba(13, 110, 253, 0.22);
+        flex-shrink: 0;
+    }
+
+    .register-complete-mark img {
+        width: 72%;
+        height: 72%;
+        object-fit: contain;
+    }
+    /* Nuevo diseño minimalista para la tarjeta de éxito */
+.register-complete-card {
+    background: #ffffff;
+    border: 1px solid #eef2f7;
+    border-radius: 20px;
+    padding: 2.5rem;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.03);
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+.success-icon-badge {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: #eefdf3; /* Color verde muy suave */
+    color: #198754;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.8rem;
+    margin: 0 auto 1.5rem auto;
+}
+
+.register-complete-copy h3 {
+    font-size: 1.4rem;
+    color: var(--n-dark);
+    margin-bottom: 0.5rem;
+    font-weight: 700;
+}
+
+.register-complete-copy p {
+    color: #718096;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    margin-bottom: 2rem;
+}
+
+.register-complete-panel {
+    background: #f8fafc;
+    border: 1px solid #edf2f7;
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: left;
+    margin-bottom: 0.75rem;
+}
+
+.register-complete-label {
+    display: block;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #a0aec0;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.register-complete-value {
+    color: #2d3748;
+    font-size: 0.9rem;
+    font-weight: 600;
+    word-break: break-all;      /* Rompe la palabra en cualquier lugar si es necesario */
+    overflow-wrap: break-word;  /* Asegura que el texto se ajuste al contenedor */
+    display: block;             /* Necesario para que el control de espacio funcione */
+    max-width: 100%;            /* Limita el ancho al contenedor */
+}
+    .inline-actions {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .secondary-action-btn {
+        background: #eef3f8;
+        color: #274562;
+        padding: 0.95rem 1rem;
+        border-radius: 12px;
+        border: none;
+        font-weight: 700;
+        width: 100%;
+    }
+
+    @@keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @@media (max-height: 860px) {
+        .main-viewport {
+            height: auto;
+        }
+
+        .brand-side {
+            padding: 2.5rem;
+        }
+
+        .glass-card {
+            padding: 1.85rem;
+            min-height: 25.75rem;
+            gap: 1rem;
+        }
+
+        .brand-side,
+        .form-side {
+            padding-top: 1.25rem;
+            padding-bottom: 1.25rem;
+        }
+
+        .login-container-pro {
+            padding: 1.35rem 1.2rem;
+        }
+    }
+
+    @@media (max-width: 992px) {
+        .main-viewport {
+            flex-direction: column;
+            height: auto;
+            min-height: max(100vh, 100dvh);
+            overflow: visible;
+        }
+
+        .form-side {
+            min-height: 100dvh;
+            padding: 0.9rem;
+            background: var(--bg-color);
+            overflow: visible;
+        }
+
+        .login-container-pro {
+            padding: 1.4rem 1.15rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+        }
+
+        .register-form-grid,
+        .avatar-picker-shell,
+        .service-selector-grid,
+        .subscription-plan-grid,
+        .register-stepper {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* ESTILOS DE PLATAFORMAS EN LOGIN/REGISTRO (DISEÑO PREMIUM MODERNO) */
+    .platforms-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+        width: 100%;
+        margin: 0.5rem 0;
+    }
+
+    .platform-card {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: flex-start;
+        padding: 1.15rem;
+        border-radius: 16px;
+        position: relative;
+        cursor: pointer;
+        transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+        min-height: 130px;
+        width: 100%;
+        backdrop-filter: blur(8px);
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        overflow: hidden;
+    }
+
+    /* CARD-SPECIFIC THEMES (Both are transparent glass) */
+    .card-efact,
+    .card-esign {
+        background: rgba(255, 255, 255, 0.30);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .card-econtax {
+        background: rgba(10, 70, 65, 0.4);
+        border: 1px solid rgba(15, 133, 119, 0.2);
+    }
+
+    .card-edeclara {
+        background: rgba(43, 38, 97, 0.4);
+        border: 1px solid rgba(83, 75, 184, 0.2);
+    }
+
+    .card-epeople {
+        background: rgba(90, 40, 5, 0.4);
+        border: 1px solid rgba(211, 84, 0, 0.2);
+    }
+    .platform-card.card-efact:hover,
+    .platform-card.card-esign:hover {
+        transform: translateY(-4px);
+        background: rgba(255, 255, 255, 0.22);
+        border-color: rgba(255, 255, 255, 0.45);
+        box-shadow: 0 12px 30px rgba(255, 255, 255, 0.12);
+    }
+
+    .card-econtax:hover {
+        transform: translateY(-4px);
+        background: rgba(10, 70, 65, 0.65);
+        border-color: rgba(15, 133, 119, 0.6);
+        box-shadow: 0 12px 30px rgba(15, 133, 119, 0.35);
+    }
+
+    .card-edeclara:hover {
+        transform: translateY(-4px);
+        background: rgba(43, 38, 97, 0.65);
+        border-color: rgba(83, 75, 184, 0.6);
+        box-shadow: 0 12px 30px rgba(83, 75, 184, 0.35);
+    }
+
+    .card-epeople:hover {
+        transform: translateY(-4px);
+        background: rgba(90, 40, 5, 0.65);
+        border-color: rgba(211, 84, 0, 0.6);
+        box-shadow: 0 12px 30px rgba(211, 84, 0, 0.35);
+    }
+
+    /* CARD HEADER & LOGO IMAGES */
+    .platform-card-header {
+        display: flex;
+        align-items: center;
+        height: 60px;
+        width: 100%;
+    }
+
+    .logo-efact-card {
+        max-height: 2.3rem;
+        width: auto;
+        object-fit: contain;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+    }
+
+    .logo-esign-card {
+        max-height: 4.4rem;
+        width: auto;
+        object-fit: contain;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+        margin-left: 0px;
+    }
+
+    .card-epeople {
+        grid-column: span 2;
+    }
+
+    /* DESCRIPTION */
+    .platform-card-desc {
+        font-size: 0.78rem;
+        line-height: 1.35;
+        color: #2c3e50 !important; 
+        margin: 0.8rem 0 0 0;
+        text-align: left;
+        font-weight: 500; 
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    /* ACTION ICON BUTTON (LARGER, WHITISH BACKGROUND) */
+    .platform-action-icon-btn {
+        position: absolute;
+        bottom: 1rem;
+        right: 1rem;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        background: rgba(255, 255, 255, 0.28);
+        color: rgba(255, 255, 255, 0.95);
+    }
+
+    .efact-arrow-bg,
+    .esign-arrow-bg {
+        background: rgba(255, 255, 255, 0.28);
+        color: rgba(255, 255, 255, 0.95);
+    }
+
+    .econtax-arrow-bg {
+        background: rgba(15, 133, 119, 0.25);
+        color: #4dbdb1;
+    }
+
+    .edeclara-arrow-bg {
+        background: rgba(83, 75, 184, 0.25);
+        color: #9c97eb;
+    }
+
+    .epeople-arrow-bg {
+        background: rgba(211, 84, 0, 0.25);
+        color: #ff9f5a;
+    }
+
+    /* Hover action interaction: whiter, less neon */
+    .platform-card:hover .platform-action-icon-btn {
+        transform: translateY(-4px);
+        background: rgba(255, 255, 255, 0.50); /* Subimos a 0.50 para que se ilumine al pasar el mouse */
+        border-color: rgba(255, 255, 255, 0.70);
+        box-shadow: 0 12px 30px rgba(255, 255, 255, 0.15);
+    }
+
+    .platform-card.card-econtax:hover .platform-action-icon-btn {
+        background: #4dbdb1;
+        color: #062b27;
+        box-shadow: 0 0 12px rgba(77, 189, 177, 0.5);
+    }
+
+    .platform-card.card-edeclara:hover .platform-action-icon-btn {
+        background: #9c97eb;
+        color: #121029;
+        box-shadow: 0 0 12px rgba(156, 151, 235, 0.5);
+    }
+
+    .platform-card.card-epeople:hover .platform-action-icon-btn {
+        background: #ff9f5a;
+        color: #381600;
+        box-shadow: 0 0 12px rgba(255, 159, 90, 0.5);
+    }
+
+    /* BRAND LOGO ABOVE WELCOME */
+    .form-brand-logo {
+        max-height: 52px;
+        width: auto;
+        margin-bottom: 0.85rem;
+        display: inline-block;
+        filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.06));
+    }
+    /* Nuevos Estilos del Rediseño de Registro e Innovación Visual */
+    .activation-wrapper {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+        width: 100%;
+        margin-top: 0.5rem;
+    }
+
+    .activation-card {
+        background: linear-gradient(145deg, #ffffff 0%, #f6fafd 100%);
+        border: 2px solid #e2effa;
+        border-radius: 24px;
+        padding: 2rem 1.75rem;
+        box-shadow: 0 15px 35px rgba(0, 107, 181, 0.06);
+        position: relative;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+
+    .activation-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 150px;
+        height: 150px;
+        background: radial-gradient(circle, rgba(0, 107, 181, 0.06) 0%, transparent 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+    .activation-header {
+        display: flex;
+        align-items: center;
+        gap: 1.25rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .activation-logo-wrapper {
+        width: 4.5rem;
+        height: 4.5rem;
+        border-radius: 20px;
+        background: linear-gradient(135deg, rgba(0, 107, 181, 0.1) 0%, rgba(0, 107, 181, 0.03) 100%);
+        border: 1.5px solid rgba(0, 107, 181, 0.15);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        box-shadow: 0 8px 20px rgba(0, 107, 181, 0.05);
+    }
+
+    .activation-logo-wrapper img {
+        width: 2.6rem;
+        height: 2.6rem;
+        object-fit: contain;
+    }
+
+    .activation-title-group h3 {
+        margin: 0;
+        color: var(--n-dark);
+        font-size: 1.45rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+    }
+
+    .activation-title-group p {
+        margin: 0.25rem 0 0;
+        color: #718096;
+        font-size: 0.88rem;
+        font-weight: 500;
+    }
+
+    .activation-body {
+        margin-bottom: 1.75rem;
+    }
+
+    .activation-description {
+        color: #4a5568;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        margin-bottom: 1.25rem;
+    }
+
+    .benefits-list {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.85rem;
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    @@media (max-width: 576px) {
+        .benefits-list {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .benefit-item {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        color: #2d3748;
+        font-size: 0.88rem;
+        font-weight: 600;
+    }
+
+    .benefit-icon-wrapper {
+        width: 1.6rem;
+        height: 1.6rem;
+        border-radius: 50%;
+        background: rgba(25, 135, 84, 0.1);
+        color: #198754;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.8rem;
+        flex-shrink: 0;
+    }
+
+    .btn-n-activation {
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        padding: 16px;
+        border-radius: 12px;
+        width: 100%;
+        border: none;
+        font-weight: 600;
+        font-size: 0.91rem;
+        letter-spacing: 0.5px;
+        box-shadow: 0 8px 20px rgba(0, 107, 181, 0.25);
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        cursor: pointer;
+    }
+
+    .btn-n-activation:hover:not(:disabled) {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 25px rgba(0, 107, 181, 0.35);
+    }
+
+    .btn-n-activation:disabled {
+        opacity: 0.75;
+        cursor: not-allowed;
+    }
+    @@keyframes scaleIn {
+        0% { transform: scale(0); opacity: 0; }
+        100% { transform: scale(1); opacity: 1; }
+    }
+
+    .success-card-premium {
+        border-radius: 24px;
+        background: linear-gradient(135deg, #ffffff 0%, #f7fbf8 100%);
+        border: 2px solid #e1f5e8;
+        padding: 2.25rem 2rem;
+        box-shadow: 0 15px 35px rgba(25, 135, 84, 0.05);
+        text-align: center;
+    }
+
+</style>
+
+@if (procesando || cuentaCreada)
+{
+    <div class="loading-overlay">
+        <div class="loading-shell">
+            <img src="/images/company-logo.png" class="loading-logo" alt="Numerica e-fact" onerror="this.style.display='none'" />
+            @if (cuentaCreada)
+            {
+                <div class="success-icon-badge">
+                    <i class="bi bi-check2"></i>
+                </div>
+            }
+            else
+            {
+                <div class="spinner-border text-primary" style="width: 3.15rem; height: 3.15rem;" role="status"></div>
+            }
+            <h4 class="fw-bold text-dark mb-0">@(cuentaCreada ? "Cuenta creada exitosamente" : "Creando tu cuenta")</h4>
+            <p class="text-muted mb-0">@(cuentaCreada ? "Ya puedes ingresar al sistema con tus credenciales." : "Estamos registrando tus datos. Esto tarda solo unos segundos.")</p>
+            <div class="loading-progress"></div>
+        </div>
+    </div>
+}
+
+<div class="main-viewport">
+    <div class="brand-side d-none d-lg-flex">
+        <div id="numericaDigitsLayerRegister" class="numeric-digits-layer" aria-hidden="true"></div>
+
+        <div class="glass-card">
+            <div class="brand-lockup">
+                <span class="brand-logo-shell">
+                    <img src="/images/company-logo.png" class="brand-logo" alt="Numerica software" onerror="this.style.display='none'" />
+                </span>
+                <h1 class="login-brand-heading">
+                    <span>Numerica</span>
+                    <span>software</span>
+                </h1>
+            </div>
+            <p class="brand-tagline">Aquí encuentras múltiples plataformas:</p>
+            <div class="platforms-grid">
+                <!-- E-FACT -->
+                <div class="platform-card card-efact">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-efact-card" src="/images/LogoPrincipal.svg" alt="e-fact" />
+                    </div>
+                    <p class="platform-card-desc">Facturación electrónica fácil, rápida y segura.</p>
+                </div>
+
+                <!-- E-SIGN -->
+                <div class="platform-card card-esign">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-esign-card" src="/images/esign/esign.png" alt="e-sing" />
+                    </div>
+                    <p class="platform-card-desc">Firma electrónica con validez legal.</p>
+                </div>
+                @*
+                <!-- E-CONTAX -->
+                <div class="platform-card card-econtax">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-econtax" src="/images/econtax/LogoEContaxWord.png" alt="e-contax" style="max-height: 1.15rem; width: auto;" />
+                    </div>
+                    <p class="platform-card-desc">Contabilidad y conciliación inteligente.</p>
+                    <span class="platform-action-icon-btn econtax-arrow-bg">
+                        <i class="ri-calculator-fill"></i>
+                    </span>
+                </div>
+
+                <!-- E-DECLARA -->
+                <div class="platform-card card-edeclara">
+                    <div class="platform-card-header">
+                        <img class="platform-logo-img logo-edeclara" src="/images/edeclara/LogoEDeclara.png" alt="e-declara" style="max-height: 1.28rem; width: auto;" />
+                    </div>
+                    <p class="platform-card-desc">Declaraciones de impuestos simplificadas.</p>
+                    <span class="platform-action-icon-btn edeclara-arrow-bg">
+                        <i class="ri-percent-fill"></i>
+                    </span>
+                </div>
+
+                <!-- E-PEOPLE -->
+                <div class="platform-card card-epeople">
+                    <div class="platform-card-header">
+                        <span class="platform-logo-fallback-text logo-epeople text-epeople" style="font-family: 'Conthrax SemiBold', sans-serif; font-size: 1.2rem; color: #ff9f5a;">E-PEOPLE</span>
+                    </div>
+                    <p class="platform-card-desc">Gestión de talento y nóminas.</p>
+                    <span class="platform-action-icon-btn epeople-arrow-bg">
+                        <i class="ri-team-fill"></i>
+                    </span>
+                </div>
+                *@
+            </div>
+            <div class="brand-version-row" style="margin-top: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.5rem;">
+                <span class="badge rounded-pill bg-white text-primary px-3 py-2 shadow-sm">Versión 2026</span>
+                <p class="brand-trust-text" style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.6); margin: 0.5rem 0 0 0; display: flex; align-items: center; gap: 0.35rem;">
+                    <i class="ri-star-line text-warning"></i>
+                    <span>Miles de empresas confían en nuestras soluciones</span>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="form-side">
+        <div class="login-container-pro">
+            <div class="text-center mb-4">
+                <img src="/images/company-logo.png" class="form-brand-logo" alt="Numerica software" onerror="this.style.display='none'" />
+                <h2 class="fw-bold text-dark mb-1">Crear tu cuenta</h2>
+                <p class="text-muted small">Completa tus datos para crear tu cuenta</p>
+            </div>
+
+            @if (pasoActual == RegisterStep.Formulario)
+            {
+                <EditForm Model="@model" OnValidSubmit="CrearCuentaYRedirigirLoginAsync" OnInvalidSubmit="MostrarAlertaErroresAsync" FormName="register-form">
+                    <DataAnnotationsValidator />
+
+                    <div class="register-section">
+                        <div class="register-section-title">
+                            <i class="bi bi-person-lines-fill"></i>
+                            <span>Datos personales</span>
+                        </div>
+
+                        <div class="register-form-grid">
+                            <div class="form-field">
+                                 <label class="form-label-n">Tipo de cliente</label>
+                                 <div class="input-wrapper">
+                                     <InputSelect @bind-Value="model.TipoCliente" @bind-Value:after="OnTipoClienteChanged" class="input-n-premium" style="appearance: auto; padding-right: 15px;">
+                                         <option value="1">Persona Natural</option>
+                                         <option value="2">Empresa</option>
+                                     </InputSelect>
+                                     <i class="bi bi-person-badge input-icon-n"></i>
+                                 </div>
+                                 <ValidationMessage For="@(() => model.TipoCliente)" class="text-danger small mt-1 d-block" />
+                             </div>
+
+                            <div class="form-field">
+                                 <label class="form-label-n">Tipo de documento</label>
+                                 <div class="input-wrapper">
+                                     <InputSelect @bind-Value="model.TipoDocumento" @bind-Value:after="OnTipoDocumentoChanged" class="input-n-premium" style="appearance: auto; padding-right: 15px;">
+                                         <option value="CEDULA" disabled="@(model.TipoCliente == 2)">Cédula</option>
+                                         <option value="RUC">RUC</option>
+                                     </InputSelect>
+                                     <i class="bi bi-file-earmark-person input-icon-n"></i>
+                                 </div>
+                                 <ValidationMessage For="@(() => model.TipoDocumento)" class="text-danger small mt-1 d-block" />
+                             </div>
+
+                            <div class="form-field form-field--full @(model.TipoCliente == 2 ? "" : "d-none")">
+                                <label class="form-label-n">Razón Social</label>
+                                <div class="input-wrapper">
+                                    <InputText @bind-Value="model.RazonSocial" class="input-n-premium" placeholder="Razón Social o Nombre Comercial" />
+                                    <i class="bi bi-building input-icon-n"></i>
+                                </div>
+                                <ValidationMessage For="@(() => model.RazonSocial)" class="text-danger small mt-1 d-block" />
+                            </div>
+
+                            <div class="form-field @(model.TipoCliente != 2 ? "" : "d-none")">
+                                <label class="form-label-n">Nombres</label>
+                                <div class="input-wrapper">
+                                    <InputText @bind-Value="model.Nombres" class="input-n-premium" placeholder="Nombres" autocomplete="given-name" />
+                                    <i class="bi bi-person input-icon-n"></i>
+                                </div>
+                                <ValidationMessage For="@(() => model.Nombres)" class="text-danger small mt-1 d-block" />
+                            </div>
+
+                            <div class="form-field @(model.TipoCliente != 2 ? "" : "d-none")">
+                                <label class="form-label-n">Apellidos</label>
+                                <div class="input-wrapper">
+                                    <InputText @bind-Value="model.Apellidos" class="input-n-premium" placeholder="Apellidos" autocomplete="family-name" />
+                                    <i class="bi bi-person-vcard input-icon-n"></i>
+                                </div>
+                                <ValidationMessage For="@(() => model.Apellidos)" class="text-danger small mt-1 d-block" />
+                            </div>
+
+                             <div class="form-field">
+                                  <label class="form-label-n">Identificación</label>
+                                  <div class="input-wrapper">
+                                      <input type="text" @bind="IdentificacionInput" @bind:event="oninput" class="input-n-premium" placeholder="1723358400" maxlength="@IdentificacionMaxLength" />
+                                      <i class="bi bi-card-text input-icon-n"></i>
+                                  </div>
+                                  <ValidationMessage For="@(() => model.Identificacion)" class="text-danger small mt-1 d-block" />
+                              </div>
+
+                              <div class="form-field">
+                                  <label class="form-label-n">Celular</label>
+                                  <div class="input-wrapper">
+                                      <input type="text" @bind="CelularInput" @bind:event="oninput" class="input-n-premium" placeholder="0999999999" maxlength="10" autocomplete="tel" />
+                                      <i class="bi bi-phone input-icon-n"></i>
+                                  </div>
+                                  <ValidationMessage For="@(() => model.Celular)" class="text-danger small mt-1 d-block" />
+                              </div>
+
+                             <div class="form-field form-field--full">
+                                 <label class="form-label-n">Email</label>
+                                 <div class="input-wrapper">
+                                     <InputText @bind-Value="model.Email" type="email" class="input-n-premium" placeholder="usuario@empresa.com" autocomplete="email" />
+                                     <i class="bi bi-envelope input-icon-n"></i>
+                                 </div>
+                                 <ValidationMessage For="@(() => model.Email)" class="text-danger small mt-1 d-block" />
+                             </div>
+
+                             <div class="form-field form-field--full">
+                                 <label class="form-label-n">Dirección</label>
+                                 <div class="input-wrapper">
+                                     <InputText @bind-Value="model.Direccion" class="input-n-premium" placeholder="Av. Amazonas y Colón" />
+                                     <i class="bi bi-geo-alt input-icon-n"></i>
+                                 </div>
+                                 <ValidationMessage For="@(() => model.Direccion)" class="text-danger small mt-1 d-block" />
+                             </div>
+                        </div>
+                    </div>
+
+                    <div class="register-section">
+                        <div class="register-section-title">
+                            <i class="bi bi-shield-lock"></i>
+                            <span>Seguridad y perfil</span>
+                        </div>
+
+                        <div class="register-form-grid">
+                            <div class="form-field">
+                                <label class="form-label-n" for="fechaNacimiento">Fecha de nacimiento</label>
+                                <div class="input-wrapper">
+                                    <InputDate id="fechaNacimiento"
+                                               @bind-Value="model.FechaNacimiento"
+                                               class="input-n-premium" />
+                                    <i class="bi bi-calendar-event input-icon-n"></i>
+                                </div>
+                                <ValidationMessage For="@(() => model.FechaNacimiento)" class="text-danger small mt-1 d-block" />
+                            </div>
+
+                            <div class="form-field">
+                                <label class="form-label-n">Contrasena</label>
+                                <div class="input-wrapper">
+                                    <InputText @bind-Value="model.Password" type="@(showPassword ? "text" : "password")" class="input-n-premium" placeholder="**********" autocomplete="new-password" />
+                                    <i class="bi bi-lock input-icon-n"></i>
+                                    <button type="button" class="btn-eye-n" @onclick="TogglePasswordVisibility" tabindex="-1">
+                                        <i class="bi @(showPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                                    </button>
+                                </div>
+                                <ValidationMessage For="@(() => model.Password)" class="text-danger small mt-1 d-block" />
+                            </div>
+
+                            <div class="form-field form-field--full">
+                                <label class="form-label-n d-block">Avatar</label>
+                                <div class="avatar-picker-shell">
+                                    <div class="avatar-preview-card">
+                                        <img src="@AvatarPreviewUrl" alt="Avatar seleccionado" class="avatar-preview-image" />
+                                        <div class="avatar-preview-copy">
+                                            <strong>Avatar seleccionado</strong>
+                                            <span>@availableAvatars.Count avatares disponibles</span>
+                                            <div class="mt-2">
+                                                <InputFile OnChange="UploadOwnPhotoAsync" accept="image/png, image/jpeg, image/jpg" class="d-none" id="fileRegisterAvatar" />
+                                                <label for="fileRegisterAvatar" class="btn btn-sm btn-outline-secondary cursor-pointer" style="border-radius: 8px; font-size: 0.8rem; padding: 0.25rem 0.5rem; font-weight: 600;">
+                                                    <i class="bi bi-cloud-arrow-up"></i> Subir Foto Propia
+                                                </label>
+                                                @if (subiendoArchivo)
+                                                {
+                                                    <span class="ms-1 spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></span>
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="avatar-scroll">
+                                        <div class="avatar-grid">
+                                            @{
+                                                var isInitialsSelected = string.IsNullOrWhiteSpace(model.AvatarUrl);
+                                                var initialsPreview = GenerarSvgIniciales();
+                                            }
+                                            <div class="avatar-option @(isInitialsSelected ? "is-selected" : string.Empty)"
+                                                 @onclick="() => SeleccionarAvatar(string.Empty)"
+                                                 role="button"
+                                                 tabindex="0"
+                                                 title="Avatar con iniciales">
+                                                <img src="@initialsPreview" alt="Iniciales" style="pointer-events: none;" />
+                                            </div>
+                                            @foreach (var avatar in availableAvatars)
+                                            {
+                                                var isSelected = string.Equals(model.AvatarUrl, avatar, StringComparison.OrdinalIgnoreCase);
+                                                <div class="avatar-option @(isSelected ? "is-selected" : string.Empty)"
+                                                     @onclick="() => SeleccionarAvatar(avatar)"
+                                                     role="button"
+                                                     tabindex="0"
+                                                     title="Seleccionar avatar">
+                                                    <img src="@avatar" alt="Avatar disponible" style="pointer-events: none;" />
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn-n-login d-flex align-items-center justify-content-center gap-2" disabled="@procesando">
+                        <span>@(procesando ? "CREANDO CUENTA..." : "CREAR CUENTA")</span>
+                        <i class="bi bi-arrow-right-short" style="font-size: 1.25rem;"></i>
+                    </button>
+                </EditForm>
+            }
+            else if (false && pasoActual == RegisterStep.Servicio)
+            {
+                <div class="activation-wrapper">
+                    <div class="activation-card">
+                        <div class="activation-header">
+                            <div class="activation-logo-wrapper">
+                                <img src="/images/company-logo.png" alt="Logo E-FACT" onerror="this.style.display='none'" />
+                            </div>
+                            <div class="activation-title-group">
+                                <h3>E-FACT</h3>
+                                <p>Facturación Electrónica</p>
+                            </div>
+                        </div>
+
+                        <div class="activation-body">
+                            <p class="activation-description">
+                                Completa tus datos para crear tu cuenta e ingresar a Numerica.
+                            </p>
+                            <ul class="benefits-list">
+                                <li class="benefit-item">
+                                    <span class="benefit-icon-wrapper"><i class="bi bi-check-lg"></i></span>
+                                    <span>Acceso Libre</span>
+                                </li>
+                                <li class="benefit-item">
+                                    <span class="benefit-icon-wrapper"><i class="bi bi-check-lg"></i></span>
+                                    <span>Alta Inmediata</span>
+                                </li>
+                                <li class="benefit-item">
+                                    <span class="benefit-icon-wrapper"><i class="bi bi-check-lg"></i></span>
+                                    <span>Facturación Ilimitada</span>
+                                </li>
+                                <li class="benefit-item">
+                                    <span class="benefit-icon-wrapper"><i class="bi bi-check-lg"></i></span>
+                                    <span>Versión 2026</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <button type="button" class="btn-n-login d-flex align-items-center justify-content-center gap-2" @onclick="ActivarEFactAsync" disabled="@procesando">
+                            <span>CREAR CUENTA</span>
+                        </button>
+                    </div>
+
+                    <button type="button" class="back-link-n" @onclick="VolverAlFormulario" disabled="@procesando">
+                        <i class="bi bi-arrow-left"></i> Volver a mis datos
+                    </button>
+                </div>
+            }
+            <div class="text-center mt-4 auth-footer">
+                <span class="text-muted small">Ya tienes cuenta?</span>
+                <a href="/" class="text-primary fw-bold text-decoration-none ms-1 small">Inicia sesion</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private RegistroForm model = new();
+    private bool procesando;
+    private bool cuentaCreada;
+    private bool showPassword;
+    private bool _disposed;
+    private int? vendedorRegistroId;
+    private List<string> availableAvatars = new();
+    private List<ServiceOption> serviceOptions = new();
+    private RegisterStep pasoActual = RegisterStep.Formulario;
+    private ServiceOption? selectedService;
+    private int? registeredUserId;
+
+    private string AvatarPreviewUrl => string.IsNullOrWhiteSpace(model.AvatarUrl) ? GenerarSvgIniciales() : ResolveAvatarUrl(model.AvatarUrl);
+
+    private string CelularInput
+    {
+        get => model.Celular;
+        set => model.Celular = SanitizarCelular(value);
+    }
+
+    private string IdentificacionInput
+    {
+        get => model.Identificacion;
+        set => model.Identificacion = SanitizarIdentificacion(value);
+    }
+
+    private int IdentificacionMaxLength =>
+        string.Equals(model.TipoDocumento, "PASAPORTE", StringComparison.OrdinalIgnoreCase) ? 20 : 13;
+
+    private void TogglePasswordVisibility() => showPassword = !showPassword;
+
+    protected override void OnInitialized()
+    {
+        availableAvatars = CargarAvataresDisponibles();
+        model.AvatarUrl = string.Empty;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await AppAccessService.EnsureSchemaAsync();
+        vendedorRegistroId = (await ResolverVendedorRegistroAsync()).IdVendedor;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        serviceOptions = await db.AppServicios
+            .AsNoTracking()
+            .Where(x => x.Estado && x.Clave == AppAccessService.FreeServiceKey)
+            .OrderBy(x => x.OrdenVisual)
+            .ThenBy(x => x.Nombre)
+            .Select(x => new ServiceOption
+            {
+                Clave = x.Clave,
+                Nombre = x.Nombre,
+                Descripcion = x.Descripcion ?? string.Empty,
+                Icono = x.Icono,
+                ColorHex = string.IsNullOrWhiteSpace(x.ColorHex) ? "#006bb5" : x.ColorHex,
+                EsAccesoLibre = !x.RequiereSuscripcion || x.Clave == AppAccessService.FreeServiceKey,
+                ServicioId = x.ServicioId
+            })
+            .ToListAsync();
+
+        if (serviceOptions.Count == 0)
+        {
+            serviceOptions.Add(new ServiceOption
+            {
+                Clave = AppAccessService.FreeServiceKey,
+                Nombre = "E-FACT",
+                Descripcion = "Facturacion electronica con acceso libre para todos los usuarios registrados.",
+                Icono = "ri-file-chart-line",
+                ColorHex = "#0d6efd",
+                EsAccesoLibre = true
+            });
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await JS.InvokeVoidAsync("NumericaDigits.init", "numericaDigitsLayerRegister");
+        }
+    }
+
+    private List<string> CargarAvataresDisponibles()
+    {
+        var avatarsPath = Path.Combine(Env.WebRootPath, "images", "Avatars");
+
+        if (!Directory.Exists(avatarsPath))
+            return new List<string> { "/images/Avatars/Avatar-Boy.jpg" };
+
+        // Definimos el nombre del archivo que queremos ocultar
+        string avatarAOcultar = "avatar_18e35752-9dbd-40a4-8c62-970a2dfc1dfb.png";
+
+        return Directory.GetFiles(avatarsPath)
+            .Select(Path.GetFileName)
+            .Where(fileName => !string.IsNullOrWhiteSpace(fileName) &&
+                               !fileName.Equals(avatarAOcultar, StringComparison.OrdinalIgnoreCase) &&
+                               !fileName.Equals("Avatar-Boy.jpg", StringComparison.OrdinalIgnoreCase) &&
+                               (fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                                fileName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                                fileName.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))) // Filtro aplicado
+            .OrderByDescending(fileName => fileName.StartsWith("Bandera-", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(fileName => fileName, StringComparer.OrdinalIgnoreCase)
+            .Select(fileName => $"/images/Avatars/{fileName}")
+            .ToList();
+    }
+
+    private void SeleccionarAvatar(string avatarUrl)
+    {
+        model.AvatarUrl = avatarUrl;
+        StateHasChanged();
+    }
+
+    private bool subiendoArchivo;
+
+    private async Task UploadOwnPhotoAsync(InputFileChangeEventArgs e)
+    {
+        subiendoArchivo = true;
+        StateHasChanged();
+        try
+        {
+            var file = e.File;
+            if (file != null)
+            {
+                // Limitar tamaño a 1MB
+                if (file.Size > 1 * 1024 * 1024)
+                {
+                    await JS.InvokeVoidAsync("Swal.fire", "Error", "La imagen no debe superar 1MB.", "error");
+                    return;
+                }
+
+                var extension = Path.GetExtension(file.Name).ToLower();
+                if (extension != ".png" && extension != ".jpg" && extension != ".jpeg")
+                {
+                    await JS.InvokeVoidAsync("Swal.fire", "Error", "Formato de imagen no permitido. Use PNG, JPG o JPEG.", "error");
+                    return;
+                }
+
+                var uploadsFolder = Path.Combine(Env.WebRootPath, "images", "Avatars", "uploads");
+                if (!Directory.Exists(uploadsFolder))
+                {
+                    Directory.CreateDirectory(uploadsFolder);
+                }
+
+                // Eliminar avatar temporal anterior de la sesión de registro si existía para no acumular basura
+                if (!string.IsNullOrWhiteSpace(model.AvatarUrl) && model.AvatarUrl.Contains("images/Avatars/uploads/"))
+                {
+                    try
+                    {
+                        var oldPath = Path.Combine(Env.WebRootPath, model.AvatarUrl.TrimStart('/'));
+                        if (File.Exists(oldPath))
+                        {
+                            File.Delete(oldPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error al eliminar avatar anterior: {ex.Message}");
+                    }
+                }
+
+                var uniqueName = $"avatar_reg_{Guid.NewGuid()}{extension}";
+                var filePath = Path.Combine(uploadsFolder, uniqueName);
+
+                using (var stream = file.OpenReadStream(1 * 1024 * 1024))
+                using (var fileStream = new FileStream(filePath, FileMode.Create))
+                {
+                    await stream.CopyToAsync(fileStream);
+                }
+
+                model.AvatarUrl = $"images/Avatars/uploads/{uniqueName}";
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al subir imagen: {ex.Message}");
+            await JS.InvokeVoidAsync("Swal.fire", "Error", "No se pudo procesar la imagen seleccionada.", "error");
+        }
+        finally
+        {
+            subiendoArchivo = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string ResolveAvatarUrl(string? avatarUrl) =>
+        string.IsNullOrWhiteSpace(avatarUrl)
+            ? "/images/Avatars/Avatar-Boy.jpg"
+            : avatarUrl;
+
+    private string GetInitials()
+    {
+        var firstInit = string.Empty;
+        var lastInit = string.Empty;
+
+        if (model.TipoCliente == 2)
+        {
+            if (!string.IsNullOrWhiteSpace(model.RazonSocial))
+            {
+                var parts = model.RazonSocial.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    firstInit = parts[0][0].ToString().ToUpper();
+                    if (parts.Length > 1)
+                    {
+                        lastInit = parts[1][0].ToString().ToUpper();
+                    }
+                }
+            }
+        }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(model.Nombres))
+            {
+                var parts = model.Nombres.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    firstInit = parts[0][0].ToString().ToUpper();
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(model.Apellidos))
+            {
+                var parts = model.Apellidos.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    lastInit = parts[0][0].ToString().ToUpper();
+                }
+            }
+        }
+
+        var initials = firstInit + lastInit;
+        return string.IsNullOrWhiteSpace(initials) ? "?" : initials;
+    }
+
+    private string GetBackgroundColorForInitials(string initials)
+    {
+        string[] premiumColors = new[] {
+            "#006bb5", // n-blue
+            "#2c3e50", // n-dark
+            "#e67e22", // orange
+            "#27ae60", // green
+            "#9b59b6", // purple
+            "#e74c3c", // red
+            "#1abc9c", // turquoise
+            "#34495e", // wet asphalt
+            "#2980b9", // belize hole
+            "#8e44ad"  // wisteria
+        };
+        int hash = 0;
+        foreach (char c in initials)
+        {
+            hash += c;
+        }
+        return premiumColors[Math.Abs(hash) % premiumColors.Length];
+    }
+
+    private string? _lastNombres;
+    private string? _lastApellidos;
+    private string? _lastRazonSocial;
+    private string? _cachedSvg;
+    private int _lastTipoCliente;
+
+    private string GenerarSvgIniciales()
+    {
+        if (_cachedSvg != null &&
+            _lastNombres == model.Nombres &&
+            _lastApellidos == model.Apellidos &&
+            _lastRazonSocial == model.RazonSocial &&
+            _lastTipoCliente == model.TipoCliente)
+        {
+            return _cachedSvg;
+        }
+
+        _lastNombres = model.Nombres;
+        _lastApellidos = model.Apellidos;
+        _lastRazonSocial = model.RazonSocial;
+        _lastTipoCliente = model.TipoCliente;
+
+        var initials = GetInitials();
+        var bgColor = GetBackgroundColorForInitials(initials);
+        
+        var svg = $"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'>" +
+                  $"<rect width='100' height='100' fill='{bgColor}'/>" +
+                  $"<text x='50%' y='55%' font-family='Arial, sans-serif' font-size='40' font-weight='bold' fill='#ffffff' text-anchor='middle' dominant-baseline='middle'>{initials}</text>" +
+                  $"</svg>";
+        
+        _cachedSvg = $"data:image/svg+xml;base64,{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg))}";
+        return _cachedSvg;
+    }
+
+    private void OnTipoDocumentoChanged()
+    {
+        model.Identificacion = SanitizarIdentificacion(model.Identificacion);
+    }
+
+    private void OnTipoClienteChanged()
+    {
+        if (model.TipoCliente == 2)
+        {
+            model.Nombres = string.Empty;
+            model.Apellidos = string.Empty;
+            model.TipoDocumento = "RUC";
+        }
+        else
+        {
+            model.RazonSocial = string.Empty;
+            model.TipoDocumento = "CEDULA";
+        }
+        model.Identificacion = SanitizarIdentificacion(model.Identificacion);
+    }
+
+    private static string SanitizarCelular(string? valor)
+    {
+        var digitsOnly = new string((valor ?? string.Empty).Where(char.IsDigit).ToArray());
+        return digitsOnly.Length <= 10 ? digitsOnly : digitsOnly[..10];
+    }
+
+    private string SanitizarIdentificacion(string? valor)
+    {
+        var raw = valor ?? string.Empty;
+        if (string.Equals(model.TipoDocumento, "PASAPORTE", StringComparison.OrdinalIgnoreCase))
+        {
+            var alphaNumeric = new string(raw.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+            return alphaNumeric.Length <= 20 ? alphaNumeric : alphaNumeric[..20];
+        }
+
+        var digitsOnly = new string(raw.Where(char.IsDigit).ToArray());
+        return digitsOnly.Length <= 13 ? digitsOnly : digitsOnly[..13];
+    }
+
+    private async Task MostrarAlertaErroresAsync(EditContext editContext)
+    {
+        var identField = editContext.Field(nameof(RegistroForm.Identificacion));
+        var identErrors = editContext.GetValidationMessages(identField).ToList();
+        
+        if (identErrors.Any())
+        {
+            await MostrarAlertaAsync("Identificación Inválida", identErrors.First(), "error");
+        }
+        else
+        {
+            var allErrors = editContext.GetValidationMessages().ToList();
+            if (allErrors.Any())
+            {
+                await MostrarAlertaAsync("Formulario Incompleto", allErrors.First(), "warning");
+            }
+        }
+    }
+
+    private async Task AvanzarASeleccionServicioAsync()
+    {
+        var existe = await EmailYaRegistradoAsync();
+        if (existe)
+        {
+            await MostrarAlertaAsync("Error", "El correo ya esta registrado.", "error");
+            return;
+        }
+
+        pasoActual = RegisterStep.Servicio;
+    }
+
+    private async Task CrearCuentaYRedirigirLoginAsync()
+    {
+        var existe = await EmailYaRegistradoAsync();
+        if (existe)
+        {
+            await MostrarAlertaAsync("Error", "El correo ya esta registrado.", "error");
+            return;
+        }
+
+        cuentaCreada = false;
+        procesando = true;
+        StateHasChanged();
+
+        try
+        {
+            var usuarioId = await EnsureUsuarioRegistradoAsync();
+            if (usuarioId <= 0)
+                return;
+
+            registeredUserId = usuarioId;
+            cuentaCreada = true;
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(1800);
+            Nav.NavigateTo("/login", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            await MostrarAlertaAsync("Error", ex.Message, "error", dismissProcessingOverlay: true);
+        }
+        finally
+        {
+            if (!cuentaCreada)
+            {
+                procesando = false;
+            }
+
+            if (!_disposed)
+                await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task SeleccionarServicioAsync(ServiceOption servicio)
+    {
+        if (!string.Equals(servicio.Clave, AppAccessService.FreeServiceKey, StringComparison.OrdinalIgnoreCase))
+        {
+            await MostrarAlertaAsync("Servicio no disponible", "Por el momento solo puedes registrarte en E-FACT.", "info");
+            return;
+        }
+
+        procesando = true;
+        selectedService = servicio;
+        StateHasChanged();
+
+        try
+        {
+            var usuarioId = await EnsureUsuarioRegistradoAsync();
+            if (usuarioId <= 0)
+            {
+                return;
+            }
+
+            if (servicio.EsAccesoLibre)
+            {
+                procesando = false;
+                pasoActual = RegisterStep.Suscripcion;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            await MostrarAlertaAsync("Error", ex.Message, "error", dismissProcessingOverlay: true);
+        }
+        finally
+        {
+            procesando = false;
+            if (!_disposed)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task<int> EnsureUsuarioRegistradoAsync()
+    {
+        if (registeredUserId is > 0)
+            return registeredUserId.Value;
+
+        var email = model.Email.Trim().ToLowerInvariant();
+        var usuarioId = 0;
+
+        await using var strategyDb = await DbFactory.CreateDbContextAsync();
+        var executionStrategy = strategyDb.Database.CreateExecutionStrategy();
+
+        await executionStrategy.ExecuteAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await using var transaction = await db.Database.BeginTransactionAsync();
+
+            var existente = await db.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.Email == email);
+            if (existente is not null)
+            {
+                throw new InvalidOperationException("El correo ya esta registrado. Intenta iniciar sesion o usa otro email.");
+            }
+
+            var finalAvatarUrl = model.AvatarUrl;
+            if (string.IsNullOrWhiteSpace(finalAvatarUrl))
+            {
+                try
+                {
+                    var initials = GetInitials();
+                    var bgColor = GetBackgroundColorForInitials(initials);
+                    var svgContent = $"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'>" +
+                                     $"<rect width='100' height='100' fill='{bgColor}'/>" +
+                                     $"<text x='50%' y='55%' font-family='Arial, sans-serif' font-size='40' font-weight='bold' fill='#ffffff' text-anchor='middle' dominant-baseline='middle'>{initials}</text>" +
+                                     $"</svg>";
+
+                    var uploadsFolder = Path.Combine(Env.WebRootPath, "images", "Avatars", "uploads");
+                    if (!Directory.Exists(uploadsFolder))
+                    {
+                        Directory.CreateDirectory(uploadsFolder);
+                    }
+
+                    var uniqueName = $"avatar_initials_{Guid.NewGuid()}.svg";
+                    var filePath = Path.Combine(uploadsFolder, uniqueName);
+                    
+                    await File.WriteAllTextAsync(filePath, svgContent, System.Text.Encoding.UTF8);
+                    finalAvatarUrl = $"images/Avatars/uploads/{uniqueName}";
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error al generar archivo de avatar con iniciales: {ex.Message}");
+                    finalAvatarUrl = "/images/Avatars/Avatar-Boy.jpg";
+                }
+            }
+
+            var usuario = new Usuario
+            {
+                Nombres = model.TipoCliente == 2 ? model.RazonSocial.Trim() : model.Nombres.Trim(),
+                Apellidos = model.TipoCliente == 2 ? string.Empty : model.Apellidos.Trim(),
+                NombreEmpresa = model.TipoCliente == 2 ? model.RazonSocial.Trim() : string.Empty,
+                Email = email,
+                DireccionEmpresa = model.Direccion?.Trim(),
+                AvatarUrl = finalAvatarUrl,
+                FechaNacimiento = model.FechaNacimiento,
+                Celular = model.Celular,
+                Identificacion = model.Identificacion.Trim(),
+                IdTipoIdentificacion = model.TipoDocumento switch
+                {
+                    "RUC" => 2,
+                    "PASAPORTE" => 3,
+                    _ => 1
+                },
+                PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(model.Password),
+                IdTipoUsuario = 1,
+                Estado = true,
+                FechaCreacion = DateTime.Now,
+                SaldoDocumentos = 9,
+                TipoCliente = model.TipoCliente,
+                IdVendedor = vendedorRegistroId
+            };
+
+            db.Usuarios.Add(usuario);
+            await db.SaveChangesAsync();
+            await ClienteService.EnsureConsumidorFinalAsync(db, usuario.IdUsuario);
+            await transaction.CommitAsync();
+
+            usuarioId = usuario.IdUsuario;
+        });
+
+        try
+        {
+            await EmailService.EnviarCuentaCreadaAsync(email, model.TipoCliente == 2 ? model.RazonSocial : model.Nombres);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"La cuenta se creo, pero no se pudo enviar el correo de confirmacion: {ex.Message}");
+        }
+
+        registeredUserId = usuarioId;
+        return usuarioId;
+    }
+
+    private async Task<VendedorBackOffice> ResolverVendedorRegistroAsync()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        query.TryGetValue("vendedor", out var vendedorCodigo);
+        return await VendedorBackOfficeService.ResolverParaRegistroAsync(vendedorCodigo.ToString());
+    }
+
+    private async Task<bool> EmailYaRegistradoAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var email = model.Email.Trim().ToLowerInvariant();
+        return await db.Usuarios.AnyAsync(u => u.Email == email);
+    }
+
+    private string GetStepCss(RegisterStep step)
+    {
+        if (pasoActual == step)
+            return "is-active";
+
+        return pasoActual > step ? "is-complete" : string.Empty;
+    }
+
+    private void VolverAlFormulario() => pasoActual = RegisterStep.Formulario;
+
+    private async Task ActivarEFactAsync()
+    {
+        var eFact = serviceOptions.FirstOrDefault();
+        if (eFact != null)
+        {
+            await SeleccionarServicioAsync(eFact);
+        }
+    }
+
+    private void VolverASeleccionServicio()
+    {
+        pasoActual = RegisterStep.Servicio;
+    }
+
+    private async Task IrAlLoginAsync()
+    {
+        Nav.NavigateTo("/login", forceLoad: true);
+    }
+
+    private async Task MostrarAlertaAsync(string titulo, string mensaje, string icono, bool dismissProcessingOverlay = false)
+    {
+        if (_disposed)
+            return;
+
+        try
+        {
+            if (dismissProcessingOverlay && procesando)
+            {
+                procesando = false;
+                await InvokeAsync(StateHasChanged);
+                await Task.Yield();
+            }
+
+            await JS.InvokeVoidAsync("Swal.fire", titulo, mensaje, icono);
+        }
+        catch (TaskCanceledException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        try
+        {
+            await JS.InvokeVoidAsync("NumericaDigits.destroy", "numericaDigitsLayerRegister");
+        }
+        catch
+        {
+        }
+    }
+
+    public sealed class RegistroForm : IValidatableObject
+    {
+        public string Nombres { get; set; } = string.Empty;
+
+        public string Apellidos { get; set; } = string.Empty;
+
+        public string RazonSocial { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "El email es obligatorio")]
+        [EmailAddress(ErrorMessage = "Formato de correo invalido")]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "La dirección es obligatoria")]
+        [StringLength(200, MinimumLength = 5, ErrorMessage = "La dirección debe tener entre 5 y 200 caracteres")]
+        public string Direccion { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "El celular es obligatorio")]
+        [RegularExpression(@"^09\d{8}$", ErrorMessage = "Celular debe tener 10 digitos y empezar con 09")]
+        public string Celular { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "El tipo de documento es obligatorio")]
+        public string TipoDocumento { get; set; } = "CEDULA";
+
+        [Required(ErrorMessage = "La identificación es obligatoria")]
+        [CustomValidation(typeof(RegistroForm), nameof(ValidarIdentificacionEcuatoriana))]
+        public string Identificacion { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "La contrasena es obligatoria")]
+        [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\da-zA-Z]).{8,}$",
+            ErrorMessage = "Minimo 8 caracteres, 1 mayuscula, 1 minuscula, 1 numero y 1 especial")]
+        public string Password { get; set; } = string.Empty;
+        [Required(ErrorMessage = "La fecha de nacimiento es obligatoria")]
+        [DataType(DataType.Date)]
+        [CustomValidation(typeof(RegistroForm), nameof(ValidarMayoriaEdad))]
+        public DateTime? FechaNacimiento { get; set; }
+
+        public string AvatarUrl { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Debe seleccionar el tipo de cliente")]
+        public int TipoCliente { get; set; } = 1;
+
+        public static ValidationResult? ValidarMayoriaEdad(DateTime? fecha, ValidationContext context)
+        {
+            if (fecha == null) return ValidationResult.Success;
+
+            var hoy = DateTime.Today;
+            var edad = hoy.Year - fecha.Value.Year;
+        
+            // Ajuste si aún no ha pasado su cumpleaños este año
+            if (fecha.Value.Date > hoy.AddYears(-edad)) edad--;
+
+            if (edad < 18)
+            {
+                return new ValidationResult("Debes ser mayor de 18 años para registrarte");
+            }
+
+            return ValidationResult.Success;
+        }
+
+        public static ValidationResult? ValidarIdentificacionEcuatoriana(string? identificacion, ValidationContext context)
+        {
+            var form = (RegistroForm)context.ObjectInstance;
+            var tipoDocumento = form.TipoDocumento;
+
+            if (string.IsNullOrWhiteSpace(identificacion))
+                return ValidationResult.Success; // [Required] handles empty check
+
+            var valor = identificacion.Trim();
+
+            if (string.Equals(tipoDocumento, "PASAPORTE", StringComparison.OrdinalIgnoreCase))
+            {
+                return ValidationResult.Success; // No validation for pasaporte
+            }
+
+            if (string.Equals(tipoDocumento, "RUC", StringComparison.OrdinalIgnoreCase))
+            {
+                if (valor.Length != 13)
+                {
+                    return new ValidationResult("El RUC debe tener exactamente 13 dígitos");
+                }
+                if (!valor.EndsWith("001"))
+                {
+                    return new ValidationResult("El RUC ecuatoriano debe terminar en 001");
+                }
+                var cedulaPart = valor[..10];
+                if (!ValidarCedulaEcuatoriana(cedulaPart))
+                {
+                    return new ValidationResult("La cédula base del RUC no es una cédula ecuatoriana válida");
+                }
+                return ValidationResult.Success;
+            }
+
+            // Default to CEDULA
+            if (valor.Length != 10)
+            {
+                return new ValidationResult("La cédula debe tener exactamente 10 dígitos");
+            }
+            if (!ValidarCedulaEcuatoriana(valor))
+            {
+                return new ValidationResult("La cédula ingresada no es una cédula ecuatoriana válida");
+            }
+            return ValidationResult.Success;
+        }
+
+        private static bool ValidarCedulaEcuatoriana(string cedula)
+        {
+            cedula = new string((cedula ?? "").Where(char.IsDigit).ToArray());
+
+            if (cedula.Length != 10)
+                return false;
+
+            int[] coeficientes = { 2, 1, 2, 1, 2, 1, 2, 1, 2 };
+            var provincia = int.Parse(cedula[..2]);
+            var tercerDigito = int.Parse(cedula.Substring(2, 1));
+
+            if (provincia < 1 || provincia > 24 || tercerDigito > 5)
+                return false;
+
+            var suma = 0;
+            for (var i = 0; i < 9; i++)
+            {
+                var valor = int.Parse(cedula[i].ToString()) * coeficientes[i];
+                suma += valor > 9 ? valor - 9 : valor;
+            }
+
+            var digitoRecibido = int.Parse(cedula[9].ToString());
+            var digitoCalculado = (10 - (suma % 10)) % 10;
+            return digitoCalculado == digitoRecibido;
+        }
+
+        private static bool ValidarRucEcuatoriano(string ruc)
+        {
+            ruc = new string((ruc ?? "").Where(char.IsDigit).ToArray());
+
+            if (ruc.Length != 13)
+                return false;
+
+            var provincia = int.Parse(ruc[..2]);
+            if (provincia < 1 || provincia > 24)
+                return false;
+
+            var tercerDigito = int.Parse(ruc.Substring(2, 1));
+
+            return tercerDigito switch
+            {
+                <= 5 => ValidarCedulaEcuatoriana(ruc[..10]) && ruc.EndsWith("001", StringComparison.Ordinal),
+                6 => ValidarRucPublico(ruc),
+                9 => ValidarRucPrivado(ruc),
+                _ => false
+            };
+        }
+
+        private static bool ValidarRucPrivado(string ruc)
+        {
+            int[] coeficientes = { 4, 3, 2, 7, 6, 5, 4, 3, 2 };
+            var suma = 0;
+
+            for (var i = 0; i < coeficientes.Length; i++)
+                suma += int.Parse(ruc[i].ToString()) * coeficientes[i];
+
+            var residuo = suma % 11;
+            var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
+            var digitoRecibido = int.Parse(ruc[9].ToString());
+
+            return digitoCalculado == digitoRecibido && ruc[10..] != "000";
+        }
+
+        private static bool ValidarRucPublico(string ruc)
+        {
+            int[] coeficientes = { 3, 2, 7, 6, 5, 4, 3, 2 };
+            var suma = 0;
+
+            for (var i = 0; i < coeficientes.Length; i++)
+                suma += int.Parse(ruc[i].ToString()) * coeficientes[i];
+
+            var residuo = suma % 11;
+            var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
+            var digitoRecibido = int.Parse(ruc[8].ToString());
+
+            return digitoCalculado == digitoRecibido && ruc[9..] != "0000";
+        }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (TipoCliente == 2)
+            {
+                if (string.IsNullOrWhiteSpace(RazonSocial))
+                {
+                    yield return new ValidationResult("La razón social es obligatoria", new[] { nameof(RazonSocial) });
+                }
+                else if (RazonSocial.Trim().Length < 3)
+                {
+                    yield return new ValidationResult("La razón social debe tener al menos 3 caracteres", new[] { nameof(RazonSocial) });
+                }
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(Nombres))
+                {
+                    yield return new ValidationResult("Los nombres son obligatorios", new[] { nameof(Nombres) });
+                }
+                else if (!System.Text.RegularExpressions.Regex.IsMatch(Nombres, @"^[a-zA-ZÀ-ÿ\s]{2,}$"))
+                {
+                    yield return new ValidationResult("Ingresa nombres validos", new[] { nameof(Nombres) });
+                }
+
+                if (string.IsNullOrWhiteSpace(Apellidos))
+                {
+                    yield return new ValidationResult("Los apellidos son obligatorios", new[] { nameof(Apellidos) });
+                }
+                else if (!System.Text.RegularExpressions.Regex.IsMatch(Apellidos, @"^[a-zA-ZÀ-ÿ\s]{2,}$"))
+                {
+                    yield return new ValidationResult("Ingresa apellidos validos", new[] { nameof(Apellidos) });
+                }
+            }
+        }
+    }
+
+    private sealed class ServiceOption
+    {
+        public int ServicioId { get; set; }
+        public string Clave { get; set; } = string.Empty;
+        public string Nombre { get; set; } = string.Empty;
+        public string Descripcion { get; set; } = string.Empty;
+        public string? Icono { get; set; }
+        public string ColorHex { get; set; } = "#006bb5";
+        public bool EsAccesoLibre { get; set; }
+    }
+
+    private enum RegisterStep
+    {
+        Formulario = 1,
+        Servicio = 2,
+        Suscripcion = 3
+    }
+}

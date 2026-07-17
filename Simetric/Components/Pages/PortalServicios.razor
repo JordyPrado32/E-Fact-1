@@ -1,0 +1,1940 @@
+@page "/portal-servicios"
+@layout Simetric.Components.Layout.EmptyLayout
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using Simetric.Extensions
+@using Simetric.Services
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IUsuarioService UsuarioService
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Portal de servicios | Numerica</PageTitle>
+
+<style>
+    @FontFaceCss
+
+    :root {
+        --n-blue: #006bb5;
+        --n-blue-dark: #004a7c;
+        --n-blue-light: #e6f0f8;
+        --n-dark: #2c3e50;
+        --white: #ffffff;
+        --bg-color: #f4f7f6;
+    }
+
+    html, body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        font-family: "Montserrat", sans-serif;
+        background: #d7ecfb;
+    }
+
+    .portal-viewport {
+        --portal-shell-padding: clamp(1rem, 2.4vw, 2rem);
+        position: relative;
+        isolation: isolate;
+        height: 100dvh;
+        max-height: 100dvh;
+        width: 100%;
+        overflow: hidden;
+        padding: var(--portal-shell-padding);
+        background:
+            radial-gradient(ellipse at 16% 8%, rgba(0, 107, 181, 0.28), transparent 34rem),
+            radial-gradient(ellipse at 92% 18%, rgba(55, 156, 219, 0.3), transparent 32rem),
+            radial-gradient(ellipse at 72% 92%, rgba(0, 74, 124, 0.16), transparent 34rem),
+            linear-gradient(140deg, #edf8ff 0%, #d2ebfb 44%, #a9d4ee 100%);
+    }
+
+        .portal-viewport::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: -2;
+            pointer-events: none;
+            opacity: 0.52;
+            background-image:
+                linear-gradient(rgba(0, 74, 124, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 74, 124, 0.1) 1px, transparent 1px);
+            background-size: 74px 74px;
+            mask-image: linear-gradient(140deg, rgba(0,0,0,0.9), transparent 72%);
+        }
+
+        .portal-viewport::after {
+            content: "";
+            position: fixed;
+            width: min(46vw, 34rem);
+            aspect-ratio: 1;
+            right: -11rem;
+            bottom: -13rem;
+            z-index: -1;
+            border: 1.8rem solid rgba(0, 107, 181, 0.08);
+            border-radius: 50%;
+        }
+
+    .brand-side {
+        flex: 0 0 54%;
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: clamp(2.5rem, 4vw, 5rem);
+        position: relative;
+        overflow: hidden;
+    }
+
+        .brand-side::before,
+        .brand-side::after {
+            content: "";
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.04);
+            z-index: 0;
+        }
+
+        .brand-side::before {
+            width: 400px;
+            height: 400px;
+            top: -100px;
+            left: -100px;
+        }
+
+        .brand-side::after {
+            width: 600px;
+            height: 600px;
+            bottom: -200px;
+            right: -150px;
+        }
+
+    .numeric-digits-layer {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    .numerica-digit {
+        position: absolute;
+        z-index: 1;
+        color: rgba(255, 255, 255, 0.5);
+        line-height: 1;
+        user-select: none;
+        mix-blend-mode: screen;
+        text-shadow: 0 0 20px rgba(255,255,255,0.34), 0 0 42px rgba(255,255,255,0.22), 0 0 64px rgba(184,220,255,0.1);
+        font-variant-numeric: tabular-nums;
+        will-change: transform, opacity;
+    }
+
+    @KeyframesDigitFloatCss
+
+    .numeric-digits-layer::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background: radial-gradient(circle at 18% 24%, rgba(255,255,255,0.14), transparent 34%), radial-gradient(circle at 74% 72%, rgba(255,255,255,0.11), transparent 30%);
+        opacity: 0.78;
+    }
+
+    .glass-card {
+        background: rgba(255,255,255,0.1);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 24px;
+        padding: clamp(2rem, 2.8vw, 3rem);
+        width: min(100%, 31rem);
+        max-width: 31rem;
+        min-height: clamp(29rem, 64vh, 31.5rem);
+        aspect-ratio: 1 / 1;
+        position: relative;
+        z-index: 2;
+        box-shadow: 0 25px 50px rgba(0,0,0,0.1);
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        gap: 0.9rem;
+    }
+
+    .brand-logo-shell {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: fit-content;
+        max-width: 100%;
+        padding: 0.8rem 1.1rem;
+        border-radius: 18px;
+        background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.08));
+        border: 1px solid rgba(255,255,255,0.26);
+        box-shadow: 0 16px 30px rgba(2,35,66,0.16), inset 0 1px 0 rgba(255,255,255,0.18);
+        backdrop-filter: blur(10px);
+    }
+
+    .brand-logo {
+        width: clamp(11rem, 26vw, 12.75rem);
+        max-width: 100%;
+        display: block;
+        filter: drop-shadow(0 8px 18px rgba(1,21,40,0.24)) saturate(1.04) contrast(1.04);
+    }
+
+    .login-brand-heading {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        line-height: 1;
+        font-size: clamp(1.45rem, 2vw, 1.85rem);
+    }
+
+    .services-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin-top: 0.5rem;
+    }
+
+    .service-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.38rem 0.85rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        border: 1px solid rgba(255,255,255,0.3);
+        background: rgba(255,255,255,0.12);
+        color: #fff;
+        backdrop-filter: blur(4px);
+    }
+
+    .service-pill-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+    }
+
+    .product-signature {
+        display: flex;
+        align-items: center;
+        gap: 0.9rem;
+        margin-top: auto;
+        padding-top: 1rem;
+        border-top: 1px solid rgba(255,255,255,0.16);
+        color: rgba(255,255,255,0.84);
+        font-size: 0.9rem;
+        letter-spacing: 0.01em;
+        min-height: 56px;
+    }
+
+    .product-signature-badge {
+        width: 46px;
+        height: 46px;
+        border-radius: 14px;
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.18);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        box-shadow: 0 14px 28px rgba(0,0,0,0.12);
+    }
+
+        .product-signature-badge img {
+            width: 26px;
+            height: 26px;
+            display: block;
+            object-fit: contain;
+            transform: translateY(-1px);
+        }
+
+    /* ── CONTENT SIDE ── */
+    .content-side {
+        position: relative;
+        width: min(100%, 1560px);
+        height: calc(100dvh - var(--portal-shell-padding) * 2);
+        max-height: 820px;
+        margin: 0 auto;
+        background:
+            linear-gradient(180deg, rgba(246,252,255,0.82), rgba(219,237,249,0.84));
+        border: 1px solid rgba(255,255,255,0.92);
+        border-radius: 34px;
+        box-shadow: 0 30px 70px rgba(14, 61, 102, 0.18), inset 0 1px 0 rgba(255,255,255,0.85);
+        backdrop-filter: blur(18px);
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow: hidden;
+    }
+
+        .content-side::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background:
+                linear-gradient(135deg, rgba(0,107,181,0.12), transparent 30%),
+                radial-gradient(ellipse at 28% 6%, rgba(255,255,255,0.62), transparent 26rem),
+                radial-gradient(ellipse at 96% 96%, rgba(0,107,181,0.1), transparent 28rem);
+            opacity: 0.9;
+        }
+
+    .content-header {
+        position: relative;
+        z-index: 1;
+        flex-shrink: 0;
+        padding: clamp(1.35rem, 2.4vw, 2.35rem) clamp(1.25rem, 3vw, 2.5rem) 0;
+    }
+
+    .content-scroll {
+        position: relative;
+        z-index: 1;
+        flex: 1 1 auto;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 1rem clamp(1.25rem, 3vw, 2.5rem) clamp(2rem, 3vw, 2.7rem);
+    }
+
+    .portal-inner {
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+        animation: slideUp 0.6s ease-out forwards;
+    }
+
+    @KeyframesSlideUpCss
+
+    /* ── HEADER ── */
+    .portal-header {
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(20rem, 28rem);
+        align-items: center;
+        gap: clamp(1rem, 2.6vw, 2rem);
+    }
+
+        .portal-header h1 {
+            font-size: clamp(2rem, 3.2vw, 3.05rem);
+            font-weight: 800;
+            color: #203a52;
+            margin: 0;
+            line-height: 1.05;
+        }
+
+    .portal-title-block {
+        display: flex;
+        align-items: center;
+        gap: clamp(0.8rem, 1.5vw, 1.15rem);
+        min-width: 0;
+    }
+
+    .portal-title-copy {
+        min-width: 0;
+    }
+
+        .portal-title-copy p {
+            margin: 0.45rem 0 0;
+            color: #66798b;
+            font-size: clamp(0.92rem, 1.3vw, 1.08rem);
+            line-height: 1.4;
+        }
+
+    .portal-header-logo {
+        width: 58px;
+        height: 58px;
+        border-radius: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255,255,255,0.9);
+        border: 1px solid rgba(176,198,214,0.9);
+        box-shadow: 0 16px 34px rgba(41,72,101,0.12);
+        flex: 0 0 auto;
+    }
+
+        .portal-header-logo img {
+            width: 34px;
+            height: 34px;
+            object-fit: contain;
+            display: block;
+        }
+
+    .user-info-bar {
+        justify-self: end;
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        margin-top: 0;
+        padding: 0.85rem 1rem;
+        border-radius: 22px;
+        background: rgba(238, 247, 255, 0.72);
+        border: 1px solid rgba(0,107,181,0.18);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 16px 36px rgba(0,74,124,0.08);
+        backdrop-filter: blur(12px);
+        min-width: 0;
+        width: min(100%, 28rem);
+    }
+
+    .user-avatar-circle {
+        width: 48px;
+        height: 48px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, var(--n-blue), var(--n-blue-dark));
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-weight: 800;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+        overflow: hidden;
+        position: relative;
+        box-shadow: 0 10px 22px rgba(0,74,124,0.18);
+    }
+
+        .user-avatar-circle img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .user-avatar-circle img[src*="Bandera-"] {
+            object-fit: contain !important;
+        }
+
+        .user-avatar-circle .avatar-initials {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+
+    .user-info-text {
+        flex: 1;
+        min-width: 0;
+    }
+
+        .user-info-text strong {
+            display: block;
+            color: var(--n-dark);
+            font-size: 0.95rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .user-session-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.38rem;
+            margin-top: 0.12rem;
+            font-size: 0.78rem;
+            color: #7a8794;
+        }
+
+    .user-session-dot {
+        width: 0.48rem;
+        height: 0.48rem;
+        border-radius: 50%;
+        background: #19b47e;
+        box-shadow: 0 0 0 0.24rem rgba(25,180,126,0.12);
+    }
+
+    .btn-logout {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.48rem 0.8rem;
+        border-radius: 999px;
+        font-size: 0.76rem;
+        font-weight: 700;
+        background: rgba(255,255,255,0.58);
+        color: #b91c1c;
+        border: 1px solid rgba(220,38,38,0.18);
+        cursor: pointer;
+        transition: background 0.18s ease, transform 0.15s ease, box-shadow 0.18s ease;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+        .btn-logout:hover {
+            background: rgba(220,38,38,0.1);
+            transform: translateY(-1px);
+            box-shadow: 0 10px 18px rgba(220,38,38,0.08);
+        }
+
+    .portal-welcome {
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-top: clamp(1.1rem, 2.2vw, 1.75rem);
+        padding: clamp(1rem, 2vw, 1.25rem);
+        border-radius: 24px;
+        background:
+            linear-gradient(135deg, rgba(255,255,255,0.82), rgba(235,247,255,0.72)),
+            radial-gradient(ellipse at 90% 10%, rgba(0,107,181,0.14), transparent 18rem);
+        border: 1px solid rgba(184, 211, 230, 0.72);
+        box-shadow: 0 18px 40px rgba(22, 70, 112, 0.08);
+    }
+
+        .portal-welcome::after {
+            content: "";
+            position: absolute;
+            inset: auto -4rem -5rem auto;
+            width: 18rem;
+            aspect-ratio: 1;
+            border: 1rem solid rgba(0,107,181,0.045);
+            border-radius: 50%;
+        }
+
+    .portal-welcome-content {
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+    }
+
+    .portal-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin-bottom: 0.35rem;
+        color: var(--n-blue-dark);
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+        .portal-eyebrow::before {
+            content: "";
+            width: 0.5rem;
+            height: 0.5rem;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--n-blue), #4cc9f0);
+            box-shadow: 0 0 0 0.25rem rgba(0,107,181,0.12);
+        }
+
+    .portal-welcome h2 {
+        margin: 0;
+        color: #203a52;
+        font-size: clamp(1.12rem, 1.9vw, 1.48rem);
+        font-weight: 800;
+        line-height: 1.15;
+    }
+
+    .portal-welcome p {
+        margin: 0.35rem 0 0;
+        color: #6b7d8e;
+        font-size: 0.92rem;
+        line-height: 1.45;
+    }
+
+    .portal-welcome-badges {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        min-width: min(100%, 20rem);
+    }
+
+    .portal-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.42rem;
+        padding: 0.48rem 0.72rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.8);
+        border: 1px solid rgba(0,107,181,0.13);
+        color: #35546d;
+        font-size: 0.76rem;
+        font-weight: 800;
+        box-shadow: 0 10px 22px rgba(0,74,124,0.06);
+    }
+
+        .portal-chip i {
+            color: var(--n-blue);
+            font-size: 0.95rem;
+        }
+
+    /* ── SERVICES CATALOG ── */
+    .services-list {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        align-items: stretch;
+        justify-content: stretch;
+        gap: clamp(1rem, 1.7vw, 1.35rem);
+        margin-top: clamp(1.15rem, 2.4vw, 1.8rem);
+    }
+
+    .services-count-1 {
+        grid-template-columns: minmax(min(100%, 18rem), 25rem);
+        justify-content: center;
+    }
+
+    .services-count-2 {
+        grid-template-columns: repeat(2, minmax(min(100%, 18rem), 25rem));
+        justify-content: center;
+    }
+
+    .services-count-3 {
+        grid-template-columns: repeat(3, minmax(min(100%, 18rem), 25rem));
+        justify-content: center;
+    }
+
+    .services-count-4 {
+        grid-template-columns: repeat(4, minmax(min(100%, 15rem), 22rem));
+        justify-content: center;
+    }
+
+    .services-count-5 {
+        grid-template-columns: repeat(5, minmax(min(100%, 14rem), 20rem));
+        justify-content: center;
+    }
+
+    /* ── SERVICE CARD ── */
+    .service-card {
+        position: relative;
+        isolation: isolate;
+        border-radius: 24px;
+        background: rgba(255,255,255,0.94);
+        border: 1px solid rgba(255,255,255,0.96);
+        padding: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+        height: 100%;
+        min-height: 25.25rem;
+        transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
+        box-shadow: 0 18px 42px rgba(34,63,88,0.12);
+    }
+
+        .service-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: -1;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--card-color) 10%, transparent), transparent 46%);
+            opacity: 0;
+            transition: opacity 0.24s ease;
+        }
+
+        .service-card:hover {
+            transform: translateY(-7px);
+            border-color: color-mix(in srgb, var(--card-color) 28%, white);
+            box-shadow: 0 28px 52px var(--card-glow, rgba(0,0,0,0.13));
+        }
+
+        .service-card:hover::before {
+            opacity: 1;
+        }
+
+    .card-hero {
+        position: relative;
+        min-height: 8.2rem;
+        border-radius: 24px 24px 0 0;
+        background:
+            radial-gradient(ellipse at 22% 18%, rgba(255,255,255,0.28), transparent 10rem),
+            linear-gradient(156deg, rgba(255,255,255,0.18) 0%, transparent 44%),
+            linear-gradient(135deg, var(--card-color), var(--card-dark));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.25rem 1rem 1rem;
+        overflow: hidden;
+    }
+
+        .card-hero::after {
+            content: "";
+            position: absolute;
+            inset: auto -18% -58% 10%;
+            height: 11rem;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.1);
+            transform: rotate(-9deg);
+        }
+
+    .service-logo-panel {
+        position: relative;
+        z-index: 1;
+        width: min(100%, 11.8rem);
+        min-height: 4.05rem;
+        border-radius: 18px;
+        background: rgba(255,255,255,0.94);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.72rem 1rem;
+        box-shadow: 0 16px 32px rgba(4,34,62,0.16), inset 0 1px 0 rgba(255,255,255,0.82);
+    }
+
+    .service-logo {
+        display: block;
+        max-width: 100%;
+        max-height: 2.55rem;
+        object-fit: contain;
+    }
+
+    .service-logo-e-fact {
+        max-height: 2.2rem;
+    }
+
+    .service-logo-e-sign {
+        max-height: 3rem;
+        transform: scale(1.45);
+    }
+
+    .service-logo-e-conta {
+        max-height: 2.15rem;
+        transform: scale(1.08);
+    }
+
+    .service-logo-e-declara {
+        max-height: 2.3rem;
+    }
+
+    .service-logo-fallback {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        color: var(--card-color);
+        font-size: 1.18rem;
+        letter-spacing: 0;
+        line-height: 1;
+        text-align: center;
+    }
+
+    .card-body {
+        position: relative;
+        padding: 1.2rem 1.15rem 1.2rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.72rem;
+        flex: 1;
+        text-align: center;
+        background:
+            linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+        border-radius: 0 0 24px 24px;
+    }
+
+    .card-divider {
+        width: 3.4rem;
+        height: 0.22rem;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--card-color), var(--card-dark));
+    }
+
+    .card-name {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-size: 1rem;
+        color: var(--n-dark);
+        margin: 0;
+        letter-spacing: 0;
+        line-height: 1.15;
+    }
+
+    .card-description {
+        margin: 0;
+        color: #6a7a89;
+        font-size: 0.82rem;
+        line-height: 1.48;
+        min-height: 4.15rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .service-badges {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.45rem;
+        min-height: 2rem;
+    }
+
+    .service-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.34rem 0.58rem;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--card-color) 9%, white);
+        color: var(--card-dark);
+        border: 1px solid color-mix(in srgb, var(--card-color) 18%, white);
+        font-size: 0.68rem;
+        font-weight: 800;
+        line-height: 1;
+    }
+
+    .service-badge-soft {
+        background: #f8fbfe;
+        color: #657789;
+        border-color: #e7eef5;
+    }
+
+    .service-badge-current {
+        background: linear-gradient(135deg, color-mix(in srgb, var(--card-color) 14%, white), #ffffff);
+        color: var(--card-dark);
+        border-color: color-mix(in srgb, var(--card-color) 28%, white);
+        box-shadow: 0 10px 20px var(--card-glow, rgba(0,0,0,0.1));
+    }
+
+    .card-actions {
+        width: 100%;
+        margin-top: auto;
+        padding-top: 0.8rem;
+        border-top: 1px solid #e8edf3;
+        display: flex;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .btn-service-primary {
+        flex: 1 1 10rem;
+        border: 0;
+        border-radius: 13px;
+        padding: 0.72rem 1rem;
+        font-weight: 700;
+        font-size: 0.84rem;
+        letter-spacing: 0.03em;
+        cursor: pointer;
+        background: linear-gradient(135deg, var(--card-color), var(--card-dark));
+        color: #fff;
+        box-shadow: 0 10px 24px var(--card-glow, rgba(0,0,0,0.12));
+        transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+    }
+
+        .btn-service-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 16px 32px var(--card-glow, rgba(0,0,0,0.18));
+        }
+
+        .btn-service-primary:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+        }
+
+    .portal-state {
+        padding: 2rem 1.5rem;
+        border-radius: 18px;
+        background: #f8fafc;
+        border: 1px solid #edf2f7;
+        color: #546878;
+        font-size: 0.88rem;
+        text-align: center;
+    }
+
+    /* ── RESPONSIVE ── */
+    @ResponsiveCss
+
+    /* ── MODAL E-DECLARA (MORADO/LAVANDA) ── */
+    .edeclara-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        background: rgba(43, 22, 90, 0.45);
+        backdrop-filter: blur(14px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        opacity: 0;
+        animation: fadeInOverlay 0.35s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    }
+
+    .edeclara-modal {
+        background: #ffffff;
+        border-radius: 28px;
+        width: 100%;
+        max-width: 1100px;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 30px 80px rgba(110, 64, 201, 0.25), 0 0 0 1px rgba(110, 64, 201, 0.1);
+        overflow: hidden;
+        border: 2px solid #eae6f7;
+        position: relative;
+        transform: translateY(30px) scale(0.95);
+        opacity: 0;
+        animation: scaleUpModal 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+
+    .edeclara-modal-header {
+        background: linear-gradient(135deg, #6e40c9 0%, #4e2d91 100%);
+        padding: 1.25rem 1.75rem;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        position: relative;
+        overflow: hidden;
+        flex-shrink: 0;
+    }
+
+    .edeclara-modal-header::after {
+        content: "";
+        position: absolute;
+        inset: auto -3rem -3rem auto;
+        width: 10rem;
+        height: 10rem;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .edeclara-header-info {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .edeclara-header-icon {
+        width: 2.8rem;
+        height: 2.8rem;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.16);
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(8px);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    }
+
+    .edeclara-header-icon img {
+        width: 1.75rem;
+        height: 1.75rem;
+        object-fit: contain;
+    }
+
+    .edeclara-header-title h3 {
+        margin: 0;
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-size: 1.15rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+
+    .edeclara-header-title p {
+        margin: 0.25rem 0 0;
+        font-size: 0.88rem;
+        color: rgba(255, 255, 255, 0.8);
+        font-weight: 500;
+    }
+
+    .edeclara-btn-close {
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 50%;
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        position: relative;
+        z-index: 2;
+    }
+
+    .edeclara-btn-close:hover {
+        background: rgba(255, 255, 255, 0.25);
+        transform: rotate(90deg);
+    }
+
+    .edeclara-modal-content {
+        padding: 1.5rem 1.75rem;
+        overflow-y: auto;
+        flex: 1;
+        background: #fbfbfe;
+    }
+
+    .edeclara-modes-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.25rem;
+        align-items: stretch;
+    }
+
+    .edeclara-mode-card {
+        border-radius: 20px;
+        background: linear-gradient(180deg, #ffffff 0%, #fcfbfe 100%);
+        border: 2px solid #eae6f7;
+        padding: 1.25rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        box-shadow: 0 10px 30px rgba(110, 64, 201, 0.02);
+        position: relative;
+    }
+
+    .edeclara-mode-card:hover {
+        transform: translateY(-5px);
+        border-color: #beb0eb;
+        box-shadow: 0 20px 40px rgba(110, 64, 201, 0.08);
+    }
+
+    .edeclara-mode-card.is-premium {
+        background: linear-gradient(180deg, #faf8ff 0%, #ffffff 100%);
+        border-color: #d1c7f4;
+    }
+
+    .edeclara-mode-card.is-premium::after {
+        content: "MÁS POPULAR";
+        position: absolute;
+        top: -0.75rem;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(90deg, #8c85ff, #6e40c9);
+        color: white;
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        padding: 0.35rem 0.85rem;
+        border-radius: 999px;
+        box-shadow: 0 6px 15px rgba(110, 64, 201, 0.25);
+    }
+
+    .edeclara-mode-badge {
+        width: 2.8rem;
+        height: 2.8rem;
+        border-radius: 14px;
+        background: #f1ecfc;
+        color: #6e40c9;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.3rem;
+        margin-bottom: 0.75rem;
+        box-shadow: 0 10px 22px rgba(110, 64, 201, 0.08);
+        transition: transform 0.25s ease;
+    }
+
+    .edeclara-mode-card:hover .edeclara-mode-badge {
+        transform: scale(1.08) rotate(5deg);
+    }
+
+    .edeclara-mode-card h4 {
+        margin: 0;
+        color: #2c1a4d;
+        font-size: 1.15rem;
+        font-weight: 800;
+    }
+
+    .edeclara-mode-desc {
+        margin: 0.35rem 0 0.75rem;
+        color: #6e6488;
+        font-size: 0.78rem;
+        line-height: 1.45;
+        min-height: 2.4rem;
+    }
+
+    .edeclara-mode-price-tag {
+        margin-bottom: 0.85rem;
+    }
+
+    .edeclara-price-number {
+        font-size: 1.85rem;
+        font-weight: 800;
+        color: #6e40c9;
+        line-height: 1;
+        letter-spacing: -0.03em;
+    }
+
+    .edeclara-price-number span {
+        font-size: 0.84rem;
+        color: #8c83a7;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+    }
+
+    .edeclara-price-periodicity {
+        display: block;
+        margin-top: 0.25rem;
+        font-size: 0.76rem;
+        color: #d03d82;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .edeclara-mode-features {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 1rem 0;
+        text-align: left;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .edeclara-feature-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #483d63;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+
+    .edeclara-feature-item i {
+        color: #198754;
+        font-size: 0.95rem;
+        flex-shrink: 0;
+    }
+
+    .btn-edeclara-action {
+        width: 100%;
+        padding: 10px 16px;
+        border-radius: 12px;
+        border: none;
+        font-weight: 700;
+        font-size: 0.84rem;
+        letter-spacing: 0.03em;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        transition: all 0.25s ease;
+        margin-top: auto;
+    }
+
+    .btn-edeclara-action-normal {
+        background: #eae6f7;
+        color: #4e2d91;
+    }
+
+    .btn-edeclara-action-normal:hover {
+        background: #ded7f3;
+        transform: translateY(-2px);
+    }
+
+    .btn-edeclara-action-premium {
+        background: linear-gradient(135deg, #8c85ff 0%, #6e40c9 100%);
+        color: white;
+        box-shadow: 0 8px 20px rgba(110, 64, 201, 0.25);
+    }
+
+    .btn-edeclara-action-premium:hover {
+        background: linear-gradient(135deg, #9993ff 0%, #7d52d4 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 12px 25px rgba(110, 64, 201, 0.35);
+    }
+
+    .edeclara-payment-footer {
+        margin-top: 1rem;
+        padding-top: 0.85rem;
+        border-top: 1px solid #eae6f7;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    .edeclara-payment-footer p {
+        margin: 0;
+        color: #6e6488;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        font-weight: 500;
+    }
+
+    .edeclara-payment-footer i {
+        color: #ffc107;
+        margin-right: 0.25rem;
+    }
+
+    /* ── ANIMACIONES DE MODAL ── */
+    @ModalEdeclaraAnimationsCss
+</style>
+
+<div class="portal-viewport">
+    <div class="content-side">
+
+        <div class="content-header">
+            <div class="portal-header">
+                <div class="portal-title-block">
+                    <span class="portal-header-logo">
+                        <img src="/images/LogoNumerica.svg" alt="Numerica" onerror="this.style.display='none'" />
+                    </span>
+                    <div class="portal-title-copy">
+                        <h1>Servicios Disponibles</h1>
+                        <p>Selecciona el modulo al que deseas ingresar</p>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(nombreUsuario))
+                {
+                    <div class="user-info-bar">
+                        <div class="user-avatar-circle">
+                            @if (!string.IsNullOrWhiteSpace(fotoUrl))
+                            {
+                                <img src="@fotoUrl" alt="Avatar del usuario"
+                                     onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+                                <span class="avatar-initials" style="display:none;">
+                                    @(string.Concat(nombreUsuario.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                                        .Take(2).Select(w => w[0].ToString().ToUpper())))
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="avatar-initials">
+                                    @(string.Concat(nombreUsuario.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                                        .Take(2).Select(w => w[0].ToString().ToUpper())))
+                                </span>
+                            }
+                        </div>
+                        <div class="user-info-text">
+                            <strong>@nombreUsuario</strong>
+                            <span class="user-session-row">
+                                <span class="user-session-dot"></span>
+                                Sesion activa
+                            </span>
+                        </div>
+                        <button type="button" class="btn-logout" @onclick="CerrarSesionAsync">
+                            <i class="ri-logout-box-r-line"></i>
+                            Salir
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="content-scroll">
+            <section class="portal-welcome">
+                <div class="portal-welcome-content">
+                    <span class="portal-eyebrow">Numerica Software</span>
+                    <h2>Bienvenido, @(string.IsNullOrWhiteSpace(nombreUsuario) ? "Usuario" : nombreUsuario)</h2>
+                    <p>Tus servicios activos estan listos para usarse</p>
+                </div>
+                <div class="portal-welcome-badges" aria-label="Estado de servicios">
+                    <span class="portal-chip"><i class="ri-checkbox-circle-line"></i>Disponible</span>
+                    <span class="portal-chip"><i class="ri-pulse-line"></i>Actual</span>
+                    <span class="portal-chip"><i class="ri-shield-check-line"></i>Suscripcion activa</span>
+                </div>
+            </section>
+
+            <div class="portal-inner">
+
+                @if (cargando)
+                {
+                    <div class="portal-state">Cargando tus servicios disponibles...</div>
+                }
+                else if (!string.IsNullOrWhiteSpace(errorCarga))
+                {
+                    <div class="portal-state">@errorCarga</div>
+                }
+                else
+                {
+                    <div class="@GetServicesListClass()">
+                        @for (var index = 0; index < servicios.Count; index++)
+                        {
+                            var item = servicios[index];
+                            var (cardColor, cardDark, cardGlow) = ResolveServiceColors(item.Clave);
+                            var logoSource = ResolveServiceLogo(item.Clave);
+                            var isCurrent = string.Equals(item.Clave, servicioSeleccionado, StringComparison.OrdinalIgnoreCase);
+
+                            <article class="service-card"
+                                     style="@($"--card-color:{cardColor};--card-dark:{cardDark};--card-glow:{cardGlow};")">
+                                <div class="card-hero">
+                                    <div class="service-logo-panel">
+                                        @if (!string.IsNullOrWhiteSpace(logoSource))
+                                        {
+                                            <img class="service-logo service-logo-@item.Clave.ToLower()" src="@logoSource" alt="@item.Nombre" onerror="this.style.display='none'" />
+                                        }
+                                        else
+                                        {
+                                            <span class="service-logo-fallback">@item.Nombre</span>
+                                        }
+                                    </div>
+                                </div>
+
+                                <div class="card-body">
+                                    <div class="card-divider"></div>
+                                    <h2 class="card-name">@item.Nombre</h2>
+                                    <p class="card-description">@GetServiceDescription(item)</p>
+
+                                    <div class="service-badges">
+                                        <span class="service-badge">@(item.TieneAcceso ? "Disponible" : "Plan requerido")</span>
+                                        @if (isCurrent)
+                                        {
+                                            <span class="service-badge service-badge-current">Actual</span>
+                                        }
+                                        <span class="service-badge service-badge-soft">
+                                            @(item.TieneAcceso ? "Suscripcion activa" : "Solicitar acceso")
+                                        </span>
+                                    </div>
+
+                                    <div class="card-actions">
+                                        <button type="button"
+                                                class="btn-service-primary"
+                                                @onclick="() => IrAlServicioAsync(item)"
+                                                disabled="@(procesandoClave == item.Clave)">
+                                            @(procesandoClave == item.Clave
+                                                ? "Abriendo..."
+                                                : item.TieneAcceso ? "Ingresar" : "Ver suscripcion")
+                                        </button>
+
+                                    </div>
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (mostrarModalEDeclara)
+{
+    <div class="edeclara-overlay">
+        <div class="edeclara-modal">
+            <div class="edeclara-modal-header">
+                <div class="edeclara-header-info">
+                    <span class="edeclara-header-icon">
+                        <img src="/images/edeclara/LogoEDeclara.png" alt="E-Declara" />
+                    </span>
+                    <div class="edeclara-header-title">
+                        <h3>E-DECLARA</h3>
+                        <p>Elige tu modalidad de acceso</p>
+                    </div>
+                </div>
+                <button type="button" class="edeclara-btn-close" @onclick="() => mostrarModalEDeclara = false">
+                    <i class="ri-close-line" style="font-size: 1.5rem; display: flex;"></i>
+                </button>
+            </div>
+
+            <div class="edeclara-modal-content">
+                <div class="edeclara-modes-grid">
+                    <!-- PLAN INDIVIDUAL -->
+                    <div class="edeclara-mode-card">
+                        <div class="edeclara-mode-badge">
+                            <i class="ri-user-line"></i>
+                        </div>
+                        <h4>Plan individual</h4>
+                        <p class="edeclara-mode-desc">Para personas que desean manejar sus impuestos por su cuenta.</p>
+                        
+                        <div class="edeclara-mode-price-tag">
+                            <span class="edeclara-price-number">$10.00 <span>/ mes</span></span>
+                            <span class="edeclara-price-periodicity">Facturación Mensual</span>
+                        </div>
+
+                        <ul class="edeclara-mode-features">
+                            <li class="edeclara-feature-item">
+                                <i class="ri-checkbox-circle-fill"></i>
+                                <span>Límite clientes: 1</span>
+                            </li>
+
+                            <li class="edeclara-feature-item">
+                                <i class="ri-checkbox-circle-fill"></i>
+                                <span>Control de Impuestos</span>
+                            </li>
+                        </ul>
+
+                        <button type="button" class="btn-edeclara-action btn-edeclara-action-normal" @onclick="ProcesarPagoIndividual" disabled="@(procesandoPagoEDeclaraIndividual || procesandoPagoEDeclaraAsesor || procesandoPagoEDeclaraEmpresarial)">
+                            @if (procesandoPagoEDeclaraIndividual)
+                            {
+                                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                <span>Procesando...</span>
+                            }
+                            else
+                            {
+                                <span>Pagar Suscripción</span>
+                                <i class="ri-coin-line"></i>
+                            }
+                        </button>
+                    </div>
+
+                    <!-- PLAN ASESOR -->
+                    <div class="edeclara-mode-card is-premium">
+                        <div class="edeclara-mode-badge" style="background: #e8e5ff; color: #6e40c9;">
+                            <i class="ri-briefcase-line"></i>
+                        </div>
+                        <h4>Plan Asesor</h4>
+                        <p class="edeclara-mode-desc">Un asesor que realiza las declaraciones para personas naturales.</p>
+                        
+                        <div class="edeclara-mode-price-tag">
+                            <span class="edeclara-price-number">$25.00 <span>/ mes</span></span>
+                            <span class="edeclara-price-periodicity">Facturación Mensual</span>
+                        </div>
+
+                        <ul class="edeclara-mode-features">
+                            <li class="edeclara-feature-item">
+                                <i class="ri-checkbox-circle-fill"></i>
+                                <span>Límite clientes: 100</span>
+                            </li>
+
+                            <li class="edeclara-feature-item">
+                                <i class="ri-checkbox-circle-fill"></i>
+                                <span>Soporte Prioritario</span>
+                            </li>
+                        </ul>
+
+                        <button type="button" class="btn-edeclara-action btn-edeclara-action-premium" @onclick="ProcesarPagoAsesor" disabled="@(procesandoPagoEDeclaraIndividual || procesandoPagoEDeclaraAsesor || procesandoPagoEDeclaraEmpresarial)">
+                            @if (procesandoPagoEDeclaraAsesor)
+                            {
+                                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                <span>Procesando...</span>
+                            }
+                            else
+                            {
+                                <span>Pagar Suscripción</span>
+                                <i class="ri-coin-line"></i>
+                            }
+                        </button>
+                    </div>
+
+                    <!-- PLAN EMPRESARIAL -->
+                    <div class="edeclara-mode-card">
+                        <div class="edeclara-mode-badge" style="background: #f1ecfc; color: #6e40c9;">
+                            <i class="ri-community-line"></i>
+                        </div>
+                        <h4>Plan Empresarial</h4>
+                        <p class="edeclara-mode-desc">Emprendedor que tiene un equipo de asesores para personas naturales.</p>
+                        
+                        <div class="edeclara-mode-price-tag">
+                            <span class="edeclara-price-number">$50.00 <span>/ mes</span></span>
+                            <span class="edeclara-price-periodicity">Facturación Mensual</span>
+                        </div>
+
+                        <ul class="edeclara-mode-features">
+                            <li class="edeclara-feature-item">
+                                <i class="ri-checkbox-circle-fill"></i>
+                                <span>Límite clientes: 500</span>
+                            </li>
+
+                            <li class="edeclara-feature-item">
+                                <i class="ri-checkbox-circle-fill"></i>
+                                <span>Soporte 24/7 Premium</span>
+                            </li>
+                        </ul>
+
+                        <button type="button" class="btn-edeclara-action btn-edeclara-action-normal" @onclick="ProcesarPagoEmpresarial" disabled="@(procesandoPagoEDeclaraIndividual || procesandoPagoEDeclaraAsesor || procesandoPagoEDeclaraEmpresarial)">
+                            @if (procesandoPagoEDeclaraEmpresarial)
+                            {
+                                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                <span>Procesando...</span>
+                            }
+                            else
+                            {
+                                <span>Pagar Suscripción</span>
+                                <i class="ri-coin-line"></i>
+                            }
+                        </button>
+                    </div>
+                </div>
+
+                <div class="edeclara-payment-footer">
+                    <p>
+                        <i class="ri-information-line"></i>
+                        Todos los planes operan con cobros recurrentes de forma automática y segura según el ciclo de facturación seleccionado.
+                    </p>
+                    <p style="font-size: 0.76rem; color: #9c92b8;">
+                        Puedes cancelar o modificar tu plan en cualquier momento desde tu panel de suscripciones.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly MarkupString FontFaceCss = (MarkupString)@"
+    @font-face {
+        font-family: ""Conthrax SemiBold"";
+        src: url(""/fonts/Conthrax-SemiBold.otf"") format(""opentype"");
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+    }
+    ";
+
+    private static readonly MarkupString KeyframesDigitFloatCss = (MarkupString)@"
+    @keyframes numericaDigitFloat {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 18px, 0) scale(0.88) rotate(var(--rotate, 0deg));
+        }
+        18% {
+            opacity: var(--peak-opacity, 0.42);
+        }
+        72% {
+            opacity: calc(var(--peak-opacity, 0.42) * 0.7);
+        }
+        100% {
+            opacity: 0;
+            transform: translate3d(var(--drift-x,0px), var(--drift-y,-38px), 0) scale(1.05) rotate(calc(var(--rotate,0deg) + 6deg));
+        }
+    }
+    ";
+
+    private static readonly MarkupString KeyframesSlideUpCss = (MarkupString)@"
+    @keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    ";
+
+    private static readonly MarkupString ResponsiveCss = (MarkupString)@"
+    .services-list.services-count-5 {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+
+    @media (max-width: 1400px) {
+        .services-list.services-count-5 {
+            grid-template-columns: repeat(6, 1fr);
+        }
+        .services-list.services-count-5 > :nth-child(1),
+        .services-list.services-count-5 > :nth-child(2),
+        .services-list.services-count-5 > :nth-child(3) {
+            grid-column: span 2;
+        }
+        .services-list.services-count-5 > :nth-child(4) {
+            grid-column: 2 / span 2;
+        }
+        .services-list.services-count-5 > :nth-child(5) {
+            grid-column: 4 / span 2;
+        }
+    }
+
+    @media (max-width: 1180px) {
+        .services-list {
+            grid-template-columns: repeat(2, minmax(min(100%, 17.5rem), 24.75rem));
+            justify-content: center;
+        }
+        .services-list.services-count-5 > * {
+            grid-column: auto !important;
+        }
+        .services-list.services-count-5 > :nth-child(5) {
+            grid-column: span 2 !important;
+        }
+
+        .services-count-1 {
+            grid-template-columns: minmax(min(100%, 18rem), 25rem);
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .portal-inner,
+        .service-card {
+            animation: none !important;
+            transition: none !important;
+        }
+    }
+
+    @media (max-width: 992px) {
+        .portal-viewport {
+            height: 100dvh;
+            max-height: 100dvh;
+            overflow: hidden;
+            padding: 0.75rem;
+        }
+
+        .brand-side {
+            display: none !important;
+        }
+
+        .content-side {
+            height: calc(100dvh - 1.5rem);
+            max-height: none;
+            border-radius: 24px;
+        }
+
+        .content-header {
+            padding: 1rem 1rem 0;
+        }
+
+        .content-scroll {
+            padding: 1rem 1rem 1.5rem;
+        }
+
+        .portal-header {
+            grid-template-columns: 1fr;
+        }
+
+        .user-info-bar {
+            justify-self: stretch;
+            width: 100%;
+        }
+
+        .portal-welcome {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .portal-welcome-badges {
+            justify-content: flex-start;
+            min-width: 0;
+        }
+
+    }
+
+    @media (max-width: 760px) {
+        .content-scroll {
+            padding-bottom: 1.5rem;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .portal-header h1 {
+            font-size: 1.65rem;
+        }
+
+        .portal-title-copy p {
+            font-size: 0.88rem;
+        }
+
+        .portal-header-logo {
+            width: 50px;
+            height: 50px;
+            border-radius: 14px;
+        }
+
+        .services-list {
+            grid-template-columns: 1fr !important;
+        }
+
+        .services-list.services-count-5 > * {
+            grid-column: auto !important;
+        }
+
+        .service-card {
+            min-height: 24.75rem;
+        }
+
+        .card-hero {
+            min-height: 7.6rem;
+        }
+
+        .card-body {
+            gap: 0.9rem;
+        }
+
+        .card-actions {
+            width: 100%;
+            min-width: 0;
+        }
+
+        .btn-service-primary {
+            flex: 1 1 auto;
+        }
+    }
+    ";
+
+    private static readonly MarkupString ModalEdeclaraAnimationsCss = (MarkupString)@"
+    @keyframes fadeInOverlay {
+        to { opacity: 1; }
+    }
+
+    @keyframes scaleUpModal {
+        to {
+            transform: translateY(0) scale(1);
+            opacity: 1;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .edeclara-modes-grid {
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+        }
+        
+        .edeclara-modal {
+            max-width: 480px;
+        }
+    }
+    ";
+
+    private List<AppServiceCatalogItem> servicios = new();
+    private bool _cerrandoSesion;
+    private string? fotoUrl;
+    private const string DefaultAvatarUrl = "/images/avatars/Avatar-Boy.jpg";
+    private bool cargando = true;
+    private string? errorCarga;
+    private string? nombreUsuario;
+    private string? servicioSeleccionado;
+    private string? procesandoClave;
+    private int usuarioId;
+    private bool esSuperAdmin;
+    private bool isTestUser;
+    private bool mostrarModalEDeclara;
+    private bool procesandoPagoEDeclaraIndividual;
+    private bool procesandoPagoEDeclaraAsesor;
+    private bool procesandoPagoEDeclaraEmpresarial;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateToIfNeeded("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out usuarioId) || usuarioId <= 0)
+        {
+            NavManager.NavigateToIfNeeded("/login", forceLoad: true);
+            return;
+        }
+
+        esSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        if (!esSuperAdmin)
+        {
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(AppAccessService.FreeServiceKey);
+            NavManager.NavigateToIfNeeded("/dashboard");
+            return;
+        }
+
+        var emailClaim = user.FindFirst(ClaimTypes.Email)?.Value ?? user.FindFirst("Email")?.Value;
+        var userEmail = emailClaim?.Trim().ToLowerInvariant();
+        isTestUser = string.Equals(userEmail, "arianna.caceres.chicaiza@estudiantes.cordillera.edu.ec", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(userEmail, "caceresarianna12@gmail.com", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(userEmail, "caceres.ariana.ueld@gmail.com", StringComparison.OrdinalIgnoreCase);
+
+        nombreUsuario = BuildDisplayName(user);
+
+        // Avatar: primero el claim (rápido), si está vacío va a la BD (siempre actualizado)
+        var avatarClaim = user.FindFirst("AvatarUrl")?.Value;
+        if (!string.IsNullOrWhiteSpace(avatarClaim) &&
+            !avatarClaim.EndsWith("default.png", StringComparison.OrdinalIgnoreCase))
+        {
+            fotoUrl = ResolveAvatarUrl(avatarClaim);
+        }
+        else
+        {
+            try
+            {
+                var userDb = await UsuarioService.ObtenerUsuarioPorId(usuarioId);
+                fotoUrl = ResolveAvatarUrl(userDb?.AvatarUrl);
+            }
+            catch
+            {
+                fotoUrl = DefaultAvatarUrl;
+            }
+        }
+
+        servicioSeleccionado = await SelectedAppServiceState.GetCurrentServiceKeyAsync();
+
+        try
+        {
+            var allServices = (await AppAccessService.GetCatalogForUserAsync(usuarioId, esSuperAdmin))
+                .ToList();
+            if (esSuperAdmin)
+            {
+                servicios = allServices;
+            }
+            else
+            {
+                servicios = allServices
+                    .Where(s =>
+                        !string.Equals(s.Clave, "backoffice", StringComparison.OrdinalIgnoreCase) &&
+                        (s.TieneAcceso || (isTestUser && (string.Equals(s.Clave, "edeclara", StringComparison.OrdinalIgnoreCase) || string.Equals(s.Clave, "e-declara", StringComparison.OrdinalIgnoreCase)))))
+                    .ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorCarga = $"No se pudo cargar el portal de servicios: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender) => Task.CompletedTask;
+
+    private async Task IrAlServicioAsync(AppServiceCatalogItem item)
+    {
+        procesandoClave = item.Clave;
+        try
+        {
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(item.Clave);
+
+            if (!item.TieneAcceso)
+            {
+                if ((string.Equals(item.Clave, "edeclara", StringComparison.OrdinalIgnoreCase) || string.Equals(item.Clave, "e-declara", StringComparison.OrdinalIgnoreCase)) && isTestUser)
+                {
+                    mostrarModalEDeclara = true;
+                    procesandoClave = null;
+                    StateHasChanged();
+                    return;
+                }
+
+                NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(item.Clave)}", forceLoad: true);
+                return;
+            }
+
+            if (string.Equals(item.Clave, AppAccessService.FreeServiceKey, StringComparison.OrdinalIgnoreCase))
+            {
+                await EmisorOnboardingService.RefreshRequirementAsync(usuarioId);
+                NavManager.NavigateToIfNeeded(item.RutaAcceso);
+                return;
+            }
+
+            NavManager.NavigateToIfNeeded(item.RutaAcceso);
+        }
+        finally
+        {
+            procesandoClave = null;
+        }
+    }
+
+    private async Task CerrarSesionAsync()
+    {
+        if (_cerrandoSesion)
+            return;
+
+        _cerrandoSesion = true;
+
+        try
+        {
+            await JS.InvokeVoidAsync("numericaLogoutAndRedirect", "/login");
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+    }
+
+    private static (string color, string dark, string glow) ResolveServiceColors(string? clave) =>
+        clave?.ToLower() switch
+        {
+            "efact" or "e-fact" => ("#006bb5", "#004a7c", "rgba(0,107,181,0.25)"),
+            "econta" or "e-conta" or "econtax" or "e-contax" => ("#00A896", "#007C73", "rgba(0,168,150,0.25)"),
+            "edeclara" or "e-declara" => ("#6e40c9", "#4e2d91", "rgba(110,64,201,0.25)"),
+            "epeople" or "e-people" => ("#e06c1a", "#a84d11", "rgba(224,108,26,0.25)"),
+            "esign" or "e-sign" => ("#2E7D32", "#1B5E20", "rgba(80, 200, 120, 0.25)"),
+            "backoffice" => ("#0f172a", "#090d16", "rgba(15,23,42,0.25)"),
+            _ => ("#006bb5", "#004a7c", "rgba(0,107,181,0.25)"),
+        };
+ 
+    private static string? ResolveServiceLogo(string? clave) =>
+        clave?.ToLower() switch
+        {
+            "efact" or "e-fact" => "/images/LogoPrincipal.svg",
+            "econta" or "e-conta" or "econtax" or "e-contax" => "/images/econtax/LogoEContaxWord.png",
+            "edeclara" or "e-declara" => "/images/edeclara/LogoEDeclara.png",
+            "esign" or "e-sign" => "/images/esign/esign.png",
+            _ => null
+        };
+ 
+    private static string GetServiceDescription(AppServiceCatalogItem item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Descripcion))
+        {
+            return item.Descripcion;
+        }
+ 
+        return item.Clave.ToLower() switch
+        {
+            "efact" or "e-fact" => "Facturacion electronica con acceso libre para usuarios registrados.",
+            "econta" or "e-conta" or "econtax" or "e-contax" => "Contabilidad y tributacion con herramientas habilitadas por suscripcion.",
+            "edeclara" or "e-declara" => "Declaraciones tributarias y control fiscal segun tu plan activo.",
+            "epeople" or "e-people" => "Gestion de talento humano y colaboradores bajo suscripcion.",
+            "esign" or "e-sign" => "Firma electronica y certificado digital para firma de documentos en linea.",
+            "backoffice" => "Acceso exclusivo para administradores y personal de backoffice.",
+            _ => "Accede a las herramientas disponibles para tu cuenta."
+        };
+    }
+
+    private string GetServicesListClass()
+    {
+        var count = Math.Clamp(servicios.Count, 1, 5);
+        return $"services-list services-count-{count}";
+    }
+
+    private static string ResolveAvatarUrl(string? avatarUrl)
+    {
+        if (string.IsNullOrWhiteSpace(avatarUrl) ||
+            avatarUrl.EndsWith("default.png", StringComparison.OrdinalIgnoreCase))
+        {
+            return DefaultAvatarUrl;
+        }
+
+        if (avatarUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("/", StringComparison.Ordinal))
+        {
+            return avatarUrl;
+        }
+
+        return avatarUrl.StartsWith("images/", StringComparison.OrdinalIgnoreCase)
+            ? $"/{avatarUrl}"
+            : avatarUrl;
+    }
+
+    private static string BuildDisplayName(ClaimsPrincipal user)
+    {
+        var nombres = user.Identity?.Name ?? string.Empty;
+        var apellidos = user.FindFirst(ClaimTypes.Surname)?.Value ?? string.Empty;
+        return string.Join(" ", new[] { nombres, apellidos }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+    }
+
+    private async Task ProcesarPagoIndividual()
+    {
+        procesandoPagoEDeclaraIndividual = true;
+        StateHasChanged();
+        mostrarModalEDeclara = false;
+        NavManager.NavigateTo("/suscripciones?servicio=e-declara&plan=individual", forceLoad: true);
+        await Task.CompletedTask;
+    }
+
+    private async Task ProcesarPagoAsesor()
+    {
+        procesandoPagoEDeclaraAsesor = true;
+        StateHasChanged();
+        mostrarModalEDeclara = false;
+        NavManager.NavigateTo("/suscripciones?servicio=e-declara&plan=asesor", forceLoad: true);
+        await Task.CompletedTask;
+    }
+
+    private async Task ProcesarPagoEmpresarial()
+    {
+        procesandoPagoEDeclaraEmpresarial = true;
+        StateHasChanged();
+        mostrarModalEDeclara = false;
+        NavManager.NavigateTo("/suscripciones?servicio=e-declara&plan=empresarial", forceLoad: true);
+        await Task.CompletedTask;
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}

@@ -1,0 +1,1726 @@
+@page "/compra-documentos"
+@rendermode InteractiveServer
+@using System.Globalization
+@using System.IO
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.DTOs
+@using Simetric.Models
+@using EmisorModel = Simetric.Models.Emisor
+@using Simetric.Services
+@inject PagoService PagoService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject EmisionControlService EmisionControlService
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject FacturacionService FacturacionService
+@inject IJSRuntime JS
+
+<PageTitle>Compra de documentos | Numerica e-fact</PageTitle>
+
+<div class="recargas-shell" data-tour="recargas.page">
+    @if (MostrarVolverInicioOnboarding)
+    {
+        <div class="breadcrumb-container">
+            <button type="button" class="breadcrumb-home-btn" @onclick='() => Navigation.NavigateTo("/dashboard")'>
+                <i class="bi bi-house-door"></i>
+                <span>Volver al inicio</span>
+            </button>
+        </div>
+    }
+
+    <section class="recargas-header" data-tour="recargas.hero">
+        <div class="recargas-title-wrap">
+            <span class="page-kicker">1. Recarga tu cuenta</span>
+            <h1>Compra documentos por recarga</h1>
+            <p>Elige la cantidad de documentos que necesitas. El saldo se acredita al instante cuando se aprueba el pago.</p>
+        </div>
+
+        <div class="header-stats">
+            <article class="header-stat">
+                <span>Saldo actual</span>
+                <strong>@SaldoActualResumen</strong>
+                <small>@SaldoActualDetalle</small>
+            </article>
+
+            <article class="header-stat">
+                <span>Ultima recarga</span>
+                <strong>@FechaUltimaRecargaResumen</strong>
+                <small>@(TotalComprasRegistradas == 0 ? "Sin movimientos" : $"{TotalComprasRegistradas} compra(s) registrada(s)")</small>
+            </article>
+        </div>
+    </section>
+
+    @if (MostrarRetornoPago)
+    {
+        <section class="return-banner @(RetornoAprobado ? "is-approved" : "is-pending")">
+            <div class="return-copy">
+                <strong>@TituloRetornoPago</strong>
+                <span>@MensajeRetornoPago</span>
+            </div>
+
+            <div class="return-meta">
+                @if (compraRetornada is not null)
+                {
+                    <div class="return-pill">
+                        <span>@(compraRetornada.EsIlimitado ? "Plan acreditado" : "Documentos acreditados")</span>
+                        <strong>@(compraRetornada.EsIlimitado ? "Ilimitado por 1 año" : compraRetornada.Documentos.ToString(CultureInfo.InvariantCulture))</strong>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(ReferenceRetorno))
+                {
+                    <div class="return-pill">
+                        <span>Referencia</span>
+                        <strong>@ReferenceRetorno</strong>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(AuthorizationRetorno))
+                {
+                    <div class="return-pill">
+                        <span>Autorizacion</span>
+                        <strong>@AuthorizationRetorno</strong>
+                    </div>
+                }
+
+                @if (compraRetornada?.FacturaAutorizada == true && compraRetornada.CodFactura is > 0)
+                {
+                    <button type="button" class="return-pdf-btn" @onclick="AbrirPdfFacturaRetornadaAsync">
+                        <i class="bi bi-file-earmark-pdf"></i>
+                        Abrir PDF autorizado
+                    </button>
+                }
+            </div>
+
+            @if (TieneErrorFacturaRetornada)
+            {
+                <div class="return-invoice-error" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    <div>
+                        <strong>No se pudo completar la facturacion automatica</strong>
+                        <span>@MensajeErrorFacturaRetornada</span>
+                    </div>
+                </div>
+            }
+        </section>
+    }
+
+    @if (TienePlanIlimitadoActivo)
+    {
+        <section class="unlimited-plan-lock" role="status">
+            <i class="bi bi-shield-check" aria-hidden="true"></i>
+            <div>
+                <strong>Tu plan ilimitado está activo</strong>
+                <span>@MensajeBloqueoRecargas</span>
+            </div>
+        </section>
+    }
+
+    <section class="commerce-grid recharge-commerce">
+        <div class="plans-panel" data-tour="recargas.plans">
+            <div class="custom-recharge custom-recharge-top">
+                <div class="custom-recharge-copy">
+                    <span class="section-kicker">Recarga personalizada</span>
+                    <strong>Compra por documentos o por dinero</strong>
+                    <small>Edita cualquiera de los dos valores y el sistema calcula automaticamente el otro.</small>
+                </div>
+
+                <label class="recharge-field">
+                    <span>¿Cuantos documentos deseas comprar?</span>
+                    <input type="text"
+                           inputmode="numeric"
+                           class="recharge-input"
+                           placeholder="Ingresa la cantidad"
+                           autocomplete="off"
+                           disabled="@TienePlanIlimitadoActivo"
+                           @bind="cantidadTexto"
+                           @bind:event="oninput"
+                           @bind:after="ActualizarDesdeCantidad" />
+                    <small>Minimo 1 documento</small>
+                </label>
+
+                <label class="recharge-field">
+                    <span>Valor de la recarga</span>
+                    <span class="custom-money-field">
+                        <span class="money-prefix" aria-hidden="true">$</span>
+                        <input type="text"
+                               inputmode="decimal"
+                               class="custom-input"
+                               placeholder="0.00"
+                               autocomplete="off"
+                               aria-label="Valor de la recarga en dolares"
+                               disabled="@TienePlanIlimitadoActivo"
+                               @bind="montoTexto"
+                               @bind:event="oninput"
+                               @bind:after="ActualizarDesdeMonto" />
+                        <span class="money-code">USD</span>
+                    </span>
+                    <small>Valores expresados en dolares</small>
+                </label>
+
+            </div>
+
+            <div class="panel-head recommended-head">
+                <div>
+                    <span class="section-kicker">Opciones recomendadas</span>
+                    <h2>Elige una recarga rapida</h2>
+                </div>
+                <span class="panel-hint">Precios finales con IVA incluido</span>
+            </div>
+
+            <div class="plans-grid">
+                @foreach (var plan in EFactBillingConfig.EFactPlans.Where(p => p.CantidadDocs != 0))
+                {
+                    bool isSelected = plan.CantidadDocs == -1 ? EsPlanIlimitado : PlanSeleccionadoDocs == plan.CantidadDocs;
+                    string cardClass = plan.CantidadDocs == -1 ? "plan-card-annual" : plan.EsRecomendado ? "plan-card-featured" : "";
+                    
+                    <button type="button"
+                            class="plan-card @cardClass @(isSelected ? "is-selected" : string.Empty)"
+                            disabled="@TienePlanIlimitadoActivo"
+                            @onclick="() => { if (plan.CantidadDocs == -1) SeleccionarPlanIlimitado(); else SeleccionarPlan(plan.CantidadDocs); }">
+                        <span class="plan-card-head">
+                            <span class="plan-symbol plan-symbol-@plan.ColorClase"><i class="bi @plan.Icono"></i></span>
+                            @if (plan.CantidadDocs == -1)
+                            {
+                                <span class="plan-highlight is-green">Mayor ahorro</span>
+                            }
+                            else if (plan.EsRecomendado)
+                            {
+                                <span class="plan-highlight">Recomendado</span>
+                            }
+                            <span class="plan-selected-check"><i class="bi bi-check-lg"></i></span>
+                        </span>
+                        <span class="plan-main">
+                            <span class="plan-copy">
+                                @if (plan.CantidadDocs == -1)
+                                {
+                                    <strong class="plan-docs plan-docs-unlimited">Ilimitados</strong>
+                                    <span class="plan-docs-label">durante 1 año</span>
+                                }
+                                else
+                                {
+                                    <strong class="plan-docs">@plan.CantidadDocs</strong>
+                                    <span class="plan-docs-label">documentos</span>
+                                }
+                            </span>
+                            <span class="plan-price"><small>USD</small> $@plan.Precio.ToString("F2", CultureInfo.InvariantCulture)</span>
+                        </span>
+                        <span class="plan-description">@plan.Descripcion</span>
+                        <span class="plan-cta"><span>Elegir plan</span><i class="bi bi-arrow-right"></i></span>
+                    </button>
+                }
+            </div>
+
+            @if (MontoMaximoExcedido)
+            {
+                <div class="custom-warning">
+                    El monto maximo permitido para compra es $@MontoMaximoPersonalizado.ToString("N2", CultureInfo.InvariantCulture). Reduce el monto o la cantidad para continuar.
+                </div>
+            }
+        </div>
+
+        <aside class="checkout-panel" data-tour="recargas.checkout">
+            <div class="checkout-card">
+                <div class="panel-head panel-head-compact">
+                    <span class="section-kicker">Resumen de compra</span>
+                    <h2>@TituloResumenCompra</h2>
+                </div>
+
+                <div class="summary-box">
+                    <div class="summary-row summary-documents">
+                        <span>Documentos</span>
+                        <strong>@DocumentosResumen</strong>
+                    </div>
+                    @if (EsPlanIlimitado)
+                    {
+                        <div class="summary-row">
+                            <span>Vigencia</span>
+                            <strong>1 año</strong>
+                        </div>
+                    }
+                    <div class="summary-row">
+                        <span>Subtotal</span>
+                        <strong>$@SubtotalGravado.ToString("F2", CultureInfo.InvariantCulture)</strong>
+                    </div>
+                    <div class="summary-row">
+                        <span>IVA 15%</span>
+                        <strong>$@IvaTotal.ToString("F2", CultureInfo.InvariantCulture)</strong>
+                    </div>
+                    <div class="summary-row summary-row-total">
+                        <span>Total a pagar</span>
+                        <strong><small>USD</small> $@montoInput.ToString("F2", CultureInfo.InvariantCulture)</strong>
+                    </div>
+                </div>
+
+                <button type="button"
+                        class="btn-buy"
+                        disabled="@(enviandoPago || !PuedeProcesarPago)"
+                        @onclick="AbrirModalPagoDocumentos">
+                    @(TienePlanIlimitadoActivo
+                        ? "Recarga no disponible"
+                        : enviandoPago
+                            ? "Procesando..."
+                            : "Confirmar recarga")
+                </button>
+
+                @if (!string.IsNullOrWhiteSpace(mensajePago))
+                {
+                    <div class="payment-message @(resultadoPago is { IsSuccess: false } ? "is-error" : "is-info")">
+                        @mensajePago
+                    </div>
+                }
+
+                <div class="checkout-footnote">
+                    <i class="bi bi-lock"></i>
+                    <span><strong>Pago 100% seguro</strong> El saldo se acredita automaticamente al aprobarse el pago.</span>
+                </div>
+            </div>
+        </aside>
+    </section>
+
+    <section class="recharge-benefits" aria-label="Beneficios de las recargas">
+        <article>
+            <i class="bi bi-person"></i>
+            <span><strong>Todas las recargas son para 1 usuario</strong><small>Los documentos aplican unicamente para el usuario actual.</small></span>
+        </article>
+        <article>
+            <i class="bi bi-people"></i>
+            <span><strong>¿Necesitas mas usuarios?</strong><small>Contactanos para informacion sobre usuarios adicionales.</small></span>
+        </article>
+        <article>
+            <i class="bi bi-calendar2-check"></i>
+            <span><strong>Sin vencimientos</strong><small>Tus documentos no vencen y puedes usarlos cuando los necesites.</small></span>
+        </article>
+    </section>
+
+    <section class="history-section" data-tour="recargas.history">
+        <div class="history-head">
+            <div>
+                <span class="section-kicker">Mi historial de compras</span>
+                <h2>Ultimos movimientos</h2>
+            </div>
+            <p>@HistorialResumen</p>
+        </div>
+
+        @if (historialCompras.Count == 0)
+        {
+            <div class="empty-state">
+                <strong>Aun no registras compras aprobadas.</strong>
+                <span>Cuando completes tu primera recarga, aqui veras el monto, la referencia y los documentos acreditados.</span>
+            </div>
+        }
+        else
+        {
+            <div class="purchase-table-card recargas-history-table-card">
+                <div class="purchase-table-wrap">
+                    <table class="purchase-table recargas-history-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Descripcion</th>
+                                <th>Documentos</th>
+                                <th>Total</th>
+                                <th>Estado</th>
+                                <th>Saldo aplicado</th>
+                                <th>Referencia</th>
+                                <th>Autorizacion</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in historialCompras.Take(4))
+                            {
+                                <tr>
+                                    <td class="purchase-col-date">
+                                        <strong>@item.Fecha.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture)</strong>
+                                        <span>@item.Fecha.ToString("HH:mm", CultureInfo.InvariantCulture)</span>
+                                    </td>
+                                    <td class="purchase-col-description">
+                                        <strong>@item.Descripcion</strong>
+                                        <span>@(item.EsIlimitado ? "Plan ilimitado" : "Recarga documental")</span>
+                                    </td>
+                                    <td class="purchase-col-docs">@(item.EsIlimitado ? "Ilimitados" : item.Documentos.ToString(CultureInfo.InvariantCulture))</td>
+                                    <td class="purchase-col-money purchase-col-money-total">$ @item.MontoTotal.ToString("F2", CultureInfo.InvariantCulture)</td>
+                                    <td class="purchase-col-status">
+                                        <span class="purchase-status-chip @ObtenerClaseEstado(item.Estado)">
+                                            <i class="bi bi-circle-fill"></i>
+                                            <span>@item.Estado</span>
+                                        </span>
+                                    </td>
+                                    <td class="purchase-col-application">@(item.SaldoAplicado ? "Si" : "No")</td>
+                                    <td>@(string.IsNullOrWhiteSpace(item.Reference) ? "Sin referencia" : item.Reference)</td>
+                                    <td>@(string.IsNullOrWhiteSpace(item.AuthorizationCode) ? "Sin autorizacion" : item.AuthorizationCode)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    </section>
+</div>
+
+@if (mostrarModalPagoDocumentos)
+{
+    <div class="recarga-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="recargaPaymentTitle" @onclick="CerrarModalPagoDocumentos">
+        <div class="recarga-payment-modal" @onclick:stopPropagation>
+            <header class="recarga-payment-header">
+                <div>
+                    <span class="section-kicker">Resumen de pago</span>
+                    <h3 id="recargaPaymentTitle">Compra de documentos</h3>
+                    <p>Elige pagar de inmediato o registrar una transferencia para validacion.</p>
+                </div>
+                <button type="button" class="recarga-modal-close" @onclick="CerrarModalPagoDocumentos" disabled="@enviandoPago" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </header>
+
+            <div class="recarga-payment-body">
+                <section class="recarga-modal-summary">
+                    <div>
+                        <span>Documentos</span>
+                        <strong>@DocumentosResumen</strong>
+                    </div>
+                    <div>
+                        <span>Subtotal</span>
+                        <strong>$@SubtotalGravado.ToString("F2", CultureInfo.InvariantCulture)</strong>
+                    </div>
+                    <div>
+                        <span>IVA 15%</span>
+                        <strong>$@IvaTotal.ToString("F2", CultureInfo.InvariantCulture)</strong>
+                    </div>
+                    <div class="is-total">
+                        <span>Total</span>
+                        <strong>USD $@montoInput.ToString("F2", CultureInfo.InvariantCulture)</strong>
+                    </div>
+                </section>
+
+                <section class="recarga-payment-methods">
+                    <button type="button"
+                            class="recarga-method-card @(metodoPagoDocumentos == "online" ? "is-active" : "")"
+                            @onclick='() => SeleccionarMetodoPagoDocumentos("online")'
+                            disabled="@enviandoPago">
+                        <i class="bi bi-phone"></i>
+                        <span>
+                            <strong>DeUna / Pago en linea</strong>
+                            <small>Abre el checkout seguro y se acredita al aprobarse.</small>
+                        </span>
+                    </button>
+                    <button type="button"
+                            class="recarga-method-card @(metodoPagoDocumentos == "transferencia" ? "is-active" : "")"
+                            @onclick='() => SeleccionarMetodoPagoDocumentos("transferencia")'
+                            disabled="@enviandoPago">
+                        <i class="bi bi-bank"></i>
+                        <span>
+                            <strong>Transferencia bancaria</strong>
+                            <small>Se valida manualmente en un plazo maximo de 24 horas.</small>
+                        </span>
+                    </button>
+                </section>
+
+                @if (metodoPagoDocumentos == "transferencia")
+                {
+                    <section class="recarga-transfer-grid">
+                        <div class="recarga-transfer-form">
+                            <h4>Informacion de pago</h4>
+                            <div class="recarga-field-grid">
+                                <label class="recarga-modal-field">
+                                    <span>Banco *</span>
+                                    <select @bind="transferBanco" disabled="@enviandoPago">
+                                        <option value="">Seleccione...</option>
+                                        @foreach (var banco in BancosTransferencia)
+                                        {
+                                            <option value="@banco">@banco</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label class="recarga-modal-field">
+                                    <span>Titular de la cuenta *</span>
+                                    <input type="text" @bind="transferTitular" disabled="@enviandoPago" placeholder="Nombre del titular" />
+                                </label>
+                                <label class="recarga-modal-field">
+                                    <span>N. cuenta de origen *</span>
+                                    <input type="text"
+                                           value="@transferCuentaOrigen"
+                                           @oninput="OnTransferCuentaOrigenInput"
+                                           inputmode="numeric"
+                                           pattern="[0-9]*"
+                                           disabled="@enviandoPago"
+                                           placeholder="Cuenta desde donde pagaste" />
+                                </label>
+                                <label class="recarga-modal-field">
+                                    <span>N. comprobante *</span>
+                                    <input type="text"
+                                           value="@transferNumeroComprobante"
+                                           @oninput="OnTransferNumeroComprobanteInput"
+                                           maxlength="12"
+                                           inputmode="text"
+                                           disabled="@enviandoPago"
+                                           placeholder="Hasta 12 letras o numeros" />
+                                </label>
+                            </div>
+
+                            <div class="recarga-modal-field recarga-comprobante-field">
+                                <span>Comprobante *</span>
+                                <label class="recarga-upload-zone @(TieneComprobanteTransferencia ? "has-file" : string.Empty)" for="recarga-transfer-file">
+                                    <div class="recarga-upload-copy">
+                                        <i class="bi bi-image"></i>
+                                        <strong>@(TieneComprobanteTransferencia ? "Comprobante cargado" : "Arrastra o selecciona el comprobante")</strong>
+                                        <small>@(string.IsNullOrWhiteSpace(transferArchivoNombre) ? "JPG o PNG. Maximo 5MB. Haz clic en cualquier parte del cuadro." : transferArchivoNombre)</small>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(transferComprobantePreviewUrl))
+                                    {
+                                        <img class="recarga-upload-preview" src="@transferComprobantePreviewUrl" alt="Vista previa del comprobante" />
+                                    }
+                                    <InputFile id="recarga-transfer-file"
+                                               class="recarga-upload-input"
+                                               OnChange="OnTransferFileSelected"
+                                               accept=".jpg,.jpeg,.png,image/png,image/jpeg"
+                                               disabled="@enviandoPago"
+                                               style="display:none" />
+                                </label>
+                                @if (!string.IsNullOrWhiteSpace(transferComprobanteMensaje))
+                                {
+                                    <small class="recarga-upload-message">@transferComprobanteMensaje</small>
+                                }
+                            </div>
+                        </div>
+
+                        <aside class="recarga-bank-card">
+                            <strong>Pagar a</strong>
+                            <dl>
+                                <div><dt>Banco:</dt><dd>Banco Pichincha</dd></div>
+                                <div><dt>Tipo de cuenta:</dt><dd>Cuenta corriente</dd></div>
+                                <div><dt>Numero de cuenta:</dt><dd>22100346647</dd></div>
+                                <div><dt>RUC:</dt><dd>1793233799001</dd></div>
+                                <div><dt>Nombre:</dt><dd>NUMERICASOFTWARE S.A.S.</dd></div>
+                                <div><dt>e-mail:</dt><dd>contabilidad@numericasoftware.com</dd></div>
+                            </dl>
+                            <p>Realiza la transferencia y adjunta la imagen del comprobante para validar la recarga.</p>
+                        </aside>
+                    </section>
+                }
+                else
+                {
+                    <section class="recarga-online-note">
+                        <i class="bi bi-shield-check"></i>
+                        <span>Continuaras al checkout seguro. No se modifica el flujo actual de pago aprobado automaticamente.</span>
+                    </section>
+                }
+            </div>
+
+            <footer class="recarga-payment-footer">
+                <button type="button" class="recarga-modal-secondary" @onclick="CerrarModalPagoDocumentos" disabled="@enviandoPago">
+                    Cancelar
+                </button>
+                <button type="button" class="recarga-modal-primary" @onclick="ConfirmarMetodoPagoDocumentosAsync" disabled="@enviandoPago">
+                    @if (enviandoPago)
+                    {
+                        <span>Procesando...</span>
+                    }
+                    else
+                    {
+                        <span>@(metodoPagoDocumentos == "transferencia" ? "Enviar transferencia" : "Pagar con DeUna")</span>
+                    }
+                </button>
+            </footer>
+
+            @if (mostrarResultadoPagoModal && !string.IsNullOrWhiteSpace(mensajeModalPago))
+            {
+                <div class="recarga-result-overlay">
+                    <div class="recarga-result-dialog @(modalPagoExitoso ? "is-success" : "is-error")">
+                        <span class="recarga-result-icon">
+                            <i class="bi @(modalPagoExitoso ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+                        </span>
+                        <h4>@(modalPagoExitoso ? "Solicitud registrada" : "Revisa la informacion")</h4>
+                        <p>@mensajeModalPago</p>
+                        <button type="button" class="recarga-result-ok" @onclick="AceptarResultadoPagoModal">
+                            OK
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private const decimal MontoMaximoPersonalizado = EFactDocumentPricing.MontoMaximoPersonalizado;
+    private const int PlanIlimitadoMarker = -1;
+    private static decimal PrecioPlanIlimitado => EFactBillingConfig.EFactPlans.FirstOrDefault(p => p.CantidadDocs == -1)?.Precio ?? EFactDocumentPricing.PrecioPlanIlimitado;
+    private const string MensajeRecargaBloqueadaPlanIlimitado =
+        "No puedes comprar documentos ni otro plan mientras tu plan ilimitado esté activo.";
+
+    private static readonly JsonSerializerOptions HistorialJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private decimal montoInput;
+    private string montoTexto = string.Empty;
+    private string cantidadTexto = string.Empty;
+    private int docsInput;
+    private CancellationTokenSource? _montoDebounce;
+    private bool enviandoPago;
+    private string? mensajePago;
+    private bool mostrarModalPagoDocumentos;
+    private string metodoPagoDocumentos = "online";
+    private string? mensajeModalPago;
+    private bool modalPagoExitoso;
+    private bool mostrarResultadoPagoModal;
+    private string transferBanco = string.Empty;
+    private string transferCuentaOrigen = string.Empty;
+    private string transferNumeroComprobante = string.Empty;
+    private string transferTitular = string.Empty;
+    private string? transferArchivoNombre;
+    private byte[]? transferComprobanteBytes;
+    private string? transferComprobantePreviewUrl;
+    private string? transferComprobanteMensaje;
+    private static readonly string[] BancosTransferencia =
+    {
+        "Banco Pichincha",
+        "Banco Guayaquil",
+        "Banco Internacional",
+        "Banco Pacifico",
+        "Banco Produbanco",
+        "Banco Bolivariano",
+        "Cooperativa JEP",
+        "Otra institucion"
+    };
+    private PagomediosApiResult? resultadoPago;
+    private Usuario? usuarioActual;
+    private Usuario? usuarioSesion;
+    private Usuario? usuarioCuentaDocumentos;
+    private EmisorModel? emisorPagador;
+    private EmisionEstado? emisionEstado;
+    private List<CompraDocumentosHistorialItem> historialCompras = new();
+    private CompraDocumentosHistorialItem? compraRetornada;
+    private bool abriendoPdfFactura;
+    private int? planSeleccionadoDocs;
+
+    [SupplyParameterFromQuery(Name = "estado")]
+    public string? EstadoRetorno { get; set; }
+
+    [SupplyParameterFromQuery(Name = "reference")]
+    public string? ReferenceRetorno { get; set; }
+
+    [SupplyParameterFromQuery(Name = "authorization")]
+    public string? AuthorizationRetorno { get; set; }
+
+    [SupplyParameterFromQuery(Name = "purchase")]
+    public string? CompraRetornoId { get; set; }
+
+    private bool MostrarRetornoPago =>
+        !string.IsNullOrWhiteSpace(EstadoRetorno) ||
+        !string.IsNullOrWhiteSpace(ReferenceRetorno) ||
+        !string.IsNullOrWhiteSpace(AuthorizationRetorno) ||
+        !string.IsNullOrWhiteSpace(CompraRetornoId);
+
+    private bool RetornoAprobado =>
+        string.Equals(EstadoRetorno, "aprobado", StringComparison.OrdinalIgnoreCase);
+
+    private bool TieneErrorFacturaRetornada =>
+        RetornoAprobado &&
+        compraRetornada is not null &&
+        (compraRetornada.CodFactura is not > 0 || compraRetornada.FacturaAutorizada != true);
+
+    private string MensajeErrorFacturaRetornada
+    {
+        get
+        {
+            if (compraRetornada is null)
+                return "No se pudo consultar el resultado de la factura.";
+
+            var detalle = string.IsNullOrWhiteSpace(compraRetornada.MensajeFactura)
+                ? "Revisa el estado en Mis facturas BackOffice o contacta a soporte."
+                : compraRetornada.MensajeFactura;
+
+            return compraRetornada.CodFactura is > 0
+                ? $"La factura se guardo, pero no fue autorizada por el SRI. Estado: {compraRetornada.EstadoFactura ?? "Sin estado"}. {detalle}"
+                : $"No se pudo guardar o emitir la factura. {detalle}";
+        }
+    }
+
+    private Usuario? UsuarioPagador => usuarioSesion ?? usuarioActual;
+
+    private int SaldoDocumentosActual => Math.Max(usuarioActual?.SaldoDocumentos ?? 0, 0);
+
+    private int? PlanSeleccionadoDocs => planSeleccionadoDocs;
+
+    private bool EsPlanIlimitado => planSeleccionadoDocs == PlanIlimitadoMarker;
+
+    private bool EsRecargaPersonalizada => !planSeleccionadoDocs.HasValue;
+
+    private bool TieneCompraEnCurso => (docsInput > 0 || EsPlanIlimitado) && montoInput > 0m;
+
+    private CompraDocumentosHistorialItem? PlanIlimitadoActivo =>
+        historialCompras
+            .Where(item =>
+                item.SaldoAplicado &&
+                item.EsIlimitado &&
+                (item.EsPermanente || item.VigenciaHasta > DateTime.Now))
+            .OrderByDescending(item => item.EsPermanente)
+            .ThenByDescending(item => item.VigenciaHasta)
+            .FirstOrDefault();
+
+    private bool TienePlanIlimitadoActivo => PlanIlimitadoActivo is not null;
+    private bool MostrarVolverInicioOnboarding =>
+        EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false;
+
+    private string MensajeBloqueoRecargas =>
+        PlanIlimitadoActivo?.VigenciaHasta is DateTime vigenteHasta
+            ? $"Podrás volver a recargar cuando finalice su vigencia el {vigenteHasta:dd/MM/yyyy}."
+            : "Este plan no tiene fecha de vencimiento. No necesitas realizar recargas adicionales.";
+
+    private string SaldoActualResumen => PlanIlimitadoActivo is not null
+        ? "Ilimitado"
+        : SaldoDocumentosActual.ToString(CultureInfo.InvariantCulture);
+
+    private string SaldoActualDetalle =>
+        PlanIlimitadoActivo is null
+            ? "documentos disponibles"
+            : PlanIlimitadoActivo.VigenciaHasta is DateTime vigenteHasta
+                ? $"vigente hasta {vigenteHasta:dd/MM/yyyy} ({ObtenerDuracionRestantePlan(vigenteHasta)} restantes)"
+                : "sin fecha de vencimiento";
+
+    private string DocumentosResumen => EsPlanIlimitado
+        ? "Ilimitados"
+        : docsInput.ToString(CultureInfo.InvariantCulture);
+
+    private string TituloResumenCompra =>
+        !TieneCompraEnCurso
+            ? "Selecciona una opcion"
+            : EsRecargaPersonalizada
+                ? "Recarga personalizada"
+                : "Plan seleccionado";
+
+    private bool MontoMaximoExcedido => montoInput > MontoMaximoPersonalizado;
+
+    private string BalanceSubtitle =>
+        SaldoDocumentosActual == 1
+            ? "1 documento disponible"
+            : $"{SaldoDocumentosActual} documentos disponibles";
+
+    private string CorreoResumen =>
+        string.IsNullOrWhiteSpace(UsuarioPagador?.Email) ? "Sin correo configurado" : UsuarioPagador.Email.Trim().ToLowerInvariant();
+
+    private string FechaUltimaRecargaTexto =>
+        usuarioCuentaDocumentos?.FechaUltimaRecargaDocumentos?.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture) ?? "Sin recargas";
+
+    private string FechaUltimaRecargaResumen =>
+        usuarioCuentaDocumentos?.FechaUltimaRecargaDocumentos?.ToString("dd MMM yyyy", CultureInfo.GetCultureInfo("es-EC")) ?? "Sin recargas";
+
+    private int TotalComprasRegistradas => historialCompras.Count;
+
+    private static string ObtenerDuracionRestantePlan(DateTime vigenteHasta)
+    {
+        var diasRestantes = Math.Max(0, (vigenteHasta.Date - DateTime.Today).Days);
+        if (diasRestantes == 0) return "menos de 1 dia";
+        return diasRestantes == 1 ? "1 dia" : $"{diasRestantes} dias";
+    }
+
+    private decimal PrecioPromedioPorDocumento =>
+        docsInput > 0
+            ? decimal.Round(montoInput / docsInput, 2, MidpointRounding.AwayFromZero)
+            : 0m;
+
+    private string UltimoMovimientoNota =>
+        historialCompras.Count == 0
+            ? "Tu historial empezara a llenarse despues de la primera compra aprobada."
+            : $"Ultimo movimiento: {historialCompras[0].Fecha:dd/MM/yyyy HH:mm}.";
+
+    private string NombrePagadorPreview
+    {
+        get
+        {
+            var nombre = ObtenerNombrePagador();
+            return string.IsNullOrWhiteSpace(nombre) ? "Completa tu perfil" : nombre;
+        }
+    }
+
+    private string DocumentoPagadorPreview
+    {
+        get
+        {
+            var documento = ObtenerDocumentoPagador();
+            return string.IsNullOrWhiteSpace(documento) ? "Sin documento configurado" : documento;
+        }
+    }
+
+    private decimal SubtotalGravado => EFactDocumentPricing.CalcularSubtotalDesdeTotal(montoInput);
+
+    private decimal IvaTotal => EFactDocumentPricing.CalcularIvaDesdeTotal(montoInput);
+
+    private string HistorialResumen =>
+        historialCompras.Count == 0
+            ? "Sin compras registradas todavia."
+            : $"{historialCompras.Count} compra(s) registradas en tu historial.";
+
+    private string ModoRecargaResumen =>
+        EsRecargaPersonalizada
+            ? "Monto libre con calculo automatico de documentos"
+            : $"{docsInput} documentos por $ {montoInput.ToString("F2", CultureInfo.InvariantCulture)}";
+
+    private string ModoRecargaNota =>
+        EsRecargaPersonalizada
+            ? "El sistema calcula los documentos segun el monto ingresado."
+            : "Edita el monto para cambiar a una recarga personalizada.";
+
+    private string TituloRetornoPago
+    {
+        get
+        {
+            if (compraRetornada is not null && RetornoAprobado)
+            {
+                return "Recarga acreditada correctamente";
+            }
+
+            return RetornoAprobado ? "Pago aprobado en Pagomedios" : "Retorno recibido desde Pagomedios";
+        }
+    }
+
+    private string MensajeRetornoPago
+    {
+        get
+        {
+            if (compraRetornada is not null && RetornoAprobado)
+            {
+                return compraRetornada.EsIlimitado
+                    ? $"Tu plan ilimitado quedó activo hasta el {compraRetornada.VigenciaHasta:dd/MM/yyyy}."
+                    : $"Se acreditaron {compraRetornada.Documentos} documentos y tu nuevo saldo es de {SaldoDocumentosActual}.";
+            }
+
+            return RetornoAprobado
+                ? "El pago fue aprobado, pero no pudimos ubicar todos los detalles del movimiento en pantalla."
+                : "Recibimos el retorno del gateway, pero la transaccion no llego como aprobacion final.";
+        }
+    }
+
+    private bool PuedeProcesarPago =>
+        !TienePlanIlimitadoActivo &&
+        montoInput > 0 &&
+        (docsInput > 0 || EsPlanIlimitado) &&
+        !MontoMaximoExcedido &&
+        usuarioActual is not null;
+
+    private void AbrirModalPagoDocumentos()
+    {
+        mensajePago = null;
+        resultadoPago = null;
+        mensajeModalPago = null;
+        modalPagoExitoso = false;
+
+        if (!ValidarDatosPago(out var error))
+        {
+            mensajePago = error;
+            mensajeModalPago = error;
+            return;
+        }
+
+        metodoPagoDocumentos = "online";
+        mostrarModalPagoDocumentos = true;
+    }
+
+    private void CerrarModalPagoDocumentos()
+    {
+        if (enviandoPago)
+        {
+            return;
+        }
+
+        mostrarModalPagoDocumentos = false;
+        mensajeModalPago = null;
+        modalPagoExitoso = false;
+        mostrarResultadoPagoModal = false;
+    }
+
+    private void SeleccionarMetodoPagoDocumentos(string metodo)
+    {
+        metodoPagoDocumentos = metodo;
+        mensajeModalPago = null;
+        modalPagoExitoso = false;
+        mostrarResultadoPagoModal = false;
+    }
+
+    private void MostrarResultadoPago(string mensaje, bool exitoso)
+    {
+        mensajeModalPago = mensaje;
+        modalPagoExitoso = exitoso;
+        mostrarResultadoPagoModal = true;
+    }
+
+    private void AceptarResultadoPagoModal()
+    {
+        var fueExitoso = modalPagoExitoso;
+        mostrarResultadoPagoModal = false;
+        mensajeModalPago = null;
+        modalPagoExitoso = false;
+
+        if (fueExitoso)
+        {
+            mostrarModalPagoDocumentos = false;
+        }
+    }
+
+    private async Task ConfirmarMetodoPagoDocumentosAsync()
+    {
+        if (metodoPagoDocumentos == "transferencia")
+        {
+            await RegistrarTransferenciaDocumentosAsync();
+            return;
+        }
+
+        await ProcesarSeleccionAsync();
+    }
+
+    private async Task OnTransferFileSelected(InputFileChangeEventArgs e)
+    {
+        mensajeModalPago = null;
+        modalPagoExitoso = false;
+        transferArchivoNombre = null;
+        transferComprobanteBytes = null;
+        transferComprobantePreviewUrl = null;
+        transferComprobanteMensaje = null;
+
+        var archivo = e.File;
+        var extension = Path.GetExtension(archivo.Name).ToLowerInvariant();
+        var esImagenPermitida =
+            archivo.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
+            extension is ".jpg" or ".jpeg" or ".png";
+
+        if (archivo.Size > 5 * 1024 * 1024)
+        {
+            transferComprobanteMensaje = "El comprobante no debe superar 5MB.";
+            return;
+        }
+
+        if (!esImagenPermitida)
+        {
+            transferComprobanteMensaje = "El comprobante debe ser una imagen JPG o PNG.";
+            return;
+        }
+
+        await using var stream = archivo.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+
+        transferComprobanteBytes = ms.ToArray();
+        transferArchivoNombre = archivo.Name;
+
+        var mime = archivo.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+            ? archivo.ContentType
+            : extension == ".png" ? "image/png" : "image/jpeg";
+
+        transferComprobantePreviewUrl = $"data:{mime};base64,{Convert.ToBase64String(transferComprobanteBytes)}";
+        transferComprobanteMensaje = "Comprobante cargado correctamente.";
+        StateHasChanged();
+    }
+
+    private bool TieneComprobanteTransferencia =>
+        transferComprobanteBytes != null && transferComprobanteBytes.Length > 0;
+
+    private void OnTransferCuentaOrigenInput(ChangeEventArgs e)
+    {
+        var valor = e.Value?.ToString() ?? string.Empty;
+        transferCuentaOrigen = new string(valor.Where(char.IsDigit).ToArray());
+    }
+
+    private void OnTransferNumeroComprobanteInput(ChangeEventArgs e)
+    {
+        var valor = e.Value?.ToString() ?? string.Empty;
+        transferNumeroComprobante = new string(valor.Where(char.IsLetterOrDigit).Take(12).ToArray()).ToUpperInvariant();
+    }
+
+    private async Task RegistrarTransferenciaDocumentosAsync()
+    {
+        mensajeModalPago = null;
+        modalPagoExitoso = false;
+        resultadoPago = null;
+
+        if (!ValidarDatosPago(out var error))
+        {
+            MostrarResultadoPago(error, exitoso: false);
+            return;
+        }
+
+        if (!ValidarFormularioTransferencia(out var errorTransferencia))
+        {
+            MostrarResultadoPago(errorTransferencia, exitoso: false);
+            return;
+        }
+
+        if (!TieneComprobanteTransferencia)
+        {
+            MostrarResultadoPago("Adjunta el comprobante de deposito o transferencia.", exitoso: false);
+            return;
+        }
+
+        enviandoPago = true;
+        CompraDocumentosHistorialItem? compraPendiente = null;
+
+        try
+        {
+            compraPendiente = await CrearCompraPendienteAsync();
+
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var solicitud = new ReporteVentaBackOffice
+            {
+                Cliente = TruncarTexto($"{ObtenerNombrePagador()} | {ObtenerCorreoPagador()}", 150),
+                Producto = "e-fact",
+                PlanPaquete = TruncarTexto(EsPlanIlimitado ? "Plan ilimitado anual documentos" : $"Recarga de {docsInput} documentos", 100),
+                Valor = decimal.Round(montoInput, 2, MidpointRounding.AwayFromZero),
+                Fecha = DateTime.Now,
+                Canal = "Transferencia Web",
+                Vendedor = "Solicitud en linea",
+                Estado = "pendiente",
+                FormaPago = "Transferencia Bancaria",
+                Observacion = TruncarTexto(
+                    $"[CompraDocs:{compraPendiente.Id}] Banco: {transferBanco.Trim()}. Cuenta origen: {transferCuentaOrigen.Trim()}. N. comprobante: {transferNumeroComprobante.Trim()}. Titular: {transferTitular.Trim()}. Solicitud pendiente de aprobacion por compra de documentos.",
+                    500),
+                ComprobanteArchivo = transferComprobanteBytes
+            };
+
+            context.ReporteVentasBackOffice.Add(solicitud);
+            await context.SaveChangesAsync();
+
+            mensajePago = "Tu transferencia fue registrada. La transaccion sera revisada y aprobada o rechazada dentro de 24 horas; veras el estado en tu historial de compras.";
+            await CargarUsuarioActualAsync();
+            LimpiarFormularioTransferencia();
+            MostrarResultadoPago(mensajePago, exitoso: true);
+        }
+        catch (Exception ex)
+        {
+            if (compraPendiente is not null)
+            {
+                await EliminarCompraPendienteAsync(compraPendiente.Id);
+            }
+
+            MostrarResultadoPago($"No se pudo registrar la transferencia: {ex.Message}", exitoso: false);
+        }
+        finally
+        {
+            enviandoPago = false;
+        }
+    }
+
+    private bool ValidarFormularioTransferencia(out string error)
+    {
+        if (string.IsNullOrWhiteSpace(transferBanco))
+        {
+            error = "Selecciona el banco desde donde realizaste la transferencia.";
+            return false;
+        }
+
+        var cuenta = transferCuentaOrigen?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(cuenta))
+        {
+            error = "Ingresa el numero de cuenta origen.";
+            return false;
+        }
+
+        if (!cuenta.All(char.IsDigit))
+        {
+            error = "El numero de cuenta origen solo debe contener numeros.";
+            return false;
+        }
+
+        var numeroComprobante = transferNumeroComprobante?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(numeroComprobante))
+        {
+            error = "Ingresa el numero de comprobante de la transferencia.";
+            return false;
+        }
+
+        if (numeroComprobante.Length > 12 || !numeroComprobante.All(char.IsLetterOrDigit))
+        {
+            error = "El numero de comprobante debe tener maximo 12 caracteres alfanumericos.";
+            return false;
+        }
+
+        var partesTitular = (transferTitular ?? string.Empty)
+            .Trim()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        if (partesTitular.Length < 2 || partesTitular.Count(parte => parte.Length >= 3 && parte.All(char.IsLetter)) < 2)
+        {
+            error = "El titular de la cuenta debe incluir al menos un nombre y un apellido de minimo 3 letras cada uno.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private void LimpiarFormularioTransferencia()
+    {
+        transferBanco = string.Empty;
+        transferCuentaOrigen = string.Empty;
+        transferNumeroComprobante = string.Empty;
+        transferTitular = string.Empty;
+        transferArchivoNombre = null;
+        transferComprobanteBytes = null;
+        transferComprobantePreviewUrl = null;
+        transferComprobanteMensaje = null;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarUsuarioActualAsync();
+    }
+
+    private async Task CargarUsuarioActualAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+
+        if (!int.TryParse(idClaim, out var usuarioId) || usuarioId <= 0)
+        {
+            return;
+        }
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        usuarioSesion = await context.Usuarios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.IdUsuario == usuarioId);
+
+        usuarioActual = usuarioSesion;
+
+        emisorPagador = null;
+
+        if (usuarioSesion is not null)
+        {
+            var idUsuarioEmisor = usuarioSesion.estadoAsociado == true && usuarioSesion.idJefe is > 0
+                ? usuarioSesion.idJefe.Value
+                : usuarioId;
+
+            if (idUsuarioEmisor != usuarioSesion.IdUsuario)
+            {
+                usuarioActual = await context.Usuarios
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(item => item.IdUsuario == idUsuarioEmisor);
+            }
+
+            emisorPagador = await context.Emisores
+                .AsNoTracking()
+                .Where(item => item.IdUsuario == idUsuarioEmisor && item.Estado)
+                .OrderByDescending(item => item.Codigo)
+                .FirstOrDefaultAsync();
+        }
+
+        usuarioCuentaDocumentos = usuarioActual;
+        historialCompras = LeerHistorial(usuarioCuentaDocumentos?.HistorialComprasDocumentosJson);
+        compraRetornada = ObtenerCompraRetornada();
+        await EmisorOnboardingService.RefreshRequirementAsync(usuarioId);
+        emisionEstado = await EmisionControlService.ObtenerEstadoAsync(context, usuarioId);
+
+        if (RetornoAprobado && compraRetornada?.SaldoAplicado == true)
+        {
+            EmisionControlService.NotifyChanged();
+        }
+    }
+
+    private async Task ProcesarSeleccionAsync()
+    {
+        mensajePago = null;
+        resultadoPago = null;
+
+        if (!ValidarDatosPago(out var error))
+        {
+            mensajePago = error;
+            return;
+        }
+
+        enviandoPago = true;
+
+        try
+        {
+            var compraPendiente = await CrearCompraPendienteAsync();
+            var notifyUrl = BuildNotifyUrl(compraPendiente.Id);
+            var request = BuildCompraRequest(notifyUrl, compraPendiente.CustomValue!);
+
+            resultadoPago = await PagoService.SendJsonAsync(
+                HttpMethod.Post,
+                "/payment-requests",
+                request);
+
+            if (resultadoPago.IsSuccess && !string.IsNullOrWhiteSpace(resultadoPago.PaymentUrl))
+            {
+                Navigation.NavigateTo(resultadoPago.PaymentUrl, forceLoad: true);
+                return;
+            }
+
+            await EliminarCompraPendienteAsync(compraPendiente.Id);
+            mensajePago = resultadoPago.IsSuccess
+                ? "Pagomedios respondio, pero no devolvio la URL del checkout."
+                : resultadoPago.ErrorMessage ?? "No se pudo procesar la recarga.";
+            mensajeModalPago = mensajePago;
+        }
+        catch (InvalidOperationException ex)
+        {
+            await CargarUsuarioActualAsync();
+            mensajePago = ex.Message;
+            mensajeModalPago = ex.Message;
+        }
+        finally
+        {
+            enviandoPago = false;
+        }
+    }
+
+    private async Task AbrirPdfFacturaRetornadaAsync()
+    {
+        if (abriendoPdfFactura || compraRetornada?.FacturaAutorizada != true || compraRetornada.CodFactura is not > 0)
+            return;
+
+        abriendoPdfFactura = true;
+        try
+        {
+            var pdfUrl = await FacturacionService.AsegurarPdfFacturaAsync(compraRetornada.CodFactura.Value);
+            if (!string.IsNullOrWhiteSpace(pdfUrl))
+                await JS.InvokeVoidAsync("open", pdfUrl, "_blank");
+            else
+                mensajePago = "La factura esta autorizada, pero no se pudo generar el PDF.";
+        }
+        finally
+        {
+            abriendoPdfFactura = false;
+        }
+    }
+
+    private bool ValidarDatosPago(out string error)
+    {
+        if (TienePlanIlimitadoActivo)
+        {
+            error = MensajeRecargaBloqueadaPlanIlimitado;
+            return false;
+        }
+
+        if (montoInput <= 0)
+        {
+            error = "Ingresa un monto valido para la recarga.";
+            return false;
+        }
+
+        if (MontoMaximoExcedido)
+        {
+            error = $"El monto maximo permitido es de $ {MontoMaximoPersonalizado.ToString("N2", CultureInfo.InvariantCulture)}.";
+            return false;
+        }
+
+        if (docsInput <= 0 && !EsPlanIlimitado)
+        {
+            error = "No fue posible calcular una cantidad valida de documentos.";
+            return false;
+        }
+
+        if (usuarioActual is null)
+        {
+            error = "No se pudo identificar al usuario actual.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(ObtenerDocumentoPagador()))
+        {
+            error = "Tu perfil no tiene identificacion configurada para enviar a Pagomedios.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(ObtenerCorreoPagador()))
+        {
+            error = "Tu perfil no tiene correo configurado para enviar a Pagomedios.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private PagomediosRequest BuildCompraRequest(string notifyUrl, string customValue)
+    {
+        var total = decimal.Round(montoInput, 2, MidpointRounding.AwayFromZero);
+
+        return new PagomediosRequest
+        {
+            Integration = true,
+            Third = new ThirdParty
+            {
+                Document = ObtenerDocumentoPagador(),
+                DocumentType = ObtenerTipoDocumentoPagomedios(),
+                Name = ObtenerNombrePagador(),
+                Email = ObtenerCorreoPagador(),
+                Phones = ObtenerTelefonoPagador(),
+                Address = ObtenerDireccionPagador(),
+                Type = ObtenerTipoClientePagomedios()
+            },
+            GenerateInvoice = 0,
+            Description = EsPlanIlimitado
+                ? "Plan E-FACT de documentos ilimitados por 1 año"
+                : $"Recarga de {docsInput} documentos E-FACT",
+            Amount = total,
+            AmountWithTax = SubtotalGravado,
+            AmountWithoutTax = 0m,
+            TaxValue = IvaTotal,
+            NotifyUrl = notifyUrl,
+            CustomValue = customValue,
+            HasCards = 0,
+            HasDeUna = 1,
+            HasPaypal = 0,
+            HasSafetypay = false
+        };
+    }
+
+    private string BuildNotifyUrl(string compraId)
+    {
+        var userId = usuarioCuentaDocumentos?.IdUsuario ?? usuarioActual?.IdUsuario ?? 0;
+        var baseUri = Navigation.ToAbsoluteUri("/api/pagomedios/notificacion-compra-documentos").ToString().TrimEnd('/');
+        return $"{baseUri}?uid={userId}&purchase={Uri.EscapeDataString(compraId)}";
+    }
+
+    private string BuildCustomValue(string compraId)
+    {
+        var userId = usuarioCuentaDocumentos?.IdUsuario ?? usuarioActual?.IdUsuario ?? 0;
+        var plan = EsPlanIlimitado ? "|plan:ilimitado-anual" : string.Empty;
+        return $"recarga-documentos|purchase:{compraId}|user:{userId}|docs:{docsInput}|total:{montoInput.ToString("0.00", CultureInfo.InvariantCulture)}{plan}";
+    }
+
+    private async Task<CompraDocumentosHistorialItem> CrearCompraPendienteAsync()
+    {
+        var userId = usuarioCuentaDocumentos?.IdUsuario ?? usuarioActual?.IdUsuario ?? 0;
+        var compraId = Guid.NewGuid().ToString("N");
+        var customValue = BuildCustomValue(compraId);
+        var compra = new CompraDocumentosHistorialItem
+        {
+            Id = compraId,
+            Fecha = DateTime.Now,
+            Documentos = docsInput,
+            MontoTotal = decimal.Round(montoInput, 2, MidpointRounding.AwayFromZero),
+            Estado = "Pendiente",
+            Descripcion = EsPlanIlimitado
+                ? "Plan de documentos ilimitados por 1 año"
+                : $"Recarga de {docsInput} documentos E-FACT",
+            CustomValue = customValue,
+            EmailDestino = ObtenerCorreoPagador(),
+            EsIlimitado = EsPlanIlimitado
+        };
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios.FirstOrDefaultAsync(item => item.IdUsuario == userId)
+            ?? throw new InvalidOperationException("No se pudo identificar la cuenta que recibira los documentos.");
+
+        var estadoEmision = await EmisionControlService.ObtenerEstadoAsync(context, userId);
+        if (estadoEmision.PlanIlimitadoActivo)
+        {
+            throw new InvalidOperationException(MensajeRecargaBloqueadaPlanIlimitado);
+        }
+
+        var historial = LeerHistorial(usuario.HistorialComprasDocumentosJson);
+        historial.Insert(0, compra);
+        usuario.HistorialComprasDocumentosJson = SerializarHistorial(historial);
+        await context.SaveChangesAsync();
+
+        historialCompras = historial;
+        return compra;
+    }
+
+    private async Task EliminarCompraPendienteAsync(string compraId)
+    {
+        var userId = usuarioCuentaDocumentos?.IdUsuario ?? usuarioActual?.IdUsuario ?? 0;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios.FirstOrDefaultAsync(item => item.IdUsuario == userId);
+        if (usuario is null)
+        {
+            return;
+        }
+
+        var historial = LeerHistorial(usuario.HistorialComprasDocumentosJson);
+        historial.RemoveAll(item =>
+            !item.SaldoAplicado &&
+            string.Equals(item.Id, compraId, StringComparison.OrdinalIgnoreCase));
+
+        usuario.HistorialComprasDocumentosJson = SerializarHistorial(historial);
+        await context.SaveChangesAsync();
+        historialCompras = historial;
+    }
+
+    private string ObtenerDocumentoBasePagador()
+    {
+        if (!string.IsNullOrWhiteSpace(UsuarioPagador?.Identificacion))
+        {
+            return UsuarioPagador.Identificacion.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(emisorPagador?.Ruc))
+        {
+            return emisorPagador.Ruc.Trim();
+        }
+
+        return string.Empty;
+    }
+
+    private string ObtenerDocumentoPagador()
+    {
+        var documento = ObtenerDocumentoBasePagador();
+        var tipoDocumento = ObtenerTipoDocumentoPagomedios();
+
+        return tipoDocumento is "04" or "05"
+            ? SoloDigitos(documento)
+            : NormalizarDocumentoLibre(documento);
+    }
+
+    private string ObtenerNombrePagador()
+    {
+        if (!string.IsNullOrWhiteSpace(UsuarioPagador?.NombreEmpresa))
+        {
+            return UsuarioPagador.NombreEmpresa.Trim();
+        }
+
+        var nombrePersona = $"{UsuarioPagador?.Nombres} {UsuarioPagador?.Apellidos}".Trim();
+        if (!string.IsNullOrWhiteSpace(nombrePersona))
+        {
+            return nombrePersona;
+        }
+
+        if (!string.IsNullOrWhiteSpace(emisorPagador?.RazonSocial))
+        {
+            return emisorPagador.RazonSocial.Trim();
+        }
+
+        return emisorPagador?.NomComercial?.Trim() ?? string.Empty;
+    }
+
+    private string ObtenerCorreoPagador() =>
+        !string.IsNullOrWhiteSpace(UsuarioPagador?.Email)
+            ? UsuarioPagador.Email.Trim().ToLowerInvariant()
+            : emisorPagador?.Email?.Trim().ToLowerInvariant() ?? string.Empty;
+
+    private string ObtenerTelefonoPagador() =>
+        string.IsNullOrWhiteSpace(SoloDigitos(UsuarioPagador?.Celular ?? string.Empty))
+            ? "0999999999"
+            : SoloDigitos(UsuarioPagador?.Celular ?? string.Empty);
+
+    private string ObtenerDireccionPagador() =>
+        !string.IsNullOrWhiteSpace((UsuarioPagador?.DireccionEmpresa ?? string.Empty).Trim())
+            ? UsuarioPagador!.DireccionEmpresa!.Trim()
+            : !string.IsNullOrWhiteSpace((emisorPagador?.DirEstablecimiento ?? string.Empty).Trim())
+                ? emisorPagador!.DirEstablecimiento!.Trim()
+                : !string.IsNullOrWhiteSpace((emisorPagador?.DireccionMatriz ?? string.Empty).Trim())
+                    ? emisorPagador!.DireccionMatriz!.Trim()
+                    : "Quito";
+
+    private string ObtenerTipoDocumentoPagomedios()
+    {
+        var identificacion = SoloDigitos(ObtenerDocumentoBasePagador());
+
+        if (identificacion.Length == 13)
+        {
+            return "04";
+        }
+
+        if (identificacion.Length == 10)
+        {
+            return "05";
+        }
+
+        return "06";
+    }
+
+    private string ObtenerTipoClientePagomedios() =>
+        !string.IsNullOrWhiteSpace(UsuarioPagador?.NombreEmpresa) ||
+        !string.IsNullOrWhiteSpace(emisorPagador?.RazonSocial)
+            ? "Company"
+            : "Individual";
+
+    private async Task ActualizarDesdeMontoAsync()
+    {
+        if (TienePlanIlimitadoActivo)
+            return;
+
+        planSeleccionadoDocs = null;
+        mensajePago = null;
+
+        // Parse and compute immediately (so cantidad reflects current typing)
+        var textoActual = montoTexto;
+        var parsed = ParseDecimal(textoActual);
+        if (parsed > 0m)
+        {
+            montoInput = parsed;
+            CalcularDesdeDinero();
+            cantidadTexto = docsInput > 0 ? docsInput.ToString(CultureInfo.InvariantCulture) : string.Empty;
+        }
+        else if (string.IsNullOrWhiteSpace(textoActual))
+        {
+            // Allow the user to clear the field entirely
+            montoInput = 0m;
+            docsInput = 0;
+            cantidadTexto = string.Empty;
+        }
+        // Do NOT rewrite montoTexto here — let the user keep typing
+
+        // Debounce: only reformat montoTexto after 600ms of inactivity
+        _montoDebounce?.Cancel();
+        _montoDebounce = new CancellationTokenSource();
+        var token = _montoDebounce.Token;
+
+        try
+        {
+            await Task.Delay(600, token);
+            if (!token.IsCancellationRequested)
+            {
+                // Finalize: reformat the money field
+                if (montoInput > 0m)
+                    montoTexto = montoInput.ToString("0.00", CultureInfo.InvariantCulture);
+                else if (string.IsNullOrWhiteSpace(montoTexto))
+                    montoTexto = string.Empty;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // User is still typing — do nothing
+        }
+    }
+
+    private void ActualizarDesdeMonto()
+    {
+        _ = ActualizarDesdeMontoAsync();
+    }
+
+    private void ActualizarDesdeCantidad()
+    {
+        if (TienePlanIlimitadoActivo)
+        {
+            return;
+        }
+
+        planSeleccionadoDocs = null;
+        cantidadTexto = SoloDigitos(cantidadTexto);
+        docsInput = ParseEnteroPositivo(cantidadTexto);
+        CalcularDesdeDocs();
+        montoTexto = montoInput > 0m ? montoInput.ToString("0.00", CultureInfo.InvariantCulture) : string.Empty;
+        mensajePago = null;
+    }
+
+    private void CalcularDesdeDocs()
+    {
+        if (docsInput <= 0)
+        {
+            docsInput = 0;
+            montoInput = 0m;
+            return;
+        }
+
+        montoInput = EFactDocumentPricing.CalcularTotalPorCantidad(docsInput);
+    }
+
+    private void CalcularDesdeDinero()
+    {
+        if (montoInput <= 0)
+        {
+            montoInput = 0m;
+            docsInput = 0;
+            return;
+        }
+
+        var precioDocActual = ObtenerPrecioPorDocumentoSegunMonto(montoInput);
+        docsInput = CalcularDocumentosSeguros(montoInput, precioDocActual);
+    }
+
+    private void SeleccionarPlan(int docs)
+    {
+        if (TienePlanIlimitadoActivo)
+        {
+            return;
+        }
+
+        planSeleccionadoDocs = docs;
+        docsInput = docs;
+        montoInput = EFactBillingConfig.EFactPlans.FirstOrDefault(p => p.CantidadDocs == docs)?.Precio
+            ?? EFactDocumentPricing.CalcularTotalPorCantidad(docsInput);
+        cantidadTexto = docsInput.ToString(CultureInfo.InvariantCulture);
+        montoTexto = montoInput.ToString("0.00", CultureInfo.InvariantCulture);
+        mensajePago = null;
+    }
+
+    private void SeleccionarPlanIlimitado()
+    {
+        if (TienePlanIlimitadoActivo)
+        {
+            return;
+        }
+
+        planSeleccionadoDocs = PlanIlimitadoMarker;
+        docsInput = 0;
+        cantidadTexto = string.Empty;
+        montoInput = PrecioPlanIlimitado;
+        montoTexto = PrecioPlanIlimitado.ToString("0.00", CultureInfo.InvariantCulture);
+        mensajePago = null;
+    }
+
+    private static decimal ObtenerPrecioPorDocumentoSegunCantidad(int documentos)
+    {
+        return EFactDocumentPricing.ObtenerPrecioPorDocumentoSegunCantidad(documentos);
+    }
+
+    private static decimal ObtenerPrecioPorDocumentoSegunMonto(decimal monto)
+    {
+        return EFactDocumentPricing.ObtenerPrecioPorDocumentoSegunMonto(monto);
+    }
+
+    private static int CalcularDocumentosSeguros(decimal monto, decimal precioDocActual)
+    {
+        return EFactDocumentPricing.CalcularDocumentosPorMonto(monto, precioDocActual);
+    }
+
+    private List<CompraDocumentosHistorialItem> LeerHistorial(string? historialJson)
+    {
+        if (string.IsNullOrWhiteSpace(historialJson))
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+
+        try
+        {
+            return (JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(historialJson, HistorialJsonOptions) ?? new List<CompraDocumentosHistorialItem>())
+                .OrderByDescending(item => item.Fecha)
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private static string SerializarHistorial(List<CompraDocumentosHistorialItem> historial)
+    {
+        var historialNormalizado = historial
+            .OrderByDescending(item => item.Fecha)
+            .Take(40)
+            .ToList();
+
+        var planPermanente = historial
+            .Where(item => item.SaldoAplicado && item.EsIlimitado && item.EsPermanente)
+            .OrderByDescending(item => item.Fecha)
+            .FirstOrDefault();
+
+        if (planPermanente is not null && !historialNormalizado.Contains(planPermanente))
+        {
+            if (historialNormalizado.Count >= 40)
+            {
+                historialNormalizado.RemoveAt(historialNormalizado.Count - 1);
+            }
+
+            historialNormalizado.Add(planPermanente);
+        }
+
+        return JsonSerializer.Serialize(historialNormalizado, HistorialJsonOptions);
+    }
+
+    private CompraDocumentosHistorialItem? ObtenerCompraRetornada()
+    {
+        if (historialCompras.Count == 0)
+        {
+            return null;
+        }
+
+        return historialCompras.FirstOrDefault(item =>
+            (!string.IsNullOrWhiteSpace(CompraRetornoId) &&
+             string.Equals(item.Id, CompraRetornoId, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrWhiteSpace(ReferenceRetorno) &&
+             string.Equals(item.Reference, ReferenceRetorno, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrWhiteSpace(AuthorizationRetorno) &&
+             string.Equals(item.AuthorizationCode, AuthorizationRetorno, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string ObtenerClaseEstado(string? estado)
+    {
+        if (string.IsNullOrWhiteSpace(estado))
+        {
+            return "is-pending";
+        }
+
+        if (estado.Contains("aprob", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-approved";
+        }
+
+        if (estado.Contains("rech", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-rejected";
+        }
+
+        if (estado.Contains("rever", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-reversed";
+        }
+
+        return "is-pending";
+    }
+
+    private static decimal ParseDecimal(object? value)
+    {
+        var text = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+        text = new string(text.Trim()
+            .Where(character => char.IsDigit(character) || character is '.' or ',' or '-')
+            .ToArray());
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0m;
+        }
+
+        var lastDot = text.LastIndexOf('.');
+        var lastComma = text.LastIndexOf(',');
+        var decimalSeparatorIndex = Math.Max(lastDot, lastComma);
+
+        if (decimalSeparatorIndex >= 0)
+        {
+            var integerPart = new string(text[..decimalSeparatorIndex].Where(char.IsDigit).ToArray());
+            var decimalPart = new string(text[(decimalSeparatorIndex + 1)..].Where(char.IsDigit).ToArray());
+            text = string.IsNullOrEmpty(decimalPart)
+                ? integerPart
+                : $"{integerPart}.{decimalPart}";
+        }
+        else
+        {
+            text = new string(text.Where(char.IsDigit).ToArray());
+        }
+
+        return decimal.TryParse(text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var result)
+            ? result
+            : 0m;
+    }
+
+    private static int ParseEnteroPositivo(string? value)
+    {
+        var text = SoloDigitos(value ?? string.Empty);
+        return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) && result > 0
+            ? result
+            : 0;
+    }
+
+    private static string SoloDigitos(string valor) =>
+        new(valor.Where(char.IsDigit).ToArray());
+
+    private static string NormalizarDocumentoLibre(string valor) =>
+        new(valor
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant)
+            .ToArray());
+
+    private static string TruncarTexto(string? valor, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+        {
+            return string.Empty;
+        }
+
+        var limpio = valor.Trim();
+        return limpio.Length <= maxLength ? limpio : limpio[..maxLength];
+    }
+}

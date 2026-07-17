@@ -1,0 +1,243 @@
+@page "/soporte/solicitudes"
+@using Simetric.DTOs
+@using Simetric.Services
+@inject SolicitudService SolicitudService
+@inject NavigationManager Navigation
+
+<div class="soporte-shell" data-tour="soporte.page">
+    <section class="soporte-card" data-tour="soporte.hero">
+        <div class="soporte-card-head">
+            <div>
+                <span class="soporte-kicker">Solicitudes</span>
+                <h3>Listado de solicitudes de firma</h3>
+                <p>Consulta rapido cada caso con sus datos principales y entra a gestionarlo cuando corresponda.</p>
+            </div>
+
+            <div class="soporte-card-meta">
+                <label class="soporte-filter">
+                    <span>Pago</span>
+                    <select @bind="filtroPago">
+                        <option value="todos">Todos</option>
+                        <option value="pagado">Pagados</option>
+                        <option value="pendiente">Pendientes</option>
+                    </select>
+                </label>
+
+                <span class="soporte-head-chip">
+                    <i class="bi bi-list-ul"></i>
+                    Total: @SolicitudesFiltradas.Count
+                </span>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(errorCarga))
+        {
+            <div class="soporte-state soporte-state-error">
+                <div class="soporte-state-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <h4>No se pudieron cargar las solicitudes</h4>
+                <p>@errorCarga</p>
+            </div>
+        }
+        else if (listaSolicitudes is null)
+        {
+            <div class="soporte-state">
+                <div class="soporte-loader" aria-hidden="true"></div>
+                <h4>Cargando solicitudes</h4>
+                <p>Estamos preparando la informacion del panel de soporte.</p>
+            </div>
+        }
+        else if (!listaSolicitudes.Any())
+        {
+            <div class="soporte-state">
+                <div class="soporte-state-icon">
+                    <i class="bi bi-inbox"></i>
+                </div>
+                <h4>No hay solicitudes registradas</h4>
+                <p>Cuando se creen nuevas solicitudes de firma apareceran aqui para su gestion.</p>
+            </div>
+        }
+        else if (!SolicitudesFiltradas.Any())
+        {
+            <div class="soporte-state">
+                <div class="soporte-state-icon">
+                    <i class="bi bi-funnel"></i>
+                </div>
+                <h4>No hay solicitudes con ese filtro</h4>
+                <p>Cambia el filtro de pago para revisar otros resultados.</p>
+            </div>
+        }
+        else
+        {
+            <div class="soporte-table-wrap" data-tour="soporte.table">
+                <table class="soporte-table">
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Cliente</th>
+                            <th>Identificacion</th>
+                            <th>Tipo firma / Vigencia</th>
+                            <th>Estado actual</th>
+                            <th>Pago</th>
+                            <th class="soporte-table-actions">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var solicitudEntry in SolicitudesFiltradas.Select((item, index) => new { Item = item, Index = index }))
+                        {
+                            var sol = solicitudEntry.Item;
+                            <tr>
+                                <td data-label="Fecha">
+                                    <div class="soporte-date">
+                                        <strong>@sol.SolFechaSolicitud.ToString("dd/MM/yyyy")</strong>
+                                        <span>@sol.SolFechaSolicitud.ToString("HH:mm")</span>
+                                    </div>
+                                </td>
+                                <td data-label="Cliente">
+                                    <div class="soporte-person">
+                                        <strong>@GetNombreCompleto(sol)</strong>
+                                        <span>@GetCorreoPrincipal(sol)</span>
+                                    </div>
+                                </td>
+                                <td data-label="Identificacion">
+                                    <div class="soporte-identificacion">
+                                        <span class="soporte-id-chip">@sol.SolIdentificacion</span>
+                                        <small>@sol.SolTipoIdentificacion</small>
+                                    </div>
+                                </td>
+                                <td data-label="Tipo firma / Vigencia">
+                                    <div class="soporte-firma">
+                                        <strong>@GetFormatoFirma(sol.SolFormatoFirma)</strong>
+                                        <span class="soporte-vigencia-chip">@sol.SolVigencia</span>
+                                    </div>
+                                </td>
+                                <td data-label="Estado actual">
+                                    <span class="soporte-status @GetStatusClass(sol.SolIdEstadoNumerica)">
+                                        <i class="bi bi-circle-fill"></i>
+                                        @GetNombreEstado(sol)
+                                    </span>
+                                </td>
+                                <td data-label="Pago">
+                                    <div class="soporte-pago">
+                                        <span class="soporte-status @GetPagoClass(sol)">
+                                            <i class="bi bi-circle-fill"></i>
+                                            @GetEstadoPago(sol)
+                                        </span>
+                                        <small>@GetPagoDetalle(sol)</small>
+                                    </div>
+                                </td>
+                                <td class="soporte-table-actions" data-label="Acciones">
+                                    <button type="button"
+                                            class="soporte-action-btn"
+                                            data-tour="@(solicitudEntry.Index == 0 ? "soporte.action" : null)"
+                                            @onclick="() => VerDetalle(sol.SolId)">
+                                        <i class="bi bi-eye"></i>
+                                        Gestionar
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private List<SolicitudPagoClienteDto>? listaSolicitudes;
+    private string? errorCarga;
+    private string filtroPago = "todos";
+
+    private List<SolicitudPagoClienteDto> SolicitudesFiltradas =>
+        (listaSolicitudes ?? new List<SolicitudPagoClienteDto>())
+        .Where(sol => filtroPago switch
+        {
+            "pagado" => sol.SolPagoExitoso,
+            "pendiente" => !sol.SolPagoExitoso,
+            _ => true
+        })
+        .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            listaSolicitudes = await SolicitudService.ObtenerSolicitudesAsync() ?? new List<SolicitudPagoClienteDto>();
+        }
+        catch (Exception ex)
+        {
+            errorCarga = "Ocurrio un problema al consultar las solicitudes. Revisa la conexion e intenta nuevamente.";
+            Console.WriteLine($"Error al cargar solicitudes: {ex.Message}");
+        }
+    }
+
+    private void VerDetalle(int id)
+    {
+        Navigation.NavigateTo($"/soporte/solicitud/{id}");
+    }
+
+    private static string GetNombreCompleto(SolicitudPagoClienteDto sol)
+    {
+        var partes = new[]
+        {
+            sol.SolPrimerApellido,
+            sol.SolSegundoApellido,
+            sol.SolNombres
+        };
+
+        return string.Join(" ", partes.Where(parte => !string.IsNullOrWhiteSpace(parte)));
+    }
+
+    private static string GetCorreoPrincipal(SolicitudPagoClienteDto sol)
+    {
+        return string.IsNullOrWhiteSpace(sol.SolCorreo1)
+            ? "Sin correo registrado"
+            : sol.SolCorreo1;
+    }
+
+    private static string GetFormatoFirma(string? formatoFirma)
+    {
+        return (formatoFirma ?? string.Empty).Trim().ToUpperInvariant() switch
+        {
+            "ARCHIVO_P12" => "Archivo .P12",
+            "ARCHIVO .P12" => "Archivo .P12",
+            "NUBE" => "Firma en la nube",
+            "FIRMA EN LA NUBE" => "Firma en la nube",
+            _ => string.IsNullOrWhiteSpace(formatoFirma) ? "No definido" : formatoFirma
+        };
+    }
+
+    private static string GetNombreEstado(SolicitudPagoClienteDto sol)
+    {
+        return (sol.EstadoSolicitud ?? "Sin estado").ToUpperInvariant();
+    }
+
+    private static string GetStatusClass(int estadoId) => estadoId switch
+    {
+        1 => "is-pending",
+        2 => "is-review",
+        3 => "is-approved",
+        4 => "is-rejected",
+        _ => "is-neutral"
+    };
+
+    private static string GetPagoClass(SolicitudPagoClienteDto sol) =>
+        sol.SolPagoExitoso ? "is-approved" : "is-pending";
+
+    private static string GetEstadoPago(SolicitudPagoClienteDto sol) =>
+        sol.SolPagoExitoso ? "Pagado" : "Pendiente";
+
+    private static string GetPagoDetalle(SolicitudPagoClienteDto sol)
+    {
+        if (!string.IsNullOrWhiteSpace(sol.SolIdTransaccionPago))
+        {
+            return sol.SolIdTransaccionPago;
+        }
+
+        return sol.SolFechaPago is null
+            ? "Sin referencia"
+            : sol.SolFechaPago.Value.ToString("dd/MM/yyyy HH:mm");
+    }
+}

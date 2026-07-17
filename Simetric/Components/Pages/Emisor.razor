@@ -1,0 +1,1750 @@
+@page "/emisor"
+
+@page "/demo/emisor"
+@using ConsultaDeRucApi.Services
+@using System.Net.Http.Json
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
+@using Simetric.Extensions
+@using Simetric.Services
+@using System.IO
+@using System.Text.Json
+
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject EmisionControlService EmisionControlService
+@attribute [AllowAnonymous]
+
+@rendermode InteractiveServer
+
+@{
+    var filteredEmisores = EmisoresFiltrados.ToList();
+}
+
+<PageTitle>Emisor | @PageBrandTitle</PageTitle>
+
+<div class="entity-shell" data-tour="emisor.page">
+    @if (MostrarVolverInicioOnboarding)
+    {
+        <div class="breadcrumb-container">
+            <button type="button" class="breadcrumb-home-btn" @onclick='() => NavManager.NavigateTo("/dashboard")'>
+                <i class="bi bi-house-door"></i>
+                <span>Volver al inicio</span>
+            </button>
+        </div>
+    }
+
+    <section class="entity-hero" data-tour="emisor.hero" style="display:none;">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Configuración fiscal</span>
+            <h2>Datos del emisor</h2>
+            <p>
+                Configura la información legal, dirección, obligatoriedad de llevar contabilidad
+                y los datos de contacto de tu empresa para la emisión de comprobantes.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Emisores registrados</span>
+                <strong>@emisores.Count</strong>
+                <small>Empresas configuradas en la plataforma.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Emisores activos</span>
+                <strong>@emisores.Count(e => e.Estado == true)</strong>
+                <small>Empresas habilitadas para operaciones.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Con RUC registrado</span>
+                <strong>@emisores.Count(e => !string.IsNullOrWhiteSpace(e.Ruc))</strong>
+                <small>Empresas con identificador tributario válido.</small>
+            </article>
+        </div>
+    </section>
+    <section class="quick-action-bar @(YaExisteEmisorActivo() ? "quick-action-bar-has-emisor" : string.Empty)" aria-label="Acciones rápidas de emisor">
+        @if (!cargando && !YaExisteEmisorActivo())
+        {
+            <button type="button" class="quick-action-card quick-action-primary" @onclick="Nuevo">
+                <span class="quick-action-icon"><i class="bi bi-building-add"></i></span>
+                <span>
+                    <strong>Datos del emisor</strong>
+                    <small>Iniciar un nuevo registro</small>
+                </span>
+            </button>
+        }
+
+        <button type="button" class="quick-action-card" @onclick="IrAFirma">
+            <span class="quick-action-icon quick-action-icon-green"><i class="bi bi-patch-check"></i></span>
+            <span>
+                <strong>Firma electrónica</strong>
+                <small>Configurar certificado</small>
+            </span>
+        </button>
+
+        <div class="quick-action-search">
+            <i class="bi bi-search"></i>
+            <input placeholder="Buscar por razón social o RUC..." @bind="filtro" @bind:event="oninput" />
+        </div>
+    </section>
+
+
+
+    <section class="entity-grid">
+        <section class="table-card" data-tour="emisor.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado activo</span>
+                    <h3>Emisores registrados</h3>
+                </div>
+                <div class="table-head-actions">
+                    <span class="table-badge">@filteredEmisores.Count registros</span>
+                    @if (!cargando && !YaExisteEmisorActivo())
+                    {
+                        <button type="button" class="primary-btn" @onclick="AbrirModalFormularioEmisor">
+                            <i class="bi bi-plus-lg"></i>
+                            <span>Nuevo emisor</span>
+                        </button>
+                    }
+                </div>
+            </div>
+
+            @if (isDemoMode)
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-eye"></i>
+                    <span>Modo demo: puedes revisar la configuración, pero guardar, eliminar y subir archivos está bloqueado.</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="status-banner status-banner-info">
+                    <i class="bi bi-info-circle"></i>
+                    <span>@mensaje</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(debugError))
+            {
+                <div class="status-banner status-banner-error">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span>@debugError</span>
+                </div>
+            }
+
+            @if (cargando)
+            {
+                <div class="state-card">
+                    <div class="state-icon">
+                        <span class="spinner-border text-primary" role="status"></span>
+                    </div>
+                    <h3>Cargando emisores</h3>
+                    <p>Preparando la configuración fiscal y visual de las empresas registradas.</p>
+                </div>
+            }
+            else if (!filteredEmisores.Any())
+            {
+                <div class="state-card state-card-empty">
+                    <div class="state-icon">
+                        <i class="bi bi-building-x"></i>
+                    </div>
+                    <h3>No hay emisores para mostrar</h3>
+                    <p>Completa el formulario para registrar los datos fiscales de tu empresa.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table entity-table entity-table-emisores mb-0">
+                        <thead>
+                            <tr>
+                                <th>Razón social</th>
+                                <th>RUC</th>
+                                <th class="list-extra-col">Contacto</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var e in filteredEmisores)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="cell-main cell-main-stacked">
+                                            <strong>@e.RazonSocial</strong>
+                                            <span>@(string.IsNullOrWhiteSpace(e.NomComercial) ? "Sin nombre comercial" : e.NomComercial)</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="code-pill">@(string.IsNullOrWhiteSpace(e.Ruc) ? "Sin RUC" : e.Ruc)</span>
+                                    </td>
+                                    <td class="list-extra-col">
+                                        <div class="compact-detail">
+                                            <span><i class="bi bi-envelope"></i> @(string.IsNullOrWhiteSpace(e.Email) ? "Sin correo" : e.Email)</span>
+                                            <span><i class="bi bi-telephone"></i> @(string.IsNullOrWhiteSpace(e.Telefono) ? "Sin teléfono" : e.Telefono)</span>
+                                        </div>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn action-view"
+                                                    title="Ver detalle"
+                                                    @onclick="() => VerDetalle(e)">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            @if (!esAsociado) // Solo se muestra si NO es asociado
+                                            {
+                                                <button type="button" class="action-btn action-edit"
+                                                title="Editar"
+                                                @onclick="() => Editar(e.Codigo)">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </button>
+                                                <button type="button" class="action-btn action-delete"
+                                                title="Eliminar"
+                                                @onclick="() => ConfirmarEliminar(e)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (mostrarConfirmacion && emisorAEliminar is not null)
+            {
+                <div class="confirm-card">
+                    <div class="confirm-copy">
+                        <strong>Eliminar lógicamente el emisor</strong>
+                        <p>@emisorAEliminar.RazonSocial</p>
+                    </div>
+
+                    <div class="confirm-actions">
+                        <button type="button" class="secondary-btn" @onclick="CancelarEliminar">Cancelar</button>
+                        <button type="button" class="danger-btn" @onclick="EliminarConfirmado">Sí, eliminar</button>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <div class="emisor-editor-stack" style="display:none;">
+        <section class="editor-card entity-editor-card" data-tour="emisor.editor">
+            <div class="editor-head">
+                <div>
+                    <span>  </span>
+                    <h3>@(editando ? "Editar emisor" : "Registrar emisor")</h3>
+                    <p>Complete los datos fiscales, de contacto y configuración de la empresa.</p>
+                </div>
+                
+            </div>
+
+            <div class="editor-body entity-form-legacy">
+
+                <EditForm Model="@model" OnValidSubmit="Guardar" @key="formKey">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary class="text-danger small" />
+
+                    @if (BloquearFormularioCreacion)
+                    {
+                        <div class="status-banner status-banner-info">
+                            <i class="bi bi-lock"></i>
+                            <span>@MensajeBloqueoFormulario</span>
+                        </div>
+                    }
+
+                    <fieldset class="p-0 m-0 border-0" disabled="@BloquearFormularioCreacion">
+                        <details class="form-accordion" open>
+                        <summary class="form-section-heading">
+                            <span>1</span>
+                            <strong>Información fiscal</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body">
+
+                        <div class="row mb-2 mt-3">
+                            <div class="col">
+                                <label class="form-label small fw-bold">Razón Social</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.RazonSocial" />
+                                <ValidationMessage For="@(() => model.RazonSocial)" class="text-danger small" />
+                            </div>
+                            <div class="col">
+                                <label class="form-label small fw-bold">RUC *</label>
+                                <InputText class="form-control form-control-sm"
+                                           @bind-Value="model.Ruc"
+                                           @onkeydown="OnRucKeyDownAsync"
+                                           @onkeyup="OnRucKeyUpAsync" />
+                                <ValidationMessage For="@(() => model.Ruc)" class="text-danger small" />
+                                <small class="text-muted d-block mt-1">
+                                    Presiona Enter para consultar automáticamente los datos del SRI.
+                                </small>
+                                @if (consultandoSri)
+                                {
+                                    <small class="text-primary d-block mt-1">Consultando datos del SRI...</small>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small">Nombre Comercial</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.NomComercial" />
+                            <ValidationMessage For="@(() => model.NomComercial)" class="text-danger small" />
+                            <small class="text-muted d-block mt-1">
+                                Debes ingresar razón social o nombre comercial. No es obligatorio completar ambos.
+                            </small>
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small">Dirección Establecimiento *</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.DirEstablecimiento" />
+                            <ValidationMessage For="@(() => model.DirEstablecimiento)" class="text-danger small" />
+                        </div>
+
+                        <div class="mb-2 d-none">
+                            <label class="form-label small fw-bold d-none">Lleva Contabilidad *</label>
+                            <InputSelect class="form-select form-select-sm" @bind-Value="model.LlevaContabilidad">
+                                <option value="">-- Seleccione --</option>
+                                <option value="SI">Sí</option>
+                                <option value="NO">No</option>
+                            </InputSelect>
+                            <ValidationMessage For="@(() => model.LlevaContabilidad)" class="text-danger small" />
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small">Dirección Matriz *</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.DireccionMatriz" />
+                            <ValidationMessage For="@(() => model.DireccionMatriz)" class="text-danger small" />
+                        </div>
+
+                        </div>
+                        </details>
+
+                        <details class="form-accordion">
+                        <summary class="form-section-heading">
+                            <span>2</span>
+                            <strong>Identidad visual</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body">
+
+                        <div class="row mb-2">
+                            <div class="col">
+                                <label class="form-label small fw-bold text-primary">
+                                    <i class="bi bi-image me-1"></i>Logo Empresa
+                                </label>
+
+                                <div class="logo-file-picker">
+                                    <InputFile id="logo-empresa-input-page"
+                                               class="logo-file-picker-input"
+                                               accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                                               OnChange="SubirLogo" />
+                                    <label class="logo-file-picker-button" for="logo-empresa-input-page">
+                                        Seleccionar archivo
+                                    </label>
+                                    <span class="logo-file-picker-name">@TextoLogoArchivo</span>
+                                </div>
+
+                                <ValidationMessage For="@(() => model.LogoImagen)" class="text-danger small" />
+
+                                <small class="text-muted d-block mt-1">
+                                    Solo se permiten imágenes JPG, JPEG o PNG de hasta 2 MB.
+                                </small>
+
+                                @if (!string.IsNullOrWhiteSpace(model.LogoImagen))
+                                {
+                                    <div class="mt-2 text-center border rounded p-2 bg-light position-relative">
+                                        <img src="@model.LogoImagen"
+                                             style="max-height: 60px; max-width: 100%; object-fit: contain;"
+                                             alt="Logo" />
+                                        <button type="button"
+                                                class="btn-close position-absolute top-0 end-0 m-1"
+                                                style="font-size: 0.5rem;"
+                                                title="Quitar logo"
+                                                @onclick="QuitarLogo"></button>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="col-12 mt-2 d-none">
+                            <div class="form-check form-switch">
+                                <InputCheckbox class="form-check-input" @bind-Value="RetencionesBool" />
+                                <label class="form-check-label fw-semibold">
+                                    ¿Es agente de Retención?
+                                </label>
+                            </div>
+                        </div>
+
+                        </div>
+                        </details>
+
+                        <details class="form-accordion">
+                        <summary class="form-section-heading">
+                            <span>3</span>
+                            <strong>Contacto</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body">
+
+                        <div class="row mb-2">
+                            <div class="col">
+                                <label class="form-label small">Teléfono *</label>
+                                <InputText class="form-control form-control-sm" @bind-Value="model.Telefono" />
+                                <ValidationMessage For="@(() => model.Telefono)" class="text-danger small" />
+                            </div>
+                        <div class="col">
+                            <label class="form-label small">Correo Electrónico</label>
+                            <InputText class="form-control form-control-sm" @bind-Value="model.Email" />
+                            <ValidationMessage For="@(() => model.Email)" class="text-danger small" />
+                        </div>
+                        </div>
+
+                        </div>
+                        </details>
+
+                    </fieldset>
+
+                    <div class="form-actions entity-form-actions">
+                        <button class="primary-btn" type="submit" disabled="@(BloquearFormularioCreacion || isDemoMode)">
+                            <i class="bi bi-save me-1"></i> @(isDemoMode ? "Guardar bloqueado" : (editando ? "Guardar cambios" : "Crear emisor"))
+                        </button>
+                        <button type="button"
+                                class="secondary-btn clear-action-btn"
+                                @onclick="Nuevo"
+                                disabled="@BloquearFormularioCreacion">
+                            <i class="bi bi-eraser"></i>
+                            Limpiar formulario
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </section>
+        </div>
+    </section>
+
+    <section class="quick-tips-section" aria-label="Consejos rápidos de emisor">
+        <div class="quick-tips-head">
+            <span class="quick-tips-head-icon"><i class="bi bi-lightbulb"></i></span>
+            <div>
+                <strong>Consejos rápidos</strong>
+                <small>Revisa estos puntos antes de emitir comprobantes con tu empresa.</small>
+            </div>
+        </div>
+
+        <div class="quick-tip-grid">
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-blue"><i class="bi bi-building-check"></i></span>
+                <div>
+                    <strong>Datos fiscales completos</strong>
+                    <p>Verifica razón social, RUC y direcciones antes de guardar el emisor.</p>
+                </div>
+            </article>
+
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-green"><i class="bi bi-patch-check"></i></span>
+                <div>
+                    <strong>Firma electrónica</strong>
+                    <p>Configura el certificado para autorizar facturas y guías sin interrupciones.</p>
+                </div>
+            </article>
+
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-violet"><i class="bi bi-image"></i></span>
+                <div>
+                    <strong>Identidad visual</strong>
+                    <p>Sube un logo liviano para mejorar la presentación de tus documentos PDF.</p>
+                </div>
+            </article>
+        </div>
+    </section>
+
+</div>
+
+@if (mostrarModalFormularioEmisor)
+{
+    <div class="modal fade show d-block" data-no-backdrop-dismiss="true" style="background: rgba(0,0,0,0.5); z-index: 1050;" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+        <div class="modal-dialog modal-dialog-centered modal-xl" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 18px;">
+                <div class="modal-header text-white" style="background-color: var(--n-blue); border-radius: 18px 18px 0 0;">
+                    <h5 class="modal-title fw-bold">
+                        <i class="bi bi-building me-2"></i>@(editando ? "Editar emisor" : "Registrar emisor")
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarModalFormularioEmisor"></button>
+                </div>
+                <div class="modal-body p-4" style="max-height: calc(100vh - 180px); overflow-y:auto;">
+                    <section class="editor-card entity-editor-card">
+                        <div class="editor-body entity-form-legacy">
+                            <EditForm Model="@model" OnValidSubmit="Guardar" @key="formKey">
+                                <DataAnnotationsValidator />
+                                <ValidationSummary class="text-danger small" />
+
+                                @if (BloquearFormularioCreacion)
+                                {
+                                    <div class="status-banner status-banner-info">
+                                        <i class="bi bi-lock"></i>
+                                        <span>@MensajeBloqueoFormulario</span>
+                                    </div>
+                                }
+
+                                <fieldset class="p-0 m-0 border-0" disabled="@BloquearFormularioCreacion">
+                                    <details class="form-accordion" open>
+                                        <summary class="form-section-heading">
+                                            <span>1</span>
+                                            <strong>Información fiscal</strong>
+                                            <i class="bi bi-chevron-down"></i>
+                                        </summary>
+                                        <div class="form-accordion-body">
+                                            <div class="row mb-2 mt-3">
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold">Razón Social</label>
+                                                    <InputText class="form-control form-control-sm" @bind-Value="model.RazonSocial" />
+                                                    <ValidationMessage For="@(() => model.RazonSocial)" class="text-danger small" />
+                                                </div>
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold">RUC *</label>
+                                                    <InputText class="form-control form-control-sm"
+                                                               @bind-Value="model.Ruc"
+                                                               @onkeydown="OnRucKeyDownAsync"
+                                                               @onkeyup="OnRucKeyUpAsync" />
+                                                    <ValidationMessage For="@(() => model.Ruc)" class="text-danger small" />
+                                                    <small class="text-muted d-block mt-1">
+                                                        Presiona Enter para consultar automáticamente los datos del SRI.
+                                                    </small>
+                                                    @if (consultandoSri)
+                                                    {
+                                                        <small class="text-primary d-block mt-1">Consultando datos del SRI...</small>
+                                                    }
+                                                </div>
+                                            </div>
+
+                                            <div class="mb-2">
+                                                <label class="form-label small">Nombre Comercial</label>
+                                                <InputText class="form-control form-control-sm" @bind-Value="model.NomComercial" />
+                                                <ValidationMessage For="@(() => model.NomComercial)" class="text-danger small" />
+                                                <small class="text-muted d-block mt-1">
+                                                    Debes ingresar razón social o nombre comercial. No es obligatorio completar ambos.
+                                                </small>
+                                            </div>
+
+                                            <div class="mb-2">
+                                                <label class="form-label small">Dirección Establecimiento *</label>
+                                                <InputText class="form-control form-control-sm" @bind-Value="model.DirEstablecimiento" />
+                                                <ValidationMessage For="@(() => model.DirEstablecimiento)" class="text-danger small" />
+                                            </div>
+
+                                            <div class="mb-2 d-none">
+                                                <label class="form-label small fw-bold d-none">Lleva Contabilidad *</label>
+                                                <InputSelect class="form-select form-select-sm" @bind-Value="model.LlevaContabilidad">
+                                                    <option value="">-- Seleccione --</option>
+                                                    <option value="SI">Sí</option>
+                                                    <option value="NO">No</option>
+                                                </InputSelect>
+                                                <ValidationMessage For="@(() => model.LlevaContabilidad)" class="text-danger small" />
+                                            </div>
+
+                                            <div class="mb-2">
+                                                <label class="form-label small">Dirección Matriz *</label>
+                                                <InputText class="form-control form-control-sm" @bind-Value="model.DireccionMatriz" />
+                                                <ValidationMessage For="@(() => model.DireccionMatriz)" class="text-danger small" />
+                                            </div>
+                                        </div>
+                                    </details>
+
+                                    <details class="form-accordion">
+                                        <summary class="form-section-heading">
+                                            <span>2</span>
+                                            <strong>Identidad visual</strong>
+                                            <i class="bi bi-chevron-down"></i>
+                                        </summary>
+                                        <div class="form-accordion-body">
+                                            <div class="row mb-2">
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold text-primary">
+                                                        <i class="bi bi-image me-1"></i>Logo Empresa
+                                                    </label>
+                                                    <div class="logo-file-picker">
+                                                        <InputFile id="logo-empresa-input-modal"
+                                                                   class="logo-file-picker-input"
+                                                                   accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                                                                   OnChange="SubirLogo" />
+                                                        <label class="logo-file-picker-button" for="logo-empresa-input-modal">
+                                                            Seleccionar archivo
+                                                        </label>
+                                                        <span class="logo-file-picker-name">@TextoLogoArchivo</span>
+                                                    </div>
+                                                    <ValidationMessage For="@(() => model.LogoImagen)" class="text-danger small" />
+                                                    <small class="text-muted d-block mt-1">
+                                                        Solo se permiten imágenes JPG, JPEG o PNG de hasta 2 MB.
+                                                    </small>
+                                                    @if (!string.IsNullOrWhiteSpace(model.LogoImagen))
+                                                    {
+                                                        <div class="mt-2 text-center border rounded p-2 bg-light position-relative">
+                                                            <img src="@model.LogoImagen"
+                                                                 style="max-height: 60px; max-width: 100%; object-fit: contain;"
+                                                                 alt="Logo" />
+                                                            <button type="button"
+                                                                    class="btn-close position-absolute top-0 end-0 m-1"
+                                                                    style="font-size: 0.5rem;"
+                                                                    title="Quitar logo"
+                                                                    @onclick="QuitarLogo"></button>
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </div>
+
+                                            <div class="col-12 mt-2 d-none">
+                                                <div class="form-check form-switch">
+                                                    <InputCheckbox class="form-check-input" @bind-Value="RetencionesBool" />
+                                                    <label class="form-check-label fw-semibold">
+                                                        ¿Es agente de Retención?
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </details>
+
+                                    <details class="form-accordion">
+                                        <summary class="form-section-heading">
+                                            <span>3</span>
+                                            <strong>Contacto</strong>
+                                            <i class="bi bi-chevron-down"></i>
+                                        </summary>
+                                        <div class="form-accordion-body">
+                                            <div class="row mb-2">
+                                                <div class="col">
+                                                    <label class="form-label small">Teléfono *</label>
+                                                    <InputText class="form-control form-control-sm" @bind-Value="model.Telefono" />
+                                                    <ValidationMessage For="@(() => model.Telefono)" class="text-danger small" />
+                                                </div>
+                                                <div class="col">
+                                                    <label class="form-label small">Correo Electrónico</label>
+                                                    <InputText class="form-control form-control-sm" @bind-Value="model.Email" />
+                                                    <ValidationMessage For="@(() => model.Email)" class="text-danger small" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </fieldset>
+
+                                <div class="form-actions entity-form-actions">
+                                    <button class="primary-btn" type="submit" disabled="@(BloquearFormularioCreacion || isDemoMode)">
+                                        <i class="bi bi-save me-1"></i> @(isDemoMode ? "Guardar bloqueado" : (editando ? "Guardar cambios" : "Crear emisor"))
+                                    </button>
+                                    <button type="button" class="secondary-btn clear-action-btn" @onclick="Nuevo" disabled="@BloquearFormularioCreacion">
+                                        <i class="bi bi-eraser"></i>
+                                        Limpiar formulario
+                                    </button>
+                                </div>
+                            </EditForm>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (mostrarDetalle && emisorDetalle is not null)
+{
+    <div class="modal fade show d-block" data-no-backdrop-dismiss="true" style="background: rgba(0,0,0,0.5); z-index: 1050;" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 8px;">
+                <div class="modal-header text-white" style="background-color: var(--n-blue); border-radius: 8px 8px 0 0;">
+                    <h5 class="modal-title fw-bold">
+                        <i class="bi bi-building me-2"></i>Detalle del Emisor
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarDetalle"></button>
+                </div>
+
+                <div class="modal-body p-4">
+                    <div class="row g-4">
+                        <div class="col-md-6 border-end pe-md-4">
+                            <h6 class="fw-bold text-muted border-bottom pb-2 mb-3">Información General</h6>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Razón Social:</div>
+                                <div class="col-7 fw-medium text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.RazonSocial) ? "N/A" : emisorDetalle.RazonSocial)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">RUC:</div>
+                                <div class="col-7">
+                                    <span class="badge bg-light text-dark border">
+                                        @(string.IsNullOrWhiteSpace(emisorDetalle.Ruc) ? "N/A" : emisorDetalle.Ruc)
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Nombre Comercial:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.NomComercial) ? "N/A" : emisorDetalle.NomComercial)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Lleva Contabilidad:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.LlevaContabilidad) ? "N/A" : emisorDetalle.LlevaContabilidad)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Retenciones:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.Retenciones) ? "NO" : emisorDetalle.Retenciones)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Estado:</div>
+                                <div class="col-7">
+                                    <span class="badge rounded-pill bg-success-subtle text-success">
+                                        @(emisorDetalle.Estado == true ? "Activo" : "Inactivo")
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6 ps-md-4">
+                            <h6 class="fw-bold text-muted border-bottom pb-2 mb-3">Contacto y Configuración</h6>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Teléfono:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.Telefono) ? "N/A" : emisorDetalle.Telefono)
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-5 text-muted fw-bold small">Email:</div>
+                                    <div class="col-7 text-dark">
+                                        @(string.IsNullOrWhiteSpace(emisorDetalle.Email) ? "N/A" : emisorDetalle.Email)
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Dirección Establecimiento:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.DirEstablecimiento) ? "N/A" : emisorDetalle.DirEstablecimiento)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Dirección Matriz:</div>
+                                <div class="col-7 text-dark">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.DireccionMatriz) ? "N/A" : emisorDetalle.DireccionMatriz)
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Archivo Firma:</div>
+                                <div class="col-7 text-dark small">
+                                    @(string.IsNullOrWhiteSpace(emisorDetalle.PathCertificado) ? "N/A" : ObtenerNombreArchivo(emisorDetalle.PathCertificado))
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-5 text-muted fw-bold small">Clave Certificado:</div>
+                                <div class="col-7 text-dark">
+                                    @(emisorDetalle.TieneClaveCertificadoConfigurada ? "Configurada" : "N/A")
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(emisorDetalle.LogoImagen))
+                    {
+                        <div class="row mt-4">
+                            <div class="col-12 text-muted fw-bold small mb-2">Logo de la Empresa:</div>
+                            <div class="col-12 text-center p-3 rounded" style="background-color: #f8fafc; border: 1px solid #dee2e6;">
+                                <img src="@emisorDetalle.LogoImagen"
+                                     alt="Logo Empresa"
+                                     style="max-height: 120px; max-width: 100%; object-fit: contain;" />
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer bg-light" style="border-radius: 0 0 8px 8px; border-top: 1px solid #dee2e6;">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarDetalle">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+
+    private string PageBrandTitle => "Numerica e-fact";
+
+    private EmisorDto? emisorDetalle;
+    private bool mostrarDetalle = false;
+    bool esAsociado = false;
+    private bool isDemoMode;
+    private class EmisorDto
+    {
+        public int Codigo { get; set; }
+        public string? RazonSocial { get; set; }
+        public string? Ruc { get; set; }
+        public string? NomComercial { get; set; }
+        public string? DirEstablecimiento { get; set; }
+        public string? Email { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("llevacontabilidad")]
+        public string? LlevaContabilidad { get; set; }
+
+        public string? LogoImagen { get; set; }
+        public string? DireccionMatriz { get; set; }
+        public string? ClaveInterna { get; set; }
+        public string? Retenciones { get; set; }
+        public string? PathCertificado { get; set; }
+        public string? ClaveCertificado { get; set; }
+        public bool TieneClaveCertificadoConfigurada { get; set; }
+        public string? Telefono { get; set; }
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+    }
+
+
+
+    private class EmisorUpsertDto : IValidatableObject
+    {
+        public int Codigo { get; set; }
+
+        [StringLength(70, ErrorMessage = "Máximo 70 caracteres")]
+        public string? RazonSocial { get; set; }
+
+        [Required(ErrorMessage = "El RUC es obligatorio")]
+        [RegularExpression(@"^\d{13}$", ErrorMessage = "El RUC debe tener 13 dígitos")]
+        public string? Ruc { get; set; }
+
+        [StringLength(100, ErrorMessage = "Máximo 100 caracteres")]
+        public string? NomComercial { get; set; }
+        [EmailAddress(ErrorMessage = "Formato de correo inválido")]
+        [StringLength(50, ErrorMessage = "Máximo 50 caracteres")]
+        public string? Email { get; set; }
+        [Required(ErrorMessage = "La dirección del establecimiento es obligatoria")]
+        [StringLength(250, ErrorMessage = "Máximo 250 caracteres")]
+        public string? DirEstablecimiento { get; set; }
+
+        [Required(ErrorMessage = "Debe seleccionar si lleva contabilidad")]
+        [RegularExpression(@"^(SI|NO)$", ErrorMessage = "Solo se permite SI o NO")]
+        public string? LlevaContabilidad { get; set; }
+
+        public string? LogoImagen { get; set; }
+
+        [Required(ErrorMessage = "La dirección matriz es obligatoria")]
+        [StringLength(255, ErrorMessage = "Máximo 255 caracteres")]
+        public string? DireccionMatriz { get; set; }
+
+        [StringLength(25, ErrorMessage = "Máximo 25 caracteres")]
+        public string? ClaveInterna { get; set; }
+
+        public string? Retenciones { get; set; }
+        [StringLength(150, ErrorMessage = "Máximo 150 caracteres")]
+        public string? PathCertificado { get; set; }
+        public string? ClaveCertificado { get; set; }
+        public bool EliminarClaveCertificado { get; set; }
+
+        [Required(ErrorMessage = "El teléfono es obligatorio")]
+        [RegularExpression(@"^\d{7,10}$", ErrorMessage = "El teléfono debe tener entre 7 y 10 dígitos")]
+        public string? Telefono { get; set; }
+
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (string.IsNullOrWhiteSpace(RazonSocial) && string.IsNullOrWhiteSpace(NomComercial))
+            {
+                yield return new ValidationResult(
+                    "Debes ingresar razón social o nombre comercial.",
+                    new[] { nameof(RazonSocial), nameof(NomComercial) });
+            }
+        }
+    }
+    private Guid formKey = Guid.NewGuid();
+    private List<EmisorDto> emisores = new();
+    private EmisorUpsertDto model = new();
+    private bool cargando = true;
+    private bool editando = false;
+    private string filtro = "";
+    private string? mensaje;
+    private string? debugError;
+    private string? logoArchivoSeleccionado;
+    private string TextoLogoArchivo =>
+        logoArchivoSeleccionado
+        ?? (!string.IsNullOrWhiteSpace(model.LogoImagen) ? "Logo actual cargado" : "Ningún archivo seleccionado");
+    private bool mostrarConfirmacion = false;
+    private bool mostrarModalFormularioEmisor;
+    private EmisorDto? emisorAEliminar;
+    private EmisionEstado? emisionEstado;
+    private bool consultandoSri;
+    private bool omitirSiguienteGuardadoPorConsultaSri;
+    private bool MostrarVolverInicioOnboarding =>
+        !isDemoMode &&
+        (EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false);
+
+    private void IrAFirma() => NavManager.NavigateTo("/firma");
+
+
+    private bool RetencionesBool
+    {
+        get => model.Retenciones == "SI";
+        set => model.Retenciones = value ? "SI" : "NO";
+    }
+    private void VerDetalle(EmisorDto e)
+    {
+        emisorDetalle = e;
+        mostrarDetalle = true;
+    }
+
+    private void CerrarDetalle()
+    {
+        mostrarDetalle = false;
+        emisorDetalle = null;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        isDemoMode = EsRutaDemoEmisor();
+
+        if (isDemoMode)
+        {
+            CargarDemoEmisor();
+            return;
+        }
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        var jefeClaim = user.FindFirst("IdJefe")?.Value;
+        var estadoAsociadoClaim = user.FindFirst("EstadoAsociado")?.Value;
+
+        esAsociado =
+            (bool.TryParse(estadoAsociadoClaim, out var estadoAsociado) && estadoAsociado) ||
+            !string.IsNullOrWhiteSpace(jefeClaim);
+
+        await CargarTodo();
+        Nuevo();
+    }
+
+    private async Task CargarTodo()
+    {
+        if (isDemoMode)
+        {
+            CargarDemoEmisor();
+            return;
+        }
+
+        cargando = true;
+        mensaje = null;
+        debugError = null;
+
+        try
+        {
+            var idUsuario = await ObtenerIdUsuarioLogueado();
+
+            if (idUsuario != null)
+            {
+                emisores = await Http.GetFromJsonAsync<List<EmisorDto>>($"api/emisores?idUsuario={idUsuario}") ?? new();
+                await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+                emisionEstado = await EmisionControlService.ObtenerEstadoAsync(idUsuario);
+            }
+            else
+            {
+                emisionEstado = null;
+                debugError = "No se pudo obtener la sesión del usuario.";
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private IEnumerable<EmisorDto> EmisoresFiltrados =>
+        string.IsNullOrWhiteSpace(filtro)
+            ? emisores
+            : emisores.Where(e =>
+                (e.RazonSocial ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (e.Ruc ?? "").Contains(filtro, StringComparison.OrdinalIgnoreCase));
+
+    private void AbrirModalFormularioEmisor()
+    {
+        Nuevo();
+        mostrarModalFormularioEmisor = true;
+    }
+
+    private void CerrarModalFormularioEmisor()
+    {
+        mostrarModalFormularioEmisor = false;
+    }
+
+    private void Nuevo()
+    {
+        editando = false;
+        mensaje = null;
+        debugError = null;
+        logoArchivoSeleccionado = null;
+
+        model = new EmisorUpsertDto
+        {
+            Retenciones = "NO",
+            LlevaContabilidad = "NO",
+            Estado = true,
+            LogoImagen = null,
+            CodEstablecimiento = null,
+            CodPuntoEmision = null
+
+        };
+        formKey = Guid.NewGuid();
+    }
+
+    private async Task Editar(int id)
+    {
+        if (isDemoMode)
+        {
+            var itemDemo = emisores.FirstOrDefault(e => e.Codigo == id);
+            if (itemDemo is null)
+                return;
+
+            model = new EmisorUpsertDto
+            {
+                Codigo = itemDemo.Codigo,
+                RazonSocial = itemDemo.RazonSocial,
+                Ruc = itemDemo.Ruc,
+                NomComercial = itemDemo.NomComercial,
+                DirEstablecimiento = itemDemo.DirEstablecimiento,
+                LlevaContabilidad = "NO",
+                LogoImagen = itemDemo.LogoImagen,
+                ClaveInterna = itemDemo.ClaveInterna,
+                DireccionMatriz = itemDemo.DireccionMatriz,
+                Retenciones = string.IsNullOrWhiteSpace(itemDemo.Retenciones) ? "NO" : itemDemo.Retenciones,
+                PathCertificado = itemDemo.PathCertificado,
+                ClaveCertificado = null,
+                Telefono = itemDemo.Telefono,
+                Estado = itemDemo.Estado ?? true,
+                CodEstablecimiento = itemDemo.CodEstablecimiento,
+                CodPuntoEmision = itemDemo.CodPuntoEmision,
+                Email = itemDemo.Email
+            };
+
+            editando = true;
+            mensaje = "Emisor demo cargado para revisión.";
+            logoArchivoSeleccionado = null;
+            formKey = Guid.NewGuid();
+            mostrarModalFormularioEmisor = true;
+            StateHasChanged();
+            return;
+        }
+
+        mensaje = "Cargando emisor...";
+        debugError = null;
+
+        try
+        {
+            var idUsuario = await ObtenerIdUsuarioLogueado();
+            if (idUsuario == null || idUsuario <= 0)
+            {
+                mensaje = "No se pudo obtener la sesión del usuario.";
+                return;
+            }
+
+            var item = await Http.GetFromJsonAsync<EmisorDto>($"api/emisores/{id}?idUsuario={idUsuario}");
+            if (item is null)
+            {
+                mensaje = "No se encontró el emisor.";
+                return;
+            }
+
+            model = new EmisorUpsertDto
+            {
+                Codigo = item.Codigo,
+                RazonSocial = item.RazonSocial,
+                Ruc = item.Ruc,
+                NomComercial = item.NomComercial,
+                DirEstablecimiento = item.DirEstablecimiento,
+                LlevaContabilidad = "NO",
+                LogoImagen = item.LogoImagen,
+                ClaveInterna = item.ClaveInterna,
+                DireccionMatriz = item.DireccionMatriz,
+                Retenciones = string.IsNullOrWhiteSpace(item.Retenciones) ? "NO" : item.Retenciones,
+                PathCertificado = item.PathCertificado,
+                ClaveCertificado = null,
+                Telefono = item.Telefono,
+                Estado = item.Estado ?? true,
+                CodEstablecimiento = item.CodEstablecimiento,
+                CodPuntoEmision = item.CodPuntoEmision,
+                Email = item.Email
+            };
+            editando = true;
+            mensaje = "Emisor cargado para edición.";
+            logoArchivoSeleccionado = null;
+            formKey = Guid.NewGuid();
+            mostrarModalFormularioEmisor = true;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            debugError = ex.Message;
+            mensaje = "Error al cargar emisor.";
+        }
+    }
+
+    private async Task<int?> ObtenerIdUsuarioLogueado()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var idClaim = user.FindFirst("IdUsuario")?.Value;
+        return int.TryParse(idClaim, out var id) ? id : null;
+    }
+
+    private Task OnRucKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (string.Equals(args.Key, "Enter", StringComparison.OrdinalIgnoreCase))
+        {
+            omitirSiguienteGuardadoPorConsultaSri = true;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task OnRucKeyUpAsync(KeyboardEventArgs args)
+    {
+        if (!string.Equals(args.Key, "Enter", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        await ConsultarSriPorRucAsync();
+    }
+
+    private async Task ConsultarSriPorRucAsync()
+    {
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: la consulta automática al SRI está bloqueada.";
+            debugError = null;
+            return;
+        }
+
+        var ruc = SoloDigitos(model.Ruc);
+        model.Ruc = ruc;
+
+        if (string.IsNullOrWhiteSpace(ruc))
+        {
+            mensaje = "Ingresa un RUC antes de consultar al SRI.";
+            debugError = null;
+            return;
+        }
+
+        if (ruc.Length != 13)
+        {
+            mensaje = "El RUC debe tener 13 dígitos para consultar al SRI.";
+            debugError = null;
+            return;
+        }
+
+        consultandoSri = true;
+        mensaje = "Consultando datos del SRI...";
+        debugError = null;
+        StateHasChanged();
+
+        try
+        {
+            var consulta = new CConsultaSri();
+            var datos = await Task.Run(() => consulta.GetRucSri(ruc));
+
+            if (datos is null)
+            {
+                mensaje = "El SRI no devolvió información para este RUC.";
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(datos.Error))
+            {
+                mensaje = "No se pudieron recuperar los datos del SRI.";
+                debugError = FormatearMensajeError(datos.Error);
+                return;
+            }
+
+            AplicarDatosSri(datos, ruc);
+            var establecimientoDetectado = string.IsNullOrWhiteSpace(model.CodEstablecimiento)
+                ? null
+                : model.CodEstablecimiento;
+
+            mensaje = establecimientoDetectado is null
+                ? "Datos del SRI cargados. Revisa y completa los campos faltantes antes de guardar."
+                : $"Datos del SRI cargados. El establecimiento {establecimientoDetectado} quedará asignado automáticamente en puntos de emisión cuando guardes el emisor.";
+            debugError = null;
+        }
+        catch (Exception ex)
+        {
+            mensaje = "Ocurrió un error al consultar el SRI.";
+            debugError = FormatearMensajeError(ex.Message);
+        }
+        finally
+        {
+            consultandoSri = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void AplicarDatosSri(DatosPersonaSri datos, string ruc)
+    {
+        var establecimiento = SeleccionarEstablecimientoSri(datos.personaEstablecimientos);
+        var nombreComercial = Convert.ToString(datos.nombreComercial)?.Trim();
+
+        model.Ruc = ruc;
+        model.RazonSocial = TextoSeguro(datos.razonSocial);
+        model.NomComercial = TextoSeguro(nombreComercial);
+        model.LlevaContabilidad = "NO";
+        model.Retenciones = "NO";
+        model.DireccionMatriz = TextoSeguro(establecimiento?.direccionCompleta);
+        model.DirEstablecimiento = TextoSeguro(establecimiento?.direccionCompleta);
+        model.CodEstablecimiento = NormalizarCodigoEstablecimiento(establecimiento?.numeroEstablecimiento);
+    }
+
+    private static PersonaEstablecimientosRuc? SeleccionarEstablecimientoSri(List<PersonaEstablecimientosRuc>? establecimientos)
+    {
+        if (establecimientos is null || establecimientos.Count == 0)
+        {
+            return null;
+        }
+
+        return establecimientos.FirstOrDefault(item =>
+                   (item.estado ?? string.Empty).Contains("ABIER", StringComparison.OrdinalIgnoreCase) ||
+                   (item.estado ?? string.Empty).Contains("ACT", StringComparison.OrdinalIgnoreCase))
+               ?? establecimientos.FirstOrDefault();
+    }
+
+    private static string TextoSeguro(string? valor) =>
+        string.IsNullOrWhiteSpace(valor) ? string.Empty : valor.Trim();
+
+    private static string MapearLlevaContabilidadSri(DatosPersonaSri datos)
+    {
+        var obligado = datos.obligado?.Trim();
+        if (string.IsNullOrWhiteSpace(obligado))
+        {
+            return "NO";
+        }
+
+        if (obligado.Equals("SI", StringComparison.OrdinalIgnoreCase) ||
+            obligado.Equals("S", StringComparison.OrdinalIgnoreCase) ||
+            obligado.Equals("Si", StringComparison.OrdinalIgnoreCase) ||
+            obligado.Contains("OBLIG", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SI";
+        }
+
+        if (obligado.Equals("NO", StringComparison.OrdinalIgnoreCase) ||
+            obligado.Equals("N", StringComparison.OrdinalIgnoreCase) ||
+            obligado.Equals("No", StringComparison.OrdinalIgnoreCase) ||
+            obligado.Contains("NO OBLIG", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NO";
+        }
+
+        return string.Empty;
+    }
+
+    private static string MapearRetencionesSri(DatosPersonaSri datos)
+    {
+        var texto = string.Join(" ",
+            new[]
+            {
+                datos.claseContribuyente,
+                datos.subtipoContribuyente,
+                datos.actividadContribuyente,
+                Convert.ToString(datos.agenteRepresentante),
+                Convert.ToString(datos.representanteLegal)
+            }.Where(item => !string.IsNullOrWhiteSpace(item)));
+
+        if (string.IsNullOrWhiteSpace(texto))
+        {
+            return "NO";
+        }
+
+        if (texto.Contains("AGENTE DE RETENCION", StringComparison.OrdinalIgnoreCase) ||
+            texto.Contains("AGENTE RETENCION", StringComparison.OrdinalIgnoreCase) ||
+            texto.Contains("RETENCION", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SI";
+        }
+
+        return "NO";
+    }
+
+    private static string? NormalizarCodigoEstablecimiento(string? numeroEstablecimiento)
+    {
+        var digitos = SoloDigitos(numeroEstablecimiento);
+        return string.IsNullOrWhiteSpace(digitos)
+            ? null
+            : digitos.Length >= 3
+                ? digitos[^3..]
+                : digitos.PadLeft(3, '0');
+    }
+
+    private static string SoloDigitos(string? valor) =>
+        new string((valor ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private bool YaExisteEmisorActivo()
+    {
+        return emisores.Any(e => e.Estado == true);
+    }
+
+    private bool BloquearFormularioCreacion => !editando && YaExisteEmisorActivo();
+    private string MensajeBloqueoFormulario => "Esta cuenta ya tiene un emisor activo. Puedes editarlo desde el listado.";
+
+    private async Task Guardar()
+    {
+        if (omitirSiguienteGuardadoPorConsultaSri || consultandoSri)
+        {
+            omitirSiguienteGuardadoPorConsultaSri = false;
+            return;
+        }
+
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: guardar emisor está bloqueado.";
+            debugError = null;
+            return;
+        }
+
+        mensaje = "Guardando...";
+        debugError = null;
+
+        var idActual = await ObtenerIdUsuarioLogueado();
+        if (idActual == null)
+        {
+            mensaje = "Error: No se pudo identificar al usuario en sesión.";
+            return;
+        }
+
+        // VALIDACIÓN: solo permitir un emisor al crear
+        if (!editando && YaExisteEmisorActivo())
+        {
+            await JS.InvokeVoidAsync("Swal.fire", new
+            {
+                icon = "warning",
+                title = "Emisor ya registrado",
+                text = "Solo puedes registrar un emisor activo en el sistema.",
+                confirmButtonText = "Entendido"
+            });
+
+            mensaje = "Ya existe un emisor activo registrado.";
+            return;
+        }
+
+        model.IdUsuario = idActual;
+        model.Estado ??= true;
+        model.Retenciones = "NO";
+        model.LlevaContabilidad = "NO";
+
+        model.RazonSocial = model.RazonSocial?.Trim();
+        model.Ruc = model.Ruc?.Trim();
+        model.NomComercial = model.NomComercial?.Trim();
+        model.DirEstablecimiento = model.DirEstablecimiento?.Trim();
+        model.DireccionMatriz = model.DireccionMatriz?.Trim();
+        model.ClaveInterna = model.ClaveInterna?.Trim();
+        model.Telefono = model.Telefono?.Trim();
+        model.Email = model.Email?.Trim();
+        model.LlevaContabilidad = model.LlevaContabilidad?.Trim().ToUpperInvariant();
+        model.PathCertificado = model.PathCertificado?.Trim();
+        model.ClaveCertificado = model.ClaveCertificado?.Trim();
+        if (!string.IsNullOrWhiteSpace(model.ClaveCertificado))
+        {
+            model.EliminarClaveCertificado = false;
+        }
+
+        model.CodEstablecimiento = NormalizarCodigoEstablecimiento(model.CodEstablecimiento);
+        model.CodPuntoEmision = NormalizarCodigoEstablecimiento(model.CodPuntoEmision) ?? "001";
+
+        try
+        {
+            var creandoPrimerEmisor = !editando;
+            HttpResponseMessage resp = editando
+     ? await Http.PutAsJsonAsync($"api/emisores/{model.Codigo}", model)
+     : await Http.PostAsJsonAsync("api/emisores", model);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var detalle = await LeerMensajeErrorHttpAsync(resp, "No se pudo guardar el emisor.");
+
+                await JS.InvokeVoidAsync("Swal.fire", new
+                {
+                    icon = "warning",
+                    title = "No se pudo guardar el emisor",
+                    text = detalle
+                });
+
+                debugError = detalle.Equals("No se pudo guardar el emisor.", StringComparison.Ordinal)
+                    ? null
+                    : detalle;
+                mensaje = "No se pudo guardar el emisor.";
+                return;
+            }
+
+            await CargarTodo();
+            Nuevo();
+            mostrarModalFormularioEmisor = false;
+            await EmisorOnboardingService.RefreshRequirementAsync(idActual);
+            EmisorOnboardingService.NotifyChanged();
+
+            mensaje = creandoPrimerEmisor
+                ? "Emisor creado correctamente. Puedes configurar la firma electrónica ahora o hacerlo más adelante."
+                : "Emisor actualizado correctamente.";
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+            mensaje = "Error al guardar (API).";
+        }
+    }
+
+    private void ConfirmarEliminar(EmisorDto e)
+    {
+        emisorAEliminar = e;
+        mostrarConfirmacion = true;
+    }
+
+    private void CancelarEliminar()
+    {
+        mostrarConfirmacion = false;
+        emisorAEliminar = null;
+    }
+
+    private async Task EliminarConfirmado()
+    {
+        if (emisorAEliminar is null) return;
+
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: eliminar emisores está bloqueado.";
+            debugError = null;
+            CancelarEliminar();
+            return;
+        }
+
+        try
+        {
+            var idUsuario = await ObtenerIdUsuarioLogueado();
+            if (idUsuario == null || idUsuario <= 0)
+            {
+                mensaje = "No se pudo obtener la sesión del usuario.";
+                return;
+            }
+
+            var resp = await Http.PutAsync(
+                $"api/emisores/{emisorAEliminar.Codigo}/desactivar?idUsuario={idUsuario}",
+                null);
+
+            if (resp.IsSuccessStatusCode)
+            {
+                mensaje = "Emisor desactivado.";
+                await CargarTodo();
+                await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+                CancelarEliminar();
+            }
+            else
+            {
+                debugError = await LeerMensajeErrorHttpAsync(resp, "No se pudo desactivar el emisor.");
+                mensaje = "No se pudo desactivar el emisor.";
+            }
+        }
+        catch (Exception ex)
+        {
+            debugError = FormatearMensajeError(ex.Message);
+            mensaje = "Error al desactivar emisor.";
+        }
+    }
+
+    private void QuitarLogo()
+    {
+        model.LogoImagen = null;
+        logoArchivoSeleccionado = null;
+        mensaje = "Logo quitado del formulario.";
+        debugError = null;
+    }
+
+    private async Task SubirLogo(InputFileChangeEventArgs e)
+    {
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: la carga de logos está bloqueada.";
+            debugError = null;
+            return;
+        }
+
+        try
+        {
+            if (e.FileCount > 1)
+            {
+                mensaje = "Solo puedes subir un archivo de logo.";
+                debugError = null;
+                return;
+            }
+
+            var file = e.File;
+
+            if (file is null)
+            {
+                mensaje = "No se seleccionó ningún archivo.";
+                return;
+            }
+
+            logoArchivoSeleccionado = file.Name;
+
+            var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
+            var extensionesPermitidas = new[] { ".jpg", ".jpeg", ".png" };
+
+            if (string.IsNullOrWhiteSpace(extension) || !extensionesPermitidas.Contains(extension))
+            {
+                model.LogoImagen = null;
+                logoArchivoSeleccionado = null;
+                mensaje = "Solo se permiten archivos JPG, JPEG o PNG.";
+                return;
+            }
+
+            var contentType = (file.ContentType ?? "").ToLowerInvariant();
+            var tiposPermitidos = new[] { "image/jpeg", "image/png" };
+
+            if (!tiposPermitidos.Contains(contentType))
+            {
+                model.LogoImagen = null;
+                logoArchivoSeleccionado = null;
+                mensaje = "El archivo seleccionado no es una imagen válida.";
+                return;
+            }
+
+            const long maxSize = 2 * 1024 * 1024;
+            if (file.Size > maxSize)
+            {
+                model.LogoImagen = null;
+                logoArchivoSeleccionado = null;
+                mensaje = "El logo excede el tamaño máximo de 2 MB.";
+                return;
+            }
+
+            using var stream = file.OpenReadStream(maxSize);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            var bytes = ms.ToArray();
+
+            if (bytes.Length == 0)
+            {
+                model.LogoImagen = null;
+                logoArchivoSeleccionado = null;
+                mensaje = "No se pudo leer la imagen seleccionada.";
+                return;
+            }
+
+            model.LogoImagen = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}";
+            mensaje = "Logo cargado correctamente.";
+            debugError = null;
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            model.LogoImagen = null;
+            logoArchivoSeleccionado = null;
+            debugError = ex.Message;
+            mensaje = "Error al procesar la imagen.";
+        }
+    }
+
+    private static string? ObtenerNombreArchivo(string? rutaArchivo) =>
+        string.IsNullOrWhiteSpace(rutaArchivo)
+            ? null
+            : Path.GetFileName(rutaArchivo.Replace('\\', '/'));
+
+    private bool EsRutaDemoEmisor() =>
+        NavManager.ToBaseRelativePath(NavManager.Uri).StartsWith("demo/emisor", StringComparison.OrdinalIgnoreCase);
+
+    private void CargarDemoEmisor()
+    {
+        isDemoMode = true;
+        esAsociado = false;
+        cargando = false;
+        mensaje = "Estás viendo la configuración demo del emisor.";
+        debugError = null;
+
+        emisores =
+        [
+            new EmisorDto
+            {
+                Codigo = 1,
+                RazonSocial = "Numerica e-fact Demo S.A.",
+                Ruc = "1799999999001",
+                NomComercial = "Numerica e-fact Demo",
+                DirEstablecimiento = "Av. Demo 123 y Calle Principal",
+                Email = "soporte@demo-efact.ec",
+                LlevaContabilidad = "SI",
+                LogoImagen = null,
+                DireccionMatriz = "Quito - Ecuador",
+                ClaveInterna = "DEMO2026",
+                Retenciones = "SI",
+                PathCertificado = "certs/path/demo-certificado.p12",
+                TieneClaveCertificadoConfigurada = true,
+                Telefono = "022456789",
+                Estado = true,
+                IdUsuario = 0,
+                CodEstablecimiento = "001",
+                CodPuntoEmision = "001"
+            }
+        ];
+
+        var demo = emisores[0];
+        model = new EmisorUpsertDto
+        {
+            Codigo = demo.Codigo,
+            RazonSocial = demo.RazonSocial,
+            Ruc = demo.Ruc,
+            NomComercial = demo.NomComercial,
+            Email = demo.Email,
+            DirEstablecimiento = demo.DirEstablecimiento,
+            LlevaContabilidad = demo.LlevaContabilidad,
+            LogoImagen = demo.LogoImagen,
+            DireccionMatriz = demo.DireccionMatriz,
+            ClaveInterna = demo.ClaveInterna,
+            Retenciones = demo.Retenciones,
+            PathCertificado = demo.PathCertificado,
+            Telefono = demo.Telefono,
+            Estado = demo.Estado ?? true,
+            IdUsuario = 0,
+            CodEstablecimiento = demo.CodEstablecimiento,
+            CodPuntoEmision = demo.CodPuntoEmision
+        };
+
+        editando = true;
+        logoArchivoSeleccionado = null;
+        formKey = Guid.NewGuid();
+    }
+
+    private static string FormatearMensajeError(string? rawMessage)
+    {
+        if (string.IsNullOrWhiteSpace(rawMessage))
+        {
+            return "Se produjo un error inesperado.";
+        }
+
+        var limpio = rawMessage
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+
+        if (PareceHtml(limpio))
+        {
+            return "El servidor devolvió un error interno no controlado.";
+        }
+
+        return limpio.Length > 320
+            ? $"{limpio[..317].TrimEnd()}..."
+            : limpio;
+    }
+
+    private async Task<string> LeerMensajeErrorHttpAsync(HttpResponseMessage response, string fallbackMessage)
+    {
+        var rawBody = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(rawBody))
+        {
+            return fallbackMessage;
+        }
+
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        var normalizedBody = rawBody.Trim();
+
+        if (string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase) || PareceHtml(normalizedBody))
+        {
+            return $"{fallbackMessage} El servidor devolvió un error interno.";
+        }
+
+        var messageFromJson = IntentarExtraerMensajeJson(normalizedBody);
+        if (!string.IsNullOrWhiteSpace(messageFromJson))
+        {
+            return FormatearMensajeError(messageFromJson);
+        }
+
+        return FormatearMensajeError(normalizedBody);
+    }
+
+    private static string? IntentarExtraerMensajeJson(string rawBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(rawBody);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                return root.GetString();
+            }
+
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (root.TryGetProperty("message", out var messageElement) && messageElement.ValueKind == JsonValueKind.String)
+            {
+                return messageElement.GetString();
+            }
+
+            if (root.TryGetProperty("title", out var titleElement) && titleElement.ValueKind == JsonValueKind.String)
+            {
+                return titleElement.GetString();
+            }
+
+            if (root.TryGetProperty("errors", out var errorsElement) && errorsElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in errorsElement.EnumerateObject())
+                {
+                    if (property.Value.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    foreach (var item in property.Value.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
+                        {
+                            return item.GetString();
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static bool PareceHtml(string value) =>
+        value.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("<html", StringComparison.OrdinalIgnoreCase);
+}

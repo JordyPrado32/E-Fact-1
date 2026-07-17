@@ -1,0 +1,2157 @@
+@page "/backoffice/ventas"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Auth
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.DTOs
+@using System.Security.Claims
+@using System.Text.Json
+@using System.IO
+@using System.Linq.Expressions
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
+@inject Simetric.Services.VendedorBackOfficeService VendedorBackOfficeService
+
+<PageTitle>Registro y Control de Ventas - BackOffice</PageTitle>
+
+<div class="ventas-wrapper animate__animated animate__fadeIn">
+    <!-- Header Block -->
+    <header class="ventas-header">
+        <div class="header-text">
+            <h2>@(esVendedor ? "Mis Ventas" : "Registro y Control de Ventas")</h2>
+            <p>@(esVendedor ? "Historial de compras de tus clientes afiliados y estadísticas." : "Historial de transacciones de clientes, canales de comercialización y activación de servicios.")</p>
+        </div>
+        @if (!esVendedor)
+        {
+            <button type="button" class="btn-registrar-new" @onclick="AbrirRegistrarModal">
+                <i class="bi bi-plus-lg"></i> Registrar Venta
+            </button>
+        }
+    </header>
+
+    <!-- Page Level Feedback Banner -->
+    @if (!string.IsNullOrEmpty(feedbackMessage))
+    {
+        <div class="action-notification-alert @(feedbackIsSuccess ? "success" : "error")" style="margin-top: 1rem;">
+            <i class="bi @(feedbackIsSuccess ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+            <span>@feedbackMessage</span>
+        </div>
+    }
+
+    @if (isLoading)
+    {
+        <div class="text-center my-5 py-5">
+            <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+                <span class="visually-hidden">Cargando ventas...</span>
+            </div>
+            <p class="mt-3 text-muted fw-bold">Cargando información</p>
+        </div>
+    }
+    else
+    {
+        <!-- KPI Summary Cards -->
+        <section class="kpi-grid">
+            @if (esVendedor)
+            {
+                <div class="kpi-card is-success">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Monto Total Recaudado</span>
+                        <strong class="kpi-value text-success">$@totalRecaudado.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                        <span class="kpi-desc">Monto total pagado por tus clientes</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-cash-coin"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-primary">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Clientes Afiliados</span>
+                        <strong class="kpi-value text-primary">@clientesAfiliadosList.Count</strong>
+                        <span class="kpi-desc">Total clientes registrados con tu link</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-people-fill"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-info">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Clientes con Compras</span>
+                        <strong class="kpi-value text-info">@clientesAfiliadosList.Count(c => c.ComprasCount > 0)</strong>
+                        <span class="kpi-desc">Clientes que han adquirido un servicio</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-person-check-fill"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-warning">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Promedio de Compra</span>
+                        <strong class="kpi-value text-warning">$@promedioCompra.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                        <span class="kpi-desc">Promedio gastado por cliente activo</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-graph-up-arrow"></i>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpi-card is-success">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Monto Total Recaudado</span>
+                        <strong class="kpi-value text-success">$@totalRecaudado.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                        <span class="kpi-desc">Monto consolidado de ventas pagadas</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-cash-coin"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-primary">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Ventas Canal Asesores</span>
+                        <strong class="kpi-value text-primary">$@ventasAsesores.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                        <span class="kpi-desc">Ventas cerradas por equipo comercial</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-headset"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-info">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Ventas Canal Web</span>
+                        <strong class="kpi-value text-info">$@ventasWeb.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                        <span class="kpi-desc">Transacciones automáticas en línea</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-globe"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-warning">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Transacciones Pendientes</span>
+                        <strong class="kpi-value text-warning">@countPendientes</strong>
+                        <span class="kpi-desc">Ventas con cobro o validación pendiente</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-hourglass-split"></i>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <!-- Charts Dashboard Grid -->
+        <section class="charts-grid">
+            @if (esVendedor)
+            {
+                <!-- Chart 1: Sales by Client -->
+                <div class="chart-card">
+                    <div class="chart-title-group">
+                        <h3>Ventas por Cliente</h3>
+                        <p>Monto total comprado por cada cliente registrado (Ventas Activas)</p>
+                    </div>
+                    <div class="bar-list-container">
+                        @if (!clientesAfiliadosList.Any(c => c.TotalGastado > 0))
+                        {
+                            <div class="text-center text-muted py-4 font-sm">
+                                <i class="bi bi-info-circle d-block mb-1 fs-5"></i>
+                                Sin compras registradas por sus clientes
+                            </div>
+                        }
+                        else
+                        {
+                            var topClientes = clientesAfiliadosList.Where(c => c.TotalGastado > 0).OrderByDescending(c => c.TotalGastado).Take(5).ToList();
+                            var maxVal = topClientes.Max(c => c.TotalGastado);
+                            if (maxVal <= 0) maxVal = 1;
+
+                            @foreach (var c in topClientes)
+                            {
+                                var pct = (c.TotalGastado / maxVal) * 100;
+                                <div class="bar-item">
+                                    <div class="bar-info">
+                                        <span class="bar-name">@c.Nombre</span>
+                                        <span class="bar-value">$@c.TotalGastado.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill" style="width: @(pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+
+                <!-- Chart 2: Conversión Clientes -->
+                <div class="chart-card">
+                    <div class="chart-title-group">
+                        <h3>Estado de Clientes</h3>
+                        <p>Conversión de clientes registrados: Con Compras vs Sin Compras</p>
+                    </div>
+                    <div class="vs-container">
+                        @{
+                            var totalCli = clientesAfiliadosList.Count;
+                            var conComp = clientesAfiliadosList.Count(c => c.ComprasCount > 0);
+                            var sinComp = totalCli - conComp;
+                            double pctCon = totalCli > 0 ? (double)conComp / totalCli * 100 : 0;
+                            double pctSin = totalCli > 0 ? (double)sinComp / totalCli * 100 : 0;
+                            if (totalCli == 0) { pctCon = 50; pctSin = 50; }
+                        }
+                        <div class="vs-bar-track">
+                            <div class="vs-segment seller-bg" style="width: @(pctCon.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Con Compras: @(pctCon.ToString("F1"))%">
+                                @if (pctCon >= 15) { <span>@(Math.Round(pctCon))%</span> }
+                            </div>
+                            <div class="vs-segment system-bg" style="width: @(pctSin.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Sin Compras: @(pctSin.ToString("F1"))%">
+                                @if (pctSin >= 15) { <span>@(Math.Round(pctSin))%</span> }
+                            </div>
+                        </div>
+                        <div class="vs-legend">
+                            <div class="vs-legend-item">
+                                <span class="vs-dot seller-bg"></span>
+                                <span>Con Compras: <strong>@conComp</strong></span>
+                            </div>
+                            <div class="vs-legend-item">
+                                <span class="vs-dot system-bg"></span>
+                                <span>Sin Compras: <strong>@sinComp</strong></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chart 3: Distribution by Product -->
+                <div class="chart-card">
+                    <div class="chart-title-group">
+                        <h3>Distribución por Producto</h3>
+                        <p>Comparación del volumen de ventas e-Fact vs e-Sign</p>
+                    </div>
+                    <div class="product-dist-container">
+                        @{
+                            var totalProds = countEFact + countESign;
+                            double pctEFact = totalProds > 0 ? (double)countEFact / totalProds * 100 : 0;
+                            double pctESign = totalProds > 0 ? (double)countESign / totalProds * 100 : 0;
+                        }
+                        <div class="product-row">
+                            <div class="product-label-row">
+                                <span class="product-name"><i class="bi bi-file-earmark-check text-success"></i> e-Fact (Documentos)</span>
+                                <span>@countEFact ventas (@(totalProds > 0 ? Math.Round(pctEFact) : 0)%)</span>
+                            </div>
+                            <div class="product-track">
+                                <div class="product-fill efact" style="width: @(pctEFact.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                        </div>
+                        <div class="product-row">
+                            <div class="product-label-row">
+                                <span class="product-name"><i class="bi bi-shield-check text-primary"></i> e-Sign (Firma Electrónica)</span>
+                                <span>@countESign ventas (@(totalProds > 0 ? Math.Round(pctESign) : 0)%)</span>
+                            </div>
+                            <div class="product-track">
+                                <div class="product-fill esign" style="width: @(pctESign.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <!-- Chart 1: Sales by Seller (Vendedor) -->
+                <div class="chart-card">
+                    <div class="chart-title-group">
+                        <h3>Ventas por Vendedor</h3>
+                        <p>Monto acumulado por asesor comercial (Ventas Activas)</p>
+                    </div>
+                    <div class="bar-list-container">
+                        @if (!ventasPorVendedor.Any())
+                        {
+                            <div class="text-center text-muted py-4 font-sm">
+                                <i class="bi bi-info-circle d-block mb-1 fs-5"></i>
+                                Sin ventas registradas por vendedores
+                            </div>
+                        }
+                        else
+                        {
+                            var maxVal = ventasPorVendedor.Max(v => v.Monto);
+                            if (maxVal <= 0) maxVal = 1;
+
+                            @foreach (var v in ventasPorVendedor)
+                            {
+                                var pct = (v.Monto / maxVal) * 100;
+                                <div class="bar-item">
+                                    <div class="bar-info">
+                                        <span class="bar-name">@v.Nombre</span>
+                                        <span class="bar-value">$@v.Monto.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill" style="width: @(pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+
+                <!-- Chart 2: Vendedor vs Sistema (Canales) -->
+                <div class="chart-card">
+                    <div class="chart-title-group">
+                        <h3>Vendedor vs Sistema</h3>
+                        <p>Comparativa de recaudación: Números Asesores vs Canal Web</p>
+                    </div>
+                    <div class="vs-container">
+                        @{
+                            double pctWeb = totalCanales > 0 ? (double)ventasWeb / (double)totalCanales * 100 : 0;
+                            double pctAsesores = totalCanales > 0 ? (double)ventasAsesores / (double)totalCanales * 100 : 0;
+                            if (totalCanales == 0) { pctWeb = 50; pctAsesores = 50; }
+                        }
+                        <div class="vs-bar-track">
+                            <div class="vs-segment system-bg" style="width: @(pctWeb.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Web: @(pctWeb.ToString("F1"))%">
+                                @if (pctWeb >= 15) { <span>@(Math.Round(pctWeb))%</span> }
+                            </div>
+                            <div class="vs-segment seller-bg" style="width: @(pctAsesores.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Asesores: @(pctAsesores.ToString("F1"))%">
+                                @if (pctAsesores >= 15) { <span>@(Math.Round(pctAsesores))%</span> }
+                            </div>
+                        </div>
+                        <div class="vs-legend">
+                            <div class="vs-legend-item">
+                                <span class="vs-dot system-bg"></span>
+                                <span>Sistema Web: <strong>$@ventasWeb.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong></span>
+                            </div>
+                            <div class="vs-legend-item">
+                                <span class="vs-dot seller-bg"></span>
+                                <span>Asesores: <strong>$@ventasAsesores.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chart 3: Distribution by Product -->
+                <div class="chart-card">
+                    <div class="chart-title-group">
+                        <h3>Distribución por Producto</h3>
+                        <p>Comparación del volumen de ventas e-Fact vs e-Sign</p>
+                    </div>
+                    <div class="product-dist-container">
+                        @{
+                            var totalProds = countEFact + countESign;
+                            double pctEFact = totalProds > 0 ? (double)countEFact / totalProds * 100 : 0;
+                            double pctESign = totalProds > 0 ? (double)countESign / totalProds * 100 : 0;
+                        }
+                        <div class="product-row">
+                            <div class="product-label-row">
+                                <span class="product-name"><i class="bi bi-file-earmark-check text-success"></i> e-Fact (Documentos)</span>
+                                <span>@countEFact ventas (@(totalProds > 0 ? Math.Round(pctEFact) : 0)%)</span>
+                            </div>
+                            <div class="product-track">
+                                <div class="product-fill efact" style="width: @(pctEFact.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                        </div>
+                        <div class="product-row">
+                            <div class="product-label-row">
+                                <span class="product-name"><i class="bi bi-shield-check text-primary"></i> e-Sign (Firma Electrónica)</span>
+                                <span>@countESign ventas (@(totalProds > 0 ? Math.Round(pctESign) : 0)%)</span>
+                            </div>
+                            <div class="product-track">
+                                <div class="product-fill esign" style="width: @(pctESign.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <!-- Filters card -->
+        <section class="filters-card">
+            @if (esVendedor)
+            {
+                <div class="filters-grid" style="grid-template-columns: 1fr;">
+                    <div class="filter-input-wrap">
+                        <i class="bi bi-search filter-input-icon"></i>
+                        <input type="text" 
+                               class="filter-input" 
+                               placeholder="Buscar cliente por nombre, correo o cédula..." 
+                               @bind="searchString" 
+                               @bind:event="oninput" />
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="filters-grid">
+                    <div class="filter-input-wrap">
+                        <i class="bi bi-search filter-input-icon"></i>
+                        <input type="text" 
+                               class="filter-input" 
+                               placeholder="Buscar cliente, vendedor o plan..." 
+                               @bind="searchString" 
+                               @bind:event="oninput" />
+                    </div>
+                    <div>
+                        <select class="filter-select" @bind="filterProducto">
+                            <option value="ALL">Todos los Productos</option>
+                            <option value="e-fact">e-Fact (Documentos)</option>
+                            <option value="e-sign">e-Sign (Firmas)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <select class="filter-select" @bind="filterCanal">
+                            <option value="ALL">Todos los Canales</option>
+                            <option value="Web">Sistema Web</option>
+                            <option value="Números Asesores">Números Asesores</option>
+                        </select>
+                    </div>
+                    <div>
+                        <select class="filter-select" @bind="filterEstado">
+                            <option value="ALL">Todos los Estados</option>
+                            <option value="pendiente">Pendiente</option>
+                            <option value="pagada">Pagada</option>
+                            <option value="anulada">Anulada</option>
+                        </select>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <!-- Sales Data Table / Clients Table -->
+        <section class="table-card">
+            <div class="table-wrap">
+                @if (esVendedor)
+                {
+                    <table class="table ventas-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Identificación</th>
+                                <th>Fecha Registro</th>
+                                <th class="text-center">Compras</th>
+                                <th class="text-end">Total Comprado</th>
+                                <th>Estado</th>
+                                <th class="text-center" style="width: 160px;">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!paginatedClientes.Any())
+                            {
+                                <tr>
+                                    <td colspan="7" class="text-center py-5 text-muted">
+                                        <i class="bi bi-info-circle fs-3 d-block mb-2"></i>
+                                        No se encontraron clientes registrados con tu enlace.
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var c in paginatedClientes)
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="fw-bold">@c.Nombre</div>
+                                            <div class="text-muted small">@c.Email</div>
+                                        </td>
+                                        <td>@c.Identificacion</td>
+                                        <td>@(c.FechaRegistro?.ToString("dd/MM/yyyy HH:mm") ?? "N/A")</td>
+                                        <td class="text-center">@c.ComprasCount</td>
+                                        <td class="text-end fw-bold text-success">$@c.TotalGastado.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</td>
+                                        <td>
+                                            @if (c.ComprasCount > 0)
+                                            {
+                                                <span class="status-badge pagada">
+                                                    <i class="bi bi-check-circle-fill"></i> Activo
+                                                </span>
+                                            }
+                                            else
+                                            {
+                                                <span class="status-badge pendiente">
+                                                    <i class="bi bi-clock-fill"></i> Inactivo
+                                                </span>
+                                            }
+                                        </td>
+                                        <td class="text-center">
+                                            <button type="button" class="btn-row-action edit" @onclick="() => AbrirModalCompras(c)" title="Ver historial de compras">
+                                                <i class="bi bi-eye"></i> Ver Compras
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                }
+                else
+                {
+                    <table class="table ventas-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Cliente</th>
+                                <th>Producto</th>
+                                <th>Plan / Paquete</th>
+                                <th class="text-end">Valor</th>
+                                <th>Canal / Vendedor</th>
+                                <th>Forma Pago</th>
+                                <th>Estado</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!paginatedVentas.Any())
+                            {
+                                <tr>
+                                    <td colspan="9" class="text-center py-5">
+                                        <div class="table-empty">
+                                            <i class="bi bi-coin"></i>
+                                            <strong>Sin registros de ventas</strong>
+                                            <p class="text-muted font-sm mb-0">No se encontraron ventas para los filtros seleccionados.</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var v in paginatedVentas)
+                                {
+                                    var parts = v.Cliente.Split('|');
+                                    var clientName = parts[0].Trim();
+                                    var clientEmail = parts.Length > 1 ? parts[1].Trim() : "";
+
+                                    <tr>
+                                        <td>
+                                            <span class="fecha-text">@v.Fecha.ToString("dd/MM/yyyy HH:mm")</span>
+                                        </td>
+                                        <td>
+                                            <div class="client-cell">
+                                                <span class="client-name">@clientName</span>
+                                                @if (!string.IsNullOrEmpty(clientEmail))
+                                                {
+                                                    <span class="client-email">@clientEmail</span>
+                                                }
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="product-badge @(v.Producto == "e-fact" ? "efact" : "esign")">
+                                                <i class="bi @(v.Producto == "e-fact" ? "bi-file-earmark-check-fill" : "bi-shield-check")"></i>
+                                                @(v.Producto == "e-fact" ? "e-Fact" : "e-Sign")
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <strong class="text-dark">@v.PlanPaquete</strong>
+                                        </td>
+                                        <td class="text-end">
+                                            <span class="valor-text">$@v.Valor.ToString("F2")</span>
+                                        </td>
+                                        <td>
+                                            <div class="canal-cell">
+                                                <i class="bi @(v.Canal == "Web" ? "bi-globe" : "bi-telephone-fill") canal-icon"></i>
+                                                <div>
+                                                    <span>@v.Canal</span>
+                                                    @if (!string.IsNullOrWhiteSpace(v.Vendedor))
+                                                    {
+                                                        <span class="seller-name">Vendedor: @v.Vendedor</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="comprobante-cell">
+                                                <span class="text-muted font-sm">@v.FormaPago</span>
+                                                @if (HasComprobanteImage(v))
+                                                {
+                                                    <button type="button" class="btn-view-evidence" title="Ver captura de comprobante" @onclick="() => ShowEvidencePreview(v)">
+                                                        <i class="bi bi-image"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="status-badge @(v.Estado == "pagada" ? "pagada" : v.Estado == "pendiente" ? "pendiente" : "anulada")">
+                                                <i class="bi @(v.Estado == "pagada" ? "bi-check-circle-fill" : v.Estado == "pendiente" ? "bi-clock-fill" : v.Estado == "anulada" ? "bi-x-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+                                                @v.Estado
+                                            </span>
+                                        </td>
+                                        <td class="text-end">
+                                            <div class="action-group">
+                                                @if (v.Canal == "Web")
+                                                {
+                                                    <span class="automatic-badge">
+                                                        <i class="bi bi-cpu"></i> Automática
+                                                    </span>
+                                                }
+                                                else
+                                                {
+                                                    <div class="vertical-actions">
+                                                        <button type="button" 
+                                                                class="btn-row-action edit" 
+                                                                title="Editar venta" 
+                                                                @onclick="() => AbrirEditarModal(v)">
+                                                            <i class="bi bi-pencil-square"></i>
+                                                            <span>Editar</span>
+                                                        </button>
+                                                        @if (v.Estado != "anulada")
+                                                        {
+                                                            <button type="button" 
+                                                                    class="btn-row-action void" 
+                                                                    title="Anular venta" 
+                                                                    @onclick="() => AnularVenta(v)">
+                                                                <i class="bi bi-x-circle"></i>
+                                                                <span>Anular</span>
+                                                            </button>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+
+            <!-- Pager -->
+            <div class="pager-container">
+                <span class="pager-info">
+                    @if (esVendedor)
+                    {
+                        <span>Mostrando del @(filteredClientesAfiliadosList.Any() ? (currentPage - 1) * pageSize + 1 : 0) al @(Math.Min(currentPage * pageSize, filteredClientesAfiliadosList.Count)) de @filteredClientesAfiliadosList.Count registros</span>
+                    }
+                    else
+                    {
+                        <span>Mostrando del @(filteredVentas.Any() ? (currentPage - 1) * pageSize + 1 : 0) al @(Math.Min(currentPage * pageSize, filteredVentas.Count)) de @filteredVentas.Count registros</span>
+                    }
+                </span>
+                <div class="pager-buttons">
+                    <button type="button" class="pager-btn" disabled="@(currentPage == 1)" @onclick="() => SetPage(1)">
+                        <i class="bi bi-chevron-double-left"></i>
+                    </button>
+                    <button type="button" class="pager-btn" disabled="@(currentPage == 1)" @onclick="() => SetPage(currentPage - 1)">
+                        <i class="bi bi-chevron-left"></i>
+                    </button>
+                    @for (int i = Math.Max(1, currentPage - 2); i <= Math.Min(totalPages, currentPage + 2); i++)
+                    {
+                        var pageNumber = i;
+                        <button type="button" class="pager-btn @(currentPage == pageNumber ? "active" : "")" @onclick="() => SetPage(pageNumber)">
+                            @pageNumber
+                        </button>
+                    }
+                    <button type="button" class="pager-btn" disabled="@(currentPage == totalPages || totalPages == 0)" @onclick="() => SetPage(currentPage + 1)">
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                    <button type="button" class="pager-btn" disabled="@(currentPage == totalPages || totalPages == 0)" @onclick="() => SetPage(totalPages)">
+                        <i class="bi bi-chevron-double-right"></i>
+                    </button>
+                </div>
+            </div>
+        </section>
+    }
+</div>
+
+<!-- Modal Historial de Compras del Cliente -->
+@if (mostrarModalComprasClient && clienteSeleccionadoVer != null)
+{
+    <div class="ventas-modal-overlay">
+        <div class="ventas-modal-dialog" style="max-width: 700px;">
+            <div class="ventas-modal-header">
+                <h3>
+                    <i class="bi bi-cart-check-fill"></i>
+                    Historial de Compras: @clienteSeleccionadoVer.Nombre
+                </h3>
+                <button type="button" class="btn-close-modal" @onclick="CerrarModalCompras">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+            <div class="ventas-modal-body">
+                <div class="mb-3 small text-muted">
+                    <strong>Email:</strong> @clienteSeleccionadoVer.Email | 
+                    <strong>Identificación:</strong> @clienteSeleccionadoVer.Identificacion
+                </div>
+                <div class="table-wrap">
+                    <table class="table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Producto</th>
+                                <th>Plan / Paquete</th>
+                                <th class="text-end">Monto</th>
+                                <th>Forma Pago</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!clienteSeleccionadoVer.Transacciones.Any())
+                            {
+                                <tr>
+                                    <td colspan="6" class="text-center py-4 text-muted">
+                                        No se registran compras para este usuario en el sistema.
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var t in clienteSeleccionadoVer.Transacciones)
+                                {
+                                    <tr>
+                                        <td>@t.Fecha.ToString("dd/MM/yyyy HH:mm")</td>
+                                        <td>
+                                            <span class="product-badge @(t.Producto == "e-fact" ? "efact" : "esign")">
+                                                @(t.Producto == "e-fact" ? "e-Fact" : "e-Sign")
+                                            </span>
+                                        </td>
+                                        <td>@t.PlanPaquete</td>
+                                        <td class="text-end fw-bold">$@t.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</td>
+                                        <td>@t.FormaPago</td>
+                                        <td>
+                                            <span class="status-badge @(t.Estado == "pagada" ? "pagada" : t.Estado == "pendiente" ? "pendiente" : "anulada")">
+                                                @t.Estado
+                                            </span>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="ventas-modal-footer">
+                <button type="button" class="btn-cancel" @onclick="CerrarModalCompras">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Modal Registrar / Editar Venta -->
+@if (mostrarModal)
+{
+    <div class="ventas-modal-overlay">
+        <div class="ventas-modal-dialog">
+            <div class="ventas-modal-header">
+                <h3>
+                    <i class="bi @(editandoVentaId.HasValue ? "bi-pencil-square" : "bi-plus-circle-fill")"></i>
+                    @(editandoVentaId.HasValue ? "Editar Venta Registrada" : "Registrar Nueva Venta")
+                </h3>
+                <button type="button" class="ventas-modal-close-btn" @onclick="CerrarModal" disabled="@isSaving">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="ventas-modal-body">
+                <!-- Modal Level Notifications -->
+                @if (!string.IsNullOrEmpty(modalError))
+                {
+                    <div class="action-notification-alert error" style="margin-bottom: 1.25rem;">
+                        <i class="bi bi-exclamation-triangle-fill"></i>
+                        <span>@modalError</span>
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(modalSuccess))
+                {
+                    <div class="action-notification-alert success" style="margin-bottom: 1.25rem;">
+                        <i class="bi bi-check-circle-fill"></i>
+                        <span>@modalSuccess</span>
+                    </div>
+                }
+
+                <div class="form-grid">
+                    <!-- Client Selector -->
+                    <div class="form-group form-group-full">
+                        <label class="form-label">Cliente (Usuario del sistema)</label>
+                        @if (selectedUser != null)
+                        {
+                            <div class="selected-user-badge">
+                                <div class="selected-user-info">
+                                    <strong>@selectedUser.Nombres @selectedUser.Apellidos</strong>
+                                    <span class="text-muted font-xs">@selectedUser.Email | ID: @selectedUser.Identificacion</span>
+                                </div>
+                                <button type="button" class="btn-remove-selected-user" @onclick="DeseleccionarUsuario" title="Cambiar usuario">
+                                    <i class="bi bi-trash-fill"></i>
+                                </button>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="searchable-select-wrap">
+                                <input type="text" 
+                                       class="form-input" 
+                                       placeholder="Escribe nombres, apellidos o correo para buscar..." 
+                                       @bind="userSearchQuery" 
+                                       @bind:event="oninput"
+                                       @bind:after="BuscarClientes"
+                                       @onfocus="OnSearchInputFocused" />
+                                
+                                @if (mostrarDropdownClientes && !string.IsNullOrWhiteSpace(userSearchQuery))
+                                {
+                                    <div class="search-results-dropdown">
+                                        @if (!clientesEncontrados.Any())
+                                        {
+                                            <div class="search-no-results">No se encontraron usuarios matching.</div>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var u in clientesEncontrados)
+                                            {
+                                                <div class="search-result-item" @onclick="() => SeleccionarUsuario(u)">
+                                                    <span class="search-result-name">@u.Nombres @u.Apellidos</span>
+                                                    <span class="search-result-email">@u.Email | CI: @u.Identificacion</span>
+                                                </div>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                        @if (mostrarErrores && selectedUser == null)
+                        {
+                            <span class="form-error">Debes seleccionar un cliente registrado en el sistema.</span>
+                        }
+                    </div>
+
+                    <!-- Producto -->
+                    <div class="form-group">
+                        <label class="form-label">Producto</label>
+                        <select class="form-select" @bind="modalVenta.Producto" @bind:after="OnProductoChanged">
+                            <option value="e-fact">e-Fact (Documentos)</option>
+                            <option value="e-sign">e-Sign (Firma)</option>
+                        </select>
+                    </div>
+
+                    <!-- Plan o Paquete -->
+                    <div class="form-group">
+                        <label class="form-label">Plan o Paquete</label>
+                        <div class="d-flex gap-2">
+                            <select class="form-select" @bind="planSeleccionado" @bind:after="OnPlanSeleccionadoChanged">
+                                @if (modalVenta.Producto == "e-fact")
+                                {
+                                    <option value="Por documento">Por documento ($@EFactDocumentPricing.PrecioTierHasta25.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))</option>
+                                    <option value="25 documentos">25 documentos</option>
+                                    <option value="120 documentos">120 documentos</option>
+                                    <option value="600 documentos">600 documentos</option>
+                                    <option value="Ilimitados durante 1 año">Ilimitados durante 1 año</option>
+                                    <option value="CUSTOM">Personalizado (Ingreso manual)</option>
+                                }
+                                else
+                                {
+                                    <option value="1 año">1 año</option>
+                                    <option value="2 años">2 años</option>
+                                    <option value="3 años">3 años</option>
+                                    <option value="4 años">4 años</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Custom Plan Box -->
+                    @if (planSeleccionado == "CUSTOM" && modalVenta.Producto == "e-fact")
+                    {
+                        <div class="form-group form-group-full">
+                            <label class="form-label">¿Cuántos documentos deseas comprar?</label>
+                            <input type="number" min="1" class="form-input" @bind="customDocsCount" @bind:event="oninput" @bind:after="RecalcularValorPlan" />
+                            @if (mostrarErrores && customDocsCount < 1)
+                            {
+                                <span class="form-error">Debes comprar al menos 1 documento.</span>
+                            }
+                        </div>
+                    }
+
+                    <!-- Valor -->
+                    <div class="form-group">
+                        <label class="form-label">Valor ($)</label>
+                        <input type="number" step="0.01" class="form-input" placeholder="0.00" @bind="modalVenta.Valor" disabled />
+                        @if (mostrarErrores && modalVenta.Valor < 0)
+                        {
+                            <span class="form-error">El valor no puede ser negativo.</span>
+                        }
+                    </div>
+
+                    <!-- Fecha -->
+                    <div class="form-group">
+                        <label class="form-label">Fecha de Registro</label>
+                        <input type="datetime-local" class="form-input" @bind="modalVenta.Fecha" />
+                    </div>
+
+                    <!-- Canal (fijo: solo ventas manuales por Asesores; las de Web se registran automáticamente) -->
+                    <div class="form-group">
+                        <label class="form-label">Canal de Comercialización</label>
+                        <input type="text" class="form-input" value="Números Asesores" disabled />
+                    </div>
+
+                    <!-- Vendedor -->
+                    <div class="form-group">
+                        <label class="form-label">Vendedor</label>
+                        @if (esVendedor)
+                        {
+                            <input type="text" class="form-input" value="@sellerName" disabled />
+                        }
+                        else
+                        {
+                            <select class="form-select" @bind="modalVenta.Vendedor">
+                                <option value="">-- Seleccione un Vendedor --</option>
+                                @foreach (var vend in vendedoresList)
+                                {
+                                    <option value="@($"{vend.Nombres} {vend.Apellidos}")">@($"{vend.Nombres} {vend.Apellidos}")</option>
+                                }
+                            </select>
+                            @if (mostrarErrores && string.IsNullOrWhiteSpace(modalVenta.Vendedor))
+                            {
+                                <span class="form-error">Debes seleccionar un vendedor.</span>
+                            }
+                        }
+                    </div>
+
+                    <!-- Forma de Pago -->
+                    <div class="form-group">
+                        <label class="form-label">Forma de Pago</label>
+                        <select class="form-select" @bind="modalVenta.FormaPago">
+                            <option value="Transferencia">Transferencia</option>
+                            <option value="Tarjeta de Crédito">Tarjeta de Crédito</option>
+                            <option value="Efectivo">Efectivo</option>
+                            <option value="Depósito Bancario">Depósito Bancario</option>
+                        </select>
+                    </div>
+
+                    <!-- Estado -->
+                    <div class="form-group">
+                        <label class="form-label">Estado de la Venta</label>
+                        <select class="form-select" @bind="modalVenta.Estado">
+                            <option value="pendiente">Pendiente</option>
+                            <option value="pagada">Pagada</option>
+                            <option value="anulada">Anulada</option>
+                        </select>
+                    </div>
+
+                    <!-- Comprobante / Referencia (Only if Estado is pagada) -->
+                    @if (modalVenta.Estado == "pagada")
+                    {
+                        <div class="form-group form-group-full">
+                            <label class="form-label">Comprobante / Referencia de Pago</label>
+                            <input type="text" class="form-input" placeholder="Ej. N° de transferencia o depósito" @bind="comprobanteRef" disabled="@isSaving" />
+                        </div>
+                    }
+
+                    <!-- Observación -->
+                    <div class="form-group form-group-full">
+                        <label class="form-label">Observaciones</label>
+                        <textarea class="form-textarea" placeholder="Añadir notas de cobro, números de referencia o comentarios..." @bind="modalVenta.Observacion" disabled="@isSaving"></textarea>
+                    </div>
+
+                    <!-- Captura de Comprobante (Evidencia) -->
+                    <div class="form-group form-group-full" style='display: @(modalVenta.Estado == "pagada" ? "block" : "none");'>
+                        <label class="form-label">Captura del Comprobante (Opcional)</label>
+                        @if (selectedFile == null && HasComprobanteImage(modalVenta))
+                        {
+                            <div class="file-preview-banner" style="background: #f0fdf4; border-color: #bbf7d0;">
+                                <div class="file-preview-info" style="color: #166534;">
+                                    <i class="bi bi-image"></i>
+                                    <span>Comprobante actual guardado</span>
+                                </div>
+                                <div class="d-flex gap-2 align-items-center">
+                                    <button type="button" class="btn-view-evidence" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" @onclick="() => ShowEvidencePreview(modalVenta)">
+                                        <i class="bi bi-eye"></i> Ver
+                                    </button>
+                                    <button type="button" class="btn-remove-file" title="Eliminar comprobante" @onclick="EliminarComprobanteExistente" disabled="@isSaving">
+                                        <i class="bi bi-trash-fill"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        }
+
+                        <label for="sales-evidence-upload" class="upload-zone" style='margin-top: 0.25rem; display: @(selectedFile == null && !HasComprobanteImage(modalVenta) ? "flex" : "none");'>
+                            <i class="bi bi-cloud-arrow-up-fill" style="font-size: 1.5rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;"></i>
+                            <span class="upload-text" style="font-size: 0.825rem; font-weight: 600; color: #475569; display: block;">Haz clic aquí para cargar captura de pago</span>
+                            <span class="upload-sub" style="font-size: 0.725rem; color: #94a3b8; display: block;">Formatos permitidos: JPG, PNG (máx. 5MB)</span>
+                        </label>
+                        <InputFile OnChange="HandleFileSelected" id="sales-evidence-upload" style="display: none;" accept="image/*" />
+
+                        @if (selectedFile != null)
+                        {
+                            <div class="file-preview-banner">
+                                <div class="file-preview-info">
+                                    <i class="bi bi-file-earmark-image-fill"></i>
+                                    <span>@selectedFile.Name (@(Math.Round(selectedFile.Size / 1024.0, 1)) KB)</span>
+                                </div>
+                                <button type="button" class="btn-remove-file" title="Eliminar archivo" @onclick="RemoveSelectedFile" disabled="@isSaving">
+                                    <i class="bi bi-trash-fill"></i>
+                                </button>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(uploadError))
+                        {
+                            <span class="text-danger font-sm fw-bold mt-1" style="font-size: 0.75rem;">@uploadError</span>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="ventas-modal-footer">
+                <button type="button" class="btn-modal-cancel" @onclick="CerrarModal" disabled="@isSaving">Cancelar</button>
+                <button type="button" class="btn-modal-save" @onclick="GuardarVenta" disabled="@isSaving">
+                    @if (isSaving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true" style="width: 1rem; height: 1rem; border-width: 0.15em; display: inline-block;"></span>
+                        <span>Guardando...</span>
+                    }
+                    else
+                    {
+                        <span>Guardar Cambios</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Modal: Vista Previa Comprobante -->
+@if (!string.IsNullOrEmpty(previewImageUrl))
+{
+    <div class="ventas-modal-overlay" @onclick="CloseEvidencePreview" style="z-index: 2000;">
+        <div class="ventas-modal-dialog" style="max-width: 650px;" @onclick:stopPropagation>
+            <div class="ventas-modal-header">
+                <h3><i class="bi bi-image"></i> Evidencia del Comprobante de Pago</h3>
+                <button type="button" class="ventas-modal-close-btn" @onclick="CloseEvidencePreview">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="ventas-modal-body" style="background-color: #0f172a; padding: 1.25rem; display: flex; justify-content: center; align-items: center; min-height: 200px; border-radius: 0 0 12px 12px;">
+                <img src="@previewImageUrl" style="max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 8px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);" alt="Comprobante de cobro" />
+            </div>
+            <div class="ventas-modal-footer">
+                <a href="@previewImageUrl" target="_blank" class="btn-modal-save" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem;">
+                    <i class="bi bi-box-arrow-up-right"></i> Abrir en pestaña nueva
+                </a>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseEvidencePreview">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool isLoading = true;
+    private List<ReporteVentaBackOffice> ventasList = new();
+    private List<ReporteVentaBackOffice> filteredVentas = new();
+    private List<ReporteVentaBackOffice> paginatedVentas = new();
+
+    // File Upload and alerts fields
+    private Microsoft.AspNetCore.Components.Forms.IBrowserFile? selectedFile;
+    private string? uploadError;
+    private string? modalError;
+    private string? modalSuccess;
+    private bool isSaving = false;
+    private string? feedbackMessage;
+    private bool feedbackIsSuccess = true;
+    private string? previewImageUrl;
+    private string comprobanteRef = "";
+
+    // Filters and Search
+    private string searchString = "";
+    private string filterProducto = "ALL";
+    private string filterCanal = "ALL";
+    private string filterEstado = "ALL";
+
+    // Pager
+    private int currentPage = 1;
+    private int pageSize = 10;
+    private int totalPages = 0;
+
+    // KPIs
+    private decimal totalRecaudado;
+    private decimal ventasAsesores;
+    private decimal ventasWeb;
+    private int countPendientes;
+    private bool esVendedor;
+    private string sellerName = string.Empty;
+    private decimal promedioCompra = 0;
+
+    // Seller specific
+    private List<VendedorClienteDto> clientesAfiliadosList = new();
+    private List<VendedorClienteDto> filteredClientesAfiliadosList = new();
+    private List<VendedorClienteDto> paginatedClientes = new();
+    private bool mostrarModalComprasClient = false;
+    private VendedorClienteDto? clienteSeleccionadoVer;
+
+    private void AbrirModalCompras(VendedorClienteDto dto)
+    {
+        clienteSeleccionadoVer = dto;
+        mostrarModalComprasClient = true;
+    }
+
+    private void CerrarModalCompras()
+    {
+        mostrarModalComprasClient = false;
+        clienteSeleccionadoVer = null;
+    }
+
+    // Charts
+    private List<(string Nombre, decimal Monto)> ventasPorVendedor = new();
+    private decimal totalCanales;
+    private int countEFact;
+    private int countESign;
+
+    // Modal Control
+    private bool mostrarModal = false;
+    private ReporteVentaBackOffice modalVenta = new();
+    private int? editandoVentaId;
+    private string planSeleccionado = "120 documentos";
+    private bool mostrarErrores = false;
+    private int customDocsCount = 1;
+
+    // Searchable Clients Dropdown
+    private string userSearchQuery = "";
+    private List<Usuario> clientesEncontrados = new();
+    private Usuario? selectedUser;
+    private bool mostrarDropdownClientes = false;
+    private List<Usuario> vendedoresList = new();
+    private string currentOperatorName = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadVentasData();
+        
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            var name = user.Identity.Name ?? "";
+            var surname = user.FindFirst(ClaimTypes.Surname)?.Value ?? "";
+            currentOperatorName = $"{name} {surname}".Trim();
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        ApplyFilters();
+    }
+
+    private async Task LoadVentasData()
+    {
+        isLoading = true;
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+            var tipoCliente = user.FindFirst("TipoCliente")?.Value;
+            var idUsuario = int.TryParse(user.FindFirst("IdUsuario")?.Value, out var idClaim) ? idClaim : 0;
+            var nombreCompleto = user.Identity?.Name ?? "Vendedor";
+            
+            esVendedor = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) && 
+                         string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
+
+            using var context = await DbFactory.CreateDbContextAsync();
+            if (idUsuario > 0)
+            {
+                var dbUser = await context.Usuarios.FindAsync(idUsuario);
+                if (dbUser != null)
+                {
+                    role = dbUser.IdTipoUsuario?.ToString() ?? role;
+                    tipoCliente = dbUser.TipoCliente?.ToString() ?? tipoCliente;
+                    nombreCompleto = $"{dbUser.Nombres} {dbUser.Apellidos}".Trim();
+                    if (string.IsNullOrWhiteSpace(nombreCompleto))
+                        nombreCompleto = dbUser.Email ?? "Vendedor";
+
+                    esVendedor = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
+                                 string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+
+            if (esVendedor)
+            {
+                var sellerProfile = await VendedorBackOfficeService.ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);
+                
+                sellerName = sellerProfile?.Nombre ?? string.Empty;
+                var idVendedor = sellerProfile?.IdVendedor ?? 0;
+
+                // Load all registered clients under this seller
+                var rawClients = await context.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.IdVendedor == idVendedor)
+                    .OrderByDescending(u => u.FechaCreacion)
+                    .ToListAsync();
+
+                var correosClientes = rawClients
+                    .Select(u => u.Email?.Trim())
+                    .Where(email => !string.IsNullOrWhiteSpace(email))
+                    .Select(email => email!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                ventasList = await LoadVentasParaCorreosAsync(context, correosClientes);
+
+                // Build client DTO list
+                clientesAfiliadosList = rawClients.Select(u =>
+                {
+                    // Find all transactions of this user in ReporteVentasBackOffice
+                    var ventasUsuario = ventasList
+                        .Where(v => CoincideClienteReporte(u, v.Cliente))
+                        .ToList();
+
+                    var nombreStr = $"{u.Nombres} {u.Apellidos}".Trim();
+                    if (string.IsNullOrWhiteSpace(nombreStr))
+                    {
+                        nombreStr = u.NombreEmpresa ?? $"Cliente #{u.IdUsuario}";
+                    }
+
+                    return new VendedorClienteDto
+                    {
+                        Usuario = u,
+                        Nombre = nombreStr,
+                        Email = u.Email ?? "",
+                        Identificacion = u.Identificacion ?? "",
+                        FechaRegistro = u.FechaCreacion,
+                        ComprasCount = ventasUsuario.Count,
+                        TotalGastado = ventasUsuario.Sum(v => v.Valor),
+                        Transacciones = ventasUsuario
+                    };
+                }).ToList();
+
+                filteredClientesAfiliadosList = new List<VendedorClienteDto>(clientesAfiliadosList);
+                
+                ventasList = clientesAfiliadosList
+                    .SelectMany(c => c.Transacciones)
+                    .OrderByDescending(v => v.Fecha)
+                    .ToList();
+            }
+            else
+            {
+                ventasList = await context.ReporteVentasBackOffice
+                    .AsNoTracking()
+                    .OrderByDescending(v => v.Fecha)
+                    .ToListAsync();
+
+                vendedoresList = await context.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.IdTipoUsuario == 7 && u.Estado == true)
+                    .OrderBy(u => u.Nombres)
+                    .ToListAsync();
+            }
+
+            ComputeMetrics();
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading ventas: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void ComputeMetrics()
+    {
+        if (esVendedor)
+        {
+            totalRecaudado = clientesAfiliadosList.Sum(c => c.TotalGastado);
+            var activeClientsCount = clientesAfiliadosList.Count(c => c.ComprasCount > 0);
+            promedioCompra = activeClientsCount > 0 ? totalRecaudado / activeClientsCount : 0;
+            
+            var activeSalesOfClients = clientesAfiliadosList.SelectMany(c => c.Transacciones).Where(t => t.Estado != "anulada").ToList();
+            countEFact = activeSalesOfClients.Count(t => t.Producto == "e-fact");
+            countESign = activeSalesOfClients.Count(t => t.Producto == "e-sign");
+            return;
+        }
+
+        // Compute KPIs (Only from valid active/paid sales, except pending which is shown separately)
+        var paidSales = ventasList.Where(v => v.Estado == "pagada").ToList();
+        totalRecaudado = paidSales.Sum(v => v.Valor);
+        ventasAsesores = paidSales.Where(v => v.Canal == "Números Asesores").Sum(v => v.Valor);
+        ventasWeb = paidSales.Where(v => v.Canal == "Web").Sum(v => v.Valor);
+        countPendientes = ventasList.Count(v => v.Estado == "pendiente");
+
+        totalCanales = ventasAsesores + ventasWeb;
+
+        // Group active paid/pending sales by seller
+        var activeSales = ventasList.Where(v => v.Estado != "anulada").ToList();
+        ventasPorVendedor = activeSales
+            .Where(v => !string.IsNullOrWhiteSpace(v.Vendedor) && v.Vendedor != "Sistema")
+            .GroupBy(v => v.Vendedor!.Trim())
+            .Select(g => (Nombre: g.Key, Monto: g.Sum(x => x.Valor)))
+            .OrderByDescending(x => x.Monto)
+            .ToList();
+
+        // Product counts
+        countEFact = activeSales.Count(v => v.Producto == "e-fact");
+        countESign = activeSales.Count(v => v.Producto == "e-sign");
+    }
+
+    private static async Task<List<ReporteVentaBackOffice>> LoadVentasParaCorreosAsync(AppDbContext context, List<string> correos)
+    {
+        if (correos.Count == 0)
+        {
+            return new List<ReporteVentaBackOffice>();
+        }
+
+        var ventas = new List<ReporteVentaBackOffice>();
+        var containsMethod = typeof(string).GetMethod(nameof(string.Contains), new[] { typeof(string) });
+        if (containsMethod is null)
+        {
+            return ventas;
+        }
+
+        foreach (var chunk in correos.Chunk(25))
+        {
+            var parameter = Expression.Parameter(typeof(ReporteVentaBackOffice), "v");
+            var clienteProperty = Expression.Property(parameter, nameof(ReporteVentaBackOffice.Cliente));
+            var notNull = Expression.NotEqual(clienteProperty, Expression.Constant(null, typeof(string)));
+
+            Expression? emailFilter = null;
+            foreach (var email in chunk)
+            {
+                var containsEmail = Expression.Call(clienteProperty, containsMethod, Expression.Constant(email));
+                emailFilter = emailFilter is null ? containsEmail : Expression.OrElse(emailFilter, containsEmail);
+            }
+
+            if (emailFilter is null)
+            {
+                continue;
+            }
+
+            var body = Expression.AndAlso(notNull, emailFilter);
+            var predicate = Expression.Lambda<Func<ReporteVentaBackOffice, bool>>(body, parameter);
+
+            var chunkVentas = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(predicate)
+                .OrderByDescending(v => v.Fecha)
+                .ToListAsync();
+
+            ventas.AddRange(chunkVentas);
+        }
+
+        return ventas
+            .GroupBy(v => v.IdReporte)
+            .Select(g => g.First())
+            .OrderByDescending(v => v.Fecha)
+            .ToList();
+    }
+
+    private void ApplyFilters()
+    {
+        if (esVendedor)
+        {
+            if (!string.IsNullOrWhiteSpace(searchString))
+            {
+                var cleanSearch = searchString.Trim().ToLower();
+                filteredClientesAfiliadosList = clientesAfiliadosList
+                    .Where(c => c.Nombre.ToLower().Contains(cleanSearch) ||
+                                c.Email.ToLower().Contains(cleanSearch) ||
+                                c.Identificacion.Contains(cleanSearch))
+                    .ToList();
+            }
+            else
+            {
+                filteredClientesAfiliadosList = new List<VendedorClienteDto>(clientesAfiliadosList);
+            }
+
+            totalPages = (int)Math.Ceiling((double)filteredClientesAfiliadosList.Count / pageSize);
+            if (currentPage > totalPages && totalPages > 0)
+            {
+                currentPage = totalPages;
+            }
+            else if (totalPages == 0)
+            {
+                currentPage = 1;
+            }
+
+            paginatedClientes = filteredClientesAfiliadosList
+                .Skip((currentPage - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+                
+            return;
+        }
+
+        var query = ventasList.AsQueryable();
+
+        // Product filter
+        if (filterProducto != "ALL")
+        {
+            query = query.Where(v => v.Producto == filterProducto);
+        }
+
+        // Channel filter
+        if (filterCanal != "ALL")
+        {
+            query = query.Where(v => v.Canal == filterCanal);
+        }
+
+        // State filter
+        if (filterEstado != "ALL")
+        {
+            query = query.Where(v => v.Estado == filterEstado);
+        }
+
+        // Search text
+        if (!string.IsNullOrWhiteSpace(searchString))
+        {
+            var cleanSearch = searchString.Trim().ToLower();
+            query = query.Where(v => 
+                v.Cliente.ToLower().Contains(cleanSearch) || 
+                (v.Vendedor != null && v.Vendedor.ToLower().Contains(cleanSearch)) ||
+                v.PlanPaquete.ToLower().Contains(cleanSearch) ||
+                v.FormaPago.ToLower().Contains(cleanSearch)
+            );
+        }
+
+        filteredVentas = query.ToList();
+        
+        // Pagination
+        totalPages = (int)Math.Ceiling((double)filteredVentas.Count / pageSize);
+        if (currentPage > totalPages && totalPages > 0)
+        {
+            currentPage = totalPages;
+        }
+        else if (totalPages == 0)
+        {
+            currentPage = 1;
+        }
+
+        UpdatePaginatedList();
+    }
+
+    private void UpdatePaginatedList()
+    {
+        if (esVendedor)
+        {
+            paginatedClientes = filteredClientesAfiliadosList
+                .Skip((currentPage - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+            return;
+        }
+
+        paginatedVentas = filteredVentas
+            .Skip((currentPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+    }
+
+    private void SetPage(int page)
+    {
+        currentPage = page;
+        UpdatePaginatedList();
+    }
+
+    // Modal Events
+    private void AbrirRegistrarModal()
+    {
+        editandoVentaId = null;
+        selectedUser = null;
+        userSearchQuery = "";
+        clientesEncontrados.Clear();
+        mostrarDropdownClientes = false;
+        selectedFile = null;
+        uploadError = null;
+        modalError = null;
+        modalSuccess = null;
+        isSaving = false;
+
+        modalVenta = new ReporteVentaBackOffice
+        {
+            Fecha = DateTime.Now,
+            Producto = "e-fact",
+            Canal = "Números Asesores",
+            Vendedor = esVendedor ? sellerName : currentOperatorName,
+            Estado = "pendiente",
+            FormaPago = "Transferencia",
+            Valor = 0
+        };
+
+        planSeleccionado = "120 documentos";
+        modalVenta.PlanPaquete = planSeleccionado;
+        RecalcularValorPlan();
+        comprobanteRef = "";
+        mostrarErrores = false;
+        mostrarModal = true;
+    }
+
+    private async Task AbrirEditarModal(ReporteVentaBackOffice venta)
+    {
+        editandoVentaId = venta.IdReporte;
+        mostrarErrores = false;
+        selectedFile = null;
+        uploadError = null;
+        modalError = null;
+        modalSuccess = null;
+        isSaving = false;
+        comprobanteRef = GetComprobanteRef(venta.Observacion);
+        if (comprobanteRef == "S/N") comprobanteRef = "";
+
+        // Copy fields
+        modalVenta = new ReporteVentaBackOffice
+        {
+            IdReporte = venta.IdReporte,
+            Cliente = venta.Cliente,
+            Producto = venta.Producto,
+            PlanPaquete = venta.PlanPaquete,
+            Valor = venta.Valor,
+            Fecha = venta.Fecha,
+            Canal = venta.Canal,
+            Vendedor = venta.Vendedor,
+            Estado = venta.Estado,
+            FormaPago = venta.FormaPago,
+            Observacion = venta.Observacion
+        };
+
+        // Try to locate selected user by parsing client email
+        var parts = venta.Cliente.Split('|');
+        if (parts.Length > 1)
+        {
+            var email = parts[1].Trim();
+            using var context = await DbFactory.CreateDbContextAsync();
+            selectedUser = await context.Usuarios.FirstOrDefaultAsync(u => u.Email == email);
+            userSearchQuery = selectedUser != null ? $"{selectedUser.Nombres} {selectedUser.Apellidos}" : parts[0].Trim();
+        }
+        else
+        {
+            selectedUser = null;
+            userSearchQuery = venta.Cliente;
+        }
+
+        // Map plan dropdown
+        var standardPlans = new List<string> { 
+            "25 documentos", "120 documentos", "600 documentos", "Ilimitados durante 1 año",
+            "1 año", "2 años", "3 años", "4 años"
+        };
+
+        if (standardPlans.Contains(venta.PlanPaquete))
+        {
+            planSeleccionado = venta.PlanPaquete;
+        }
+        else
+        {
+            if (venta.Producto == "e-fact")
+            {
+                planSeleccionado = "CUSTOM";
+                var match = System.Text.RegularExpressions.Regex.Match(venta.PlanPaquete, @"\d+");
+                customDocsCount = match.Success ? int.Parse(match.Value) : 1;
+            }
+            else
+            {
+                planSeleccionado = "1 año";
+            }
+        }
+
+        mostrarModal = true;
+    }
+
+    private void CerrarModal()
+    {
+        mostrarModal = false;
+        selectedFile = null;
+        uploadError = null;
+        modalError = null;
+        modalSuccess = null;
+        isSaving = false;
+    }
+
+    private void OnProductoChanged()
+    {
+        if (modalVenta.Producto == "e-fact")
+        {
+            planSeleccionado = "120 documentos";
+        }
+        else
+        {
+            planSeleccionado = "1 año";
+        }
+        modalVenta.PlanPaquete = planSeleccionado;
+        customDocsCount = 1;
+        RecalcularValorPlan();
+    }
+
+    private void OnPlanSeleccionadoChanged()
+    {
+        if (planSeleccionado != "CUSTOM")
+        {
+            modalVenta.PlanPaquete = planSeleccionado;
+        }
+        else
+        {
+            customDocsCount = 1;
+            modalVenta.PlanPaquete = "1 documento";
+        }
+        RecalcularValorPlan();
+    }
+
+    private void RecalcularValorPlan()
+    {
+        if (modalVenta.Producto == "e-fact")
+        {
+            if (planSeleccionado == "CUSTOM")
+            {
+                if (customDocsCount < 1) customDocsCount = 1;
+                modalVenta.Valor = EFactDocumentPricing.CalcularTotalPorCantidad(customDocsCount);
+                modalVenta.PlanPaquete = $"{customDocsCount} {(customDocsCount == 1 ? "documento" : "documentos")}";
+            }
+            else
+            {
+                var plan = EFactBillingConfig.EFactPlans.FirstOrDefault(p => string.Equals(p.Nombre, planSeleccionado, StringComparison.OrdinalIgnoreCase));
+                if (plan != null)
+                {
+                    modalVenta.Valor = plan.Precio;
+                }
+            }
+        }
+        else if (modalVenta.Producto == "e-sign")
+        {
+            modalVenta.Valor = planSeleccionado switch
+            {
+                "1 año" => 21.91m,
+                "2 años" => 34.60m,
+                "3 años" => 46.14m,
+                "4 años" => 57.68m,
+                _ => modalVenta.Valor
+            };
+        }
+    }
+
+    private void OnCanalChanged()
+    {
+        // Las ventas manuales siempre son por Asesores
+        modalVenta.Canal = "Números Asesores";
+        if (string.IsNullOrEmpty(modalVenta.Vendedor))
+        {
+            modalVenta.Vendedor = esVendedor ? sellerName : currentOperatorName;
+        }
+    }
+
+    private async Task OnSearchInputFocused()
+    {
+        mostrarDropdownClientes = true;
+        await BuscarClientes();
+    }
+
+    private async Task BuscarClientes()
+    {
+        if (string.IsNullOrWhiteSpace(userSearchQuery))
+        {
+            clientesEncontrados.Clear();
+            return;
+        }
+
+        using var context = await DbFactory.CreateDbContextAsync();
+        var query = userSearchQuery.ToLower().Trim();
+
+        clientesEncontrados = await context.Usuarios
+            .Where(u => u.IdTipoUsuario == 1 || u.IdTipoUsuario == 7)
+            .Where(u => (u.Nombres != null && u.Nombres.ToLower().Contains(query)) ||
+                        (u.Apellidos != null && u.Apellidos.ToLower().Contains(query)) ||
+                        (u.Email != null && u.Email.ToLower().Contains(query)) ||
+                        (u.Identificacion != null && u.Identificacion.Contains(query)))
+            .Take(6)
+            .ToListAsync();
+    }
+
+    private void SeleccionarUsuario(Usuario u)
+    {
+        selectedUser = u;
+        modalVenta.Cliente = $"{u.Nombres} {u.Apellidos} | {u.Email}";
+        mostrarDropdownClientes = false;
+        userSearchQuery = $"{u.Nombres} {u.Apellidos}";
+    }
+
+    private void DeseleccionarUsuario()
+    {
+        selectedUser = null;
+        modalVenta.Cliente = "";
+        userSearchQuery = "";
+        clientesEncontrados.Clear();
+    }
+
+    // Save/Update
+    private async Task GuardarVenta()
+    {
+        if (esVendedor)
+        {
+            modalVenta.Vendedor = sellerName;
+        }
+
+        // Validation
+        mostrarErrores = true;
+        if (selectedUser == null) return;
+        if (planSeleccionado == "CUSTOM" && string.IsNullOrWhiteSpace(modalVenta.PlanPaquete)) return;
+        if (modalVenta.Valor < 0) return;
+        if (string.IsNullOrWhiteSpace(modalVenta.Vendedor)) return;
+
+        modalError = null;
+        modalSuccess = null;
+        isSaving = true;
+
+        try
+        {
+            byte[]? fileBytes = null;
+
+            // Handle image upload save if any
+            if (selectedFile != null)
+            {
+                try
+                {
+                    using var stream = selectedFile.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+                    using var ms = new MemoryStream();
+                    await stream.CopyToAsync(ms);
+                    fileBytes = ms.ToArray();
+                }
+                catch (Exception fileEx)
+                {
+                    modalError = $"Error al leer el archivo: {fileEx.Message}";
+                    isSaving = false;
+                    return;
+                }
+            }
+
+            using var context = await DbFactory.CreateDbContextAsync();
+            bool triggerActivation = false;
+
+            if (editandoVentaId.HasValue)
+            {
+                // Modification: check if status changes to "pagada"
+                var dbVenta = await context.ReporteVentasBackOffice.FindAsync(editandoVentaId.Value);
+                if (dbVenta != null)
+                {
+                    if (dbVenta.Estado != "pagada" && modalVenta.Estado == "pagada")
+                    {
+                        triggerActivation = true;
+                    }
+
+                    // Copy new values with truncation
+                    dbVenta.Cliente = TruncateStr(modalVenta.Cliente, 150);
+                    dbVenta.Producto = TruncateStr(modalVenta.Producto, 50);
+                    dbVenta.PlanPaquete = TruncateStr(modalVenta.PlanPaquete, 100);
+                    dbVenta.Valor = modalVenta.Valor;
+                    dbVenta.Fecha = modalVenta.Fecha;
+                    dbVenta.Canal = TruncateStr(modalVenta.Canal, 50);
+                    dbVenta.Vendedor = TruncateStr(modalVenta.Vendedor, 100);
+                    dbVenta.Estado = TruncateStr(modalVenta.Estado, 50);
+                    dbVenta.FormaPago = TruncateStr(modalVenta.FormaPago, 50);
+
+                    // Update ComprobanteArchivo
+                    if (fileBytes != null)
+                    {
+                        dbVenta.ComprobanteArchivo = fileBytes;
+                    }
+                    else if (modalVenta.ComprobanteArchivo == null)
+                    {
+                        dbVenta.ComprobanteArchivo = null;
+                    }
+
+                    var cleanObs = GetObservacionLimpia(modalVenta.Observacion);
+                    var compTag = !string.IsNullOrWhiteSpace(comprobanteRef) ? $"[Comprobante: {comprobanteRef.Trim()}]" : "";
+
+                    dbVenta.Observacion = TruncateStr($"{compTag} {cleanObs}".Trim(), 500);
+
+                    await context.SaveChangesAsync();
+                }
+            }
+            else
+            {
+                // Creation — truncate before persisting
+                modalVenta.Cliente = TruncateStr(modalVenta.Cliente, 150);
+                modalVenta.Producto = TruncateStr(modalVenta.Producto, 50);
+                modalVenta.PlanPaquete = TruncateStr(modalVenta.PlanPaquete, 100);
+                modalVenta.Canal = TruncateStr(modalVenta.Canal, 50);
+                modalVenta.Vendedor = TruncateStr(modalVenta.Vendedor, 100);
+                modalVenta.Estado = TruncateStr(modalVenta.Estado, 50);
+                modalVenta.FormaPago = TruncateStr(modalVenta.FormaPago, 50);
+
+                if (fileBytes != null)
+                {
+                    modalVenta.ComprobanteArchivo = fileBytes;
+                }
+
+                var cleanObs = GetObservacionLimpia(modalVenta.Observacion);
+                var compTag = !string.IsNullOrWhiteSpace(comprobanteRef) ? $"[Comprobante: {comprobanteRef.Trim()}]" : "";
+
+                modalVenta.Observacion = TruncateStr($"{compTag} {cleanObs}".Trim(), 500);
+
+                if (modalVenta.Estado == "pagada")
+                {
+                    triggerActivation = true;
+                }
+
+                context.ReporteVentasBackOffice.Add(modalVenta);
+                await context.SaveChangesAsync();
+            }
+
+            // License Activation if applicable
+            if (triggerActivation)
+            {
+                await ActivarLicenciaUsuario(modalVenta);
+            }
+
+            modalSuccess = "¡Venta registrada exitosamente!";
+            ShowFeedback("Venta guardada correctamente.", true);
+
+            // Reload data in background
+            await LoadVentasData();
+
+            // Delay closing to show modalSuccess
+            await Task.Delay(1200);
+            mostrarModal = false;
+            isSaving = false;
+        }
+        catch (Exception ex)
+        {
+            modalError = $"Error al guardar la venta: {ex.Message}";
+            isSaving = false;
+        }
+    }
+
+    private async Task MarcarComoPagada(ReporteVentaBackOffice venta)
+    {
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var dbVenta = await context.ReporteVentasBackOffice.FindAsync(venta.IdReporte);
+            if (dbVenta != null && dbVenta.Estado != "pagada")
+            {
+                dbVenta.Estado = "pagada";
+                await context.SaveChangesAsync();
+
+                // Activate license
+                await ActivarLicenciaUsuario(dbVenta);
+                await LoadVentasData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error activating sale: {ex.Message}");
+        }
+    }
+
+    private async Task AnularVenta(ReporteVentaBackOffice venta)
+    {
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var dbVenta = await context.ReporteVentasBackOffice.FindAsync(venta.IdReporte);
+            if (dbVenta != null && dbVenta.Estado != "anulada")
+            {
+                dbVenta.Estado = "anulada";
+                await context.SaveChangesAsync();
+                await LoadVentasData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error voiding sale: {ex.Message}");
+        }
+    }
+
+    // License Activation Core Logic
+    private async Task ActivarLicenciaUsuario(ReporteVentaBackOffice venta)
+    {
+        var parts = venta.Cliente.Split('|');
+        if (parts.Length < 2) return;
+        var email = parts[1].Trim();
+
+        using var context = await DbFactory.CreateDbContextAsync();
+        var user = await context.Usuarios.FirstOrDefaultAsync(u => u.Email == email);
+        if (user == null) return;
+
+        if (venta.Producto == "e-sign")
+        {
+            // Activate / Renew e-Sign subscription
+            var service = await context.AppServicios.FirstOrDefaultAsync(s => s.Clave.ToLower().Contains("sign"));
+            if (service == null) return;
+
+            var sub = await context.UsuarioServicioSuscripciones
+                .FirstOrDefaultAsync(s => s.IdUsuario == user.IdUsuario && s.ServicioId == service.ServicioId);
+
+            if (sub == null)
+            {
+                sub = new UsuarioServicioSuscripcion
+                {
+                    IdUsuario = user.IdUsuario,
+                    ServicioId = service.ServicioId,
+                    FechaCreacion = DateTime.Now
+                };
+                context.UsuarioServicioSuscripciones.Add(sub);
+            }
+
+            sub.Estado = "ACTIVO";
+            sub.FechaInicio = DateTime.Today;
+            sub.PlanActual = venta.PlanPaquete;
+            sub.FechaActualizacion = DateTime.Now;
+
+            if (venta.PlanPaquete.Contains("Vitalicio", StringComparison.OrdinalIgnoreCase))
+            {
+                sub.EsVitalicia = true;
+                sub.FechaFin = null;
+                sub.CicloActual = "Vitalicio";
+            }
+            else
+            {
+                int years = 1;
+                var matchYears = System.Text.RegularExpressions.Regex.Match(venta.PlanPaquete, @"\d+");
+                if (matchYears.Success)
+                {
+                    years = int.Parse(matchYears.Value);
+                }
+
+                sub.EsVitalicia = false;
+                var baseDate = (sub.FechaFin.HasValue && sub.FechaFin.Value > DateTime.Today) ? sub.FechaFin.Value : DateTime.Today;
+                sub.FechaFin = baseDate.AddYears(years);
+                sub.CicloActual = $"{years} {(years == 1 ? "Año" : "Años")}";
+            }
+
+            sub.Observacion = $"Activado automáticamente por venta pagada Ref #{venta.IdReporte}. Canal: {venta.Canal}. Forma de Pago: {venta.FormaPago}.";
+            await context.SaveChangesAsync();
+        }
+        else if (venta.Producto == "e-fact")
+        {
+            // Activate e-Fact documents or Plan Ilimitado
+            bool isIlimitado = venta.PlanPaquete.Contains("Ilimitado", StringComparison.OrdinalIgnoreCase);
+            int docsCount = 0;
+
+            if (!isIlimitado)
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(venta.PlanPaquete, @"\d+");
+                docsCount = match.Success ? int.Parse(match.Value) : 50; // default 50 if not parsed
+                user.SaldoDocumentos += docsCount;
+            }
+
+            // Append to purchase history
+            var history = LeerHistorial(user.HistorialComprasDocumentosJson);
+            var newItem = new CompraDocumentosHistorialItem
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Fecha = DateTime.Now,
+                Documentos = docsCount,
+                MontoTotal = venta.Valor,
+                Estado = "Aprobado",
+                Descripcion = $"Venta BackOffice: {venta.PlanPaquete} (Ref #{venta.IdReporte})",
+                SaldoAplicado = true,
+                EsIlimitado = isIlimitado,
+                EsPermanente = true,
+                VigenciaHasta = null
+            };
+            history.Insert(0, newItem);
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            user.HistorialComprasDocumentosJson = JsonSerializer.Serialize(history, options);
+
+            // If it is an unlimited plan, we also create/update an e-Fact subscription in USUARIO_SERVICIO_SUSCRIPCION table!
+            if (isIlimitado)
+            {
+                var service = await context.AppServicios.FirstOrDefaultAsync(s => s.Clave.ToLower().Contains("fact"));
+                if (service != null)
+                {
+                    var sub = await context.UsuarioServicioSuscripciones
+                        .FirstOrDefaultAsync(s => s.IdUsuario == user.IdUsuario && s.ServicioId == service.ServicioId);
+
+                    if (sub == null)
+                    {
+                        sub = new UsuarioServicioSuscripcion
+                        {
+                            IdUsuario = user.IdUsuario,
+                            ServicioId = service.ServicioId,
+                            FechaCreacion = DateTime.Now
+                        };
+                        context.UsuarioServicioSuscripciones.Add(sub);
+                    }
+
+                    sub.Estado = "ACTIVO";
+                    sub.FechaInicio = DateTime.Today;
+                    sub.EsVitalicia = true;
+                    sub.FechaFin = null;
+                    sub.PlanActual = "Plan Ilimitado";
+                    sub.CicloActual = "Vitalicio";
+                    sub.FechaActualizacion = DateTime.Now;
+                    sub.Observacion = $"Activado automáticamente por plan ilimitado Ref #{venta.IdReporte}. Canal: {venta.Canal}. Forma de Pago: {venta.FormaPago}.";
+                }
+            }
+
+            context.Entry(user).State = EntityState.Modified;
+            await context.SaveChangesAsync();
+        }
+    }
+
+    private List<CompraDocumentosHistorialItem> LeerHistorial(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new List<CompraDocumentosHistorialItem>();
+
+        try
+        {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(json, options) 
+                   ?? new List<CompraDocumentosHistorialItem>();
+        }
+        catch
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private void HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        uploadError = null;
+        selectedFile = e.File;
+        if (selectedFile != null)
+        {
+            if (selectedFile.Size > 5 * 1024 * 1024)
+            {
+                uploadError = "El archivo supera el límite de 5 MB.";
+                selectedFile = null;
+                return;
+            }
+            if (!selectedFile.ContentType.StartsWith("image/"))
+            {
+                uploadError = "Solo se permiten archivos de imagen.";
+                selectedFile = null;
+                return;
+            }
+        }
+    }
+
+    private void RemoveSelectedFile()
+    {
+        selectedFile = null;
+        uploadError = null;
+    }
+
+    private void EliminarComprobanteExistente()
+    {
+        modalVenta.ComprobanteArchivo = null;
+        var cleanObs = GetObservacionLimpia(modalVenta.Observacion);
+        var compRef = GetComprobanteRef(modalVenta.Observacion);
+        var compTag = compRef != "S/N" ? $"[Comprobante: {compRef}]" : "";
+        modalVenta.Observacion = $"{compTag} {cleanObs}".Trim();
+    }
+
+    private bool HasComprobanteImage(ReporteVentaBackOffice row)
+    {
+        if (row.ComprobanteArchivo != null && row.ComprobanteArchivo.Length > 0) return true;
+        var obs = row.Observacion;
+        if (string.IsNullOrEmpty(obs)) return false;
+        return obs.Contains("[Imagen:") && obs.Contains("/uploads/comprobantes/");
+    }
+
+    private string GetEvidenceImageUrl(string? obs)
+    {
+        if (string.IsNullOrEmpty(obs)) return "";
+        var startTag = "[Imagen:";
+        var startIdx = obs.IndexOf(startTag);
+        if (startIdx >= 0)
+        {
+            var contentStart = startIdx + startTag.Length;
+            var endIdx = obs.IndexOf(']', contentStart);
+            if (endIdx > contentStart)
+            {
+                return obs.Substring(contentStart, endIdx - contentStart).Trim();
+            }
+        }
+        return "";
+    }
+
+    private string GetComprobanteRef(string? obs)
+    {
+        if (string.IsNullOrEmpty(obs)) return "S/N";
+        if (obs.StartsWith("[Comprobante:"))
+        {
+            var endIdx = obs.IndexOf(']');
+            if (endIdx > 13)
+            {
+                return obs.Substring(13, endIdx - 13).Trim();
+            }
+        }
+        return "S/N";
+    }
+
+    private string GetObservacionLimpia(string? obs)
+    {
+        if (string.IsNullOrEmpty(obs)) return string.Empty;
+        var workingObs = obs;
+        
+        // Remove Comprobante tag
+        if (workingObs.StartsWith("[Comprobante:"))
+        {
+            var endIdx = workingObs.IndexOf(']');
+            if (endIdx > 0)
+            {
+                workingObs = workingObs.Substring(endIdx + 1).Trim();
+            }
+        }
+
+        // Remove Imagen tag
+        var imgTagIdx = workingObs.IndexOf("[Imagen:");
+        if (imgTagIdx >= 0)
+        {
+            var endIdx = workingObs.IndexOf(']', imgTagIdx);
+            if (endIdx > 0)
+            {
+                workingObs = (workingObs.Substring(0, imgTagIdx) + workingObs.Substring(endIdx + 1)).Trim();
+            }
+        }
+
+        return workingObs;
+    }
+
+    private void ShowEvidencePreview(ReporteVentaBackOffice row)
+    {
+        if (row.ComprobanteArchivo != null && row.ComprobanteArchivo.Length > 0)
+        {
+            var base64 = Convert.ToBase64String(row.ComprobanteArchivo);
+            previewImageUrl = $"data:image/png;base64,{base64}";
+        }
+        else
+        {
+            previewImageUrl = GetEvidenceImageUrl(row.Observacion);
+        }
+    }
+
+    private void CloseEvidencePreview()
+    {
+        previewImageUrl = null;
+    }
+
+    private void ShowFeedback(string message, bool isSuccess)
+    {
+        feedbackMessage = message;
+        feedbackIsSuccess = isSuccess;
+        
+        // Auto-clear feedback after 8 seconds
+        Task.Delay(8000).ContinueWith(_ => {
+            feedbackMessage = null;
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private static string TruncateStr(string? value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Length <= maxLength ? value : value[..maxLength];
+    }
+
+    private static bool CoincideClienteReporte(Usuario usuario, string? cliente)
+    {
+        if (string.IsNullOrWhiteSpace(cliente)) return false;
+        var parts = cliente.Split('|');
+        var emailPart = parts.Length > 1 ? parts[1].Trim() : "";
+
+        // 1. Exact Email Match (most reliable)
+        if (!string.IsNullOrWhiteSpace(usuario.Email) && !string.IsNullOrWhiteSpace(emailPart))
+        {
+            if (string.Equals(usuario.Email.Trim(), emailPart, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        // 2. Contains Email fallback
+        if (!string.IsNullOrWhiteSpace(usuario.Email) && cliente.Contains(usuario.Email.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    public class VendedorClienteDto
+    {
+        public Usuario Usuario { get; set; } = null!;
+        public string Nombre { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string Identificacion { get; set; } = "";
+        public DateTime? FechaRegistro { get; set; }
+        public int ComprasCount { get; set; }
+        public decimal TotalGastado { get; set; }
+        public List<ReporteVentaBackOffice> Transacciones { get; set; } = new();
+    }
+}

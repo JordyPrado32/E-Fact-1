@@ -1,0 +1,519 @@
+@page "/backoffice/perfil"
+@attribute [Authorize]
+@layout Simetric.Components.Layout.BackOfficeLayout
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Auth
+@using Simetric.Components.Helpers
+@using Simetric.Data
+@using Simetric.Models
+@using System.Security.Claims
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IWebHostEnvironment Env
+
+<PageTitle>Mi perfil | BackOffice</PageTitle>
+
+<div class="bo-profile-shell">
+    @if (cargando)
+    {
+        <section class="bo-profile-loading">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Cargando informacion</span>
+            </div>
+            <strong>Cargando informacion</strong>
+        </section>
+    }
+    else if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="bo-profile-alert is-error">@error</div>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(mensaje))
+        {
+            <div class="bo-profile-alert @(exito ? "is-success" : "is-error")">@mensaje</div>
+        }
+
+        <div class="bo-profile-grid">
+            <aside class="bo-profile-aside">
+                <div class="bo-profile-panel-head">
+                    <div>
+                        <span>Avatar</span>
+                        <h3>Imagen</h3>
+                    </div>
+                    <em>BackOffice</em>
+                </div>
+
+                <div class="bo-profile-avatar-stage">
+                    <div class="bo-profile-avatar-frame">
+                        <img src="@ResolveAvatarUrl(avatarUrl)" alt="Avatar de perfil" />
+                    </div>
+                    <div class="bo-profile-avatar-copy">
+                        <strong>@NombreCompleto</strong>
+                        <span>Avatar seleccionado</span>
+                        <InputFile id="boOwnAvatar" class="bo-hidden-file-input" style="display:none" OnChange="SubirAvatarAsync" accept="image/png,image/jpeg,image/jpg" />
+                        <label for="boOwnAvatar" class="bo-profile-upload-button">
+                            <i class="bi bi-cloud-arrow-up"></i>
+                            <span>Subir imagen</span>
+                        </label>
+                        @if (subiendoAvatar)
+                        {
+                            <small>Subiendo imagen...</small>
+                        }
+                    </div>
+                </div>
+
+                <div class="bo-profile-avatar-library">
+                    <div class="bo-profile-section-title">
+                        <h4>Seleccion</h4>
+                        <span>Biblioteca</span>
+                    </div>
+                    @if (avatarFiles.Any())
+                    {
+                        <div class="bo-profile-avatar-grid">
+                            <button type="button"
+                                    class="bo-avatar-choice @(EsAvatarActual(avatarIniciales) ? "is-active" : "")"
+                                    title="Iniciales"
+                                    @onclick="SeleccionarInicialesAsync">
+                                <img src="@avatarIniciales" alt="Iniciales" />
+                            </button>
+                            @foreach (var avatar in avatarFiles)
+                            {
+                                var ruta = $"images/Avatars/{avatar}";
+                                <button type="button"
+                                        class="bo-avatar-choice @(EsAvatarActual(ruta) ? "is-active" : "")"
+                                        title="@avatar"
+                                        @onclick="() => SeleccionarAvatarAsync(ruta)">
+                                    <img src="/@ruta" alt="@avatar" />
+                                </button>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="bo-profile-empty">Sin avatares disponibles.</div>
+                    }
+                </div>
+            </aside>
+
+            <section class="bo-profile-form-card">
+                <div class="bo-profile-panel-head">
+                    <div>
+                        <span>Cuenta</span>
+                        <h3>Informacion</h3>
+                    </div>
+                    <em>@rolTexto</em>
+                </div>
+
+                <div class="bo-profile-form-grid">
+                    <label class="bo-profile-field is-wide is-readonly">
+                        <span>Correo electronico</span>
+                        <div class="bo-profile-input-shell">
+                            <i class="bi bi-envelope"></i>
+                            <input value="@email" readonly />
+                        </div>
+                    </label>
+
+                    <label class="bo-profile-field">
+                        <span>Nombres</span>
+                        <div class="bo-profile-input-shell">
+                            <i class="bi bi-person-badge"></i>
+                            <input @bind="nombres" maxlength="60" />
+                        </div>
+                    </label>
+
+                    <label class="bo-profile-field">
+                        <span>Apellidos</span>
+                        <div class="bo-profile-input-shell">
+                            <i class="bi bi-person-vcard"></i>
+                            <input @bind="apellidos" maxlength="60" />
+                        </div>
+                    </label>
+                </div>
+
+                <section class="bo-profile-security">
+                    <div class="bo-profile-security-head">
+                        <div>
+                            <span>Seguridad</span>
+                            <h4>Clave de acceso</h4>
+                        </div>
+                        <button type="button" class="bo-profile-change-pass" @onclick="ToggleCambiarClave">
+                            <i class="bi @(cambiarClave ? "bi-x-lg" : "bi-key")"></i>
+                            <span>@(cambiarClave ? "Cancelar" : "Cambiar contrasena")</span>
+                        </button>
+                    </div>
+
+                    @if (cambiarClave)
+                    {
+                        <div class="bo-profile-password-grid">
+                            <label class="bo-profile-field">
+                                <span>Clave actual</span>
+                                <div class="bo-profile-input-shell">
+                                    <i class="bi bi-lock"></i>
+                                    <input type="password" @bind="claveActual" autocomplete="current-password" />
+                                </div>
+                            </label>
+
+                            <label class="bo-profile-field">
+                                <span>Nueva clave</span>
+                                <div class="bo-profile-input-shell">
+                                    <i class="bi bi-shield-lock"></i>
+                                    <input type="password" @bind="claveNueva" autocomplete="new-password" />
+                                </div>
+                            </label>
+
+                            <label class="bo-profile-field is-wide">
+                                <span>Confirmar nueva clave</span>
+                                <div class="bo-profile-input-shell">
+                                    <i class="bi bi-patch-check"></i>
+                                    <input type="password" @bind="claveConfirmar" autocomplete="new-password" />
+                                </div>
+                            </label>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="bo-profile-security-placeholder">
+                            <i class="bi bi-shield-check"></i>
+                            <div>
+                                <strong>Sin cambios en contrasena</strong>
+                                <span>Activa el interruptor solo cuando quieras actualizar tu clave.</span>
+                            </div>
+                        </div>
+                    }
+                </section>
+
+                <div class="bo-profile-actions">
+                    <button type="button" class="bo-profile-save" disabled="@guardando" @onclick="GuardarAsync">
+                        <i class="bi @(guardando ? "bi-hourglass-split" : "bi-save2")"></i>
+                        <span>@(guardando ? "Guardando..." : "Guardar cambios")</span>
+                    </button>
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    private int idUsuario;
+    private string nombres = "";
+    private string apellidos = "";
+    private string email = "";
+    private string avatarUrl = "";
+    private string rolTexto = "BackOffice";
+    private string? claveActual;
+    private string? claveNueva;
+    private string? claveConfirmar;
+    private bool cargando = true;
+    private bool guardando;
+    private bool exito;
+    private bool cambiarClave;
+    private bool subiendoAvatar;
+    private string? mensaje;
+    private string? error;
+    private List<string> avatarFiles = new();
+
+    private string NombreCompleto => string.Join(" ", new[] { nombres, apellidos }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+    private string avatarIniciales => GenerarAvatarIniciales();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await CargarUsuarioAsync();
+            CargarAvatares();
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudo cargar tu perfil: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task CargarUsuarioAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var principal = auth.User;
+
+        idUsuario = ResolverIdUsuario(principal);
+        var correoClaim = principal.FindFirst(ClaimTypes.Email)?.Value ?? principal.FindFirst("Email")?.Value;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        Usuario? usuario = null;
+
+        if (idUsuario > 0)
+        {
+            usuario = await context.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.IdUsuario == idUsuario);
+        }
+
+        if (usuario is null && !string.IsNullOrWhiteSpace(correoClaim))
+        {
+            var correo = correoClaim.Trim().ToLower();
+            usuario = await context.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.Email != null && u.Email.ToLower() == correo);
+        }
+
+        if (usuario is null)
+        {
+            throw new InvalidOperationException("No se pudo identificar tu usuario.");
+        }
+
+        idUsuario = usuario.IdUsuario;
+        nombres = usuario.Nombres ?? "";
+        apellidos = usuario.Apellidos ?? "";
+        email = usuario.Email ?? "";
+        avatarUrl = usuario.AvatarUrl ?? "";
+        rolTexto = usuario.IdTipoUsuario == 7 && usuario.TipoCliente == 2
+            ? "Vendedor"
+            : usuario.IdTipoUsuario == 7 && usuario.TipoCliente == 3
+                ? "Contador"
+                : usuario.IdTipoUsuario == 2 ? "Super Admin" : "BackOffice";
+    }
+
+    private static int ResolverIdUsuario(ClaimsPrincipal principal)
+    {
+        var raw = principal.FindFirst("IdUsuario")?.Value ??
+                  principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ??
+                  principal.FindFirst("sub")?.Value;
+
+        return int.TryParse(raw, out var id) ? id : 0;
+    }
+
+    private void CargarAvatares()
+    {
+        try
+        {
+            var path = Path.Combine(Env.WebRootPath, "images", "Avatars");
+            if (!Directory.Exists(path)) return;
+
+            avatarFiles = Directory.GetFiles(path)
+                .Select(Path.GetFileName)
+                .Where(f => !string.IsNullOrWhiteSpace(f) &&
+                            (f!.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToList()!;
+        }
+        catch
+        {
+            avatarFiles = new();
+        }
+    }
+
+    private async Task GuardarAsync()
+    {
+        if (guardando) return;
+
+        guardando = true;
+        mensaje = null;
+        error = null;
+        exito = false;
+
+        try
+        {
+            var nombresVal = Normalizar(nombres);
+            var apellidosVal = Normalizar(apellidos);
+
+            if (nombresVal.Length < 2 || apellidosVal.Length < 2)
+            {
+                mensaje = "Ingresa nombres y apellidos validos.";
+                return;
+            }
+
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuario = await context.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == idUsuario);
+            if (usuario is null)
+            {
+                mensaje = "No se encontro tu usuario.";
+                return;
+            }
+
+            usuario.Nombres = nombresVal;
+            usuario.Apellidos = apellidosVal;
+            usuario.AvatarUrl = avatarUrl;
+
+            if (cambiarClave)
+            {
+                if (string.IsNullOrWhiteSpace(claveActual) ||
+                    !SecurityHelper.VerifyPassword(claveActual, usuario.PasswordHash))
+                {
+                    mensaje = "La contrasena actual no es correcta.";
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(claveNueva) || claveNueva.Length < 8)
+                {
+                    mensaje = "La nueva contrasena debe tener al menos 8 caracteres.";
+                    return;
+                }
+
+                if (!string.Equals(claveNueva, claveConfirmar, StringComparison.Ordinal))
+                {
+                    mensaje = "La confirmacion no coincide con la nueva contrasena.";
+                    return;
+                }
+
+                usuario.PasswordHash = SecurityHelper.HashPassword(claveNueva);
+                usuario.ClaveTemporal = false;
+                usuario.IntentosFallidos = 0;
+                usuario.CuentaBloqueada = false;
+                usuario.FechaDesbloqueo = null;
+                usuario.TokenRecuperacion = null;
+                usuario.FechaExpiracionToken = null;
+            }
+
+            await context.SaveChangesAsync();
+
+            if (AuthStateProvider is CustomAuthStateProvider authProvider)
+            {
+                await authProvider.UpdateAuthenticationState(usuario);
+            }
+
+            nombres = nombresVal;
+            apellidos = apellidosVal;
+            claveActual = null;
+            claveNueva = null;
+            claveConfirmar = null;
+            cambiarClave = false;
+            exito = true;
+            mensaje = "Perfil actualizado correctamente.";
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar el perfil: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private void ToggleCambiarClave()
+    {
+        cambiarClave = !cambiarClave;
+        if (!cambiarClave)
+        {
+            claveActual = null;
+            claveNueva = null;
+            claveConfirmar = null;
+        }
+    }
+
+    private async Task SeleccionarAvatarAsync(string ruta)
+    {
+        avatarUrl = ruta;
+        await GuardarAvatarAsync();
+    }
+
+    private async Task SeleccionarInicialesAsync()
+    {
+        avatarUrl = avatarIniciales;
+        await GuardarAvatarAsync();
+    }
+
+    private async Task GuardarAvatarAsync()
+    {
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == idUsuario);
+        if (usuario is null) return;
+
+        usuario.AvatarUrl = avatarUrl;
+        await context.SaveChangesAsync();
+
+        if (AuthStateProvider is CustomAuthStateProvider authProvider)
+        {
+            await authProvider.UpdateAuthenticationState(usuario);
+        }
+    }
+
+    private async Task SubirAvatarAsync(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is null) return;
+
+        subiendoAvatar = true;
+        mensaje = null;
+        try
+        {
+            var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+            if (ext is not ".png" and not ".jpg" and not ".jpeg")
+            {
+                mensaje = "Solo se permiten imagenes PNG o JPG.";
+                return;
+            }
+
+            var folder = Path.Combine(Env.WebRootPath, "images", "Avatars", "uploads");
+            Directory.CreateDirectory(folder);
+
+            var fileName = $"bo_avatar_{idUsuario}_{Guid.NewGuid():N}{ext}";
+            var fullPath = Path.Combine(folder, fileName);
+
+            await using var stream = file.OpenReadStream(maxAllowedSize: 2 * 1024 * 1024);
+            await using var output = File.Create(fullPath);
+            await stream.CopyToAsync(output);
+
+            avatarUrl = $"images/Avatars/uploads/{fileName}";
+            await GuardarAvatarAsync();
+            exito = true;
+            mensaje = "Avatar actualizado correctamente.";
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo subir la imagen: {ex.Message}";
+        }
+        finally
+        {
+            subiendoAvatar = false;
+        }
+    }
+
+    private bool EsAvatarActual(string ruta)
+    {
+        if (ruta.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return avatarUrl?.StartsWith("data:", StringComparison.OrdinalIgnoreCase) == true;
+        }
+
+        return string.Equals(avatarUrl?.TrimStart('/'), ruta.TrimStart('/'), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ResolveAvatarUrl(string? ruta)
+    {
+        if (string.IsNullOrWhiteSpace(ruta))
+            return avatarIniciales;
+
+        if (ruta.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+            ruta.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            ruta.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            ruta.StartsWith("/", StringComparison.Ordinal))
+            return ruta;
+
+        return "/" + ruta.TrimStart('/');
+    }
+
+    private string GenerarAvatarIniciales()
+    {
+        var nombre = NombreCompleto;
+        var partes = nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var iniciales = partes.Length >= 2
+            ? $"{partes[0][0]}{partes[^1][0]}".ToUpperInvariant()
+            : partes.Length == 1 ? partes[0][0].ToString().ToUpperInvariant() : "BO";
+
+        var svg = $@"<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'>
+<rect width='160' height='160' rx='42' fill='#111827'/>
+<circle cx='128' cy='28' r='18' fill='#38bdf8' opacity='.9'/>
+<text x='80' y='94' text-anchor='middle' font-family='Segoe UI, Arial' font-size='48' font-weight='800' fill='#ffffff'>{System.Net.WebUtility.HtmlEncode(iniciales)}</text>
+</svg>";
+
+        return "data:image/svg+xml;base64," + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg));
+    }
+
+    private static string Normalizar(string? value) =>
+        string.Join(" ", (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+}

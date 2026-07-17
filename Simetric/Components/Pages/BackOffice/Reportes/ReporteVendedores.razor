@@ -1,0 +1,455 @@
+@page "/backoffice/reportes/vendedores"
+@namespace Simetric.Components.Pages.BackOffice
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.DTOs
+@using System.Globalization
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+
+<PageTitle>Reporte Vendedores - BackOffice</PageTitle>
+
+<link href="css/reportes-compartido.css" rel="stylesheet" />
+
+<style>
+    .vendor-chart-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 20px;
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+        margin-bottom: 2rem;
+    }
+    .vendor-bar-row {
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        margin-bottom: 1.25rem;
+    }
+    .vendor-bar-label {
+        width: 180px;
+        font-weight: 700;
+        color: #1e293b;
+        font-size: 0.9rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .vendor-bar-container {
+        flex: 1;
+        background: #f1f5f9;
+        height: 20px;
+        border-radius: 999px;
+        overflow: hidden;
+        position: relative;
+    }
+    .vendor-bar-fill {
+        background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
+        height: 100%;
+        border-radius: 999px;
+        transition: width 1s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3);
+    }
+    .vendor-bar-value {
+        width: 100px;
+        text-align: right;
+        font-weight: 800;
+        color: #1e293b;
+        font-size: 0.92rem;
+    }
+</style>
+
+<div class="reports-container">
+    <div class="report-header-card no-print animate__animated animate__fadeIn">
+        <div class="report-header-top">
+            <h2 class="report-page-title">
+                <i class="bi bi-person-vcard-fill" style="color:#1f9cff;"></i> Reporte Vendedores
+            </h2>
+            <button type="button" class="btn-export" style="background:#1f9cff;" @onclick="DescargarReportePdf">
+                <i class="bi bi-file-earmark-pdf-fill"></i> Descargar PDF Directo
+            </button>
+        </div>
+        <div class="report-header-filters">
+            <div class="filter-group">
+                <span class="filter-label">Desde:</span>
+                <input type="date" @bind="fechaInicio" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Hasta:</span>
+                <input type="date" @bind="fechaFin" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este Mes</button>
+                <button type="button" class="btn-preset @(presetActivo == "trimestre" ? "active" : "")" @onclick='() => AplicarPreset("trimestre")'>Últimos 90 Días</button>
+                <button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este Año</button>
+                <button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sliding Viewport Container -->
+    <div class="reports-viewport printable-report" id="report-view-area">
+        <div class="report-slide report-slide-active">
+            <div class="visual-header">
+                <h3 class="visual-title">Reporte de Vendedores y Enlaces de Afiliación</h3>
+                <p class="visual-subtitle">Métricas de desempeño de ventas y captación comercial. Rango: @fechaInicio.ToString("dd/MM/yyyy") al @fechaFin.ToString("dd/MM/yyyy")</p>
+            </div>
+
+            @if (loading)
+            {
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando datos...</span>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpis-grid">
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-teal"><i class="bi bi-people-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Vendedores</span>
+                            <strong class="kpi-card-value">@totalVendedoresConRegistros</strong>
+                            <span class="kpi-card-trend trend-neutral">Con registros en el rango</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-blue"><i class="bi bi-person-plus-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Clientes Registrados</span>
+                            <strong class="kpi-card-value">@totalUsuariosPorVendedor</strong>
+                            <span class="kpi-card-trend trend-up">Desde link de afiliación</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-bag-check-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Suscripciones / Planes</span>
+                            <strong class="kpi-card-value">@totalComprasVendedores</strong>
+                            <span class="kpi-card-trend trend-neutral">Compras en el sistema</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-green"><i class="bi bi-currency-dollar"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Total Recaudado</span>
+                            <strong class="kpi-card-value">$ @totalMontoVendedores.ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-up">Ingresos generados</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="vendor-chart-card">
+                    <div class="visual-header">
+                        <h4 class="visual-title">Ingresos Generados por Vendedor (Dinero Gastado por sus Clientes en el Sistema)</h4>
+                        <p class="visual-subtitle">Comparativo del valor total que los clientes registrados por cada vendedor han invertido en licencias y firmas.</p>
+                    </div>
+                    <div style="margin-top: 1.5rem;">
+                        @if (vendedoresChartData.Any())
+                        {
+                            @foreach (var item in vendedoresChartData)
+                            {
+                                var pct = maxVendedoresChart > 0 ? (double)(item.Valor / maxVendedoresChart) * 100.0 : 0.0;
+                                <div class="vendor-bar-row">
+                                    <div class="vendor-bar-label" title="@item.Etiqueta">
+                                        <i class="bi bi-person-fill" style="color: #64748b; margin-right: 0.25rem;"></i>
+                                        @item.Etiqueta
+                                    </div>
+                                    <div class="vendor-bar-container">
+                                        <div class="vendor-bar-fill" style="width: @(pct.ToString("F1", CultureInfo.InvariantCulture))%;"></div>
+                                    </div>
+                                    <div class="vendor-bar-value">
+                                        $ @item.Valor.ToString("N2")
+                                    </div>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="empty-chart-message">No hay compras asociadas a vendedores en este rango.</div>
+                        }
+                    </div>
+                </div>
+
+                <div class="report-table-card" style="border-color:#0f1c3f;">
+                    <div class="table-header-row" style="background:#0f1c3f;">
+                        <h4 class="table-title">Usuarios Registrados por Vendedor</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead style="background:#0f1c3f;">
+                            <tr>
+                                <th>Vendedor</th>
+                                <th>Cliente Registrado</th>
+                                <th>Correo</th>
+                                <th>Fecha Registro</th>
+                                <th>Planes Comprados</th>
+                                <th>Total Gastado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (reporteVendedoresPaginados.Any())
+                            {
+                                @foreach (var item in reporteVendedoresPaginados)
+                                {
+                                    <tr>
+                                        <td><strong>@item.Vendedor</strong></td>
+                                        <td>@item.Usuario</td>
+                                        <td>@item.Email</td>
+                                        <td>@item.FechaRegistro?.ToString("dd/MM/yyyy")</td>
+                                        <td><span class="badge bg-secondary">@item.Compras</span></td>
+                                        <td><strong class="text-blue">$ @item.TotalComprado.ToString("N2")</strong></td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">No hay usuarios registrados desde links de vendedor en este rango.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="pagination-controls">
+                        <span class="page-indicator">Página @(pageVendedores + 1) de @MaxPaginaVendedores</span>
+                        <div class="pagination-btn-group">
+                            <button type="button" class="btn-pagination" disabled="@(pageVendedores == 0)" @onclick="() => CambiarPaginaVendedores(-1)">
+                                <i class="bi bi-chevron-left"></i> Ant.
+                            </button>
+                            <button type="button" class="btn-pagination" disabled="@(pageVendedores >= MaxPaginaVendedores - 1)" @onclick="() => CambiarPaginaVendedores(1)">
+                                Sig. <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private DateTime fechaInicio = DateTime.Now.AddMonths(-3);
+    private DateTime fechaFin = DateTime.Now;
+    private string presetActivo = "trimestre";
+    private bool loading = true;
+
+    private List<ReporteVendedorDto> reporteVendedoresList = new();
+    private List<ChartItemDto> vendedoresChartData = new();
+    private decimal maxVendedoresChart = 100;
+
+    private int totalVendedoresConRegistros = 0;
+    private int totalUsuariosPorVendedor = 0;
+    private int totalComprasVendedores = 0;
+    private decimal totalMontoVendedores = 0;
+
+    private int pageVendedores = 0;
+    private const int PageSize = 10;
+    private int MaxPaginaVendedores => Math.Max(1, (int)Math.Ceiling(reporteVendedoresList.Count / (double)PageSize));
+    private List<ReporteVendedorDto> reporteVendedoresPaginados => reporteVendedoresList.Skip(pageVendedores * PageSize).Take(PageSize).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AplicarPreset("trimestre");
+    }
+
+    private async Task OnDatesChanged()
+    {
+        presetActivo = "";
+        await CargarDatosReportesAsync();
+    }
+
+    private void AplicarPreset(string preset)
+    {
+        presetActivo = preset;
+        var hoy = DateTime.Now;
+        if (preset == "mes")
+        {
+            fechaInicio = new DateTime(hoy.Year, hoy.Month, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "trimestre")
+        {
+            fechaInicio = hoy.AddDays(-90);
+            fechaFin = hoy;
+        }
+        else if (preset == "anio")
+        {
+            fechaInicio = new DateTime(hoy.Year, 1, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "todo")
+        {
+            fechaInicio = new DateTime(2020, 1, 1);
+            fechaFin = hoy;
+        }
+        _ = CargarDatosReportesAsync();
+    }
+
+    private async Task CargarDatosReportesAsync()
+    {
+        loading = true;
+        StateHasChanged();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            var vendedores = await context.VendedoresBackOffice
+                .AsNoTracking()
+                .Where(v => v.EsSistema != true)
+                .ToListAsync();
+
+            var vendedoresIds = vendedores.Select(v => v.IdVendedor).ToList();
+
+            var usuariosVendedor = await context.Usuarios
+                .AsNoTracking()
+                .Where(u => u.IdVendedor.HasValue && vendedoresIds.Contains(u.IdVendedor.Value) &&
+                            (!u.FechaCreacion.HasValue || (u.FechaCreacion.Value >= fechaInicio && u.FechaCreacion.Value <= fechaFin)))
+                .OrderByDescending(u => u.FechaCreacion)
+                .ToListAsync();
+
+            var reportesBackOffice = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(r => r.Fecha >= fechaInicio && r.Fecha <= fechaFin)
+                .ToListAsync();
+
+            reporteVendedoresList = usuariosVendedor
+                .Select(usuario =>
+                {
+                    var vendedor = vendedores.FirstOrDefault(v => v.IdVendedor == usuario.IdVendedor);
+                    
+                    // Filter sales registered for this user in ReporteVentasBackOffice (money spent in system)
+                    var ventasUsuario = reportesBackOffice
+                        .Where(r => CoincideClienteReporte(usuario, r.Cliente))
+                        .ToList();
+
+                    return new ReporteVendedorDto
+                    {
+                        IdVendedor = usuario.IdVendedor ?? 0,
+                        Vendedor = vendedor?.Nombre ?? $"Vendedor #{usuario.IdVendedor}",
+                        Usuario = ObtenerNombreUsuario(usuario),
+                        Email = usuario.Email ?? "",
+                        FechaRegistro = usuario.FechaCreacion,
+                        Compras = ventasUsuario.Count,
+                        TotalComprado = ventasUsuario.Sum(v => v.Valor)
+                    };
+                })
+                .OrderByDescending(x => x.TotalComprado)
+                .ThenBy(x => x.Vendedor)
+                .ToList();
+
+            totalVendedoresConRegistros = reporteVendedoresList
+                .Where(x => x.TotalComprado > 0)
+                .Select(x => x.IdVendedor)
+                .Distinct()
+                .Count();
+
+            // Default to count of all unique active sellers if total is 0
+            if (totalVendedoresConRegistros == 0)
+            {
+                totalVendedoresConRegistros = reporteVendedoresList
+                    .Select(x => x.IdVendedor)
+                    .Distinct()
+                    .Count();
+            }
+
+            totalUsuariosPorVendedor = reporteVendedoresList.Count;
+            totalComprasVendedores = reporteVendedoresList.Sum(x => x.Compras);
+            totalMontoVendedores = reporteVendedoresList.Sum(x => x.TotalComprado);
+
+            vendedoresChartData = reporteVendedoresList
+                .GroupBy(x => x.Vendedor)
+                .Select(g => new ChartItemDto { Etiqueta = g.Key, Valor = g.Sum(x => x.TotalComprado) })
+                .OrderByDescending(x => x.Valor)
+                .Take(5)
+                .ToList();
+
+            maxVendedoresChart = vendedoresChartData.Any() 
+                ? ObtenerMaximoGrafico(vendedoresChartData.Max(x => x.Valor)) 
+                : 100;
+        }
+        catch (Exception)
+        {
+            // Fail silent
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CambiarPaginaVendedores(int step)
+    {
+        pageVendedores += step;
+        if (pageVendedores < 0) pageVendedores = 0;
+        if (pageVendedores >= MaxPaginaVendedores) pageVendedores = MaxPaginaVendedores - 1;
+    }
+
+    private static string ObtenerNombreUsuario(Usuario usuario)
+    {
+        var nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim();
+        if (!string.IsNullOrWhiteSpace(nombre)) return nombre;
+
+        return !string.IsNullOrWhiteSpace(usuario.NombreEmpresa)
+            ? usuario.NombreEmpresa
+            : $"Usuario #{usuario.IdUsuario}";
+    }
+
+    private static bool CoincideClienteReporte(Usuario usuario, string? cliente)
+    {
+        if (string.IsNullOrWhiteSpace(cliente)) return false;
+        var parts = cliente.Split('|');
+        var emailPart = parts.Length > 1 ? parts[1].Trim() : "";
+        var namePart = parts[0].Trim();
+
+        // 1. Exact Email Match (most reliable)
+        if (!string.IsNullOrWhiteSpace(usuario.Email) && !string.IsNullOrWhiteSpace(emailPart))
+        {
+            if (string.Equals(usuario.Email.Trim(), emailPart, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        // 2. Contains Email fallback
+        if (!string.IsNullOrWhiteSpace(usuario.Email) && cliente.Contains(usuario.Email.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 3. Contains Identification fallback
+        if (!string.IsNullOrWhiteSpace(usuario.Identificacion) && cliente.Contains(usuario.Identificacion.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 4. Exact Full Name Match (if name is longer than 3 characters to avoid collisions on short names like ARI)
+        var nombreCompleto = ObtenerNombreUsuario(usuario).Trim();
+        if (!string.IsNullOrWhiteSpace(nombreCompleto) && nombreCompleto.Length > 3)
+        {
+            if (string.Equals(namePart, nombreCompleto, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static decimal ObtenerMaximoGrafico(decimal maxValue)
+    {
+        if (maxValue <= 0) return 100m;
+        var padded = Math.Ceiling((double)maxValue * 1.15);
+        if (padded <= 10) return (decimal)Math.Ceiling(padded);
+        var magnitude = Math.Pow(10, Math.Floor(Math.Log10(padded)));
+        var normalized = padded / magnitude;
+        var niceNormalized = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+        return (decimal)(niceNormalized * magnitude);
+    }
+
+    private async Task DescargarReportePdf()
+    {
+        var filename = $"Reporte_Vendedores_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
+        await JS.InvokeVoidAsync("window.downloadPdfReport", "report-view-area", filename);
+    }
+}

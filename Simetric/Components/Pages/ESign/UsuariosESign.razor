@@ -1,0 +1,996 @@
+@page "/e-sign/administracion/usuarios"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Auth
+@using Simetric.Components.Helpers
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@using System.IO
+@inject UserService UserService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
+@inject IEmailService EmailService
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+@{
+    var usuariosVisibles = usuariosList.ToList();
+}
+
+<PageTitle>Usuarios | Numerica E-Sign</PageTitle>
+
+<div class="users-shell" data-tour="usuarios.page">
+    <section class="users-hero" data-tour="usuarios.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Administracion de accesos</span>
+            <h2>Usuarios E-Sign</h2>
+            <p>
+                Gestione perfiles, roles y seguridad operativa desde una vista unificada,
+                con foco en control, trazabilidad y consistencia visual.
+            </p>
+        </div>
+
+        <div class="hero-actions" data-tour="usuarios.actions">
+            <button type="button" class="secondary-btn" @onclick="AbrirGestorAvatares">
+                <i class="bi bi-images"></i>
+                <span>Galeria de avatares</span>
+            </button>
+
+            <button type="button" class="primary-btn" @onclick="() => AbrirModal()">
+                <i class="bi bi-person-plus-fill"></i>
+                <span>Nuevo usuario</span>
+            </button>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Usuarios registrados</span>
+                <strong>@usuariosList.Count</strong>
+                <small>Base total de perfiles administrativos y operativos.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Usuarios activos</span>
+                <strong>@UsuariosActivos</strong>
+                <small>Perfiles con acceso habilitado actualmente.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Cuentas bloqueadas</span>
+                <strong>@UsuariosBloqueados</strong>
+                <small>Usuarios que requieren intervencion administrativa.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="table-card" data-tour="usuarios.table">
+        <div class="table-card-head">
+            <div>
+                <span class="table-kicker">Directorio administrativo</span>
+                <h3>Control de usuarios</h3>
+            </div>
+            <span class="table-badge">@usuariosVisibles.Count activos</span>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="state-card">
+                <div class="state-icon">
+                    <i class="bi bi-arrow-repeat"></i>
+                </div>
+                <h3>Cargando usuarios</h3>
+                <p>Preparando la informacion de acceso, roles y configuracion de seguridad.</p>
+            </div>
+        }
+        else if (!usuariosVisibles.Any())
+        {
+            <div class="state-card state-card-empty">
+                <div class="state-icon">
+                    <i class="bi bi-people"></i>
+                </div>
+                <h3>No hay usuarios activos</h3>
+                <p>Cree un nuevo usuario para comenzar.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table users-table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Usuario</th>
+                            <th>Rol</th>
+                            <th>Seguridad</th>
+                            <th class="text-end">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var u in usuariosVisibles)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="user-cell">
+                                        @if (TieneAvatar(u.AvatarUrl))
+                                        {
+                                            <img src="@u.AvatarUrl"
+                                                 alt="Avatar de @u.Nombres @u.Apellidos"
+                                                 class="user-avatar" />
+                                        }
+                                        else
+                                        {
+                                            <span class="user-avatar avatar-default">
+                                                <i class="bi bi-person-fill"></i>
+                                            </span>
+                                        }
+                                        <div class="cell-main">
+                                            <strong>@u.Nombres @u.Apellidos</strong>
+                                            <span>@u.Email</span>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="role-pill">@(u.IdTipoUsuarioNavigation?.NombreTipo ?? "Sin rol asignado")</span>
+                                </td>
+                                <td>
+                                    <div class="security-stack">
+                                        <span class="security-pill @(u.CuentaBloqueada == true ? "security-pill-danger" : "security-pill-neutral")">
+                                            <i class="bi @(u.CuentaBloqueada == true ? "bi-lock-fill" : "bi-unlock-fill")"></i>
+                                            @(u.CuentaBloqueada == true ? "Bloqueado" : "Sin bloqueo")
+                                        </span>
+                                    </div>
+                                </td>
+                                <td class="text-end">
+                                    <div class="action-group">
+                                        <button type="button"
+                                                class="action-btn action-view"
+                                                title="Ver detalles"
+                                                @onclick="() => VerDetalle(u)">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                        <button type="button"
+                                                class="action-btn action-edit"
+                                                title="Editar usuario"
+                                                @onclick="() => AbrirModal(u)">
+                                            <i class="bi bi-pencil-square"></i>
+                                        </button>
+                                        <button type="button"
+                                                class="action-btn action-reset"
+                                                title="Resetear clave"
+                                                @onclick="() => ResetearPassword(u)">
+                                            <i class="bi bi-shield-lock"></i>
+                                        </button>
+                                        @if (u.CuentaBloqueada == true)
+                                        {
+                                            <button type="button"
+                                                    class="action-btn action-unlock"
+                                                    title="Desbloquear usuario"
+                                                    @onclick="() => DesbloquearUsuario(u)">
+                                                <i class="bi bi-unlock"></i>
+                                            </button>
+                                        }
+                                        <button type="button"
+                                                class="action-btn action-delete"
+                                                title="Dar de baja"
+                                                @onclick="() => ConfirmarBaja(u.IdUsuario)">
+                                            <i class="bi bi-person-x"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+@if (showModal)
+{
+    <div class="users-modal-backdrop"></div>
+    <div class="users-modal users-modal-lg" role="dialog" aria-modal="true">
+        <div class="users-modal-content">
+            <div class="users-modal-header users-modal-header-primary">
+                <div>
+                    <span class="modal-kicker">Perfil de usuario</span>
+                    <h3>@(tempUser.IdUsuario == 0 ? "Nuevo registro de usuario" : "Modificar usuario")</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarModal" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="users-modal-body">
+                @if (!string.IsNullOrWhiteSpace(errorFormularioUsuario))
+                {
+                    <div class="alert alert-danger rounded-3 border-0 shadow-sm mb-3">
+                        @errorFormularioUsuario
+                    </div>
+                }
+
+                <div class="form-layout">
+                    <aside class="avatar-panel">
+                        <div class="avatar-preview-wrap">
+                            @if (TieneAvatar(tempUser.AvatarUrl))
+                            {
+                                <img src="@tempUser.AvatarUrl"
+                                     alt="Avatar del usuario"
+                                     class="avatar-preview" />
+                            }
+                            else
+                            {
+                                <span class="avatar-preview avatar-default avatar-default-large">
+                                    <i class="bi bi-person-fill"></i>
+                                </span>
+                            }
+                            <button type="button" class="avatar-trigger" @onclick="ToggleAvatarSelector">
+                                <i class="bi bi-camera"></i>
+                            </button>
+                        </div>
+
+                        <div class="avatar-copy">
+                            <strong>Imagen de perfil</strong>
+                            <span>Seleccione un avatar del catalogo disponible.</span>
+                        </div>
+
+                        @if (showAvatarSelector)
+                        {
+                            <div class="avatar-selector">
+                                @foreach (var avatar in avatarFiles)
+                                {
+                                    var avatarUrl = $"images/avatars/{avatar}";
+                                    <button type="button"
+                                            class="avatar-selector-item @(tempUser.AvatarUrl == avatarUrl ? "avatar-selector-item-selected" : string.Empty)"
+                                            @onclick='() => SeleccionarAvatar(avatarUrl)'>
+                                        <img src="@avatarUrl" alt="Avatar disponible" />
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </aside>
+
+                    <div class="form-grid">
+                        <div class="form-field">
+                            <label class="field-label">Nombres</label>
+                            <input @bind="tempUser.Nombres" class="form-control field-input" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Apellidos</label>
+                            <input @bind="tempUser.Apellidos" class="form-control field-input" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Email corporativo</label>
+                            <input @bind="tempUser.Email" type="email" class="form-control field-input" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Fecha de nacimiento</label>
+                            <input type="date"
+                                   class="form-control field-input"
+                                   value="@FormatFechaNacimiento(tempUser.FechaNacimiento)"
+                                   @onchange="OnFechaNacimientoChanged" />
+                        </div>
+
+                        <div class="form-field">
+                            <label class="field-label">Identificacion</label>
+                            <input @bind="tempUser.Identificacion" class="form-control field-input" />
+                        </div>
+
+                        @if (IsSuperAdmin)
+                        {
+                            <div class="form-field">
+                                <label class="field-label">Tipo de Identificación</label>
+                                <select @bind="tempUser.IdTipoIdentificacion" class="form-select field-input">
+                                    <option value="">Seleccione tipo</option>
+                                    @foreach (var ti in tipoIdentificaciones)
+                                    {
+                                        <option value="@ti.IdTipoIdentificacion">@ti.NombreTipo</option>
+                                    }
+                                </select>
+                            </div>
+
+                            <div class="form-field">
+                                <label class="field-label">Tipo de Cliente</label>
+                                <select @bind="tempUser.TipoCliente" class="form-select field-input">
+                                    <option value="">Seleccione tipo de cliente</option>
+                                    @foreach (var tc in tipoClientesList)
+                                    {
+                                        <option value="@tc.TclCodigo">@tc.TclDescripcion</option>
+                                    }
+                                </select>
+                            </div>
+
+                            <div class="form-field form-field-wide">
+                                <label class="field-label">Dirección</label>
+                                <input @bind="tempUser.DireccionEmpresa" class="form-control field-input" placeholder="Dirección del usuario o empresa" />
+                            </div>
+                        }
+
+                        <div class="form-field form-field-wide">
+                            <label class="field-label">Rol asignado</label>
+                            <select @bind="tempUser.IdTipoUsuario" class="form-select field-input">
+                                <option value="0">Seleccione un rol</option>
+                                @foreach (var r in rolesList)
+                                {
+                                    <option value="@r.IdTipoUsuario">@r.NombreTipo</option>
+                                }
+                            </select>
+                        </div>
+
+                        @if (tempUser.IdUsuario == 0)
+                        {
+                            <div class="form-note form-field-wide">
+                                <i class="bi bi-info-circle"></i>
+                                <span>Se enviara un correo de bienvenida al usuario cuando el registro se guarde.</span>
+                            </div>
+
+                            <div class="form-field form-field-wide">
+                                <label class="field-label">Contrasena inicial</label>
+                                <input @bind="nuevaClave"
+                                       type="password"
+                                       class="form-control field-input field-input-accent"
+                                       placeholder="Minimo 8 caracteres" />
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="form-note form-field-wide">
+                                <i class="bi bi-cash-stack"></i>
+                                @if (cargandoCajaUsuario)
+                                {
+                                    <span>Cargando caja y secuencia del usuario...</span>
+                                }
+                                else if (cajaUsuarioEditando == null)
+                                {
+                                    <span>Este usuario no tiene una caja activa asignada.</span>
+                                }
+                                else
+                                {
+                                    <span>Caja @cajaUsuarioEditando.NumeroCaja asignada al usuario.</span>
+                                }
+                            </div>
+
+                            @if (cajaUsuarioEditando != null)
+                            {
+                                <div class="form-field form-field-wide">
+                                    <label class="field-label">Serie de la caja</label>
+                                    <input @bind="serieCajaUsuarioInput"
+                                           class="form-control field-input"
+                                           maxlength="7"
+                                           inputmode="numeric"
+                                           placeholder="001-001" />
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="users-modal-footer">
+                <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal">
+                    Cancelar
+                </button>
+                <button type="button" class="primary-btn" @onclick="Guardar">
+                    <i class="bi bi-save"></i>
+                    <span>Guardar cambios</span>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showDetailModal && usuarioSeleccionado != null)
+{
+    <div class="users-modal-backdrop"></div>
+    <div class="users-modal users-modal-lg" role="dialog" aria-modal="true">
+        <div class="users-modal-content">
+            <div class="users-modal-header users-modal-header-secondary">
+                <div>
+                    <span class="modal-kicker">Detalle de usuario</span>
+                    <h3>@usuarioSeleccionado.Nombres @usuarioSeleccionado.Apellidos</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarDetalle" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="users-modal-body">
+                <div class="detail-layout">
+                    <aside class="detail-profile">
+                        @if (TieneAvatar(usuarioSeleccionado.AvatarUrl))
+                        {
+                            <img src="@usuarioSeleccionado.AvatarUrl"
+                                 alt="Avatar del usuario"
+                                 class="detail-avatar" />
+                        }
+                        else
+                        {
+                            <span class="detail-avatar avatar-default avatar-default-large">
+                                <i class="bi bi-person-fill"></i>
+                            </span>
+                        }
+                        <h4>@usuarioSeleccionado.Nombres @usuarioSeleccionado.Apellidos</h4>
+                        <span class="role-pill">@(usuarioSeleccionado.IdTipoUsuarioNavigation?.NombreTipo ?? "Sin rol asignado")</span>
+                        <span class="status-pill @(usuarioSeleccionado.Estado == true ? "status-pill-active" : "status-pill-inactive")">
+                            @(usuarioSeleccionado.Estado == true ? "Usuario activo" : "Usuario inactivo")
+                        </span>
+                    </aside>
+
+                    <div class="detail-sections">
+                        <section class="detail-section">
+                            <span class="detail-kicker">Contacto e identificacion</span>
+                            <div class="detail-grid">
+                                <article class="detail-item">
+                                    <span>Email</span>
+                                    <strong>@usuarioSeleccionado.Email</strong>
+                                </article>
+                                <article class="detail-item">
+                                    <span>Fecha de nacimiento</span>
+                                    <strong>@FormatFechaNacimientoDetalle(usuarioSeleccionado.FechaNacimiento)</strong>
+                                </article>
+                                <article class="detail-item">
+                                    <span>Identificacion</span>
+                                    <strong>@(string.IsNullOrWhiteSpace(usuarioSeleccionado.Identificacion) ? "No registrada" : usuarioSeleccionado.Identificacion)</strong>
+                                </article>
+                            </div>
+                        </section>
+
+                        @if (IsSuperAdmin)
+                        {
+                            <section class="detail-section">
+                                <span class="detail-kicker">Información Adicional (Super Admin)</span>
+                                <div class="detail-grid">
+                                    <article class="detail-item">
+                                        <span>Tipo de Identificación</span>
+                                        <strong>@(usuarioSeleccionado.IdTipoIdentificacionNavigation?.NombreTipo ?? "No registrado")</strong>
+                                    </article>
+                                    <article class="detail-item">
+                                        <span>Tipo de Cliente</span>
+                                        <strong>@(GetTipoClienteDescripcion(usuarioSeleccionado.TipoCliente))</strong>
+                                    </article>
+                                    <article class="detail-item">
+                                        <span>Dirección</span>
+                                        <strong>@(string.IsNullOrWhiteSpace(usuarioSeleccionado.DireccionEmpresa) ? "No registrada" : usuarioSeleccionado.DireccionEmpresa)</strong>
+                                    </article>
+                                </div>
+                            </section>
+                        }
+
+                        <section class="detail-section">
+                            <span class="detail-kicker">Seguridad de la cuenta</span>
+                            <div class="detail-grid">
+                                <article class="detail-item">
+                                    <span>Bloqueo</span>
+                                    <strong>@(usuarioSeleccionado.CuentaBloqueada == true ? "Cuenta bloqueada" : "Sin bloqueo")</strong>
+                                </article>
+                                <article class="detail-item">
+                                    <span>Estado de clave</span>
+                                    <strong>@(usuarioSeleccionado.ClaveTemporal == true ? "Temporal" : "Permanente")</strong>
+                                </article>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <div class="users-modal-footer">
+                <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarDetalle">
+                    Cerrar
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showAvatarManager)
+{
+    <div class="users-modal-backdrop"></div>
+    <div class="users-modal users-modal-xl" role="dialog" aria-modal="true">
+        <div class="users-modal-content">
+            <div class="users-modal-header users-modal-header-dark">
+                <div>
+                    <span class="modal-kicker">Biblioteca visual</span>
+                    <h3>Galeria de avatares</h3>
+                </div>
+                <button type="button" class="modal-close" @onclick="() => showAvatarManager = false" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="users-modal-body">
+                <label class="upload-dropzone">
+                    <span class="upload-icon">
+                        <i class="bi bi-cloud-arrow-up"></i>
+                    </span>
+                    <strong>Subir nuevo avatar</strong>
+                    <small>Formatos admitidos: JPG, JPEG y PNG. Tamano maximo 2 MB.</small>
+                    <InputFile OnChange="SubirNuevoAvatar" accept=".jpg,.jpeg,.png" class="d-none" />
+                </label>
+
+                <div class="avatar-gallery-grid">
+                    @foreach (var avatar in avatarFiles)
+                    {
+                        var avatarUrl = $"images/avatars/{avatar}";
+                        <article class="avatar-gallery-card">
+                            @if (!string.Equals(avatar, "default.png", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <button type="button"
+                                        class="avatar-gallery-remove"
+                                        @onclick="() => EliminarArchivoAvatar(avatar)"
+                                        title="Eliminar avatar"
+                                        aria-label="Eliminar avatar">
+                                    <i class="bi bi-x-lg"></i>
+                                </button>
+                            }
+                            <img src="@avatarUrl" alt="Avatar almacenado" class="avatar-gallery-image" />
+                        </article>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Usuario> usuariosList = new();
+    private List<TipoUsuario> rolesList = new();
+    private List<string> avatarFiles = new();
+    private Usuario tempUser = new();
+    private string nuevaClave = string.Empty;
+
+    private bool showModal;
+    private bool showAvatarSelector;
+    private bool showAvatarManager;
+    private bool showDetailModal;
+    private bool isLoading = true;
+    private Usuario? usuarioSeleccionado;
+    private string? errorFormularioUsuario;
+    private UsuarioCajaDto? cajaUsuarioEditando;
+    private string serieCajaUsuarioInput = string.Empty;
+    private bool cargandoCajaUsuario;
+    private int currentUserId;
+    private int currentTipoUsuario;
+    private bool IsSuperAdmin => currentTipoUsuario == 2;
+    private List<TipoIdentificacion> tipoIdentificaciones = new();
+    private List<Tipocliente> tipoClientesList = new();
+
+    private int UsuariosActivos => usuariosList.Count(u => u.Estado == true);
+    private int UsuariosBloqueados => usuariosList.Count(u => u.CuentaBloqueada == true);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        CargarAvatares();
+    }
+
+    private async Task LoadData()
+    {
+        isLoading = true;
+
+        try
+        {
+            
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            // 2. Extraer los claims necesarios (ID y Rol)
+            // Asegúrate de que los nombres de los claims coincidan con los que usas en el login
+            int idActual = int.Parse(user.FindFirst("IdUsuario")?.Value ?? "0");
+            int tipoActual = int.Parse(user.FindFirst("IdTipoUsuario")?.Value ?? "0");
+
+            currentUserId = idActual;
+            currentTipoUsuario = tipoActual;
+
+            // 3. Llamar al método actualizado con los parámetros de seguridad
+            usuariosList = await UserService.GetUsuariosAsync(idActual, tipoActual);
+        
+            rolesList = await UserService.GetTiposUsuarioAsync();
+
+            using var context = await DbFactory.CreateDbContextAsync();
+            tipoIdentificaciones = await context.TipoIdentificacion.OrderBy(ti => ti.IdTipoIdentificacion).ToListAsync();
+            tipoClientesList = await context.Tipoclientes.OrderBy(tc => tc.TclCodigo).ToListAsync();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void VerDetalle(Usuario u)
+    {
+        usuarioSeleccionado = u;
+        showDetailModal = true;
+    }
+
+    private void CerrarDetalle()
+    {
+        showDetailModal = false;
+        usuarioSeleccionado = null;
+    }
+
+    private void CargarAvatares()
+    {
+        try
+        {
+            var path = Path.Combine(Env.WebRootPath, "images", "avatars");
+            if (!Directory.Exists(path))
+            {
+                Directory.CreateDirectory(path);
+            }
+
+            avatarFiles = Directory.GetFiles(path)
+                .Select(Path.GetFileName)
+                .Where(f => !string.IsNullOrWhiteSpace(f) &&
+                            (f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                             f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(f => string.Equals(f, "default.png", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenByDescending(f => f.StartsWith("Bandera-", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToList()!;
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task AbrirModal(Usuario? u = null)
+    {
+        nuevaClave = string.Empty;
+        errorFormularioUsuario = null;
+        showAvatarSelector = false;
+        cajaUsuarioEditando = null;
+        serieCajaUsuarioInput = string.Empty;
+
+        if (u != null)
+        {
+            tempUser = u;
+            cargandoCajaUsuario = true;
+            showModal = true;
+            StateHasChanged();
+
+            cajaUsuarioEditando = await UserService.GetCajaUsuarioAsync(u.IdUsuario);
+            serieCajaUsuarioInput = cajaUsuarioEditando?.Serie ?? string.Empty;
+            cargandoCajaUsuario = false;
+        }
+        else
+        {
+            tempUser = new Usuario
+            {
+                IdUsuario = 0,
+                Estado = true,
+                IdTipoUsuario = 0,
+                AvatarUrl = null,
+                ClaveTemporal = true
+            };
+        }
+
+        showModal = true;
+    }
+
+    private void CerrarModal()
+    {
+        showModal = false;
+        showAvatarSelector = false;
+        errorFormularioUsuario = null;
+    }
+
+    private void ToggleAvatarSelector() => showAvatarSelector = !showAvatarSelector;
+
+    private void SeleccionarAvatar(string url)
+    {
+        tempUser.AvatarUrl = url;
+        showAvatarSelector = false;
+    }
+
+    private void AbrirGestorAvatares() => showAvatarManager = true;
+
+    private void OnFechaNacimientoChanged(ChangeEventArgs e)
+    {
+        var valor = e.Value?.ToString();
+        tempUser.FechaNacimiento = DateTime.TryParse(valor, out var fecha) ? fecha : null;
+    }
+
+    private async Task ResetearPassword(Usuario u)
+    {
+        string passDefault = "00000000";
+        bool confirm = await JS.InvokeAsync<bool>("confirm", $"¿Resetear contraseña de {u.Nombres} a '{passDefault}'?");
+
+        if (confirm)
+        {
+            string codigoAcceso = string.Empty;
+
+            try
+            {
+                const int minutosExpira = RecoveryCodeHelper.MinutosExpiracionPorDefecto;
+                codigoAcceso = RecoveryCodeHelper.GenerarCodigoNumerico();
+
+                await using var context = await DbFactory.CreateDbContextAsync();
+                var usuarioDb = await context.Usuarios.FindAsync(u.IdUsuario);
+
+                if (usuarioDb == null)
+                {
+                    await JS.InvokeVoidAsync("alert", "No se encontrÃ³ el usuario para resetear la contraseÃ±a.");
+                    return;
+                }
+
+                usuarioDb.PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(passDefault);
+                usuarioDb.ClaveTemporal = true;
+                usuarioDb.CuentaBloqueada = false;
+                usuarioDb.IntentosFallidos = 0;
+                usuarioDb.FechaDesbloqueo = null;
+                usuarioDb.FechaExpiracionToken = DateTime.Now.AddMinutes(minutosExpira);
+                usuarioDb.TokenRecuperacion = Simetric.Components.Helpers.SecurityHelper.HashPassword(codigoAcceso);
+
+                await context.SaveChangesAsync();
+                await EmailService.EnviarClaveTemporal(usuarioDb.Email, codigoAcceso, minutosExpira, "Reseteo de contraseña por administrador");
+                await JS.InvokeVoidAsync("alert", "Contraseña restablecida. El usuario debe ingresar con '00000000' y usar el código enviado al correo para cambiarla.");
+            }
+            catch (Exception ex)
+            {
+                await JS.InvokeVoidAsync("alert", $"La contraseña se cambió a '{passDefault}', pero no se pudo enviar el correo. Código de acceso manual: {codigoAcceso}. Error: {ex.Message}");
+            }
+            finally
+            {
+                await LoadData();
+            }
+        }
+    }
+
+    private async Task Guardar()
+    {
+        errorFormularioUsuario = ValidarFormularioUsuario();
+        if (!string.IsNullOrWhiteSpace(errorFormularioUsuario))
+            return;
+
+        if (tempUser.IdUsuario == 0)
+            tempUser.PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(nuevaClave.Trim());
+
+        await UserService.SaveUsuarioAsync(tempUser);
+        if (tempUser.IdUsuario > 0 && cajaUsuarioEditando != null)
+        {
+            try
+            {
+                await UserService.GuardarSerieCajaUsuarioAsync(
+                    tempUser.IdUsuario,
+                    serieCajaUsuarioInput);
+            }
+            catch (Exception ex)
+            {
+                errorFormularioUsuario = ex.Message;
+                return;
+            }
+        }
+        await RefrescarSesionActualSiCorrespondeAsync(tempUser.IdUsuario);
+        showModal = false;
+        errorFormularioUsuario = null;
+        await LoadData();
+        StateHasChanged();
+    }
+
+    private async Task RefrescarSesionActualSiCorrespondeAsync(int idUsuario)
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var claimIdUsuario = authState.User.FindFirst("IdUsuario")?.Value;
+
+        if (!int.TryParse(claimIdUsuario, out var idUsuarioActual) || idUsuarioActual != idUsuario)
+        {
+            return;
+        }
+
+        var usuarioActualizado = await UserService.GetUsuarioByIdAsync(idUsuario);
+        if (usuarioActualizado is null)
+        {
+            return;
+        }
+
+        var authProvider = (CustomAuthStateProvider)AuthStateProvider;
+        await authProvider.UpdateAuthenticationState(usuarioActualizado);
+    }
+
+    private async Task DesbloquearUsuario(Usuario u)
+    {
+        u.CuentaBloqueada = false;
+        await UserService.SaveUsuarioAsync(u);
+        await LoadData();
+    }
+
+    private async Task ConfirmarBaja(int id)
+    {
+        if (!await JS.ConfirmDeleteAsync("Dar de baja usuario", "Se dara de baja al usuario seleccionado.", "Si, dar de baja"))
+        {
+            return;
+        }
+
+        try
+        {
+            var eliminado = await UserService.SoftDeleteAsync(id);
+            if (!eliminado)
+            {
+                await JS.ShowAlertAsync("No se pudo completar", "No encontramos el usuario que intentas dar de baja.", "warning");
+                return;
+            }
+
+            await LoadData();
+            await JS.ShowToastAsync("Usuario dado de baja");
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("No se pudo eliminar", ex.Message, "error");
+        }
+    }
+
+    private async Task SubirNuevoAvatar(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            if (file.Size > 2 * 1024 * 1024)
+            {
+                await JS.InvokeVoidAsync("alert", "Máximo 2MB.");
+                return;
+            }
+
+            var fileName = $"avatar_{Guid.NewGuid()}{Path.GetExtension(file.Name)}";
+            var path = Path.Combine(Env.WebRootPath, "images", "avatars", fileName);
+
+            using var stream = file.OpenReadStream(2 * 1024 * 1024);
+            using var fs = new FileStream(path, FileMode.Create);
+            await stream.CopyToAsync(fs);
+
+            CargarAvatares();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            await JS.InvokeVoidAsync("alert", "Error: " + ex.Message);
+        }
+    }
+
+    private async Task EliminarArchivoAvatar(string nombreArchivo)
+    {
+        if (!await JS.ConfirmDeleteAsync("Eliminar avatar", "Se eliminara el avatar seleccionado."))
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(Env.WebRootPath, "images", "avatars", nombreArchivo);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            var avatarUrl = $"images/avatars/{nombreArchivo}";
+
+            await using (var context = await DbFactory.CreateDbContextAsync())
+            {
+                var usuariosConAvatar = await context.Usuarios
+                    .Where(u => u.AvatarUrl == avatarUrl)
+                    .ToListAsync();
+
+                if (usuariosConAvatar.Any())
+                {
+                    foreach (var usuario in usuariosConAvatar)
+                    {
+                        usuario.AvatarUrl = null;
+                    }
+
+                    await context.SaveChangesAsync();
+                }
+            }
+
+            if (string.Equals(tempUser.AvatarUrl, avatarUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                tempUser.AvatarUrl = null;
+            }
+
+            if (usuarioSeleccionado is not null &&
+                string.Equals(usuarioSeleccionado.AvatarUrl, avatarUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                usuarioSeleccionado.AvatarUrl = null;
+            }
+
+            CargarAvatares();
+            await LoadData();
+            await JS.ShowToastAsync("Avatar eliminado");
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("No se pudo eliminar", ex.Message, "error");
+        }
+    }
+
+    private string? ValidarFormularioUsuario()
+    {
+        tempUser.Nombres = (tempUser.Nombres ?? string.Empty).Trim();
+        tempUser.Apellidos = (tempUser.Apellidos ?? string.Empty).Trim();
+        tempUser.Email = (tempUser.Email ?? string.Empty).Trim();
+        tempUser.Identificacion = (tempUser.Identificacion ?? string.Empty).Trim();
+        tempUser.Celular = null;
+        nuevaClave = (nuevaClave ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(tempUser.Nombres) || tempUser.Nombres.Length < 2)
+            return "Los nombres son obligatorios y deben tener al menos 2 caracteres.";
+
+        if (string.IsNullOrWhiteSpace(tempUser.Apellidos) || tempUser.Apellidos.Length < 2)
+            return "Los apellidos son obligatorios y deben tener al menos 2 caracteres.";
+
+        if (string.IsNullOrWhiteSpace(tempUser.Email))
+            return "El correo corporativo es obligatorio.";
+
+        if (!EsCorreoValido(tempUser.Email))
+            return "El correo corporativo no tiene un formato válido.";
+
+        if (usuariosList.Any(u =>
+                u.IdUsuario != tempUser.IdUsuario &&
+                string.Equals((u.Email ?? string.Empty).Trim(), tempUser.Email, StringComparison.OrdinalIgnoreCase)))
+            return "Ya existe otro usuario registrado con ese correo.";
+
+        if (tempUser.IdTipoUsuario is null or 0)
+            return "Debes seleccionar un rol para el usuario.";
+
+
+        if (!string.IsNullOrWhiteSpace(tempUser.Identificacion) &&
+            !EsIdentificacionValida(tempUser.Identificacion))
+            return "La identificación debe tener 10 o 13 dígitos numéricos.";
+
+        if (tempUser.IdUsuario == 0)
+        {
+            if (string.IsNullOrWhiteSpace(nuevaClave))
+                return "Debes establecer una contraseña inicial.";
+
+            if (nuevaClave.Length < 8)
+                return "La contraseña inicial debe tener al menos 8 caracteres.";
+        }
+        if (tempUser.IdUsuario > 0 && cajaUsuarioEditando != null)
+        {
+            var serieLimpia = (serieCajaUsuarioInput ?? string.Empty).Trim();
+            var regexSerie = new System.Text.RegularExpressions.Regex(@"^\d{3}-\d{3}$");
+
+            if (!regexSerie.IsMatch(serieLimpia))
+                return "El formato de la serie debe ser XXX-XXX (ej. 001-001).";
+
+            if (serieLimpia == "000-000" || serieLimpia.EndsWith("-000") || serieLimpia.StartsWith("000-"))
+                return "La serie no puede contener '000'. El SRI requiere numeración desde 001.";
+        }
+        return null;
+    }
+
+    private static bool TieneAvatar(string? avatarUrl) =>
+        !string.IsNullOrWhiteSpace(avatarUrl) &&
+        !avatarUrl.EndsWith("/default.png", StringComparison.OrdinalIgnoreCase) &&
+        !avatarUrl.EndsWith("\\default.png", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatFechaNacimiento(DateTime? fecha) =>
+        fecha.HasValue ? fecha.Value.ToString("yyyy-MM-dd") : string.Empty;
+
+    private static string FormatFechaNacimientoDetalle(DateTime? fecha) =>
+        fecha.HasValue ? fecha.Value.ToString("dd/MM/yyyy") : "No registrada";
+
+    private static bool EsCorreoValido(string correo)
+    {
+        try
+        {
+            _ = new System.Net.Mail.MailAddress(correo);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool EsIdentificacionValida(string identificacion) =>
+        identificacion.All(char.IsDigit) && identificacion.Length is 10 or 13;
+
+    private string GetTipoClienteDescripcion(int? tipoCliente)
+    {
+        if (tipoCliente == null) return "No registrado";
+        return tipoClientesList.FirstOrDefault(tc => tc.TclCodigo == tipoCliente.Value)?.TclDescripcion ?? $"Tipo #{tipoCliente.Value}";
+    }
+}

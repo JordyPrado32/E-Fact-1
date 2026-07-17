@@ -1,0 +1,1199 @@
+@page "/suscripciones"
+@layout Simetric.Components.Layout.EmptyLayout
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Extensions
+@using Simetric.Services
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject PagoService PagoService
+
+<PageTitle>Checkout | Numerica</PageTitle>
+
+<style>
+    :root {
+        --e-purple: #6e40c9;
+        --e-purple-dark: #4e2d91;
+        --e-purple-light: #f1ecfc;
+        --n-dark: #2c3e50;
+        --text-muted: #6b7d8e;
+        --bg-color: #f6f8fb;
+    }
+
+    body {
+        background-color: var(--bg-color);
+        font-family: "Montserrat", sans-serif;
+    }
+
+    .checkout-viewport {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background: 
+            radial-gradient(ellipse at 12% 10%, rgba(110, 64, 201, 0.08), transparent 32rem),
+            radial-gradient(ellipse at 88% 88%, rgba(0, 168, 150, 0.04), transparent 28rem),
+            linear-gradient(135deg, #fbfafd 0%, #f3f0fa 100%);
+        padding: clamp(1rem, 2.5vw, 3rem) 1rem;
+    }
+
+    .checkout-card {
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(16px);
+        border: 1px solid rgba(110, 64, 201, 0.12);
+        border-radius: 28px;
+        box-shadow: 0 20px 50px rgba(78, 45, 145, 0.06);
+        max-width: 1000px;
+        width: 100%;
+        margin: 0 auto;
+        overflow: hidden;
+    }
+
+    .checkout-header {
+        background: linear-gradient(135deg, var(--e-purple) 0%, var(--e-purple-dark) 100%);
+        padding: 1.5rem clamp(1.5rem, 3vw, 2.5rem);
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .checkout-header::after {
+        content: "";
+        position: absolute;
+        width: 12rem;
+        height: 12rem;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.05);
+        right: -3rem;
+        bottom: -3rem;
+    }
+
+    .checkout-brand-info {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .checkout-brand-logo {
+        width: 2.8rem;
+        height: 2.8rem;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.16);
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    }
+
+    .checkout-brand-logo img {
+        width: 1.75rem;
+        height: 1.75rem;
+        object-fit: contain;
+    }
+
+    .checkout-header-titles h1 {
+        margin: 0;
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-size: clamp(1.1rem, 2.5vw, 1.35rem);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        line-height: 1.2;
+    }
+
+    .checkout-header-titles p {
+        margin: 0.2rem 0 0;
+        font-size: 0.85rem;
+        color: rgba(255, 255, 255, 0.78);
+    }
+
+    .btn-checkout-back {
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        padding: 0.55rem 1.1rem;
+        border-radius: 14px;
+        color: #ffffff;
+        font-size: 0.82rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        position: relative;
+        z-index: 2;
+    }
+
+    .btn-checkout-back:hover {
+        background: rgba(255, 255, 255, 0.25);
+        transform: translateX(-2px);
+    }
+
+    .checkout-body {
+        padding: clamp(1.5rem, 3.5vw, 2.5rem);
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 2.5rem;
+    }
+
+    @@media (max-width: 860px) {
+        .checkout-body {
+            grid-template-columns: 1fr;
+            gap: 2rem;
+        }
+    }
+
+    /* LEFT SIDE STYLE */
+    .checkout-main-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 1.8rem;
+    }
+
+    .section-title {
+        font-size: 0.95rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--e-purple);
+        margin: 0 0 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .plan-info-card {
+        border-radius: 20px;
+        background: linear-gradient(135deg, #ffffff 0%, #fbf9ff 100%);
+        border: 1px solid rgba(110, 64, 201, 0.1);
+        padding: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+    }
+
+    .plan-info-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .plan-info-header h3 {
+        margin: 0;
+        color: var(--n-dark);
+        font-size: 1.2rem;
+        font-weight: 800;
+    }
+
+    .plan-limit-badge {
+        font-size: 0.72rem;
+        font-weight: 800;
+        padding: 0.35rem 0.75rem;
+        border-radius: 99px;
+        background: var(--e-purple-light);
+        color: var(--e-purple-dark);
+        border: 1px solid rgba(110, 64, 201, 0.15);
+    }
+
+    .plan-info-desc {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 0.88rem;
+        line-height: 1.45;
+    }
+
+    .plan-info-limits {
+        display: flex;
+        gap: 1.5rem;
+        margin-top: 0.4rem;
+        padding-top: 0.65rem;
+        border-top: 1px dashed rgba(110, 64, 201, 0.15);
+    }
+
+    .plan-limit-item {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.82rem;
+        color: #483d63;
+        font-weight: 600;
+    }
+
+    .plan-limit-item i {
+        color: var(--e-purple);
+        font-size: 1rem;
+    }
+
+    /* Billing Cycle Switcher */
+    .billing-cycle-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #f1f3f7;
+        padding: 0.5rem;
+        border-radius: 18px;
+        border: 1px solid #e1e5ee;
+    }
+
+    .billing-cycle-btn {
+        flex: 1;
+        border: 0;
+        padding: 0.65rem 1rem;
+        border-radius: 14px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        background: transparent;
+        color: var(--text-muted);
+    }
+
+    .billing-cycle-btn.is-active {
+        background: #ffffff;
+        color: var(--e-purple-dark);
+        box-shadow: 0 4px 12px rgba(110, 64, 201, 0.08);
+    }
+
+    /* RIGHT SIDE - SUMMARY */
+    .checkout-summary-panel {
+        background: #fcfbfe;
+        border-radius: 24px;
+        border: 1px solid rgba(110, 64, 201, 0.08);
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        height: fit-content;
+    }
+
+    .summary-title {
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--n-dark);
+        margin: 0 0 0.25rem;
+    }
+
+    .summary-divider {
+        height: 1px;
+        background: rgba(110, 64, 201, 0.08);
+        width: 100%;
+        margin: 0.2rem 0;
+    }
+
+    .summary-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.88rem;
+        color: var(--text-muted);
+    }
+
+    .summary-row-bold {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: var(--n-dark);
+    }
+
+    .summary-total-val {
+        color: var(--e-purple);
+        font-size: 1.45rem;
+        font-weight: 800;
+    }
+
+    .discount-badge {
+        font-size: 0.68rem;
+        font-weight: 800;
+        background: #e6fcf5;
+        color: #0ca678;
+        padding: 0.25rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid #c3fae8;
+    }
+
+    /* Cards & Actions Style */
+    .card-list-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+        margin-bottom: 1.2rem;
+    }
+
+    .card-list-item {
+        border-radius: 16px;
+        border: 1px solid #e1e5ee;
+        padding: 1rem;
+        background: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        width: 100%;
+        text-align: left;
+        transition: all 0.2s ease;
+    }
+
+    .card-list-item:hover {
+        border-color: #beb0eb;
+        background: #fdfcff;
+    }
+
+    .card-list-item.is-selected {
+        border-color: var(--e-purple);
+        background: #faf8ff;
+        box-shadow: 0 4px 15px rgba(110, 64, 201, 0.05);
+    }
+
+    .card-brand-icon {
+        width: 2.2rem;
+        height: 2.2rem;
+        border-radius: 10px;
+        background: #f1f3f7;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--e-purple);
+        font-size: 1.2rem;
+        flex-shrink: 0;
+    }
+
+    .card-list-item.is-selected .card-brand-icon {
+        background: var(--e-purple-light);
+    }
+
+    .checkout-btn-pay {
+        background: linear-gradient(135deg, var(--e-purple) 0%, var(--e-purple-dark) 100%);
+        color: #ffffff;
+        border: 0;
+        border-radius: 16px;
+        padding: 1rem;
+        font-weight: 700;
+        font-size: 0.92rem;
+        width: 100%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        box-shadow: 0 8px 24px rgba(110, 64, 201, 0.2);
+        transition: all 0.25s ease;
+    }
+
+    .checkout-btn-pay:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 28px rgba(110, 64, 201, 0.3);
+    }
+
+    .checkout-btn-pay:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+    }
+
+    .btn-secondary-outline {
+        background: transparent;
+        border: 1px solid #cbd5e1;
+        border-radius: 16px;
+        padding: 0.85rem;
+        font-weight: 700;
+        font-size: 0.85rem;
+        color: #475569;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        width: 100%;
+        transition: all 0.2s ease;
+    }
+
+    .btn-secondary-outline:hover {
+        background: #f8fafc;
+        border-color: #94a3b8;
+    }
+
+    .no-cards-panel {
+        text-align: center;
+        padding: 2.2rem 1rem;
+        background: #ffffff;
+        border: 2px dashed #cbd5e1;
+        border-radius: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .security-badge {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        font-size: 0.76rem;
+        color: var(--text-muted);
+        margin-top: 0.5rem;
+        font-weight: 600;
+    }
+
+    .security-badge i {
+        color: #198754;
+    }
+</style>
+
+<section class="checkout-viewport">
+    <div class="checkout-card">
+        <div class="checkout-header">
+            <div class="checkout-brand-info">
+                <span class="checkout-brand-logo">
+                    <img src="/images/edeclara/LogoEDeclara.png" alt="E-Declara" />
+                </span>
+                <div class="checkout-header-titles">
+                    <h1>Checkout de Suscripción</h1>
+                    <p>Módulo de Declaraciones Fiscales y Control Tributario</p>
+                </div>
+            </div>
+            <button type="button" class="btn-checkout-back" @onclick="VolverAlPortal">
+                <i class="ri-arrow-left-line"></i> Volver al Portal
+            </button>
+        </div>
+
+        @if (cargando)
+        {
+            <div class="p-5 text-center">
+                <div class="spinner-border" style="color: var(--e-purple);" role="status"></div>
+                <p class="text-muted mt-3">Cargando detalles de suscripción y métodos de pago...</p>
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(errorCarga))
+        {
+            <div class="p-5 text-center">
+                <i class="ri-error-warning-fill text-danger fs-1"></i>
+                <h3 class="mt-3">Error al cargar</h3>
+                <p class="text-muted">@errorCarga</p>
+                <button type="button" class="checkout-btn-pay mt-3" style="width: auto; margin: 0 auto;" @onclick="VolverAlPortal">Volver al Portal</button>
+            </div>
+        }
+        else if (acceso?.HasAccess == true)
+        {
+            <div class="p-5 text-center d-flex flex-column align-items-center gap-3">
+                <i class="ri-checkbox-circle-fill text-success" style="font-size: 4.5rem;"></i>
+                <h2 class="fw-bold text-dark">Suscripción Activa</h2>
+                <p class="text-muted" style="max-width: 500px;">
+                    Tu cuenta ya cuenta con acceso habilitado para el servicio **E-DECLARA** (@acceso.StatusText). ¡Puedes ingresar y empezar a usar las herramientas de inmediato!
+                </p>
+                <button type="button" class="checkout-btn-pay mt-2" style="width: auto; padding: 0.8rem 2.5rem;" @onclick='() => NavManager.NavigateTo("/e-declara", forceLoad: true)'>
+                    <i class="ri-login-box-line"></i> Ingresar al Sistema
+                </button>
+            </div>
+        }
+        else
+        {
+            <div class="checkout-body">
+                <!-- COLUMNA IZQUIERDA: PLAN & METODO PAGO -->
+                <div class="checkout-main-panel">
+                    
+                    <!-- DETALLE DEL PLAN -->
+                    <div>
+                        <h2 class="section-title"><i class="ri-medal-line"></i> Plan Seleccionado</h2>
+                        <div class="plan-info-card">
+                            <div class="plan-info-header">
+                                <h3>@ObtenerNombrePlan()</h3>
+                                <span class="plan-limit-badge">@((cicloPago == "anual") ? "Facturación Anual" : "Facturación Mensual")</span>
+                            </div>
+                            <p class="plan-info-desc">@ObtenerPlanDescripcion()</p>
+                            
+                            <div class="plan-info-limits">
+                                <div class="plan-limit-item">
+                                    <i class="ri-user-shared-line"></i>
+                                    <span>Límite Clientes: @ObtenerPlanLimiteClientes()</span>
+                                </div>
+                                <div class="plan-limit-item">
+                                    <i class="ri-team-line"></i>
+                                    <span>Usuarios Incluidos: @ObtenerPlanLimiteUsuarios()</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- FRECUENCIA DE PAGO -->
+                    <div>
+                        <h2 class="section-title"><i class="ri-calendar-event-line"></i> Frecuencia de Facturación</h2>
+                        <div class="billing-cycle-wrap">
+                            <button type="button" 
+                                    class="billing-cycle-btn @((cicloPago == "mensual") ? "is-active" : "")"
+                                    @onclick='() => CambiarCiclo("mensual")'>
+                                Mensual
+                            </button>
+                            <button type="button" 
+                                    class="billing-cycle-btn @((cicloPago == "anual") ? "is-active" : "")"
+                                    @onclick='() => CambiarCiclo("anual")'>
+                                Anual (Ahorro)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- METODO DE PAGO -->
+                    <div>
+                        <h2 class="section-title"><i class="ri-bank-card-fill"></i> Método de Pago</h2>
+                        
+                        @if (!string.IsNullOrWhiteSpace(successMensaje))
+                        {
+                            <div class="alert alert-success d-flex align-items-center mb-3" style="border-radius: 16px;" role="alert">
+                                <i class="ri-checkbox-circle-fill me-2 fs-5"></i>
+                                <div>@successMensaje</div>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(errorCobro))
+                        {
+                            <div class="alert alert-danger d-flex align-items-center mb-3" style="border-radius: 16px;" role="alert">
+                                <i class="ri-error-warning-fill me-2 fs-5"></i>
+                                <div>@errorCobro</div>
+                            </div>
+                        }
+
+                        @if (usuarioObj is null || string.IsNullOrWhiteSpace(usuarioObj.Identificacion))
+                        {
+                            <div class="alert alert-warning mb-3" style="border-radius: 16px;" role="alert">
+                                <i class="ri-alert-line me-2"></i>
+                                Debes completar tu Identificación (Cédula o RUC) en tu perfil para registrar tarjetas o realizar pagos.
+                            </div>
+                        }
+                        else
+                        {
+                            @if (cargandoTarjetas)
+                            {
+                                <div class="text-center py-4">
+                                    <div class="spinner-border spinner-border-sm" style="color: var(--e-purple);" role="status"></div>
+                                    <span class="ms-2 text-muted small">Cargando métodos de pago...</span>
+                                </div>
+                            }
+                            else
+                            {
+                                @if (tarjetasTokenizadas.Any())
+                                {
+                                    <div class="card-list-group">
+                                        @foreach (var card in tarjetasTokenizadas)
+                                        {
+                                            <button type="button" 
+                                                    class="card-list-item @(tokenSeleccionado == card.Token ? "is-selected" : "")"
+                                                    @onclick="() => tokenSeleccionado = card.Token">
+                                                <div class="d-flex align-items-center gap-3">
+                                                    <span class="card-brand-icon">
+                                                        <i class="ri-bank-card-line"></i>
+                                                    </span>
+                                                    <div>
+                                                        <strong class="text-capitalize d-block text-dark">@card.CardBrand</strong>
+                                                        <span class="text-muted small">Número: @card.Number</span>
+                                                    </div>
+                                                </div>
+                                                @if (tokenSeleccionado == card.Token)
+                                                {
+                                                    <i class="ri-checkbox-circle-fill fs-4" style="color: var(--e-purple);"></i>
+                                                }
+                                            </button>
+                                        }
+                                    </div>
+                                    
+                                    <button type="button" 
+                                            class="btn-secondary-outline"
+                                            disabled="@procesandoCobro"
+                                            @onclick="RegistrarNuevaTarjetaAsync">
+                                        <i class="ri-add-line"></i> Registrar otra tarjeta de crédito/débito
+                                    </button>
+                                }
+                                else
+                                {
+                                    <div class="no-cards-panel">
+                                        <i class="ri-bank-card-2-line fs-1 text-muted"></i>
+                                        <div>
+                                            <strong class="d-block text-dark mb-1">Sin métodos de pago</strong>
+                                            <p class="text-muted small mb-0">No tienes tarjetas registradas para cobros recurrentes de E-Declara.</p>
+                                        </div>
+                                        <button type="button" 
+                                                class="checkout-btn-pay px-4"
+                                                style="width: auto;"
+                                                @onclick="RegistrarNuevaTarjetaAsync">
+                                            <i class="ri-add-circle-line"></i> Registrar Tarjeta para Cobro Recurrente
+                                        </button>
+                                    </div>
+                                }
+                            }
+                        }
+                    </div>
+
+                </div>
+
+                <!-- COLUMNA DERECHA: RESUMEN DE PAGO -->
+                <div class="checkout-summary-panel">
+                    <h3 class="summary-title">Resumen del Pago</h3>
+                    <div class="summary-divider"></div>
+                    
+                    <div class="summary-row">
+                        <span>Servicio</span>
+                        <strong class="text-dark">E-DECLARA</strong>
+                    </div>
+                    <div class="summary-row">
+                        <span>Plan</span>
+                        <strong class="text-dark">@ObtenerNombrePlan()</strong>
+                    </div>
+                    <div class="summary-row">
+                        <span>Ciclo de Pago</span>
+                        <strong class="text-dark">@((cicloPago == "anual") ? "Anual" : "Mensual")</strong>
+                    </div>
+
+                    @if (cicloPago == "anual")
+                    {
+                        <div class="summary-row">
+                            <span>Ahorro Anual</span>
+                            <span class="discount-badge">Ahorras $@ObtenerDescuentoAnual().ToString("F2")</span>
+                        </div>
+                    }
+
+                    <div class="summary-divider"></div>
+
+                    <div class="summary-row">
+                        <span>Subtotal</span>
+                        <span class="text-dark fw-bold">$@subtotal.ToString("F2")</span>
+                    </div>
+                    <div class="summary-row">
+                        <span>IVA (15%)</span>
+                        <span class="text-dark fw-bold">$@iva.ToString("F2")</span>
+                    </div>
+
+                    <div class="summary-divider"></div>
+
+                    <div class="summary-row summary-row-bold">
+                        <span>Total a Pagar</span>
+                        <span class="summary-total-val">$@total.ToString("F2")</span>
+                    </div>
+
+                    <button type="button" 
+                            class="checkout-btn-pay mt-3" 
+                            disabled="@(procesandoCobro || string.IsNullOrWhiteSpace(tokenSeleccionado) || usuarioObj is null)"
+                            @onclick="PagarSuscripcionAsync">
+                        @if (procesandoCobro)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                            <span>Procesando pago...</span>
+                        }
+                        else
+                        {
+                            <i class="ri-shield-keyhole-line"></i>
+                            <span>Pagar Suscripción ($@total.ToString("F2"))</span>
+                        }
+                    </button>
+
+                    <div class="security-badge">
+                        <i class="ri-shield-check-line"></i> Transacción Segura por Pagomedios
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    [SupplyParameterFromQuery(Name = "plan")]
+    public string? Plan { get; set; }
+
+    [SupplyParameterFromQuery(Name = "ciclo")]
+    public string? Ciclo { get; set; }
+
+    [SupplyParameterFromQuery(Name = "registro")]
+    public string? Registro { get; set; }
+
+    private bool cargando = true;
+    private string? errorCarga;
+    private int usuarioId;
+    private bool esSuperAdmin;
+    private string servicioNombre = "E-DECLARA";
+    private string servicioKeyActual = "e-declara";
+    private string estadoActual = "Suscripcion requerida";
+    private string detalleEstado = "Necesitas una suscripcion activa para continuar.";
+    private AppServiceAccessDecision? acceso;
+    private List<AppServiceSubscriptionStatus> serviciosPago = new();
+
+    private Usuario? usuarioObj;
+    private List<PagomediosTokenizedCard> tarjetasTokenizadas = new();
+    private bool cargandoTarjetas = false;
+    private string? errorTarjetas;
+    private string? successMensaje;
+    private string? errorCobro;
+    private bool procesandoCobro = false;
+    private string? tokenSeleccionado;
+
+    private decimal subtotal = 10.00m;
+    private decimal iva = 1.50m;
+    private decimal total = 11.50m;
+    private string cicloPago = "mensual";
+
+    private string ObtenerNombrePlan()
+    {
+        if (string.Equals(Plan, "individual", StringComparison.OrdinalIgnoreCase)) return "Plan Individual";
+        if (string.Equals(Plan, "asesor", StringComparison.OrdinalIgnoreCase)) return "Plan Asesor";
+        if (string.Equals(Plan, "empresarial", StringComparison.OrdinalIgnoreCase)) return "Plan Empresarial";
+        return "Plan Regular";
+    }
+
+    private string ObtenerPlanDescripcion()
+    {
+        if (string.Equals(Plan, "individual", StringComparison.OrdinalIgnoreCase)) return "Para personas que desean manejar sus impuestos por su cuenta.";
+        if (string.Equals(Plan, "asesor", StringComparison.OrdinalIgnoreCase)) return "Un asesor que realiza las declaraciones para personas naturales.";
+        if (string.Equals(Plan, "empresarial", StringComparison.OrdinalIgnoreCase)) return "Emprendedor que tiene un equipo de asesores que realizan declaraciones para personas naturales.";
+        return "";
+    }
+
+    private int ObtenerPlanLimiteClientes()
+    {
+        if (string.Equals(Plan, "individual", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (string.Equals(Plan, "asesor", StringComparison.OrdinalIgnoreCase)) return 100;
+        if (string.Equals(Plan, "empresarial", StringComparison.OrdinalIgnoreCase)) return 500;
+        return 0;
+    }
+
+    private int ObtenerPlanLimiteUsuarios()
+    {
+        if (string.Equals(Plan, "individual", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (string.Equals(Plan, "asesor", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (string.Equals(Plan, "empresarial", StringComparison.OrdinalIgnoreCase)) return 3;
+        return 0;
+    }
+
+    private decimal ObtenerDescuentoAnual()
+    {
+        if (string.Equals(Plan, "individual", StringComparison.OrdinalIgnoreCase)) return 40.00m; // 120 - 80
+        if (string.Equals(Plan, "asesor", StringComparison.OrdinalIgnoreCase)) return 100.00m;    // 300 - 200
+        if (string.Equals(Plan, "empresarial", StringComparison.OrdinalIgnoreCase)) return 100.00m; // 600 - 500
+        return 0;
+    }
+
+    private string ObtenerNombreCiclo()
+    {
+        return string.Equals(cicloPago, "anual", StringComparison.OrdinalIgnoreCase) ? "Anual" : "Mensual";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateToIfNeeded("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out usuarioId) || usuarioId <= 0)
+        {
+            NavManager.NavigateToIfNeeded("/login", forceLoad: true);
+            return;
+        }
+
+        esSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        // Forzar e-declara
+        servicioKeyActual = "e-declara";
+        servicioNombre = "E-DECLARA";
+        
+        // Inicializar plan y ciclo (override si hay agendamiento)
+        string? planAgendado = null;
+        string? cicloAgendado = null;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var service = await context.AppServicios.FirstOrDefaultAsync(x => x.Clave == servicioKeyActual);
+            if (service is not null)
+            {
+                var existingSub = await context.UsuarioServicioSuscripciones
+                    .FirstOrDefaultAsync(x => x.IdUsuario == usuarioId && x.ServicioId == service.ServicioId);
+                if (existingSub is not null && !string.IsNullOrWhiteSpace(existingSub.PlanAgendado))
+                {
+                    planAgendado = existingSub.PlanAgendado;
+                    cicloAgendado = existingSub.CicloAgendado;
+                }
+            }
+        }
+        catch { }
+
+        if (!string.IsNullOrWhiteSpace(planAgendado))
+        {
+            Plan = planAgendado;
+            cicloPago = cicloAgendado ?? "mensual";
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(Plan) || 
+                (!string.Equals(Plan, "individual", StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(Plan, "asesor", StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(Plan, "empresarial", StringComparison.OrdinalIgnoreCase)))
+            {
+                Plan = "individual";
+            }
+            cicloPago = string.Equals(Ciclo, "anual", StringComparison.OrdinalIgnoreCase) ? "anual" : "mensual";
+        }
+
+        CalcularMontos();
+
+        try
+        {
+            await using (var context = await DbFactory.CreateDbContextAsync())
+            {
+                usuarioObj = await context.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == usuarioId);
+            }
+
+            if (usuarioObj is not null && !string.IsNullOrWhiteSpace(usuarioObj.Identificacion))
+            {
+                await CargarTarjetasAsync(usuarioObj.Identificacion);
+                if (tarjetasTokenizadas.Any())
+                {
+                    tokenSeleccionado = tarjetasTokenizadas.First().Token;
+                }
+            }
+
+            acceso = await AppAccessService.CanAccessAsync(usuarioId, servicioKeyActual, esSuperAdmin);
+            if (acceso.HasAccess)
+            {
+                NavManager.NavigateTo("/e-declara", forceLoad: true);
+                return;
+            }
+
+            estadoActual = acceso.StatusText;
+            detalleEstado = acceso.HasAccess
+                ? "Tu cuenta ya cumple las condiciones de acceso y puedes continuar."
+                : acceso.DenialReason ?? "Aun no tienes una suscripcion activa para este modulo.";
+
+            if (string.Equals(Registro, "exito", StringComparison.OrdinalIgnoreCase))
+            {
+                if (acceso is { HasAccess: false } && tarjetasTokenizadas.Any())
+                {
+                    tokenSeleccionado = tarjetasTokenizadas.First().Token;
+                    procesandoCobro = true;
+                    successMensaje = "¡Tarjeta registrada! Procesando cobro de suscripción automáticamente...";
+                    StateHasChanged();
+                    await PagarSuscripcionAsync();
+                }
+                else
+                {
+                    successMensaje = "¡Tarjeta registrada con éxito en Pagomedios! Ahora puedes seleccionarla abajo para pagar.";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            errorCarga = $"No se pudo consultar la suscripcion: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private void CalcularMontos()
+    {
+        if (string.Equals(Plan, "individual", StringComparison.OrdinalIgnoreCase))
+        {
+            subtotal = string.Equals(cicloPago, "anual", StringComparison.OrdinalIgnoreCase) ? 80.00m : 10.00m;
+        }
+        else if (string.Equals(Plan, "asesor", StringComparison.OrdinalIgnoreCase))
+        {
+            subtotal = string.Equals(cicloPago, "anual", StringComparison.OrdinalIgnoreCase) ? 200.00m : 25.00m;
+        }
+        else if (string.Equals(Plan, "empresarial", StringComparison.OrdinalIgnoreCase))
+        {
+            subtotal = string.Equals(cicloPago, "anual", StringComparison.OrdinalIgnoreCase) ? 500.00m : 50.00m;
+        }
+        iva = Math.Round(subtotal * 0.15m, 2);
+        total = subtotal + iva;
+    }
+
+    private void CambiarCiclo(string nuevoCiclo)
+    {
+        cicloPago = nuevoCiclo;
+        CalcularMontos();
+        StateHasChanged();
+    }
+
+    private async Task CargarTarjetasAsync(string document)
+    {
+        if (string.IsNullOrWhiteSpace(document)) return;
+        cargandoTarjetas = true;
+        errorTarjetas = null;
+        try
+        {
+            var result = await PagoService.ObtenerTarjetasTokenizadas(document);
+            if (result.IsSuccess && !string.IsNullOrWhiteSpace(result.ResponseBody))
+            {
+                var cardsResponse = JsonSerializer.Deserialize<PagomediosCardListResponse>(result.ResponseBody);
+                if (cardsResponse?.Success == true && cardsResponse.Data != null)
+                {
+                    tarjetasTokenizadas = cardsResponse.Data.SelectMany(x => x.Cards ?? new List<PagomediosTokenizedCard>()).ToList();
+                    
+                    if (tarjetasTokenizadas.Any())
+                    {
+                        try
+                        {
+                            await using var context = await DbFactory.CreateDbContextAsync();
+                            var existingTokens = await context.EdeclareTarjetas
+                                .Where(x => x.IdUsuario == usuarioId)
+                                .Select(x => x.Token)
+                                .ToListAsync();
+
+                            var newTarjetas = new List<EdeclareTarjeta>();
+                            foreach (var card in tarjetasTokenizadas)
+                            {
+                                if (!string.IsNullOrWhiteSpace(card.Token) && !existingTokens.Contains(card.Token))
+                                {
+                                    newTarjetas.Add(new EdeclareTarjeta
+                                    {
+                                        IdUsuario = usuarioId,
+                                        Documento = document,
+                                        Token = card.Token,
+                                        MarcaTarjeta = card.CardBrand,
+                                        NumeroMascara = card.Number,
+                                        FechaRegistro = DateTime.Now,
+                                        Estado = true
+                                    });
+                                }
+                            }
+
+                            if (newTarjetas.Any())
+                            {
+                                context.EdeclareTarjetas.AddRange(newTarjetas);
+                                await context.SaveChangesAsync();
+                            }
+                        }
+                        catch (Exception dbEx)
+                        {
+                            // Log database sync error but don't block the user checkout flow
+                            System.Diagnostics.Debug.WriteLine($"Error sincronizando tarjetas: {dbEx.Message}");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                errorTarjetas = "No se pudieron obtener las tarjetas guardadas.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorTarjetas = $"Error cargando tarjetas: {ex.Message}";
+        }
+        finally
+        {
+            cargandoTarjetas = false;
+        }
+    }
+
+    private async Task RegistrarNuevaTarjetaAsync()
+    {
+        if (usuarioObj is null || string.IsNullOrWhiteSpace(usuarioObj.Identificacion))
+        {
+            errorCobro = "No se puede iniciar el registro de tarjeta sin identificación de perfil.";
+            return;
+        }
+
+        errorCobro = null;
+        successMensaje = null;
+
+        try
+        {
+            var documentSanitized = new string((usuarioObj.Identificacion ?? "").Where(char.IsLetterOrDigit).ToArray());
+            var cleanPlanName = new string(ObtenerNombrePlan().Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray());
+            var notifyUrl = NavManager.ToAbsoluteUri("/api/pagomedios/notificacion-registro-tarjeta").ToString();
+            
+            var request = new
+            {
+                integration = true,
+                third = new
+                {
+                    document = documentSanitized,
+                    document_type = documentSanitized.Length == 13 ? "04" : "05",
+                    name = usuarioObj.NombreCompleto,
+                    email = usuarioObj.Email,
+                    phones = string.IsNullOrWhiteSpace(usuarioObj.Celular) ? "0999999999" : usuarioObj.Celular,
+                    address = string.IsNullOrWhiteSpace(usuarioObj.DireccionEmpresa) ? "Quito" : usuarioObj.DireccionEmpresa,
+                    type = "Individual"
+                },
+                generate_invoice = 0,
+                description = $"Registro E-Declara {cleanPlanName}",
+                amount = 1.15m,
+                amount_with_tax = 1.00m,
+                amount_without_tax = 0.00m,
+                tax_value = 0.15m,
+                notify_url = notifyUrl,
+                custom_value = $"user-{usuarioId}-plan-{Plan}-ciclo-{cicloPago}"
+            };
+
+            var result = await PagoService.RegistrarTarjetaSuscripcion(request);
+            if (result.IsSuccess && !string.IsNullOrWhiteSpace(result.PaymentUrl))
+            {
+                NavManager.NavigateTo(result.PaymentUrl, forceLoad: true);
+            }
+            else
+            {
+                errorCobro = $"Error al generar link de registro: {result.ErrorMessage ?? "Error en el registro."} Detalle del error: {result.ResponseBody}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorCobro = $"Error: {ex.Message}";
+        }
+    }
+
+    private async Task PagarSuscripcionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(tokenSeleccionado) || usuarioObj is null)
+            return;
+
+        procesandoCobro = true;
+        errorCobro = null;
+        successMensaje = null;
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            
+            var service = await context.AppServicios.FirstOrDefaultAsync(x => x.Clave == servicioKeyActual);
+            if (service is null)
+            {
+                errorCobro = "Servicio no encontrado.";
+                return;
+            }
+
+            var documentSanitized = new string((usuarioObj.Identificacion ?? "").Where(char.IsLetterOrDigit).ToArray());
+            var cleanPlanName = new string(ObtenerNombrePlan().Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray());
+            var reference = $"SUB{usuarioId}{DateTime.Now:yyyyMMddHHmmss}";
+
+            var request = new
+            {
+                integration = true,
+                document = documentSanitized,
+                token = tokenSeleccionado,
+                reference = reference,
+                description = $"Suscripcion E-Declara {cleanPlanName}",
+                amount = total,
+                amount_with_tax = subtotal,
+                amount_without_tax = 0.00m,
+                tax_value = iva,
+                generate_invoice = 0
+            };
+
+            var result = await PagoService.CobrarTarjetaTokenizada(request);
+            if (result.IsSuccess)
+            {
+                var subscription = await context.UsuarioServicioSuscripciones
+                    .FirstOrDefaultAsync(x => x.IdUsuario == usuarioId && x.ServicioId == service.ServicioId);
+
+                if (subscription is null)
+                {
+                    subscription = new UsuarioServicioSuscripcion
+                    {
+                        IdUsuario = usuarioId,
+                        ServicioId = service.ServicioId,
+                        FechaCreacion = DateTime.Now
+                    };
+                    context.UsuarioServicioSuscripciones.Add(subscription);
+                }
+
+                subscription.Estado = "ACTIVA";
+                subscription.FechaInicio = DateTime.Today;
+                
+                // Vigencia según ciclo: mensual = 1 mes, anual = 1 año
+                subscription.FechaFin = string.Equals(cicloPago, "anual", StringComparison.OrdinalIgnoreCase)
+                    ? DateTime.Today.AddYears(1)
+                    : DateTime.Today.AddMonths(1);
+                    
+                subscription.EsVitalicia = false;
+                subscription.FechaActualizacion = DateTime.Now;
+                subscription.PlanActual = Plan;
+                subscription.CicloActual = cicloPago;
+
+                var cardInfo = tarjetasTokenizadas.FirstOrDefault(x => x.Token == tokenSeleccionado);
+                subscription.Observacion = $"Pago recurrente exitoso. Ref: {reference}. Tarjeta: {(cardInfo?.CardBrand ?? "Desconocida")} ****{(cardInfo?.Number?.Length >= 4 ? cardInfo.Number.Substring(cardInfo.Number.Length - 4) : "")}. Plan: {ObtenerNombrePlan()} ({ObtenerNombreCiclo()})";
+
+                await context.SaveChangesAsync();
+
+                successMensaje = "¡Pago procesado con éxito! Redirigiéndote al sistema...";
+                StateHasChanged();
+                
+                acceso = await AppAccessService.CanAccessAsync(usuarioId, servicioKeyActual, esSuperAdmin);
+                if (acceso is not null)
+                {
+                    estadoActual = acceso.StatusText;
+                    detalleEstado = "Tu cuenta ya cumple las condiciones de acceso y puedes continuar.";
+                }
+
+                await Task.Delay(1500);
+                NavManager.NavigateTo("/e-declara", forceLoad: true);
+            }
+            else
+            {
+                errorCobro = $"El cobro fue rechazado: {result.ErrorMessage ?? "Error en el cobro."} Detalle del error: {result.ResponseBody}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorCobro = $"Error al procesar el cobro: {ex.Message}";
+        }
+        finally
+        {
+            procesandoCobro = false;
+        }
+    }
+
+    private void VolverAlPortal() => NavManager.NavigateToIfNeeded("/portal-servicios", forceLoad: true);
+
+    public class PagomediosCardListResponse
+    {
+        [JsonPropertyName("success")]
+        public bool Success { get; set; }
+
+        [JsonPropertyName("status")]
+        public int Status { get; set; }
+
+        [JsonPropertyName("data")]
+        public List<PagomediosClientCards>? Data { get; set; }
+    }
+
+    public class PagomediosClientCards
+    {
+        [JsonPropertyName("document")]
+        public string? Document { get; set; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("tradename")]
+        public string? Tradename { get; set; }
+
+        [JsonPropertyName("cards")]
+        public List<PagomediosTokenizedCard>? Cards { get; set; }
+    }
+
+    public class PagomediosTokenizedCard
+    {
+        [JsonPropertyName("card_brand")]
+        public string? CardBrand { get; set; }
+
+        [JsonPropertyName("number")]
+        public string? Number { get; set; }
+
+        [JsonPropertyName("token")]
+        public string? Token { get; set; }
+    }
+}

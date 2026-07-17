@@ -1,0 +1,1088 @@
+@page "/compras/liquidaciones-generadas"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.DTOs
+@using Simetric.Services
+
+@inject LiquidacionCompraService LiquidacionCompraService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject SweetAlertService AlertService
+@inject IJSRuntime JS
+@inject ISimpleExcelExportService SimpleExcelExportService
+
+<PageTitle>Liquidaciones de Compra Generadas</PageTitle>
+
+@{
+    var liquidacionesFiltradas = LiquidacionesFiltradas;
+    var liquidacionesPaginaActual = LiquidacionesPaginaActual;
+    var totalFiltrado = liquidacionesFiltradas.Sum(x => x.ImporteTotal);
+    var totalVisible = liquidacionesPaginaActual.Sum(x => x.ImporteTotal);
+    var autorizadas = liquidacionesFiltradas.Count(EstaAutorizada);
+    var noAutorizadas = liquidacionesFiltradas.Count(x => ObtenerEstadoSriTexto(x) == DocumentoAutorizacionHelper.EstadoNoAutorizado);
+    var pendientes = liquidacionesFiltradas.Count - autorizadas - noAutorizadas;
+}
+
+<div class="facturas-shell" data-tour="liqgen.page">
+    @if (idDocumentoMenuAbierto.HasValue)
+    {
+        <div class="row-menu-backdrop" @onclick="CerrarMenus"></div>
+    }
+
+    @if (mostrarResultadoOverlay)
+    {
+        <div class="facturas-inline-overlay" @onclick="CerrarResultadoOverlay">
+            <div class="facturas-inline-overlay-card facturas-inline-overlay-card-result is-error" @onclick:stopPropagation>
+                <div class="overlay-result-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <div>
+                    <strong>@tituloResultadoOverlay</strong>
+                    <span>@detalleResultadoOverlay</span>
+                </div>
+                <button type="button" class="overlay-close-btn" @onclick="CerrarResultadoOverlay">Cerrar</button>
+            </div>
+        </div>
+    }
+
+    <section class="facturas-hero" data-tour="liqgen.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Compras emitidas</span>
+            <h2>Mis liquidaciones con filtros, reporte y acciones unificadas</h2>
+            <p>
+                Filtra por proveedor, numero o identificacion, exporta tu consulta y abre cada
+                comprobante con el mismo patron visual del resto de documentos.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Liquidaciones filtradas</span>
+                <strong>@liquidacionesFiltradas.Count</strong>
+                <small>@ResumenRangoFechas</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Total filtrado</span>
+                <strong>$ @totalFiltrado.ToString("N2")</strong>
+                <small>Base acumulada del resultado visible en tu consulta.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Autorizadas</span>
+                <strong>@autorizadas</strong>
+                <small>Pendientes: @pendientes | No autorizadas: @noAutorizadas</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card" data-tour="liqgen.toolbar">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Busqueda y control</span>
+            <h3>Liquidaciones de compra generadas</h3>
+            <p>Combina texto y rango de fechas para ordenar mejor tu consulta diaria.</p>
+        </div>
+
+        <div class="toolbar-actions toolbar-actions-expanded">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+
+                <input class="search-input"
+                       placeholder="Buscar por numero, proveedor o identificacion"
+                       @bind="Filtro"
+                       @bind:event="oninput" />
+
+                @if (!string.IsNullOrWhiteSpace(Filtro))
+                {
+                    <button class="search-clear" type="button" @onclick="LimpiarTexto" aria-label="Limpiar busqueda">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                }
+            </div>
+
+            <div class="date-filter-group">
+                <label class="date-filter-box">
+                    <span>Desde</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaDesde" />
+                </label>
+
+                <label class="date-filter-box">
+                    <span>Hasta</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaHasta" />
+                </label>
+            </div>
+
+            <button class="report-btn" type="button" @onclick="DescargarReporteAsync">
+                <i class="bi bi-file-earmark-spreadsheet"></i>
+                <span>Descargar Excel</span>
+            </button>
+
+            <button class="refresh-btn" type="button" @onclick="Recargar">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>Refrescar</span>
+            </button>
+
+            @if (HayFiltrosActivos)
+            {
+                <button class="filter-reset-btn" type="button" @onclick="LimpiarFiltros">
+                    <i class="bi bi-eraser"></i>
+                    <span>Limpiar filtros</span>
+                </button>
+            }
+        </div>
+    </section>
+
+    @if (cargando)
+    {
+        <section class="state-card">
+            <div class="state-icon">
+                <span class="spinner-border"></span>
+            </div>
+            <h3>Cargando liquidaciones</h3>
+            <p>Estamos organizando tu historial de compras para mostrarlo completo.</p>
+        </section>
+    }
+    else if (liquidacionesFiltradas.Count == 0)
+    {
+        <section class="state-card state-card-empty">
+            <div class="state-icon">
+                <i class="bi bi-inbox"></i>
+            </div>
+            <h3>No hay resultados</h3>
+            <p>
+                @(HayFiltrosActivos
+                    ? "No encontramos liquidaciones con los filtros aplicados. Ajusta el texto o las fechas."
+                    : "Todavia no existen liquidaciones generadas para mostrar en este panel.")
+            </p>
+        </section>
+    }
+    else
+    {
+        <section class="table-card" data-tour="liqgen.table">
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado</span>
+                    <h3>Liquidaciones</h3>
+                    <p>Consulta proveedor, estado, base, IVA y total en una sola tabla.</p>
+                </div>
+
+                <div class="table-head-actions">
+                    <label class="page-size-box" for="liq-page-size">
+                        <span>Ver</span>
+                        <select id="liq-page-size" class="page-size-select" @bind="RegistrosPorPagina">
+                            @foreach (var opcion in pageSizeOptions)
+                            {
+                                <option value="@opcion">@opcion</option>
+                            }
+                        </select>
+                        <span>registros</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="table-wrap list-table-wrap">
+                <table class="table table-hover align-middle mb-0 facturas-table responsive-list-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 188px;">Numero</th>
+                            <th style="width: 128px;">Fecha</th>
+                            <th>Proveedor</th>
+                            <th style="width: 148px;">Estado SRI</th>
+                            <th class="text-end" style="width: 122px;">Base</th>
+                            <th class="text-end" style="width: 116px;">IVA</th>
+                            <th class="text-end" style="width: 132px;">Total</th>
+                            <th class="text-end actions-header-otros">Acciones</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @foreach (var liquidacionEntry in liquidacionesPaginaActual.Select((item, index) => new { Item = item, Index = index }))
+                        {
+                            var item = liquidacionEntry.Item;
+                            <tr>
+                                <td data-label="Numero">
+                                    <span class="invoice-pill">
+                                        @item.NumeroDocumento
+                                    </span>
+                                </td>
+
+                                <td data-label="Fecha">
+                                    <span class="invoice-id">
+                                        @(item.FechaEmision?.ToString("dd/MM/yyyy") ?? "")
+                                    </span>
+                                </td>
+
+                                <td data-label="Proveedor">
+                                    <div class="client-cell">
+                                        <strong>@item.Proveedor</strong>
+                                        <span>@item.IdentificacionProveedor</span>
+                                    </div>
+                                </td>
+
+                                 <td data-label="Estado SRI">
+                                     <div class="client-cell">
+                                         <span class="status-with-info">
+                                             <span class="status-pill @ObtenerEstadoSriClase(item)">
+                                                 @ObtenerEstadoSriTexto(item)
+                                             </span>
+                                             @if (EsNoAutorizada(item))
+                                             {
+                                                 <button class="status-info-btn"
+                                                         type="button"
+                                                         title="@ObtenerErrorSriTexto(item)"
+                                                         @onclick="() => MostrarErrorSriLiquidacion(item)">
+                                                     <i class="bi bi-info-circle-fill"></i>
+                                                 </button>
+                                             }
+                                         </span>
+                                         <span class="authorization-number" title="@ObtenerNumeroAutorizacionTexto(item)">
+                                             Autorizacion: @ObtenerNumeroAutorizacionTexto(item)
+                                         </span>
+                                     </div>
+                                 </td>
+
+                                <td class="text-end" data-label="Base">
+                                    <span class="amount-pill">
+                                        <span class="currency-symbol">$</span>
+                                        <span class="currency-value">@item.TotalSinImpuestos.ToString("N2")</span>
+                                    </span>
+                                </td>
+
+                                <td class="text-end" data-label="IVA">
+                                    <span class="amount-pill">
+                                        <span class="currency-symbol">$</span>
+                                        <span class="currency-value">@item.IvaTotal.ToString("N2")</span>
+                                    </span>
+                                </td>
+
+                                <td class="text-end" data-label="Total">
+                                    <span class="amount-pill">
+                                        <span class="currency-symbol">$</span>
+                                        <span class="currency-value">@item.ImporteTotal.ToString("N2")</span>
+                                    </span>
+                                </td>
+
+                                  <td class="text-end" data-label="Acciones">
+                                      <!-- Desktop: Inline summarized compact icon buttons -->
+                                       <div class="actions-desktop-inline gap-1 justify-content-end row-actions-inline-desktop">
+                                           <button class="row-action-btn row-action-view"
+                                                   type="button"
+                                                   title="Ver"
+                                                   @onclick="() => VerLiquidacionAsync(item.CodFactura)">
+                                              <i class="bi bi-eye"></i>
+                                          </button>
+
+                                          <button class="row-action-btn row-action-xml"
+                                                  type="button"
+                                                  title="Descargar XML"
+                                                  @onclick="() => AbrirXmlAsync(item.CodFactura)">
+                                              <i class="bi bi-filetype-xml"></i>
+                                          </button>
+
+                                           <button class="row-action-btn row-action-pdf"
+                                                   type="button"
+                                                   title="Descargar PDF"
+                                                   @onclick="() => AbrirPdfAsync(item.CodFactura)">
+                                               <i class="bi bi-file-earmark-pdf"></i>
+                                           </button>
+
+                                           @if (PuedeContinuarRetencion(item))
+                                           {
+                                               <button class="row-action-btn row-action-sri"
+                                                       type="button"
+                                                       title="Continuar con retencion"
+                                                       @onclick="() => ContinuarRetencionAsync(item.CodFactura)">
+                                                   <i class="bi bi-receipt-cutoff"></i>
+                                               </button>
+                                           }
+                                           else if (item.TieneRetencion)
+                                           {
+                                               <button class="row-action-btn row-action-view"
+                                                       type="button"
+                                                       title="Ver retencion"
+                                                       @onclick="VerRetencion">
+                                                   <i class="bi bi-eye"></i>
+                                               </button>
+                                           }
+
+                                           <button class="row-action-btn row-action-sri"
+                                                   type="button"
+                                                   title="Enviar al SRI"
+                                                   @onclick="() => ReintentarSriAsync(item.CodFactura)">
+                                               <i class="bi bi-send-check"></i>
+                                           </button>
+
+                                           <button class="row-action-btn row-action-mail"
+                                                   type="button"
+                                                   title="Reenviar correo"
+                                                   @onclick="() => ReenviarCorreoAsync(item.CodFactura)">
+                                               <i class="bi bi-envelope"></i>
+                                           </button>
+                                       </div>
+
+                                      <!-- Mobile: Dropdown -->
+                                      <div class="actions-mobile-dropdown row-actions-dropdown">
+                                          <button class="row-actions-trigger" type="button" @onclick="() => ToggleMenu(item.CodFactura)" @onclick:stopPropagation>
+                                              <i class="bi bi-three-dots"></i>
+                                          </button>
+                                          @if (idDocumentoMenuAbierto == item.CodFactura)
+                                          {
+                                              <div class="action-dropdown-menu">
+                                                  <button class="action-dropdown-item view-item" type="button" @onclick="async () => { CerrarMenus(); await VerLiquidacionAsync(item.CodFactura); }">
+                                                      <i class="bi bi-eye"></i>
+                                                      <span>Ver</span>
+                                                  </button>
+                                                   <button class="action-dropdown-item xml-item" type="button" @onclick="async () => { CerrarMenus(); await AbrirXmlAsync(item.CodFactura); }">
+                                                       <i class="bi bi-filetype-xml"></i>
+                                                       <span>Descargar XML</span>
+                                                   </button>
+                                                    <button class="action-dropdown-item pdf-item" type="button" @onclick="async () => { CerrarMenus(); await AbrirPdfAsync(item.CodFactura); }">
+                                                        <i class="bi bi-file-earmark-pdf"></i>
+                                                        <span>Descargar PDF</span>
+                                                    </button>
+                                                    @if (PuedeContinuarRetencion(item))
+                                                    {
+                                                        <button class="action-dropdown-item" type="button" @onclick="async () => { CerrarMenus(); await ContinuarRetencionAsync(item.CodFactura); }">
+                                                            <i class="bi bi-receipt-cutoff"></i>
+                                                            <span>Continuar con retencion</span>
+                                                        </button>
+                                                    }
+                                                    else if (item.TieneRetencion)
+                                                    {
+                                                        <button class="action-dropdown-item view-item" type="button" @onclick="VerRetencion">
+                                                            <i class="bi bi-eye"></i>
+                                                            <span>Ver retencion</span>
+                                                        </button>
+                                                    }
+                                                    <button class="action-dropdown-item" type="button" @onclick="async () => { CerrarMenus(); await ReintentarSriAsync(item.CodFactura); }">
+                                                        <i class="bi bi-send-check"></i>
+                                                        <span>Enviar al SRI</span>
+                                                    </button>
+                                                    <button class="action-dropdown-item" type="button" @onclick="async () => { CerrarMenus(); await ReenviarCorreoAsync(item.CodFactura); }">
+                                                        <i class="bi bi-envelope"></i>
+                                                        <span>Reenviar correo</span>
+                                                    </button>
+                                               </div>
+                                           }
+                                       </div>
+                                   </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-footer">
+                <div class="footer-metrics">
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados visibles</span>
+                        <strong>@liquidacionesPaginaActual.Count</strong>
+                    </div>
+
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados filtrados</span>
+                        <strong>@liquidacionesFiltradas.Count</strong>
+                    </div>
+
+                    <div class="footer-metric footer-metric-highlight">
+                        <span class="footer-label">Total visible</span>
+                        <strong>$ @totalVisible.ToString("N2")</strong>
+                    </div>
+                </div>
+
+                @if (TotalPaginas > 1)
+                {
+                    <nav class="pagination-nav" aria-label="Paginacion de liquidaciones">
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaAnterior"
+                                disabled="@(PaginaActualSegura == 1)">
+                            <i class="bi bi-chevron-left"></i>
+                            <span>Anterior</span>
+                        </button>
+
+                        @foreach (var pagina in PaginasVisibles)
+                        {
+                            var paginaLocal = pagina;
+                            <button class="pagination-btn @(paginaLocal == PaginaActualSegura ? "is-active" : null)"
+                                    @onclick="() => IrAPagina(paginaLocal)">
+                                @paginaLocal
+                            </button>
+                        }
+
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaSiguiente"
+                                disabled="@(PaginaActualSegura == TotalPaginas)">
+                            <span>Siguiente</span>
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </nav>
+                }
+            </div>
+        </section>
+    }
+
+</div>
+
+@if (mostrarModal && liquidacionSeleccionada != null)
+{
+    <div class="factura-modal-backdrop" @onclick="CerrarModal"></div>
+
+    <div class="modal fade show d-block factura-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable factura-modal-dialog">
+            <div class="modal-content factura-modal-content">
+
+                <div class="modal-header factura-modal-header">
+                    <div>
+                        <span class="modal-kicker">Comprobante generado</span>
+                        <h5 class="modal-title mb-0">
+                            Liquidacion de Compra @($"{liquidacionSeleccionada.Preview.SerieVisual}-{liquidacionSeleccionada.Preview.Secuencial}")
+                        </h5>
+                    </div>
+
+                    <button type="button" class="btn-close" @onclick="CerrarModal"></button>
+                </div>
+
+                <div class="modal-body factura-modal-body">
+                    <div class="liq-preview-shell">
+                        <div class="liq-preview-top">
+                            <div class="liq-company-card">
+                                <h4>@(liquidacionSeleccionada.Preview.RazonSocialEmisor ?? "EMISOR")</h4>
+                                <div><strong>RUC:</strong> @liquidacionSeleccionada.Preview.RucEmisor</div>
+                                <div><strong>Direccion:</strong> @liquidacionSeleccionada.Preview.DireccionEstablecimiento</div>
+                                <div><strong>Ambiente:</strong> @(liquidacionSeleccionada.Preview.Ambiente == 1 ? "Pruebas" : "Produccion")</div>
+                            </div>
+
+                            <div class="liq-doc-card">
+                                <div class="liq-doc-title">LIQUIDACION DE COMPRA</div>
+                                <div><strong>No.:</strong> @($"{liquidacionSeleccionada.Preview.SerieVisual}-{liquidacionSeleccionada.Preview.Secuencial}")</div>
+                                <div><strong>Fecha emision:</strong> @(liquidacionSeleccionada.Preview.FechaEmision?.ToString("dd/MM/yyyy") ?? "")</div>
+                                <div><strong>Estado SRI:</strong> @ObtenerEstadoSriTexto(liquidacionSeleccionada.Compra.Autorizado, liquidacionSeleccionada.Compra.EstadoEnvioSRI)</div>
+                                <div><strong>Numero de autorizacion:</strong> @ObtenerNumeroAutorizacionTexto(liquidacionSeleccionada.Compra.Autorizado, liquidacionSeleccionada.Compra.EstadoEnvioSRI, liquidacionSeleccionada.Preview.NumeroAutorizacion)</div>
+                                @if (!DocumentoAutorizacionHelper.EstaAutorizado(liquidacionSeleccionada.Compra.Autorizado, liquidacionSeleccionada.Compra.EstadoEnvioSRI) &&
+                                    !string.IsNullOrWhiteSpace(liquidacionSeleccionada.Compra.CodClave))
+                                {
+                                    <div><strong>Clave de acceso:</strong> @liquidacionSeleccionada.Compra.CodClave</div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="liq-section-card">
+                            <div class="liq-section-title">Proveedor</div>
+
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <strong>Razon social / nombres:</strong><br />
+                                    @liquidacionSeleccionada.Preview.RazonSocialProveedor
+                                </div>
+
+                                <div class="col-md-3">
+                                    <strong>Identificacion:</strong><br />
+                                    @liquidacionSeleccionada.Preview.IdentificacionProveedor
+                                </div>
+
+                                <div class="col-md-3">
+                                    <strong>Tipo:</strong><br />
+                                    @liquidacionSeleccionada.Preview.TipoIdentificacionProveedorNombre
+                                </div>
+
+                                <div class="col-md-6">
+                                    <strong>Direccion:</strong><br />
+                                    @liquidacionSeleccionada.Preview.DireccionProveedor
+                                </div>
+
+                                <div class="col-md-3">
+                                    <strong>Telefono:</strong><br />
+                                    @TelefonoProveedorDetalle
+                                </div>
+
+                                <div class="col-md-3">
+                                    <strong>Correo:</strong><br />
+                                    @liquidacionSeleccionada.Preview.EmailProveedor
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="liq-section-card">
+                            <div class="liq-section-title">Condiciones</div>
+
+                            <div class="liq-summary-grid">
+                                <div class="liq-summary-box">
+                                    <span>Forma de pago</span>
+                                    <strong>@FormaPagoDetalle</strong>
+                                </div>
+
+                                <div class="liq-summary-box">
+                                    <span>Plazo</span>
+                                    <strong>@PlazoDetalle</strong>
+                                </div>
+
+                                <div class="liq-summary-box">
+                                    <span>Moneda</span>
+                                    <strong>@(string.IsNullOrWhiteSpace(liquidacionSeleccionada.Preview.Moneda) ? "DOLAR" : liquidacionSeleccionada.Preview.Moneda)</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="liq-section-card">
+                            <div class="liq-section-title">Detalle</div>
+
+                            <div class="table-wrap modal-table-wrap">
+                                <table class="table table-hover align-middle mb-0 facturas-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Codigo</th>
+                                            <th>Descripcion</th>
+                                            <th class="text-end">Cant.</th>
+                                            <th class="text-end">P. Unit.</th>
+                                            <th class="text-end">Desc.</th>
+                                            <th class="text-end">IVA</th>
+                                            <th class="text-end">Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @if (liquidacionSeleccionada.Preview.Detalles.Any())
+                                        {
+                                            @foreach (var d in liquidacionSeleccionada.Preview.Detalles)
+                                            {
+                                                <tr>
+                                                    <td>@(string.IsNullOrWhiteSpace(d.CodPrincipal) ? d.CodProducto.ToString() : d.CodPrincipal)</td>
+                                                    <td>@d.Descripcion</td>
+                                                    <td class="text-end">@d.Cantidad.ToString("N2")</td>
+                                                    <td class="text-end">@d.PrecioUnitario.ToString("N2")</td>
+                                                    <td class="text-end">@d.Descuento.ToString("N2")</td>
+                                                    <td class="text-end">@d.ValorIva.ToString("N2")</td>
+                                                    <td class="text-end">@d.ValorTotal.ToString("N2")</td>
+                                                </tr>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <tr>
+                                                <td colspan="7" class="text-center py-4">
+                                                    No se encontraron detalles registrados.
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="liq-totals-row">
+                            <div class="liq-total-card">
+                                <span>Base</span>
+                                <strong>$ @liquidacionSeleccionada.Preview.TotalSinImpuestos.ToString("N2")</strong>
+                            </div>
+
+                            <div class="liq-total-card">
+                                <span>IVA</span>
+                                <strong>$ @liquidacionSeleccionada.Preview.IvaTotal.ToString("N2")</strong>
+                            </div>
+
+                            <div class="liq-total-card liq-total-card-main">
+                                <span>Total</span>
+                                <strong>$ @liquidacionSeleccionada.Preview.ImporteTotal.ToString("N2")</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer factura-modal-footer">
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="() => AbrirXmlAsync(liquidacionSeleccionada.CodFactura)">
+                        Abrir XML
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="() => AbrirPdfAsync(liquidacionSeleccionada.CodFactura)">
+                        Abrir PDF A4
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="() => AbrirPdfAsync(liquidacionSeleccionada.CodFactura, FormatoImpresionDocumento.Termica80mm)">
+                        Termica 80mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="() => AbrirPdfAsync(liquidacionSeleccionada.CodFactura, FormatoImpresionDocumento.Termica50mm)">
+                        Termica 50mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="() => ReintentarSriAsync(liquidacionSeleccionada.CodFactura)">
+                        Enviar al SRI
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="() => ReenviarCorreoAsync(liquidacionSeleccionada.CodFactura)">
+                        Reenviar correo
+                    </button>
+
+                    @if (PuedeContinuarRetencionDetalle(liquidacionSeleccionada.CodFactura))
+                    {
+                        <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="() => ContinuarRetencionAsync(liquidacionSeleccionada.CodFactura)">
+                            Continuar con retencion
+                        </button>
+                    }
+                    else if (TieneRetencionDetalle(liquidacionSeleccionada.CodFactura))
+                    {
+                        <button class="secondary-btn secondary-btn-accent modal-link-btn" @onclick="VerRetencion">
+                            Ver retencion
+                        </button>
+                    }
+
+                    <button class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal">
+                        Cerrar
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public EventCallback<int> OnContinuarRetencion { get; set; }
+
+    private int? idDocumentoMenuAbierto;
+
+    private void ToggleMenu(int id)
+    {
+        if (idDocumentoMenuAbierto == id)
+            idDocumentoMenuAbierto = null;
+        else
+            idDocumentoMenuAbierto = id;
+    }
+
+    private void CerrarMenus()
+    {
+        idDocumentoMenuAbierto = null;
+    }
+
+
+    private int currentUserId;
+    private bool cargando = true;
+    private bool mostrarResultadoOverlay;
+    private string tituloResultadoOverlay = string.Empty;
+    private string detalleResultadoOverlay = string.Empty;
+    private List<LiquidacionCompraListDto> liquidaciones = new();
+    private readonly int[] pageSizeOptions = { 5, 10, 20, 50 };
+    private int paginaActual = 1;
+    private int registrosPorPagina = 10;
+    private bool mostrarModal;
+    private LiquidacionCompraDetalleViewDto? liquidacionSeleccionada;
+    private string filtro = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+
+    private int RegistrosPorPagina
+    {
+        get => registrosPorPagina;
+        set
+        {
+            registrosPorPagina = value;
+            paginaActual = 1;
+        }
+    }
+
+    private string Filtro
+    {
+        get => filtro;
+        set
+        {
+            if (filtro == value)
+                return;
+
+            filtro = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaDesde
+    {
+        get => fechaDesde;
+        set
+        {
+            if (fechaDesde == value)
+                return;
+
+            fechaDesde = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaHasta
+    {
+        get => fechaHasta;
+        set
+        {
+            if (fechaHasta == value)
+                return;
+
+            fechaHasta = value;
+            paginaActual = 1;
+        }
+    }
+
+    private bool HayFiltrosActivos =>
+        !string.IsNullOrWhiteSpace(Filtro) || FechaDesde.HasValue || FechaHasta.HasValue;
+
+    private string ResumenRangoFechas
+    {
+        get
+        {
+            if (FechaDesde.HasValue && FechaHasta.HasValue)
+                return $"{FechaDesde.Value:dd/MM/yyyy} al {FechaHasta.Value:dd/MM/yyyy}";
+
+            if (FechaDesde.HasValue)
+                return $"Desde {FechaDesde.Value:dd/MM/yyyy}";
+
+            if (FechaHasta.HasValue)
+                return $"Hasta {FechaHasta.Value:dd/MM/yyyy}";
+
+            return "Todas las fechas";
+        }
+    }
+
+    private string FormaPagoDetalle =>
+        liquidacionSeleccionada == null
+            ? ""
+            : (string.IsNullOrWhiteSpace(liquidacionSeleccionada.Preview.FormaPagoNombre)
+                ? liquidacionSeleccionada.Preview.FormaPago
+                : liquidacionSeleccionada.Preview.FormaPagoNombre);
+
+    private string PlazoDetalle =>
+        liquidacionSeleccionada == null || (liquidacionSeleccionada.Preview.Plazo ?? 0) <= 0
+            ? "Contado"
+            : $"{liquidacionSeleccionada.Preview.Plazo} {liquidacionSeleccionada.Preview.UnidadTiempo}";
+
+    private string TelefonoProveedorDetalle
+    {
+        get
+        {
+            if (liquidacionSeleccionada == null)
+                return "";
+
+            if (!string.IsNullOrWhiteSpace(liquidacionSeleccionada.Preview.TelefonoProveedor))
+                return liquidacionSeleccionada.Preview.TelefonoProveedor;
+
+            return liquidacionSeleccionada.Preview.TelefonoFijoProveedor;
+        }
+    }
+
+    private List<LiquidacionCompraListDto> LiquidacionesFiltradas =>
+        liquidaciones
+            .Where(CumpleFiltroLiquidacion)
+            .ToList();
+
+    private List<LiquidacionCompraListDto> LiquidacionesPaginaActual =>
+        LiquidacionesFiltradas
+            .Skip((PaginaActualSegura - 1) * registrosPorPagina)
+            .Take(registrosPorPagina)
+            .ToList();
+
+    private int TotalPaginas =>
+        LiquidacionesFiltradas.Count == 0
+            ? 0
+            : (int)Math.Ceiling(LiquidacionesFiltradas.Count / (double)registrosPorPagina);
+
+    private int PaginaActualSegura =>
+        TotalPaginas == 0
+            ? 1
+            : Math.Min(paginaActual, TotalPaginas);
+
+    private int RegistroInicialPagina =>
+        LiquidacionesFiltradas.Count == 0 ? 0 : ((PaginaActualSegura - 1) * registrosPorPagina) + 1;
+
+    private int RegistroFinalPagina =>
+        LiquidacionesFiltradas.Count == 0 ? 0 : Math.Min(PaginaActualSegura * registrosPorPagina, LiquidacionesFiltradas.Count);
+
+    private IEnumerable<int> PaginasVisibles
+    {
+        get
+        {
+            if (TotalPaginas == 0)
+                return Array.Empty<int>();
+
+            var inicio = Math.Max(1, PaginaActualSegura - 2);
+            var fin = Math.Min(TotalPaginas, inicio + 4);
+            inicio = Math.Max(1, fin - 4);
+            return Enumerable.Range(inicio, fin - inicio + 1);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Recargar();
+    }
+
+    private async Task Recargar()
+    {
+        cargando = true;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+
+        if (currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/", true);
+            return;
+        }
+
+        liquidaciones = await LiquidacionCompraService.ListarLiquidacionesUsuarioAsync(currentUserId);
+        paginaActual = 1;
+        cargando = false;
+    }
+
+    private bool CumpleFiltroLiquidacion(LiquidacionCompraListDto item)
+    {
+        if (!string.IsNullOrWhiteSpace(Filtro))
+        {
+            var filtroActual = Filtro.Trim();
+            var coincideTexto =
+                (item.NumeroDocumento ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.Proveedor ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.IdentificacionProveedor ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.EstadoSri ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.NumeroAutorizacion ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                ObtenerEstadoSriTexto(item).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (item.ClaveAcceso ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase);
+
+            if (!coincideTexto)
+                return false;
+        }
+
+        var fechaReferencia = item.FechaEmision?.Date;
+
+        if (FechaDesde.HasValue && (!fechaReferencia.HasValue || fechaReferencia.Value < FechaDesde.Value.Date))
+            return false;
+
+        if (FechaHasta.HasValue && (!fechaReferencia.HasValue || fechaReferencia.Value > FechaHasta.Value.Date))
+            return false;
+
+        return true;
+    }
+
+    private async Task VerLiquidacionAsync(int codFactura)
+    {
+        liquidacionSeleccionada = await LiquidacionCompraService.GetLiquidacionDetalleUsuarioAsync(codFactura, currentUserId);
+        if (liquidacionSeleccionada != null)
+            mostrarModal = true;
+    }
+
+    private async Task AbrirXmlAsync(int codFactura)
+    {
+        var xmlUrl = await LiquidacionCompraService.AsegurarXmlLiquidacionUsuarioAsync(codFactura, currentUserId);
+        if (string.IsNullOrWhiteSpace(xmlUrl))
+        {
+            await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la liquidacion.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", xmlUrl, "_blank");
+    }
+
+    private async Task AbrirPdfAsync(int codFactura, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    {
+        var pdfUrl = await LiquidacionCompraService.AsegurarPdfLiquidacionUsuarioAsync(codFactura, currentUserId, formato);
+        if (string.IsNullOrWhiteSpace(pdfUrl))
+        {
+            await AlertService.ShowWarningAsync($"No se pudo generar o ubicar el PDF {formato.ObtenerEtiqueta()} de la liquidacion.");
+            return;
+        }
+
+        var separador = pdfUrl.Contains('?') ? "&" : "?";
+        await JS.InvokeVoidAsync("open", $"{pdfUrl}{separador}v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}", "_blank");
+    }
+
+    private async Task ReintentarSriAsync(int codFactura)
+    {
+        var resultado = await LiquidacionCompraService.EmitirLiquidacionSriAsync(codFactura, currentUserId, intentarEnviarCorreo: true);
+        await Recargar();
+
+        if (mostrarModal)
+            liquidacionSeleccionada = await LiquidacionCompraService.GetLiquidacionDetalleUsuarioAsync(codFactura, currentUserId);
+
+        if (string.Equals(resultado.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
+            await AlertService.ShowSuccessAsync(string.IsNullOrWhiteSpace(resultado.mensaje) ? "Liquidación autorizada correctamente." : resultado.mensaje, "SRI");
+        else
+            await AlertService.ShowWarningAsync(string.IsNullOrWhiteSpace(resultado.mensaje) ? "La liquidación sigue pendiente o con observaciones." : resultado.mensaje, "SRI");
+    }
+
+    private async Task ReenviarCorreoAsync(int codFactura)
+    {
+        var resultado = await LiquidacionCompraService.IntentarEnviarLiquidacionPorCorreoAsync(codFactura);
+        await Recargar();
+
+        if (mostrarModal)
+            liquidacionSeleccionada = await LiquidacionCompraService.GetLiquidacionDetalleUsuarioAsync(codFactura, currentUserId);
+
+        if (resultado.Enviado || resultado.YaEnviado)
+            await AlertService.ShowSuccessAsync(resultado.Mensaje, "Correo");
+        else if (resultado.PendienteAutorizacion || resultado.SinDestinatarios)
+            await AlertService.ShowWarningAsync(resultado.Mensaje, "Correo");
+        else
+            await AlertService.ShowErrorAsync(resultado.Mensaje, "Correo");
+    }
+
+    private async Task DescargarReporteAsync()
+    {
+        var liquidacionesFiltradas = LiquidacionesFiltradas;
+        if (liquidacionesFiltradas.Count == 0)
+        {
+            await AlertService.ShowInfoAsync("No hay datos para exportar con los filtros actuales.");
+            return;
+        }
+
+        var archivo = SimpleExcelExportService.Create(
+            $"liquidaciones_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+            new ExcelSheetData(
+                "Liquidaciones",
+                new[]
+                {
+                    "Fecha",
+                    "Numero",
+                    "Proveedor",
+                    "Identificacion",
+                    "Estado SRI",
+                    "Numero autorizacion",
+                    "Base",
+                    "IVA",
+                    "Total"
+                },
+                liquidacionesFiltradas
+                    .Select(item => (IReadOnlyList<string>)new[]
+                    {
+                        item.FechaEmision?.ToString("yyyy-MM-dd") ?? string.Empty,
+                        item.NumeroDocumento ?? string.Empty,
+                        item.Proveedor ?? string.Empty,
+                        item.IdentificacionProveedor ?? string.Empty,
+                        ObtenerEstadoSriTexto(item),
+                        ObtenerNumeroAutorizacionTexto(item),
+                        item.TotalSinImpuestos.ToString("N2"),
+                        item.IvaTotal.ToString("N2"),
+                        item.ImporteTotal.ToString("N2")
+                    })
+                    .ToList()));
+
+        await using var stream = new MemoryStream(archivo.Content);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+    }
+
+    private void CerrarModal()
+    {
+        mostrarModal = false;
+        liquidacionSeleccionada = null;
+    }
+
+    private void LimpiarTexto() => Filtro = string.Empty;
+
+    private void LimpiarFiltros()
+    {
+        Filtro = string.Empty;
+        FechaDesde = null;
+        FechaHasta = null;
+    }
+
+    private void IrAPagina(int pagina)
+    {
+        if (pagina < 1 || pagina > Math.Max(TotalPaginas, 1))
+            return;
+
+        paginaActual = pagina;
+    }
+
+    private void PaginaAnterior() => IrAPagina(PaginaActualSegura - 1);
+
+    private void PaginaSiguiente() => IrAPagina(PaginaActualSegura + 1);
+
+    private static bool EstaAutorizada(LiquidacionCompraListDto liquidacion) =>
+        DocumentoAutorizacionHelper.EstaAutorizado(liquidacion.Autorizado, liquidacion.EstadoSri);
+
+    private static bool PuedeContinuarRetencion(LiquidacionCompraListDto liquidacion) =>
+        EstaAutorizada(liquidacion) && !liquidacion.TieneRetencion;
+
+    private bool PuedeContinuarRetencionDetalle(int codFactura) =>
+        liquidaciones.FirstOrDefault(x => x.CodFactura == codFactura) is { } liquidacion &&
+        PuedeContinuarRetencion(liquidacion);
+
+    private bool TieneRetencionDetalle(int codFactura) =>
+        liquidaciones.FirstOrDefault(x => x.CodFactura == codFactura)?.TieneRetencion == true;
+
+    private void VerRetencion()
+    {
+        CerrarMenus();
+        CerrarModal();
+        NavManager.NavigateTo("/facturacion/retenciones-generadas");
+    }
+
+    private async Task ContinuarRetencionAsync(int codFactura)
+    {
+        CerrarModal();
+        if (OnContinuarRetencion.HasDelegate)
+        {
+            await OnContinuarRetencion.InvokeAsync(codFactura);
+            return;
+        }
+
+        NavManager.NavigateTo($"/compras/nueva-liquidacion?retencionLiquidacion={codFactura}");
+    }
+
+    private static string ObtenerEstadoSriTexto(LiquidacionCompraListDto liquidacion) =>
+        ObtenerEstadoSriTexto(liquidacion.Autorizado, liquidacion.EstadoSri);
+
+    private static string ObtenerEstadoSriTexto(string? autorizado, string? estadoSri) =>
+        DocumentoAutorizacionHelper.ObtenerEstadoVisual(
+            estadoSri,
+            DocumentoAutorizacionHelper.EstaAutorizado(autorizado, estadoSri));
+
+    private static bool EsNoAutorizada(LiquidacionCompraListDto liquidacion) =>
+        ObtenerEstadoSriTexto(liquidacion) == DocumentoAutorizacionHelper.EstadoNoAutorizado;
+
+    private static string ObtenerErrorSriTexto(LiquidacionCompraListDto liquidacion)
+    {
+        var mensaje = (liquidacion.MensajeSri ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(mensaje))
+            return mensaje;
+
+        return string.IsNullOrWhiteSpace(liquidacion.EstadoSri)
+            ? "El SRI no devolvio un detalle de error para esta liquidacion."
+            : liquidacion.EstadoSri;
+    }
+
+    private void MostrarErrorSriLiquidacion(LiquidacionCompraListDto liquidacion)
+    {
+        tituloResultadoOverlay = "Error SRI";
+        detalleResultadoOverlay = ObtenerErrorSriTexto(liquidacion);
+        mostrarResultadoOverlay = true;
+    }
+
+    private void CerrarResultadoOverlay()
+    {
+        mostrarResultadoOverlay = false;
+        tituloResultadoOverlay = string.Empty;
+        detalleResultadoOverlay = string.Empty;
+    }
+
+    private static string ObtenerNumeroAutorizacionTexto(LiquidacionCompraListDto liquidacion) =>
+        ObtenerNumeroAutorizacionTexto(liquidacion.Autorizado, liquidacion.EstadoSri, liquidacion.NumeroAutorizacion);
+
+    private static string ObtenerNumeroAutorizacionTexto(
+        string? autorizado,
+        string? estadoSri,
+        string? numeroAutorizacion) =>
+        DocumentoAutorizacionHelper.ObtenerNumeroAutorizacionVisual(
+            estadoSri,
+            DocumentoAutorizacionHelper.EstaAutorizado(autorizado, estadoSri),
+            numeroAutorizacion);
+
+    private static string ObtenerEstadoSriClase(LiquidacionCompraListDto liquidacion)
+    {
+        var estado = ObtenerEstadoSriTexto(liquidacion);
+
+        return estado == DocumentoAutorizacionHelper.EstadoAutorizado
+            ? "status-pill-success"
+            : estado == DocumentoAutorizacionHelper.EstadoNoAutorizado
+                ? "status-pill-danger"
+                : "status-pill-info";
+    }
+
+}

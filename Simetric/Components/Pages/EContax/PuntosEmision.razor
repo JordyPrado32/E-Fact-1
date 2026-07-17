@@ -1,0 +1,548 @@
+@page "/e-contax/configuracion/puntos-emision"
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using System.Security.Claims
+@using System.Threading
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ConfiguracionService ConfigService
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Puntos de emision | Numerica E-Contax</PageTitle>
+
+<div class="caja-page caja-page-econtax" data-tour="econtax.puntos-emision.page">
+    @if (isLoading)
+    {
+        <section class="caja-loading-card">
+            <div class="caja-loading-icon">
+                <span class="spinner-border" role="status"></span>
+            </div>
+            <h3>Cargando caja</h3>
+            <p>Estamos preparando tu configuracion actual.</p>
+        </section>
+    }
+    else
+    {
+        <div class="caja-shell">
+            <section class="caja-card animate__animated animate__fadeInUp" data-tour="caja.card">
+                <div class="caja-card-header @(esNuevaCaja ? "is-new" : "is-active")">
+                    <div class="caja-card-title-group">
+                        <h3>
+                            <i class="bi @(esNuevaCaja ? "bi-plus-circle" : "bi-check-circle-fill")"></i>
+                            <span>@CardTitle</span>
+                        </h3>
+                        <p>@CardSubtitle</p>
+                    </div>
+                    <span class="caja-status-pill @(esNuevaCaja ? "is-new" : "is-active")">
+                        @StatusLabel
+                    </span>
+                </div>
+
+                <div class="caja-card-body">
+                    @if (!string.IsNullOrWhiteSpace(mensajeStatus))
+                    {
+                        <div class="caja-alert @(StatusIsError ? "is-error" : "is-success")">
+                            <i class="bi @(StatusIsError ? "bi-exclamation-triangle" : "bi-check2-circle")"></i>
+                            <span>@mensajeStatus</span>
+                        </div>
+                    }
+
+                    <div class="caja-grid" data-tour="caja.series">
+                        <div class="caja-form-column">
+                            <div class="caja-field">
+                                <span class="caja-field-label">1. Codigo de establecimiento</span>
+                                <div class="caja-input-shell @(esNuevaCaja ? (establecimientoError ? "is-error" : string.Empty) : "is-disabled")">
+                                    <span class="caja-input-icon"><i class="bi bi-building"></i></span>
+                                    <input class="caja-input"
+                                           @bind="establecimiento"
+                                           @bind:event="oninput"
+                                           @onblur="NormalizarEstablecimiento"
+                                           maxlength="3"
+                                           inputmode="numeric"
+                                           placeholder="001"
+                                           disabled="@(!esNuevaCaja)" />
+                                </div>
+                                @if (establecimientoError)
+                                {
+                                    <p class="caja-help-text text-danger">Debe contener exactamente 3 digitos numericos validos y no puede ser 000.</p>
+                                }
+                                else
+                                {
+                                    <p class="caja-help-text">@EstablecimientoHelp</p>
+                                }
+                            </div>
+
+                            <div class="caja-field">
+                                <span class="caja-field-label">2. Punto de emision</span>
+                                <div class="caja-input-shell @(puntoEmisionError ? "is-error" : string.Empty)">
+                                    <span class="caja-input-icon"><i class="bi bi-upc-scan"></i></span>
+                                    <input class="caja-input"
+                                           @bind="puntoEmisionInput"
+                                           @bind:event="oninput"
+                                           @onblur="NormalizarPuntoEmision"
+                                           maxlength="3"
+                                           inputmode="numeric"
+                                           placeholder="001"
+                                           />
+                                </div>
+                                @if (puntoEmisionError)
+                                {
+                                    <p class="caja-help-text text-danger">Debe contener exactamente 3 digitos numericos validos y no puede ser 000.</p>
+                                }
+                                else
+                                {
+                                    <p class="caja-help-text">@PuntoEmisionHelp</p>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="caja-preview-column">
+                            <span class="caja-field-label caja-preview-label">Vista previa de la serie</span>
+                            <div class="caja-preview-box">
+                                <div class="caja-preview-number">
+                                    @EstablecimientoPreview<span>-</span>@PuntoEmisionPreview
+                                </div>
+                                <span class="caja-preview-badge">
+                                    <i class="bi bi-qr-code-scan"></i>
+                                    <span>Documentos electronicos</span>
+                                </span>
+                            </div>
+                            <p class="caja-preview-note">@PreviewNote</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="caja-card-footer" data-tour="caja.save">
+                    <p class="caja-footer-note">@FooterNote</p>
+                    @if (esNuevaCaja)
+                    {
+                        <button type="button" class="primary-btn caja-action-btn" @onclick="AbrirConfirmacionNuevaCaja" disabled="@(isSaving || establecimientoError || puntoEmisionError)">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm"></span>
+                                <span>Activando...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-rocket-takeoff-fill"></i>
+                                <span>Activar punto de emision @SeriePreview</span>
+                            }
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button" class="primary-btn caja-action-btn" @onclick="GuardarConfiguracion" disabled="@(isSaving || puntoEmisionError)">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm"></span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-save"></i>
+                                <span>Guardar Cambios</span>
+                            }
+                        </button>
+                    }
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+@if (showConfirmModal)
+{
+    <div class="caja-modal-backdrop" @onclick="CerrarConfirmacionNuevaCaja"></div>
+    <div class="caja-modal-shell">
+        <section class="caja-modal-card" role="dialog" aria-modal="true">
+            <div class="caja-modal-head">
+                <div>
+                    <span class="caja-modal-kicker">Confirmacion requerida</span>
+                    <h4>Activar punto de emision</h4>
+                </div>
+                <button type="button" class="caja-modal-close" @onclick="CerrarConfirmacionNuevaCaja"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="caja-modal-body">
+                <div class="caja-warning-box">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    <div>
+                        <strong>Esta accion no se puede revertir.</strong>
+                        <p>Al confirmar, el punto de emision quedara creado con la serie <strong>@SeriePreview</strong>. El establecimiento quedara fijo.</p>
+                    </div>
+                </div>
+                <ul class="caja-confirm-list">
+                    <li>Solo se configurara una caja para esta cuenta.</li>
+                    <li>El establecimiento <strong>001</strong> no se podra cambiar despues.</li>
+                    <li>El punto de emision <strong>@PuntoEmisionPreview</strong> si podra modificarse luego.</li>
+                    <li>La serie se compartira para Facturas, Notas de Credito, Retenciones y Guias.</li>
+                </ul>
+                <div class="caja-confirm-check">
+                    <label class="caja-check-option @(confirmCheckboxEnabled ? "" : "is-locked")">
+                        <input type="checkbox" @bind="confirmCheckboxChecked" disabled="@(!confirmCheckboxEnabled || isSaving)" />
+                        <span>Entiendo que esta accion no se puede revertir.</span>
+                    </label>
+                    @if (!confirmCheckboxEnabled)
+                    {
+                        <p class="caja-confirm-timer">Podras confirmar en <strong>@confirmSecondsRemaining</strong> segundos.</p>
+                    }
+                </div>
+            </div>
+            <div class="caja-modal-actions">
+                <button type="button" class="secondary-btn" @onclick="CerrarConfirmacionNuevaCaja" disabled="@isSaving">Cancelar</button>
+                <button type="button" class="primary-btn" @onclick="ConfirmarCreacionNuevaCaja" disabled="@(!CanConfirmCreation)">
+                    @if (isSaving)
+                    {
+                        <span class="spinner-border spinner-border-sm"></span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-check2-circle"></i>
+                        <span>Confirmar creacion</span>
+                    }
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private Caja miCaja = new();
+    private bool isLoading = true, isSaving = false, esNuevaCaja = false;
+    private bool showConfirmModal = false, confirmCheckboxChecked = false, confirmCheckboxEnabled = false;
+    private string? mensajeStatus;
+    private int idUsuarioActual, confirmSecondsRemaining = 10;
+    private string establecimiento = "001";
+    private string puntoEmisionInput = "001";
+    private bool establecimientoError = false;
+    private bool puntoEmisionError = false;
+    private CancellationTokenSource? confirmCountdownCts;
+
+    private bool StatusIsError => mensajeStatus?.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ?? false;
+    private bool CanConfirmCreation => confirmCheckboxEnabled && confirmCheckboxChecked && !isSaving;
+    private string EstablecimientoPreview => FormatearEstablecimientoPreview(establecimiento);
+    private string SeriePreview => $"{EstablecimientoPreview}-{PuntoEmisionPreview}";
+    private string CardTitle => esNuevaCaja ? "Configurar punto de emision" : $"Punto de emision activo: {SeriePreview}";
+    private string CardSubtitle => esNuevaCaja
+        ? "Define el punto de emision inicial para comenzar a emitir."
+        : "Puedes modificar el punto de emision cuando necesites.";
+    private string StatusLabel => esNuevaCaja ? "Por configurar" : "Activo";
+    private string EstablecimientoHelp => esNuevaCaja
+        ? "Ingresa el establecimiento inicial. Luego quedara fijo."
+        : "El establecimiento queda fijo luego de la primera configuracion.";
+    private string PuntoEmisionHelp => esNuevaCaja
+        ? "Ingresa el punto de emision inicial."
+        : "Cada punto de emision mantiene su propia secuencia.";
+    private string PreviewNote => "Se aplicara a facturas, notas de credito, compras, debitos y guias.";
+    private string FooterNote => esNuevaCaja
+        ? $"Se activara con la serie {SeriePreview}."
+        : $"Serie actual: {SeriePreview}. Los siguientes documentos usaran esta nueva secuencia.";
+
+    private string PuntoEmisionPreview
+    {
+        get
+        {
+            var digits = LimpiarDigitos(puntoEmisionInput);
+            if (digits.Length == 0) return "001";
+            return (digits.Length > 3 ? digits.Substring(0, 3) : digits).PadLeft(3, '0');
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (!await ValidarAccesoEContaxAsync(user))
+        {
+            isLoading = false;
+            return;
+        }
+
+        idUsuarioActual = ObtenerIdUsuario(user);
+        if (idUsuarioActual <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            isLoading = false;
+            return;
+        }
+
+        if (idUsuarioActual > 0)
+        {
+            await CargarDatos();
+        }
+
+        isLoading = false;
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+
+    private async Task CargarDatos(bool preserveStatus = false)
+    {
+        isLoading = true;
+        if (!preserveStatus) mensajeStatus = null;
+
+        try
+        {
+            var cajaUsuario = (await ConfigService.GetCajasCuentaActivasAsync(idUsuarioActual))
+                .OrderBy(c => c.NumCaja ?? c.Sec)
+                .ThenBy(c => c.Sec)
+                .FirstOrDefault();
+
+            if (cajaUsuario != null)
+            {
+                miCaja = cajaUsuario;
+                esNuevaCaja = false;
+                establecimiento = ExtraerEstablecimiento(miCaja.SerieFactura);
+                puntoEmisionInput = ExtraerPuntoEmision(miCaja.SerieFactura);
+            }
+            else
+            {
+                esNuevaCaja = true;
+                miCaja = new Caja
+                {
+                    IdUsuario = idUsuarioActual,
+                    NumCaja = 1,
+                    idJefe = idUsuarioActual
+                };
+                establecimiento = "001";
+                puntoEmisionInput = "001";
+            }
+
+            establecimientoError = false;
+            puntoEmisionError = false;
+            await EmisorOnboardingService.RefreshRequirementAsync(idUsuarioActual);
+        }
+        catch (Exception ex)
+        {
+            mensajeStatus = $"Error al cargar datos: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void NormalizarEstablecimiento()
+    {
+        var digits = LimpiarDigitos(establecimiento);
+        if (digits.Length != 3 || digits == "000")
+        {
+            establecimientoError = true;
+            return;
+        }
+
+        establecimiento = digits;
+        establecimientoError = false;
+    }
+
+    private void NormalizarPuntoEmision()
+    {
+        var digits = LimpiarDigitos(puntoEmisionInput);
+        if (digits.Length == 0)
+        {
+            puntoEmisionError = true;
+            return;
+        }
+
+        puntoEmisionInput = digits.PadLeft(3, '0');
+        if (puntoEmisionInput.Length > 3)
+        {
+            puntoEmisionInput = puntoEmisionInput.Substring(0, 3);
+        }
+        if (puntoEmisionInput == "000")
+        {
+            puntoEmisionError = true;
+            return;
+        }
+        puntoEmisionError = false;
+    }
+
+    private async Task GuardarConfiguracion()
+    {
+        if (isSaving) return;
+
+        NormalizarEstablecimiento();
+        NormalizarPuntoEmision();
+        if (establecimientoError)
+        {
+            mensajeStatus = "Error: El establecimiento debe tener 3 digitos validos y no puede ser 000.";
+            return;
+        }
+        if (puntoEmisionError)
+        {
+            mensajeStatus = "Error: El punto de emision debe tener 3 digitos validos y no puede ser 000.";
+            return;
+        }
+
+        isSaving = true;
+        mensajeStatus = null;
+        try
+        {
+            var serie = SeriePreview;
+            miCaja.SerieFactura = serie;
+            miCaja.SerieNotasCred = serie;
+            miCaja.SerieGuia = serie;
+            miCaja.SerieCompras = serie;
+            miCaja.SerieDebitos = serie;
+            miCaja.Estado = true;
+            miCaja.NumCaja = 1;
+            miCaja.IdUsuario = idUsuarioActual;
+            miCaja.idJefe ??= idUsuarioActual;
+            miCaja.IdEmpresa = miCaja.IdEmpresa is > 0 ? miCaja.IdEmpresa : 1;
+            miCaja.IdSucursal = miCaja.IdSucursal is > 0 ? miCaja.IdSucursal : 1;
+
+            if (await ConfigService.SaveCajaAsync(miCaja, idUsuarioActual))
+            {
+                mensajeStatus = esNuevaCaja
+                    ? $"Punto de emision {serie} activado correctamente."
+                    : "Punto de emision actualizado correctamente.";
+                await CargarDatos(true);
+            }
+            else
+            {
+                mensajeStatus = "Error: No se pudo guardar la configuracion.";
+            }
+        }
+        catch (Exception ex)
+        {
+            mensajeStatus = $"Error del sistema: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void AbrirConfirmacionNuevaCaja()
+    {
+        NormalizarEstablecimiento();
+        NormalizarPuntoEmision();
+        if (isSaving || !esNuevaCaja) return;
+        if (establecimientoError)
+        {
+            mensajeStatus = "Error: El establecimiento debe tener 3 digitos validos y no puede ser 000.";
+            return;
+        }
+        if (puntoEmisionError)
+        {
+            mensajeStatus = "Error: El punto de emision debe tener 3 digitos validos y no puede ser 000.";
+            return;
+        }
+        ResetConfirmacionNuevaCaja();
+        showConfirmModal = true;
+        confirmSecondsRemaining = 10;
+        _ = IniciarCuentaRegresiva();
+    }
+
+    private async Task IniciarCuentaRegresiva()
+    {
+        confirmCountdownCts = new CancellationTokenSource();
+        try
+        {
+            while (confirmSecondsRemaining > 0)
+            {
+                await Task.Delay(1000, confirmCountdownCts.Token);
+                confirmSecondsRemaining--;
+                await InvokeAsync(StateHasChanged);
+            }
+
+            confirmCheckboxEnabled = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+
+    private void CerrarConfirmacionNuevaCaja() => ResetConfirmacionNuevaCaja();
+
+    private async Task ConfirmarCreacionNuevaCaja()
+    {
+        if (!CanConfirmCreation) return;
+        showConfirmModal = false;
+        await GuardarConfiguracion();
+    }
+
+    private void ResetConfirmacionNuevaCaja()
+    {
+        confirmCountdownCts?.Cancel();
+        confirmCountdownCts?.Dispose();
+        confirmCountdownCts = null;
+        showConfirmModal = false;
+        confirmCheckboxChecked = false;
+        confirmCheckboxEnabled = false;
+        confirmSecondsRemaining = 10;
+    }
+
+    private static string LimpiarDigitos(string? v) => new((v ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private static string ExtraerEstablecimiento(string? serie)
+    {
+        if (string.IsNullOrWhiteSpace(serie)) return "001";
+        if (serie.Contains('-')) return FormatearEstablecimientoPreview(serie.Split('-')[0]);
+
+        var nums = LimpiarDigitos(serie);
+        return nums.Length >= 3 ? nums.Substring(0, 3) : FormatearEstablecimientoPreview(nums);
+    }
+
+    private static string ExtraerPuntoEmision(string? serie)
+    {
+        if (string.IsNullOrWhiteSpace(serie)) return "001";
+        if (serie.Contains('-')) return serie.Split('-').LastOrDefault() ?? "001";
+
+        var nums = LimpiarDigitos(serie);
+        return nums.Length >= 6 ? nums.Substring(3, 3) : "001";
+    }
+
+    private static string FormatearEstablecimientoPreview(string? value)
+    {
+        var digits = LimpiarDigitos(value);
+        if (digits.Length == 0) return "???";
+        return (digits.Length > 3 ? digits.Substring(0, 3) : digits).PadLeft(3, '0');
+    }
+
+    public void Dispose() => ResetConfirmacionNuevaCaja();
+}

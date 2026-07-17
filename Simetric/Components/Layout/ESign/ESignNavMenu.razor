@@ -1,0 +1,379 @@
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.ESign
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IESignMenuService ESignMenuService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject MenuStateService MenuStateService
+@implements IDisposable
+
+<div class="nav-item">
+    <NavLink class="menu-link" href="/portal-servicios" Match="NavLinkMatch.Prefix" @onclick="NotifyNavigateAsync">
+        <span class="menu-icon">
+            <i class="ri-apps-2-line"></i>
+        </span>
+        <span class="menu-text">Servicios</span>
+    </NavLink>
+</div>
+
+@if (isLoading)
+{
+    <div class="loading-pill">
+        <span class="spinner-border spinner-border-sm" role="status"></span>
+        <span>Cargando menú...</span>
+    </div>
+}
+else if (listadoMenus.Any())
+{
+    @foreach (var padre in GetMenusPadreOrdenados())
+    {
+        var hijos = GetMenusHijosOrdenados(padre.IdMenu).ToList();
+
+        if (hijos.Any())
+        {
+            <div class="nav-item">
+                @if (!string.IsNullOrWhiteSpace(padre.RutaMenu))
+                {
+                    <div class="menu-parent-row">
+                        <NavLink class="menu-link menu-parent-link" href="@padre.RutaMenu" Match="NavLinkMatch.Prefix" @onclick="NotifyNavigateAsync">
+                            <span class="menu-icon">
+                                <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-folder-line" : padre.IconoMenu)"></i>
+                            </span>
+                            <span class="menu-text">@padre.NombreMenu</span>
+                        </NavLink>
+
+                        <button type="button" class="menu-caret-button" @onclick="() => ToggleSubmenu(padre.IdMenu)" aria-label="Expandir modulo">
+                            <i class="menu-caret @(menuAbiertoId == padre.IdMenu ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <button type="button" class="menu-button" @onclick="() => ToggleSubmenu(padre.IdMenu)">
+                        <span class="menu-icon">
+                            <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-folder-line" : padre.IconoMenu)"></i>
+                        </span>
+                        <span class="menu-text">@padre.NombreMenu</span>
+                        <i class="menu-caret @(menuAbiertoId == padre.IdMenu ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+                    </button>
+                }
+
+                @if (menuAbiertoId == padre.IdMenu)
+                {
+                    <div class="submenu-panel animate__animated animate__fadeIn">
+                        @foreach (var hijo in hijos)
+                        {
+                            <NavLink class="menu-link submenu-link" href="@hijo.RutaMenu" @onclick="NotifyNavigateAsync">
+                                <span class="menu-icon">
+                                    <i class="@(string.IsNullOrWhiteSpace(hijo.IconoMenu) ? "ri-subtract-line" : hijo.IconoMenu)"></i>
+                                </span>
+                                <span class="menu-text">@hijo.NombreMenu</span>
+                            </NavLink>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(padre.RutaMenu))
+        {
+            <div class="nav-item">
+                <NavLink class="menu-link" href="@padre.RutaMenu" @onclick="NotifyNavigateAsync" Match="@(padre.RutaMenu == "/e-sign" ? NavLinkMatch.All : NavLinkMatch.Prefix)">
+                    <span class="menu-icon">
+                        <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-circle-line" : padre.IconoMenu)"></i>
+                    </span>
+                    <span class="menu-text">@padre.NombreMenu</span>
+                </NavLink>
+            </div>
+        }
+    }
+}
+else
+{
+    <!-- Fallback Static Menu with Firma Electronica Parent/Child Structure in ESign Greens -->
+    <div class="nav-item">
+        <NavLink class="menu-link" href="/e-sign" Match="NavLinkMatch.All" @onclick="NotifyNavigateAsync">
+            <span class="menu-icon">
+                <i class="ri-home-4-line"></i>
+            </span>
+            <span class="menu-text">Inicio</span>
+        </NavLink>
+    </div>
+
+    <div class="nav-item">
+        <NavLink class="menu-link" href="/e-sign/documentos" Match="NavLinkMatch.Prefix" @onclick="NotifyNavigateAsync">
+            <span class="menu-icon">
+                <i class="ri-file-shield-2-line"></i>
+            </span>
+            <span class="menu-text">Documentos firmados</span>
+        </NavLink>
+    </div>
+
+    <div class="nav-item">
+        <button type="button" class="menu-button" @onclick="() => ToggleSubmenu(-1)">
+            <span class="menu-icon">
+                <i class="ri-pen-nib-line"></i>
+            </span>
+            <span class="menu-text">Firma Electronica</span>
+            <i class="menu-caret @(menuAbiertoId == -1 ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+        </button>
+        @if (menuAbiertoId == -1)
+        {
+            <div class="submenu-panel animate__animated animate__fadeIn">
+                <NavLink class="menu-link submenu-link" href="/solicitud/nueva" @onclick="NotifyNavigateAsync">
+                    <span class="menu-icon">
+                        <i class="ri-file-add-line"></i>
+                    </span>
+                    <span class="menu-text">Nueva Solicitud</span>
+                </NavLink>
+                <NavLink class="menu-link submenu-link" href="/solicitud/pagos" @onclick="NotifyNavigateAsync">
+                    <span class="menu-icon">
+                        <i class="ri-bill-line"></i>
+                    </span>
+                    <span class="menu-text">Mis Pagos</span>
+                </NavLink>
+            </div>
+        }
+    </div>
+
+    <div class="nav-item">
+        <button type="button" class="menu-button" @onclick="() => ToggleSubmenu(-3)">
+            <span class="menu-icon">
+                <i class="ri-key-2-line"></i>
+            </span>
+            <span class="menu-text">Mis firmas</span>
+            <i class="menu-caret @(menuAbiertoId == -3 ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+        </button>
+        @if (menuAbiertoId == -3)
+        {
+            <div class="submenu-panel animate__animated animate__fadeIn">
+                @if (!usuarioTieneFirma)
+                {
+                    <NavLink class="menu-link submenu-link" href="/solicitud/nueva" @onclick="NotifyNavigateAsync">
+                        <span class="menu-icon">
+                            <i class="ri-file-add-line"></i>
+                        </span>
+                        <span class="menu-text">Comprar firma</span>
+                    </NavLink>
+                }
+                else
+                {
+                    <NavLink class="menu-link submenu-link" href="/e-sign/mis-firmas" @onclick="NotifyNavigateAsync">
+                        <span class="menu-icon">
+                            <i class="ri-shield-user-line"></i>
+                        </span>
+                        <span class="menu-text">Ver mis firmas</span>
+                    </NavLink>
+                }
+            </div>
+        }
+    </div>
+
+    @if (isSuperAdmin)
+    {
+        <div class="nav-item">
+            <button type="button" class="menu-button" @onclick="() => ToggleSubmenu(-4)">
+                <span class="menu-icon">
+                    <i class="ri-settings-3-line"></i>
+                </span>
+                <span class="menu-text">Administración</span>
+                <i class="menu-caret @(menuAbiertoId == -4 ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+            </button>
+            @if (menuAbiertoId == -4)
+            {
+                <div class="submenu-panel animate__animated animate__fadeIn">
+                    <NavLink class="menu-link submenu-link" href="/e-sign/administracion/roles" @onclick="NotifyNavigateAsync">
+                        <span class="menu-icon">
+                            <i class="ri-key-line"></i>
+                        </span>
+                        <span class="menu-text">Roles y permisos</span>
+                    </NavLink>
+                    <NavLink class="menu-link submenu-link" href="/e-sign/administracion/usuarios" @onclick="NotifyNavigateAsync">
+                        <span class="menu-icon">
+                            <i class="ri-user-shared-line"></i>
+                        </span>
+                        <span class="menu-text">Usuarios</span>
+                    </NavLink>
+                </div>
+            }
+        </div>
+    }
+
+    <div class="nav-item">
+        <button type="button" class="menu-button" @onclick="() => ToggleSubmenu(-2)">
+            <span class="menu-icon">
+                <i class="ri-settings-3-line"></i>
+            </span>
+            <span class="menu-text">Configuracion</span>
+            <i class="menu-caret @(menuAbiertoId == -2 ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+        </button>
+        @if (menuAbiertoId == -2)
+        {
+            <div class="submenu-panel animate__animated animate__fadeIn">
+                <NavLink class="menu-link submenu-link" href="/e-sign/configuracion/perfil" @onclick="NotifyNavigateAsync">
+                    <span class="menu-icon">
+                        <i class="ri-user-settings-line"></i>
+                    </span>
+                    <span class="menu-text">Perfil</span>
+                </NavLink>
+                <NavLink class="menu-link submenu-link" href="/e-sign/configuracion/plan" @onclick="NotifyNavigateAsync">
+                    <span class="menu-icon">
+                        <i class="ri-bill-line"></i>
+                    </span>
+                    <span class="menu-text">Plan disponible</span>
+                </NavLink>
+            </div>
+        }
+    </div>
+
+    <div class="nav-item">
+        <NavLink class="menu-link" href="/e-sign/soporte" @onclick="NotifyNavigateAsync">
+            <span class="menu-icon">
+                <i class="ri-customer-service-2-line"></i>
+            </span>
+            <span class="menu-text">Soporte</span>
+        </NavLink>
+    </div>
+}
+
+@code {
+    [Parameter] public EventCallback OnNavigate { get; set; }
+    private readonly List<Menu> listadoMenus = new();
+    private bool isLoading = true;
+    private int menuAbiertoId;
+    private bool usuarioTieneFirma = false;
+    private bool isSuperAdmin = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        MenuStateService.OnMenuChanged += HandleMenuChanged;
+        await CargarMenus();
+    }
+
+    private async void HandleMenuChanged()
+    {
+        await InvokeAsync(async () =>
+        {
+            await CargarMenus();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        MenuStateService.OnMenuChanged -= HandleMenuChanged;
+    }
+
+    private async Task CargarMenus()
+    {
+        try
+        {
+            isLoading = true;
+            listadoMenus.Clear();
+            isSuperAdmin = false;
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated ?? false)
+            {
+                var claimValue = user.FindFirst("IdTipoUsuario")?.Value
+                    ?? user.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+
+                isSuperAdmin = string.Equals(claimValue, "2", StringComparison.OrdinalIgnoreCase);
+
+                if (int.TryParse(claimValue, out int idTipoUsuario))
+                {
+                    var dbMenus = await ESignMenuService.GetMenusByRol(idTipoUsuario);
+                    if (dbMenus != null)
+                    {
+                        listadoMenus.AddRange(dbMenus);
+
+                        // Clear Route for parent menu ID 10 so it behaves as dropdown
+                        var parentMisFirmas = listadoMenus.FirstOrDefault(m => m.IdMenu == 10);
+                        if (parentMisFirmas != null)
+                        {
+                            parentMisFirmas.RutaMenu = "";
+                        }
+                    }
+                }
+
+                // Check if user has signature
+                if (int.TryParse(user.FindFirst("IdUsuario")?.Value, out int userId))
+                {
+                    await using var context = await DbFactory.CreateDbContextAsync();
+                    usuarioTieneFirma = await context.Set<UsuSolicitudFirma>()
+                        .AnyAsync(s => s.SolIdUsuarioCliente == userId && s.SolActivo && (s.SolIdEstadoNumerica == 3 || s.SolPagoExitoso == true));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error en ESignNavMenu: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task NotifyNavigateAsync()
+    {
+        if (OnNavigate.HasDelegate)
+        {
+            await OnNavigate.InvokeAsync();
+        }
+    }
+
+    private void ToggleSubmenu(int id)
+    {
+        menuAbiertoId = menuAbiertoId == id ? 0 : id;
+    }
+
+    private IEnumerable<Menu> GetMenusPadreOrdenados() =>
+        listadoMenus
+            .Where(m => m.IdMenuPadre == 0 || m.IdMenuPadre == null)
+            .OrderBy(m => m.OrdenMenu ?? 9999)
+            .ThenBy(m => m.IdMenu);
+
+    private IEnumerable<Menu> GetMenusHijosOrdenados(int idPadre)
+    {
+        if (idPadre == 10)
+        {
+            var hijos = new List<Menu>();
+            if (!usuarioTieneFirma)
+            {
+                hijos.Add(new Menu
+                {
+                    IdMenu = 101,
+                    IdMenuPadre = 10,
+                    NombreMenu = "Comprar firma",
+                    RutaMenu = "/solicitud/nueva",
+                    IconoMenu = "ri-file-add-line",
+                    EstadoMenu = true
+                });
+            }
+            else
+            {
+                hijos.Add(new Menu
+                {
+                    IdMenu = 102,
+                    IdMenuPadre = 10,
+                    NombreMenu = "Ver mis firmas",
+                    RutaMenu = "/e-sign/mis-firmas",
+                    IconoMenu = "ri-shield-user-line",
+                    EstadoMenu = true
+                });
+            }
+            return hijos;
+        }
+
+        return listadoMenus
+            .Where(m => m.IdMenuPadre == idPadre)
+            .OrderBy(m => m.OrdenMenu ?? 9999)
+            .ThenBy(m => m.IdMenu);
+    }
+}

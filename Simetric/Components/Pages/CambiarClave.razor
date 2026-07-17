@@ -1,0 +1,781 @@
+@page "/cambiar-clave/{IdUsuario:int}"
+@attribute [AllowAnonymous]
+@layout EmptyLayout
+@implements IAsyncDisposable
+
+@using Simetric.Components.Helpers
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.ViewModels
+@using Simetric.Components.Layout
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Routing
+
+@inject NavigationManager Nav
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Cambiar Clave | Numerica e-fact</PageTitle>
+
+<style>
+    @FontFaceCss
+
+    :root {
+        --n-blue: #006bb5;
+        --n-blue-dark: #004a7c;
+        --n-blue-light: #e6f0f8;
+        --n-dark: #2c3e50;
+        --white: #ffffff;
+        --bg-color: #f4f7f6;
+    }
+
+    body {
+        font-family: 'Montserrat', sans-serif;
+        background-color: var(--bg-color);
+        margin: 0;
+        min-height: 100dvh;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(10px);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+        color: var(--n-blue);
+    }
+
+    .main-viewport {
+        display: flex;
+        min-height: max(100vh, 100dvh);
+        height: auto;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-y: visible;
+    }
+
+    /* ── Panel Izquierdo ── */
+    .brand-side {
+        flex: 1 1 56%;
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: clamp(2.5rem, 4vw, 5rem);
+        position: relative;
+        overflow: hidden;
+        min-width: 0;
+        min-height: 0;
+    }
+
+    .brand-side::before,
+    .brand-side::after {
+        content: "";
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.04);
+        z-index: 0;
+    }
+
+    .brand-side::before {
+        width: 400px;
+        height: 400px;
+        top: -100px;
+        left: -100px;
+    }
+
+    .brand-side::after {
+        width: 600px;
+        height: 600px;
+        bottom: -200px;
+        right: -150px;
+    }
+
+    .numeric-digits-layer {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    .numerica-digit {
+        position: absolute;
+        z-index: 1;
+        color: rgba(255, 255, 255, 0.5);
+        line-height: 1;
+        user-select: none;
+        mix-blend-mode: screen;
+        text-shadow: 0 0 20px rgba(255, 255, 255, 0.34), 0 0 42px rgba(255, 255, 255, 0.22), 0 0 64px rgba(184, 220, 255, 0.1);
+        font-variant-numeric: tabular-nums;
+        will-change: transform, opacity;
+    }
+    @KeyframesDigitFloatCss
+
+    .numeric-digits-layer::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background: radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.14), transparent 34%), radial-gradient(circle at 74% 72%, rgba(255, 255, 255, 0.11), transparent 30%);
+        opacity: 0.78;
+    }
+
+    .glass-card {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 24px;
+        padding: clamp(2.15rem, 3vw, 3.25rem);
+        width: min(100%, 34rem);
+        max-width: 34rem;
+        min-height: clamp(23rem, 50vh, 27rem);
+        position: relative;
+        z-index: 2;
+        box-shadow: 0 25px 50px rgba(0,0,0,0.1);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: clamp(1.35rem, 2vw, 1.9rem);
+        text-align: center;
+    }
+
+    .brand-logo-shell {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: fit-content;
+        max-width: 100%;
+        padding: 0.8rem 1.1rem;
+        border-radius: 18px;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08));
+        border: 1px solid rgba(255, 255, 255, 0.26);
+        box-shadow: 0 16px 30px rgba(2, 35, 66, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+        backdrop-filter: blur(10px);
+    }
+
+    .brand-lockup {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: clamp(0.95rem, 1.4vw, 1.25rem);
+        max-width: 100%;
+    }
+
+    .brand-logo,
+    .brand-logo-shell > img {
+        width: clamp(4.6rem, 8vw, 5.75rem);
+        height: clamp(4.6rem, 8vw, 5.75rem);
+        max-width: 100%;
+        display: block;
+        object-fit: contain;
+        filter: drop-shadow(0 8px 18px rgba(1, 21, 40, 0.24)) saturate(1.04) contrast(1.04);
+    }
+
+    .brand-logo-shell > img {
+        margin-bottom: 0 !important;
+    }
+
+    .login-brand-heading {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-weight: 600;
+        font-size: clamp(2rem, 3.2vw, 2.85rem);
+        letter-spacing: 0;
+        line-height: 0.96;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        text-align: left;
+    }
+
+    .brand-tagline {
+        margin: 0;
+        max-width: 28rem;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: clamp(1.08rem, 1.55vw, 1.35rem);
+        font-weight: 400;
+        line-height: 1.55;
+    }
+
+    .brand-version-row {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+    }
+
+    .brand-mobile-lockup {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+    }
+
+    .brand-mobile-logo {
+        width: 58px;
+        height: 58px;
+        display: inline-block;
+        object-fit: contain;
+        filter: drop-shadow(0 10px 18px rgba(37, 76, 205, 0.2));
+    }
+
+    .brand-mobile-name {
+        font-family: "Conthrax SemiBold", "Conthrax", sans-serif;
+        font-size: 1.15rem;
+        font-weight: 600;
+        line-height: 0.98;
+        color: var(--n-dark);
+        display: flex;
+        flex-direction: column;
+        text-align: left;
+    }
+
+    /* ── Panel Derecho (Formulario y Controles) ── */
+    .form-side {
+        flex: 1 1 44%;
+        background: var(--white);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: clamp(1rem, 2vw, 2rem);
+        min-width: 0;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .login-container-pro {
+        width: 100%;
+        max-width: 440px;
+        animation: slideUp 0.6s ease-out forwards;
+        background: white;
+        padding: clamp(1.75rem, 2.4vw, 3rem) clamp(1.4rem, 2vw, 2rem);
+        border-radius: 24px;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.04);
+        border: 1px solid rgba(0,0,0,0.02);
+        max-height: none;
+        overflow: visible;
+    }
+
+    .login-container-pro .mb-5 {
+        margin-bottom: 2rem !important;
+    }
+
+    .form-label-n {
+        font-weight: 600;
+        font-size: 0.85rem;
+        color: var(--n-dark);
+        margin-bottom: 8px;
+        display: block;
+        letter-spacing: 0.5px;
+    }
+
+    .input-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+
+    .input-n-premium {
+        width: 100%;
+        padding: 14px 45px 14px 45px;
+        border: 2px solid #edf2f7;
+        border-radius: 12px;
+        background: #f8fafc;
+        font-size: 0.95rem;
+        color: var(--n-dark);
+        transition: all 0.3s ease;
+    }
+
+    .input-n-premium:focus {
+        border-color: var(--n-blue);
+        background: white;
+        box-shadow: 0 0 0 4px rgba(0, 107, 181, 0.1);
+        outline: none;
+    }
+
+    .input-icon-n {
+        position: absolute;
+        left: 16px;
+        color: #a0aec0;
+        font-size: 1.2rem;
+        transition: color 0.3s ease;
+        pointer-events: none;
+    }
+
+    .input-n-premium:focus + .input-icon-n,
+    .input-n-premium:not(:placeholder-shown) + .input-icon-n {
+        color: var(--n-blue);
+    }
+
+    .btn-eye-n {
+        position: absolute;
+        right: 16px;
+        background: transparent;
+        border: none;
+        color: #a0aec0;
+        font-size: 1.2rem;
+        cursor: pointer;
+        transition: color 0.3s ease;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10;
+    }
+
+    .btn-eye-n:hover {
+        color: var(--n-blue);
+    }
+
+    .btn-n-login {
+        background: linear-gradient(135deg, var(--n-blue) 0%, var(--n-blue-dark) 100%);
+        color: white;
+        padding: 16px;
+        border-radius: 12px;
+        width: 100%;
+        border: none;
+        font-weight: 600;
+        font-size: 1rem;
+        letter-spacing: 0.5px;
+        box-shadow: 0 8px 20px rgba(0, 107, 181, 0.25);
+        transition: all 0.3s ease;
+        margin-top: 1rem;
+    }
+
+    .btn-n-login:hover:not(:disabled) {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 25px rgba(0, 107, 181, 0.35);
+    }
+
+    .btn-n-login:disabled {
+        background: #a0aec0;
+        box-shadow: none;
+        cursor: not-allowed;
+    }
+
+    .auth-mail-note {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        padding: 0.9rem 1rem;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #f7fbff, #edf6fd);
+        border: 1px solid #d4e6f4;
+        color: #4f6475;
+        font-size: 0.85rem;
+        text-align: center;
+    }
+
+    .auth-mail-note strong {
+        color: var(--n-blue-dark);
+        font-size: 0.95rem;
+        word-break: break-word;
+    }
+
+    .resend-timer {
+        color: #6b7280;
+        font-size: 0.85rem;
+    }
+
+    @SlideUpAndMediaCss
+</style>
+
+@if (cargando)
+{
+    <div class="loading-overlay">
+        <div class="spinner-border text-primary" style="width: 3.5rem; height: 3.5rem;" role="status"></div>
+        <h4 class="mt-4 fw-bold text-dark">Actualizando Clave</h4>
+        <p class="text-muted">Protegiendo tu acceso a Numerica...</p>
+    </div>
+}
+
+<div class="main-viewport">
+    <div class="brand-side d-none d-lg-flex">
+        <div id="numericaDigitsLayerClave" class="numeric-digits-layer" aria-hidden="true"></div>
+        <div class="glass-card">
+            <div class="brand-lockup">
+                <span class="brand-logo-shell">
+                    <img src="/images/company-logo.png" class="brand-logo" alt="Numerica software" onerror="this.style.display='none'" />
+                </span>
+                <h1 class="login-brand-heading">
+                    <span>Numerica</span>
+                    <span>software</span>
+                </h1>
+            </div>
+            <p class="brand-tagline">Actualiza tu clave de forma segura y vuelve a tu entorno de trabajo sin fricciones.</p>
+            <div class="brand-version-row">
+                <span class="badge rounded-pill bg-white text-primary px-3 py-2 shadow-sm">Versión 2026</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="form-side">
+        <div class="login-container-pro">
+            <div class="text-center mb-5">
+                <div class="brand-mobile-lockup d-lg-none mb-3">
+                    <img src="/images/company-logo.png" class="brand-mobile-logo" alt="Numerica software" onerror="this.style.display='none'" />
+                    <div class="brand-mobile-name">
+                        <span>Numerica</span>
+                        <span>software</span>
+                    </div>
+                </div>
+                <h2 class="fw-bold text-dark mb-1">Cambiar Clave</h2>
+                <p class="text-muted small">Ingresa el código temporal y crea una nueva contraseña</p>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(correoUsuario))
+            {
+                <div class="auth-mail-note mb-4">
+                    <span>Correo enviado a</span>
+                    <strong>@correoUsuario</strong>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(error))
+            {
+                <div class="alert alert-danger small py-2 mb-4">
+                    @error
+                </div>
+            }
+
+            <EditForm Model="@cambioModel" OnValidSubmit="ProcesarCambio" FormName="cambiarClaveForm">
+                <DataAnnotationsValidator />
+
+                <div class="mb-4">
+                    <label class="form-label-n">Código de Acceso</label>
+                    <div class="input-wrapper">
+                        <InputText @bind-Value="cambioModel.ClaveActual"
+                                   type="@(showCurrentPassword ? "text" : "password")"
+                                   class="input-n-premium"
+                                   placeholder="00000000"
+                                   autocomplete="one-time-code" />
+                        <i class="bi bi-123 input-icon-n"></i>
+                        <button type="button" class="btn-eye-n" @onclick="() => showCurrentPassword = !showCurrentPassword" tabindex="-1">
+                            <i class="bi @(showCurrentPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                        </button>
+                    </div>
+                    <ValidationMessage For="@(() => cambioModel.ClaveActual)" class="text-danger small mt-1 d-block" />
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label-n">Nueva Contraseña</label>
+                    <div class="input-wrapper">
+                        <InputText @bind-Value="cambioModel.NuevaClave"
+                                   type="@(showNewPassword ? "text" : "password")"
+                                   class="input-n-premium"
+                                   placeholder="Crea una clave segura"
+                                   autocomplete="new-password" />
+                        <i class="bi bi-lock input-icon-n"></i>
+                        <button type="button" class="btn-eye-n" @onclick="() => showNewPassword = !showNewPassword" tabindex="-1">
+                            <i class="bi @(showNewPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                        </button>
+                    </div>
+                    <ValidationMessage For="@(() => cambioModel.NuevaClave)" class="text-danger small mt-1 d-block" />
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label-n">Confirmar Contraseña</label>
+                    <div class="input-wrapper">
+                        <InputText @bind-Value="cambioModel.ConfirmarClave"
+                                   type="@(showConfirmPassword ? "text" : "password")"
+                                   class="input-n-premium"
+                                   placeholder="Repite la nueva clave"
+                                   autocomplete="new-password" />
+                        <i class="bi bi-shield-lock input-icon-n"></i>
+                        <button type="button" class="btn-eye-n" @onclick="() => showConfirmPassword = !showConfirmPassword" tabindex="-1">
+                            <i class="bi @(showConfirmPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                        </button>
+                    </div>
+                    <ValidationMessage For="@(() => cambioModel.ConfirmarClave)" class="text-danger small mt-1 d-block" />
+                </div>
+
+                <ValidationSummary class="text-danger small mb-3" />
+
+                <button type="submit" class="btn-n-login" disabled="@cargando">
+                    @(cargando ? "PROCESANDO..." : "ACTUALIZAR Y ACCEDER")
+                </button>
+
+                <div class="text-center mt-4">
+                    @if (timerSegundos > 0)
+                    {
+                        <span class="resend-timer">Reenviar código en <strong>@timerSegundos</strong>s</span>
+                    }
+                    else
+                    {
+                        <a href="/recover-password" class="text-primary fw-bold text-decoration-none small">Generar otra clave</a>
+                    }
+                </div>
+            </EditForm>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static readonly MarkupString FontFaceCss = (MarkupString)@"
+    @font-face {
+        font-family: ""Conthrax SemiBold"";
+        src: url(""/fonts/Conthrax-SemiBold.otf"") format(""opentype"");
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+    }
+    ";
+
+    private static readonly MarkupString KeyframesDigitFloatCss = (MarkupString)@"
+    @keyframes numericaDigitFloat {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 18px, 0) scale(0.88) rotate(var(--rotate, 0deg));
+        }
+
+        18% {
+            opacity: var(--peak-opacity, 0.42);
+        }
+
+        72% {
+            opacity: calc(var(--peak-opacity, 0.42) * 0.7);
+        }
+
+        100% {
+            opacity: 0;
+            transform: translate3d(var(--drift-x, 0px), var(--drift-y, -38px), 0) scale(1.05) rotate(calc(var(--rotate, 0deg) + 6deg));
+        }
+    }
+    ";
+
+    private static readonly MarkupString SlideUpAndMediaCss = (MarkupString)@"
+    @keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @media (max-height: 860px) {
+        .main-viewport {
+            height: auto;
+        }
+
+        .brand-side {
+            padding: 2.5rem;
+        }
+
+        .glass-card {
+            padding: 1.85rem;
+            min-height: 25.75rem;
+            gap: 1rem;
+        }
+
+        .brand-side,
+        .form-side {
+            padding-top: 1.25rem;
+            padding-bottom: 1.25rem;
+        }
+
+        .login-container-pro {
+            padding: 1.6rem 1.35rem;
+        }
+    }
+
+    @media (max-width: 992px) {
+        .main-viewport {
+            flex-direction: column;
+            height: auto;
+            min-height: max(100vh, 100dvh);
+            overflow: visible;
+        }
+
+        .form-side {
+            min-height: 100dvh;
+            padding: 0.9rem;
+            background: var(--bg-color);
+            overflow: visible;
+        }
+
+        .login-container-pro {
+            padding: 1.75rem 1.25rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+        }
+    }
+    ";
+
+    [Parameter] public int IdUsuario { get; set; }
+
+    private CambioClaveModel cambioModel = new();
+    private string? error;
+    private string correoUsuario = string.Empty;
+    private bool cargando;
+    private bool navegacionInterna;
+    private bool showCurrentPassword;
+    private bool showNewPassword;
+    private bool showConfirmPassword;
+    private int timerSegundos = 60;
+    private System.Threading.Timer? _countdownTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Nav.LocationChanged += ForzarLoginSiRegresa;
+
+        if (IdUsuario <= 0)
+        {
+            navegacionInterna = true;
+            Nav.NavigateTo("/login", replace: true);
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var usuarioDB = await db.Usuarios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.IdUsuario == IdUsuario);
+
+        if (usuarioDB == null || usuarioDB.ClaveTemporal != true)
+        {
+            navegacionInterna = true;
+            Nav.NavigateTo("/login", replace: true);
+            return;
+        }
+
+        if (usuarioDB.FechaExpiracionToken != null && usuarioDB.FechaExpiracionToken < DateTime.Now)
+        {
+            navegacionInterna = true;
+            Nav.NavigateTo("/recover-password", replace: true);
+            return;
+        }
+
+        correoUsuario = usuarioDB.Email?.Trim() ?? string.Empty;
+        IniciarTimer();
+    }
+
+    private async Task ProcesarCambio()
+    {
+        if (cargando)
+        {
+            return;
+        }
+
+        cargando = true;
+        error = null;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var usuarioDB = await db.Usuarios.FindAsync(IdUsuario);
+
+            if (usuarioDB == null || usuarioDB.ClaveTemporal != true)
+            {
+                error = "La sesion de cambio de clave ha expirado.";
+                return;
+            }
+
+            string codigoAcceso = cambioModel.ClaveActual?.Trim() ?? string.Empty;
+
+            if (!EsCodigoAccesoValido(usuarioDB, codigoAcceso))
+            {
+                error = "El codigo de acceso no es correcto. Verifica el correo e intentalo de nuevo.";
+                return;
+            }
+
+            usuarioDB.PasswordHash = SecurityHelper.HashPassword(cambioModel.NuevaClave);
+            usuarioDB.ClaveTemporal = false;
+            usuarioDB.CuentaBloqueada = false;
+            usuarioDB.IntentosFallidos = 0;
+            usuarioDB.FechaDesbloqueo = null;
+            usuarioDB.FechaExpiracionToken = null;
+            usuarioDB.TokenRecuperacion = null;
+
+            await db.SaveChangesAsync();
+
+            navegacionInterna = true;
+            Nav.NavigateTo("/login?status=success", replace: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error critico: {ex.Message}");
+            error = "Error critico al actualizar la contrasena.";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private static bool EsCodigoAccesoValido(Usuario usuarioDB, string codigoAcceso)
+    {
+        if (string.IsNullOrWhiteSpace(codigoAcceso))
+        {
+            return false;
+        }
+
+        var tokenValido = !string.IsNullOrWhiteSpace(usuarioDB.TokenRecuperacion) &&
+            SecurityHelper.VerifyPassword(codigoAcceso, usuarioDB.TokenRecuperacion);
+
+        var claveTemporalValida = !string.IsNullOrWhiteSpace(usuarioDB.PasswordHash) &&
+            SecurityHelper.VerifyPassword(codigoAcceso, usuarioDB.PasswordHash);
+
+        return tokenValido || claveTemporalValida;
+    }
+
+    private void ForzarLoginSiRegresa(object? sender, LocationChangedEventArgs e)
+    {
+        if (navegacionInterna)
+        {
+            return;
+        }
+
+        var relativePath = Nav.ToBaseRelativePath(e.Location).ToLowerInvariant();
+        if (!relativePath.Contains("cambiar-clave"))
+        {
+            Nav.NavigateTo("/login", replace: true);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await JS.InvokeVoidAsync("NumericaDigits.init", "numericaDigitsLayerClave");
+    }
+
+    private void IniciarTimer()
+    {
+        timerSegundos = 60;
+        _countdownTimer?.Dispose();
+        _countdownTimer = new System.Threading.Timer(async _ =>
+        {
+            if (timerSegundos > 0)
+            {
+                timerSegundos--;
+                await InvokeAsync(StateHasChanged);
+            }
+            else
+            {
+                _countdownTimer?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            }
+        }, null, 1000, 1000);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Nav.LocationChanged -= ForzarLoginSiRegresa;
+        _countdownTimer?.Dispose();
+        try { await JS.InvokeVoidAsync("NumericaDigits.destroy", "numericaDigitsLayerClave"); }
+        catch { }
+    }
+}

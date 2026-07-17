@@ -1,0 +1,820 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using System.Globalization
+@implements IDisposable
+@using Simetric.Services
+@using Simetric.Components.Layout.EContax
+@using Simetric.Services.EContax
+@using Simetric.Services.EDeclara
+@using Simetric.Components.Layout.ESign
+@using Simetric.Services.ESign
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IMenuService MenuService
+@inject IEDeclaraMenuService EDeclaraMenuService
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject EmisionControlService EmisionControlService
+@inject MenuStateService MenuStateService 
+@inject NavigationManager NavManager
+
+<div class="nav-shell @(sidebarOpen ? "is-open" : string.Empty)">
+    <div class="nav-toggle-wrap">
+        <button type="button" class="nav-toggle" @onclick="ToggleSidebar" aria-label="Abrir menu">
+            <i class="@(sidebarOpen ? "ri-close-line" : "ri-menu-line")"></i>
+        </button>
+    </div>
+
+    <div class="nav-scrollable">
+        <nav class="menu-tree">
+            <AuthorizeView>
+                <Authorized>
+                    @if (IsEContaxContext)
+                    {
+                        <EContaxNavMenu OnNavigate="CloseSidebar" />
+                    }
+                    else if (IsESignContext)
+                    {
+                        <ESignNavMenu OnNavigate="CloseSidebar" />
+                    }
+                    else if (IsEDeclaraContext)
+                    {
+                        @if (isSuperAdmin)
+                        {
+                            <div class="nav-item">
+                                <NavLink class="menu-link" href="/portal-servicios" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                    <span class="menu-icon">
+                                        <i class="ri-apps-2-line"></i>
+                                    </span>
+                                    <span class="menu-text">Servicios</span>
+                                </NavLink>
+                            </div>
+                        }
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="@EDeclaraRoutes.Dashboard" Match="NavLinkMatch.All" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-home-4-line"></i>
+                                </span>
+                                <span class="menu-text">Inicio</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="@EDeclaraRoutes.GastosIngresos" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-exchange-dollar-line"></i>
+                                </span>
+                                <span class="menu-text">Gastos/Ingresos</span>
+                            </NavLink>
+                        </div>
+
+                        @if (isLoading)
+                        {
+                            <div class="loading-pill">
+                                <span class="spinner-border spinner-border-sm" role="status"></span>
+                                <span>Cargando modulos...</span>
+                            </div>
+                        }
+                        else if (listadoMenus.Any())
+                        {
+                            @foreach (var padre in GetMenusPadreOrdenados())
+                            {
+                                var hijos = GetMenusHijosOrdenados(padre.IdMenu).ToList();
+                                var rutaPadre = GetRutaMenuVisible(padre);
+
+                                if (hijos.Any())
+                                {
+                                    <div class="nav-item">
+                                        @if (!string.IsNullOrWhiteSpace(rutaPadre) && !EsMenuConfiguracion(padre))
+                                        {
+                                            <div class="menu-parent-row">
+                                                <NavLink class="menu-link menu-parent-link" href="@rutaPadre" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                                    <span class="menu-icon">
+                                                        <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-folder-line" : padre.IconoMenu)"></i>
+                                                    </span>
+                                                    <span class="menu-text">@GetMenuTexto(padre)</span>
+                                                </NavLink>
+
+                                                <button type="button" class="menu-caret-button" @onclick="() => ToggleSubmenu(padre.IdMenu)" aria-label="Expandir modulo">
+                                                    <i class="menu-caret @(menuAbiertoId == padre.IdMenu ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+                                                </button>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="menu-button" @onclick="() => ToggleSubmenu(padre.IdMenu)">
+                                                <span class="menu-icon">
+                                                    <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-folder-line" : padre.IconoMenu)"></i>
+                                                </span>
+                                                <span class="menu-text">@GetMenuTexto(padre)</span>
+                                                <i class="menu-caret @(menuAbiertoId == padre.IdMenu ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+                                            </button>
+                                        }
+
+                                        @if (menuAbiertoId == padre.IdMenu)
+                                        {
+                                            <div class="submenu-panel animate__animated animate__fadeIn">
+                                                @foreach (var hijo in hijos)
+                                                {
+                                                    var rutaHijo = GetRutaMenuVisible(hijo);
+                                                    if (!string.IsNullOrWhiteSpace(rutaHijo))
+                                                    {
+                                                        <NavLink class="menu-link submenu-link" href="@rutaHijo" @onclick="CloseSidebar">
+                                                            <span class="menu-icon">
+                                                                <i class="@(string.IsNullOrWhiteSpace(hijo.IconoMenu) ? "ri-subtract-line" : hijo.IconoMenu)"></i>
+                                                            </span>
+                                                            <span class="menu-text">@GetMenuTexto(hijo)</span>
+                                                        </NavLink>
+                                                    }
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(rutaPadre))
+                                {
+                                    <div class="nav-item">
+                                        <NavLink class="menu-link" href="@rutaPadre" @onclick="CloseSidebar">
+                                            <span class="menu-icon">
+                                                <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-circle-line" : padre.IconoMenu)"></i>
+                                            </span>
+                                            <span class="menu-text">@GetMenuTexto(padre)</span>
+                                        </NavLink>
+                                    </div>
+                                }
+                            }
+                        }
+                    }
+
+                    else if (requiresAccountSetup)
+                    {
+                        <div class="loading-pill loading-pill-onboarding">
+                            <span class="loading-pill-copy">Completa la configuración inicial para habilitar la emisión.</span>
+                            <span class="loading-pill-note">
+                                <i class="ri-settings-3-line"></i>
+                                <span>Configuración pendiente</span>
+                            </span>
+                            <span>Completa la configuración inicial para habilitar la emisión.</span>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/dashboard" Match="NavLinkMatch.All" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-home-4-line"></i>
+                                </span>
+                                <span class="menu-text">Inicio</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/emisor" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-building-2-line"></i>
+                                </span>
+                                <span class="menu-text">Emisor</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/firma" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-shield-keyhole-line"></i>
+                                </span>
+                                <span class="menu-text">Firma</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/mi-caja" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-safe-2-line"></i>
+                                </span>
+                                <span class="menu-text">Pto. Emision</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/clientes" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-group-line"></i>
+                                </span>
+                                <span class="menu-text">Clientes / Proveedores</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/productos" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-box-3-line"></i>
+                                </span>
+                                <span class="menu-text">Productos</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/compra-documentos" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-file-add-line"></i>
+                                </span>
+                                <span class="menu-text">Comprar documentos</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/perfil" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-user-settings-line"></i>
+                                </span>
+                                <span class="menu-text">Mi perfil</span>
+                            </NavLink>
+                        </div>
+                    }
+                    else
+                    {
+                        @if (isSuperAdmin)
+                        {
+                            <div class="nav-item">
+                                <NavLink class="menu-link" href="/portal-servicios" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                    <span class="menu-icon">
+                                        <i class="ri-apps-2-line"></i>
+                                    </span>
+                                    <span class="menu-text">Servicios</span>
+                                </NavLink>
+                            </div>
+                        }
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/dashboard" Match="NavLinkMatch.All" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-home-4-line"></i>
+                                </span>
+                                <span class="menu-text">Inicio</span>
+                            </NavLink>
+                        </div>
+
+
+                        @if (isLoading)
+                        {
+                            <div class="loading-pill">
+                                <span class="spinner-border spinner-border-sm" role="status"></span>
+                                <span>Cargando modulos...</span>
+                            </div>
+                        }
+                        else if (listadoMenus.Any())
+                        {
+                            @foreach (var padre in GetMenusPadreOrdenados())
+                            {
+                                var hijos = GetMenusHijosOrdenados(padre.IdMenu).ToList();
+                                var rutaPadre = GetRutaMenuVisible(padre);
+
+                                if (hijos.Any())
+                                {
+                                    <div class="nav-item">
+                                        @if (!string.IsNullOrWhiteSpace(rutaPadre) && !EsMenuConfiguracion(padre))
+                                        {
+                                            <div class="menu-parent-row">
+                                                <NavLink class="menu-link menu-parent-link" href="@rutaPadre" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                                    <span class="menu-icon">
+                                                        <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-folder-line" : padre.IconoMenu)"></i>
+                                                    </span>
+                                                    <span class="menu-text">@GetMenuTexto(padre)</span>
+                                                </NavLink>
+
+                                                <button type="button" class="menu-caret-button" @onclick="() => ToggleSubmenu(padre.IdMenu)" aria-label="Expandir modulo">
+                                                    <i class="menu-caret @(menuAbiertoId == padre.IdMenu ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+                                                </button>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="menu-button" @onclick="() => ToggleSubmenu(padre.IdMenu)">
+                                                <span class="menu-icon">
+                                                    <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-folder-line" : padre.IconoMenu)"></i>
+                                                </span>
+                                                <span class="menu-text">@GetMenuTexto(padre)</span>
+                                                <i class="menu-caret @(menuAbiertoId == padre.IdMenu ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line")"></i>
+                                            </button>
+                                        }
+
+                                        @if (menuAbiertoId == padre.IdMenu)
+                                        {
+                                            <div class="submenu-panel animate__animated animate__fadeIn">
+                                                @foreach (var hijo in hijos)
+                                                {
+                                                    var rutaHijo = GetRutaMenuVisible(hijo);
+                                                    if (!string.IsNullOrWhiteSpace(rutaHijo))
+                                                    {
+                                                        <NavLink class="menu-link submenu-link" href="@rutaHijo" @onclick="CloseSidebar">
+                                                            <span class="menu-icon">
+                                                                <i class="@(string.IsNullOrWhiteSpace(hijo.IconoMenu) ? "ri-subtract-line" : hijo.IconoMenu)"></i>
+                                                            </span>
+                                                            <span class="menu-text">@GetMenuTexto(hijo)</span>
+                                                        </NavLink>
+                                                    }
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(rutaPadre))
+                                {
+                                    <div class="nav-item">
+                                        <NavLink class="menu-link" href="@rutaPadre" @onclick="CloseSidebar">
+                                            <span class="menu-icon">
+                                                <i class="@(string.IsNullOrWhiteSpace(padre.IconoMenu) ? "ri-circle-line" : padre.IconoMenu)"></i>
+                                            </span>
+                                            <span class="menu-text">@GetMenuTexto(padre)</span>
+                                        </NavLink>
+                                    </div>
+                                }
+                            }
+                        }
+                    }
+                </Authorized>
+
+                <NotAuthorized>
+                    @if (IsDemoContext)
+                    {
+                        <div class="loading-pill">
+                            <i class="ri-eye-line"></i>
+                            <span>Explorando e-fact en modo demo.</span>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/dashboard" Match="NavLinkMatch.All" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-home-4-line"></i>
+                                </span>
+                                <span class="menu-text">Inicio</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/emisor" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-building-2-line"></i>
+                                </span>
+                                <span class="menu-text">Emisor</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/clientes" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-group-line"></i>
+                                </span>
+                                <span class="menu-text">Clientes / Proveedores</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/productos" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-box-3-line"></i>
+                                </span>
+                                <span class="menu-text">Productos</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/facturas/nueva" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-file-add-line"></i>
+                                </span>
+                                <span class="menu-text">Nueva factura</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/documentos" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-file-list-3-line"></i>
+                                </span>
+                                <span class="menu-text">Reporte documentos</span>
+                            </NavLink>
+                        </div>
+
+
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/retenciones-generadas" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-file-shield-2-line"></i>
+                                </span>
+                                <span class="menu-text">Retenciones</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/notas-credito-generadas" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-arrow-go-back-line"></i>
+                                </span>
+                                <span class="menu-text">Notas de crédito</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/demo/guias-remision-generadas" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-truck-line"></i>
+                                </span>
+                                <span class="menu-text">Guías de remisión</span>
+                            </NavLink>
+                        </div>
+
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/login" Match="NavLinkMatch.Prefix" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-login-box-line"></i>
+                                </span>
+                                <span class="menu-text">Volver al login</span>
+                            </NavLink>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="nav-item">
+                            <NavLink class="menu-link" href="/" Match="NavLinkMatch.All" @onclick="CloseSidebar">
+                                <span class="menu-icon">
+                                    <i class="ri-user-shared-2-line"></i>
+                                </span>
+                                <span class="menu-text">Iniciar sesión</span>
+                            </NavLink>
+                        </div>
+                    }
+                </NotAuthorized>
+            </AuthorizeView>
+        </nav>
+    </div>
+</div>
+
+@code {
+    private readonly List<Simetric.Models.Menu> listadoMenus = new();
+    private bool isLoading = true;
+    private bool sidebarOpen;
+    private int menuAbiertoId;
+    private bool isAssociatedUser;
+    private bool isSuperAdmin;
+    private bool requiresAccountSetup;
+    private bool? _lastIsEDeclaraContext;
+    private bool? _lastIsEContaxContext;
+    private bool? _lastIsESignContext;
+    private bool IsEContaxContext => IsEContaxPath(NavManager.Uri);
+    private bool IsEDeclaraContext => IsEDeclaraPath(NavManager.Uri);
+    private bool IsESignContext => IsESignPath(NavManager.Uri);
+    private bool IsDemoContext => IsDemoPath(NavManager.Uri);
+
+    private bool IsEDeclaraPath(string location) => EDeclaraRoutes.IsEDeclaraPath(NavManager, location);
+    private bool IsESignPath(string location) => ESignRoutes.IsESignPath(NavManager, location);
+
+    protected override async Task OnInitializedAsync()
+    {
+        EmisorOnboardingService.Changed += OnOnboardingChanged;
+        EmisionControlService.Changed += OnEmisionChanged;
+        MenuStateService.OnMenuChanged += HandleMenuChanged; // Escucha los cambios aquí.
+        NavManager.LocationChanged += OnLocationChanged;
+        _lastIsEDeclaraContext = IsEDeclaraContext;
+        _lastIsEContaxContext = IsEContaxContext;
+        _lastIsESignContext = IsESignContext;
+        await CargarMenus();
+    }
+
+    public void Dispose()
+    {
+        EmisorOnboardingService.Changed -= OnOnboardingChanged;
+        EmisionControlService.Changed -= OnEmisionChanged;
+        NavManager.LocationChanged -= OnLocationChanged;
+        MenuStateService.OnMenuChanged -= HandleMenuChanged; // Se desconecta aquí.
+    }
+
+    // Este método refresca el menú sin requerir F5.
+    private async void HandleMenuChanged()
+    {
+        await CargarMenus();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleSidebar()
+    {
+        sidebarOpen = !sidebarOpen;
+    }
+
+    private void CloseSidebar()
+    {
+        sidebarOpen = false;
+    }
+
+    private void ToggleSubmenu(int id)
+    {
+        menuAbiertoId = menuAbiertoId == id ? 0 : id;
+    }
+
+    private IEnumerable<Simetric.Models.Menu> GetMenusPadreOrdenados() =>
+        listadoMenus
+            .Where(m => m.IdMenuPadre == 0 && !CoincideNombreMenu(m, "Inicio"))
+            .OrderBy(m => ObtenerPrioridadMenuPadre(m))
+            .ThenBy(m => m.OrdenMenu ?? 9999)
+            .ThenBy(m => m.IdMenu);
+
+    private IEnumerable<Simetric.Models.Menu> GetMenusHijosOrdenados(int idPadre)
+    {
+        var padre = listadoMenus.FirstOrDefault(m => m.IdMenu == idPadre);
+
+        return listadoMenus
+            .Where(m => m.IdMenuPadre == idPadre && !CoincideRutaMenu(m.RutaMenu, padre?.RutaMenu))
+            .GroupBy(m => NormalizarRutaMenu(m.RutaMenu) ?? $"menu:{m.IdMenu}")
+            .Select(g => g.First())
+            .OrderBy(m => m.OrdenMenu ?? 9999)
+            .ThenBy(m => m.IdMenu);
+    }
+
+
+    private static int ObtenerPrioridadMenuPadre(Simetric.Models.Menu menu)
+    {
+        if (EsMenuConfiguracion(menu))
+            return 90;
+
+        if (EsMenuTutoriales(menu) || EsMenuAyuda(menu))
+            return 91;
+
+        if (EsMenuSoporte(menu))
+            return 92;
+
+        return 0;
+    }
+
+
+    private static bool EsMenuConfiguracion(Simetric.Models.Menu menu) =>
+        CoincideNombreMenu(menu, "Configuracion");
+
+    private static bool EsMenuAyuda(Simetric.Models.Menu menu) =>
+        CoincideNombreMenu(menu, "Ayuda");
+
+    private static bool EsMenuTutoriales(Simetric.Models.Menu menu) =>
+        CoincideNombreMenu(menu, "Tutoriales")
+        || CoincideRutaMenu(menu.RutaMenu, "/tutoriales")
+        || CoincideRutaMenu(menu.RutaMenu, "/ayuda/tutoriales");
+
+    private static bool EsMenuSoporte(Simetric.Models.Menu menu) =>
+        CoincideNombreMenu(menu, "Soporte")
+        || CoincideRutaMenu(menu.RutaMenu, "/soporte");
+
+    private static bool CoincideNombreMenu(Simetric.Models.Menu menu, string nombreObjetivo) =>
+        !string.IsNullOrWhiteSpace(menu.NombreMenu) &&
+        CultureInfo.InvariantCulture.CompareInfo.Compare(
+            menu.NombreMenu.Trim(),
+            nombreObjetivo,
+            CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) == 0;
+
+    private static string GetMenuTexto(Simetric.Models.Menu menu) =>
+        EsMenuClientesProveedores(menu)
+            ? "Clientes / Proveedores"
+            : menu.NombreMenu;
+
+    private static string? GetRutaMenuVisible(Simetric.Models.Menu menu)
+    {
+        if (EsMenuClientesProveedores(menu))
+        {
+            return "/clientes";
+        }
+
+        return string.IsNullOrWhiteSpace(menu.RutaMenu) ? null : menu.RutaMenu.Trim();
+    }
+
+    private static bool EsMenuClientesProveedores(Simetric.Models.Menu menu) =>
+        CoincideRutaMenu(menu.RutaMenu, "/clientes") ||
+        CoincideNombreMenu(menu, "Clientes") ||
+        CoincideNombreMenu(menu, "Clientes / Proveedores") ||
+        CoincideNombreMenu(menu, "Clientes/Proveedores");
+
+    private async Task CargarMenus()
+    {
+        try
+        {
+            isLoading = true;
+            listadoMenus.Clear();
+
+            if (IsEContaxContext)
+            {
+                return;
+            }
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated ?? false)
+            {
+                isSuperAdmin = string.Equals(
+                    user.FindFirst("IdTipoUsuario")?.Value,
+                    AppAccessService.AdminRoleId,
+                    StringComparison.OrdinalIgnoreCase);
+
+                isAssociatedUser =
+                    (bool.TryParse(user.FindFirst("EstadoAsociado")?.Value, out var estadoAsociado) && estadoAsociado) ||
+                    !string.IsNullOrWhiteSpace(user.FindFirst("IdJefe")?.Value);
+
+                requiresAccountSetup = await RequiereConfiguracionInicialAsync(user);
+
+                var claimValue = user.FindFirst("IdTipoUsuario")?.Value
+                    ?? user.FindFirst(ClaimTypes.Role)?.Value;
+
+                if (int.TryParse(claimValue, out int idTipoUsuario))
+                {
+                    if (IsEDeclaraContext)
+                    {
+                        listadoMenus.AddRange(await EDeclaraMenuService.GetMenusByRol(idTipoUsuario));
+                    }
+                    else
+                    {
+                        var efactMenus = await MenuService.GetMenusByRol(idTipoUsuario);
+                        listadoMenus.AddRange(efactMenus.Where(m => 
+                            !string.Equals(m.NombreMenu, "Firma Electronica", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(m.NombreMenu, "Firma Electrónica", StringComparison.OrdinalIgnoreCase) &&
+                            (m.RutaMenu == null || 
+                             (!m.RutaMenu.Contains("/solicitud", StringComparison.OrdinalIgnoreCase) && 
+                              !m.RutaMenu.Contains("/e-sign", StringComparison.OrdinalIgnoreCase)))
+                        ));
+                    }
+                }
+
+                // â† SIEMPRE, independiente de si hay menÃºs en BD o no
+                AsegurarVistasModulosPadre();
+                var menusNormalizados = DeduplicarMenus(listadoMenus);
+                listadoMenus.Clear();
+                listadoMenus.AddRange(menusNormalizados);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error en NavMenu: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+    private void OnOnboardingChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await CargarMenus();
+            StateHasChanged();
+        });
+    }
+
+    private void OnEmisionChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await CargarMenus();
+            StateHasChanged();
+        });
+    }
+
+    private async Task<bool> RequiereConfiguracionInicialAsync(ClaimsPrincipal user)
+    {
+        if (isSuperAdmin ||
+            IsEContaxContext ||
+            IsEDeclaraContext ||
+            IsESignContext ||
+            !int.TryParse(user.FindFirst("IdUsuario")?.Value, out var idUsuario) ||
+            idUsuario <= 0)
+        {
+            return false;
+        }
+
+        await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+        var estadoEmision = await EmisionControlService.ObtenerEstadoAsync(idUsuario);
+
+        return EmisorOnboardingService.RequiresInitialSetup ||
+               !estadoEmision.PuedeEmitir;
+    }
+
+    private async void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            sidebarOpen = false;
+
+            if (!IsEContaxPath(e.Location) && !IsESignPath(e.Location))
+            {
+                await CargarMenus();
+            }
+
+            StateHasChanged();
+        });
+    }
+    private void AsegurarVistasModulosPadre()
+    {
+        AsegurarVistaModuloPadre("Tutoriales", "/tutoriales", "ri-question-line");
+        AsegurarVistaModuloPadre("Soporte", "/soporte", "ri-customer-service-2-line");
+        AsegurarVistaModuloPadre("Cuentas por cobrar", "/cuentas-por-cobrar", "ri-wallet-3-line");
+        AsegurarMenuHijo("Cuentas por cobrar", "Registro de abonos", "/cuentas-por-cobrar", "ri-hand-coin-line");
+        AsegurarMenuHijo("Cuentas por cobrar", "Estado de cuenta", "/cuentas-por-cobrar/estado-cuenta", "ri-file-list-3-line");
+
+
+        // Configuración con hijo Perfil
+        AsegurarVistaModuloPadre("Configuracion", "/configuracion", "ri-settings-3-line");
+        AsegurarMenuHijo("Configuracion", "Perfil", "/perfil", "ri-user-settings-line");
+        if (!IsEDeclaraContext && !IsESignContext)
+        {
+            AsegurarMenuHijo("Configuracion", "Firma", "/firma", "ri-shield-keyhole-line");
+        }
+        
+        if (IsEDeclaraContext)
+        {
+            AsegurarMenuHijo("Configuracion", "Suscripción", "/e-declara/configuracion/suscripcion", "ri-bank-card-line");
+        }
+    }
+
+    private void AsegurarVistaModuloPadre(string nombreMenu, string rutaMenu, string iconoMenu)
+    {
+        var menuExistente = listadoMenus.FirstOrDefault(m => CoincideNombreMenu(m, nombreMenu));
+
+        if (menuExistente is not null)
+        {
+            menuExistente.IdMenuPadre = 0;
+            menuExistente.RutaMenu = string.IsNullOrWhiteSpace(menuExistente.RutaMenu)
+                ? rutaMenu
+                : menuExistente.RutaMenu;
+            menuExistente.IconoMenu = string.IsNullOrWhiteSpace(menuExistente.IconoMenu)
+                ? iconoMenu
+                : menuExistente.IconoMenu;
+            return;
+        }
+
+        var hijoDelModulo = listadoMenus.FirstOrDefault(m =>
+            m.IdMenuPadre != 0 &&
+            !string.IsNullOrWhiteSpace(m.RutaMenu) &&
+            m.RutaMenu.Trim().StartsWith($"{rutaMenu}/", StringComparison.OrdinalIgnoreCase));
+
+        listadoMenus.Add(new Simetric.Models.Menu
+        {
+            IdMenu = hijoDelModulo?.IdMenuPadre ?? ObtenerIdMenuSintetico(nombreMenu),
+            IdMenuPadre = 0,
+            NombreMenu = nombreMenu,
+            RutaMenu = rutaMenu,
+            IconoMenu = iconoMenu,
+            EstadoMenu = true
+        });
+    }
+    private void AsegurarMenuHijo(string nombrePadre, string nombreHijo, string rutaHijo, string iconoHijo)
+    {
+        var padre = listadoMenus.FirstOrDefault(m => CoincideNombreMenu(m, nombrePadre));
+        if (padre is null) return;
+
+        if (CoincideRutaMenu(padre.RutaMenu, rutaHijo) ||
+            listadoMenus.Any(m => CoincideRutaMenu(m.RutaMenu, rutaHijo)))
+        {
+            return;
+        }
+
+        var yaExiste = listadoMenus.Any(m =>
+            m.IdMenuPadre == padre.IdMenu && CoincideNombreMenu(m, nombreHijo));
+        if (yaExiste) return;
+
+        listadoMenus.Add(new Simetric.Models.Menu
+        {
+            IdMenu = ObtenerIdMenuSintetico($"{nombrePadre}:{nombreHijo}"),
+            IdMenuPadre = padre.IdMenu,
+            NombreMenu = nombreHijo,
+            RutaMenu = rutaHijo,
+            IconoMenu = iconoHijo,
+            EstadoMenu = true
+        });
+    }
+
+    private static bool CoincideRutaMenu(string? rutaActual, string? rutaObjetivo) =>
+        !string.IsNullOrWhiteSpace(rutaActual) &&
+        !string.IsNullOrWhiteSpace(rutaObjetivo) &&
+        string.Equals(
+            rutaActual.Trim().TrimEnd('/'),
+            rutaObjetivo.Trim().TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string? NormalizarRutaMenu(string? ruta) =>
+        string.IsNullOrWhiteSpace(ruta) ? null : ruta.Trim().TrimEnd('/').ToLowerInvariant();
+
+    private static string? NormalizarNombreMenu(string? nombreMenu) =>
+        string.IsNullOrWhiteSpace(nombreMenu) ? null : nombreMenu.Trim().ToLowerInvariant();
+
+    private static List<Simetric.Models.Menu> DeduplicarMenus(IEnumerable<Simetric.Models.Menu> menus) =>
+        menus
+            .GroupBy(menu => menu.IdMenu != 0
+                ? $"id:{menu.IdMenu}"
+                : $"padre:{menu.IdMenuPadre}|nombre:{NormalizarNombreMenu(menu.NombreMenu)}|ruta:{NormalizarRutaMenu(menu.RutaMenu)}")
+            .Select(grupo => grupo
+                .OrderByDescending(menu => !string.IsNullOrWhiteSpace(menu.RutaMenu))
+                .ThenByDescending(menu => !string.IsNullOrWhiteSpace(menu.IconoMenu))
+                .First())
+            .OrderBy(menu => menu.IdMenuPadre)
+            .ThenBy(menu => menu.NombreMenu)
+            .ToList();
+
+    private static int ObtenerIdMenuSintetico(string nombreMenu) =>
+        -Math.Abs(StringComparer.OrdinalIgnoreCase.GetHashCode(nombreMenu));
+
+    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);
+    private bool IsDemoPath(string location) =>
+        NavManager.ToBaseRelativePath(location).StartsWith("demo", StringComparison.OrdinalIgnoreCase);
+}

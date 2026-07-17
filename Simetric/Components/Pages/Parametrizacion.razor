@@ -1,0 +1,417 @@
+@page "/parametrizacion"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Components
+@using Simetric.Services
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject InitialSequencePromptService SequenceService
+@inject ICajaSerieResolver CajaSerieResolver
+@inject ConfiguracionService ConfigService
+
+<PageTitle>Parametrizacion | Numerica e-fact</PageTitle>
+
+<div class="param-shell">
+    <section class="param-hero">
+        <div>
+            <span class="param-kicker">Configuracion</span>
+            <h2>Parametrizacion</h2>
+            <p>Selecciona el punto de emision de cada documento y ajusta su secuencia desde una sola vista.</p>
+        </div>
+        <div class="param-serie">
+            <span>Punto principal</span>
+            <strong>@serieVisual</strong>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="param-alert @(mensajeEsError ? "is-error" : "is-success")">@mensaje</div>
+    }
+
+    @if (cargando)
+    {
+        <section class="param-card">Cargando parametrizacion...</section>
+    }
+    else
+    {
+        <section class="param-card">
+            <div class="param-card-head">
+                <div>
+                    <span class="param-kicker">Secuencias</span>
+                    <h3>Documentos y puntos de emision</h3>
+                </div>
+            </div>
+
+            <div class="param-sequence-grid">
+                @foreach (var item in secuencias)
+                {
+                    <div class="param-sequence-row">
+                        <div class="param-doc-copy">
+                            <strong>@item.Label</strong>
+                            <small>@(item.Initialized ? "Configurada" : "Preguntar al emitir")</small>
+                        </div>
+                        <select class="param-select"
+                                value="@item.SelectedSeriesRaw"
+                                @onchange="async e => await CambiarPuntoDocumentoAsync(item, e.Value?.ToString())">
+                            @foreach (var punto in puntosDisponibles)
+                            {
+                                <option value="@punto.SerieRaw">@punto.Label</option>
+                            }
+                        </select>
+                        <input value="@item.LastSequence"
+                               maxlength="9"
+                               inputmode="numeric"
+                               placeholder="000000001"
+                               @oninput="(e) => item.LastSequence = e.Value?.ToString() ?? string.Empty" />
+                        <label class="param-check">
+                            <input type="checkbox" @bind="item.Initialized" />
+                            <span>Activa</span>
+                        </label>
+                    </div>
+                }
+            </div>
+        </section>
+
+        <div class="param-actions">
+            <button type="button" class="param-primary" @onclick="Guardar" disabled="@guardando">
+                @(guardando ? "Guardando..." : "Guardar parametrizacion")
+            </button>
+        </div>
+    }
+</div>
+
+<style>
+.param-shell {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 3rem;
+    display: grid;
+    gap: 1rem;
+}
+.param-hero,
+.param-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 1.25rem;
+    box-shadow: 0 10px 26px rgba(15,23,42,.05);
+}
+.param-hero {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+.param-kicker {
+    display: block;
+    color: #006bb5;
+    font-size: .72rem;
+    font-weight: 800;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    margin-bottom: .35rem;
+}
+.param-hero h2,
+.param-card h3 {
+    margin: 0;
+    color: #0f172a;
+}
+.param-hero p {
+    margin: .45rem 0 0;
+    color: #64748b;
+}
+.param-serie {
+    min-width: 150px;
+    text-align: right;
+    color: #64748b;
+}
+.param-serie strong {
+    display: block;
+    color: #006bb5;
+    font-size: 1.45rem;
+    letter-spacing: .08em;
+}
+.param-card-head {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+.param-toggle-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .75rem;
+}
+.param-option {
+    display: flex;
+    gap: .75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: .9rem;
+    cursor: pointer;
+}
+.param-option.is-selected {
+    border-color: #006bb5;
+    background: rgba(0,107,181,.06);
+}
+.param-option small,
+.param-sequence-row small {
+    display: block;
+    color: #64748b;
+    margin-top: .2rem;
+}
+.param-sequence-grid {
+    display: grid;
+    gap: .65rem;
+}
+.param-sequence-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 180px 150px 110px;
+    gap: .75rem;
+    align-items: center;
+    border: 1px solid #dbe7f3;
+    border-radius: 18px;
+    padding: 1rem;
+    background: linear-gradient(135deg, rgba(0, 107, 181, 0.05), rgba(255, 255, 255, 0.96));
+    box-shadow: 0 12px 26px rgba(15, 23, 42, .06);
+}
+.param-doc-copy strong {
+    display: block;
+    font-size: .98rem;
+}
+.param-doc-copy small {
+    margin-top: .3rem;
+}
+.param-select,
+.param-sequence-row input {
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: .65rem .8rem;
+    background: #fff;
+}
+.param-select {
+    font-weight: 700;
+    color: #0f172a;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, .04);
+}
+.param-sequence-row input {
+    font-weight: 700;
+    text-align: right;
+    color: #006bb5;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, .04);
+}
+.param-check {
+    display: inline-flex;
+    gap: .4rem;
+    align-items: center;
+    justify-self: end;
+    padding: .55rem .8rem;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #0f172a;
+    font-weight: 700;
+}
+.param-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+.param-primary {
+    border: 0;
+    border-radius: 14px;
+    padding: .85rem 1.25rem;
+    background: linear-gradient(135deg, #006bb5, #0a84d6);
+    color: #fff;
+    font-weight: 800;
+    box-shadow: 0 16px 28px rgba(0, 107, 181, .22);
+}
+.param-alert {
+    border-radius: 12px;
+    padding: .8rem 1rem;
+    font-weight: 700;
+}
+.param-alert.is-success {
+    background: #ecfdf5;
+    color: #047857;
+}
+.param-alert.is-error {
+    background: #fef2f2;
+    color: #b91c1c;
+}
+@@media (max-width: 720px) {
+    .param-hero,
+    .param-toggle-grid {
+        grid-template-columns: 1fr;
+        display: grid;
+    }
+    .param-serie {
+        text-align: left;
+    }
+    .param-sequence-row {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+@code {
+    private int currentUserId;
+    private bool cargando = true;
+    private bool guardando;
+    private string serieVisual = "Sin caja";
+    private string serieRaw = string.Empty;
+    private string? mensaje;
+    private bool mensajeEsError;
+    private List<InitialSequenceDocumentState> secuencias = new();
+    private List<PuntoEmisionOption> puntosDisponibles = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        currentUserId = int.TryParse(idClaim, out var id) ? id : 0;
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        cargando = true;
+        mensaje = null;
+        try
+        {
+            var caja = await CajaSerieResolver.ResolverAsync(currentUserId);
+            serieVisual = caja.SerieVisual;
+            serieRaw = caja.SerieRaw;
+            await CargarPuntosDisponiblesAsync();
+            secuencias = await ConstruirEstadosDocumentoAsync();
+        }
+        catch (Exception ex)
+        {
+            mensajeEsError = true;
+            mensaje = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task Guardar()
+    {
+        guardando = true;
+        mensaje = null;
+        try
+        {
+            foreach (var item in secuencias)
+            {
+                await SequenceService.SavePreferredSeriesKeyAsync(
+                    currentUserId,
+                    item.DocumentKey,
+                    item.SelectedSeriesRaw);
+
+                await SequenceService.SaveDocumentStateAsync(
+                    currentUserId,
+                    item.DocumentKey,
+                    item.SelectedSeriesRaw,
+                    item.Initialized,
+                    item.LastSequence);
+            }
+
+            mensajeEsError = false;
+            mensaje = "Parametrizacion guardada correctamente.";
+            await JS.ShowToastAsync("Parametrizacion guardada");
+            await Cargar();
+        }
+        catch (Exception ex)
+        {
+            mensajeEsError = true;
+            mensaje = ex.Message;
+            await JS.ShowAlertAsync("No se pudo guardar", ex.Message, "error");
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task CambiarPuntoDocumentoAsync(InitialSequenceDocumentState item, string? selectedSeriesRaw)
+    {
+        var serieSeleccionada = ResolverSerieDocumento(selectedSeriesRaw);
+        item.SelectedSeriesRaw = serieSeleccionada.SerieRaw;
+        item.SelectedSeriesVisual = serieSeleccionada.SerieVisual;
+
+        var state = await SequenceService.GetStateAsync(currentUserId, item.DocumentKey, item.SelectedSeriesRaw);
+        item.Initialized = state.Initialized;
+        item.LastSequence = state.PreviousSequence;
+        mensaje = null;
+        StateHasChanged();
+    }
+
+    private async Task<List<InitialSequenceDocumentState>> ConstruirEstadosDocumentoAsync()
+    {
+        var items = new List<InitialSequenceDocumentState>();
+
+        foreach (var document in InitialSequencePromptService.Documents)
+        {
+            var preferredSeriesRaw = await SequenceService.GetPreferredSeriesKeyAsync(currentUserId, document.Key, serieRaw);
+            var serieSeleccionada = ResolverSerieDocumento(preferredSeriesRaw);
+            var state = await SequenceService.GetStateAsync(currentUserId, document.Key, serieSeleccionada.SerieRaw);
+
+            items.Add(new InitialSequenceDocumentState
+            {
+                DocumentKey = document.Key,
+                Label = document.Label,
+                Initialized = state.Initialized,
+                LastSequence = state.PreviousSequence,
+                SelectedSeriesRaw = serieSeleccionada.SerieRaw,
+                SelectedSeriesVisual = serieSeleccionada.SerieVisual
+            });
+        }
+
+        return items;
+    }
+
+    private async Task CargarPuntosDisponiblesAsync()
+    {
+        var cajas = await ConfigService.GetCajasCuentaActivasAsync(currentUserId);
+        puntosDisponibles = cajas
+            .Select(c => NormalizarSerie(c.SerieFactura))
+            .Where(s => !string.IsNullOrWhiteSpace(s.SerieRaw))
+            .DistinctBy(s => s.SerieRaw)
+            .OrderBy(s => s.SerieRaw)
+            .ToList();
+
+        if (!puntosDisponibles.Any() && !string.IsNullOrWhiteSpace(serieRaw))
+        {
+            puntosDisponibles.Add(new PuntoEmisionOption(serieRaw, serieVisual));
+        }
+    }
+
+    private PuntoEmisionOption ResolverSerieDocumento(string? serieRawSeleccionada)
+    {
+        var normalizedRaw = SoloDigitos(serieRawSeleccionada);
+        return puntosDisponibles.FirstOrDefault(p => p.SerieRaw == normalizedRaw)
+            ?? puntosDisponibles.FirstOrDefault()
+            ?? new PuntoEmisionOption(serieRaw, serieVisual);
+    }
+
+    private static PuntoEmisionOption NormalizarSerie(string? serie)
+    {
+        var raw = SoloDigitos(serie);
+        if (raw.Length >= 6)
+        {
+            raw = raw[..6];
+        }
+
+        var visual = raw.Length == 6
+            ? $"{raw[..3]}-{raw[3..]}"
+            : "001-001";
+
+        return new PuntoEmisionOption(raw, visual);
+    }
+
+    private static string SoloDigitos(string? value)
+        => new((value ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private sealed record PuntoEmisionOption(string SerieRaw, string SerieVisual)
+    {
+        public string Label => SerieVisual;
+    }
+}

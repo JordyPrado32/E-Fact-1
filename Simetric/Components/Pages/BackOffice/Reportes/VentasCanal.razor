@@ -1,0 +1,361 @@
+@page "/backoffice/reportes/ventas-canal"
+@namespace Simetric.Components.Pages.BackOffice
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.DTOs
+@using System.Globalization
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+
+<PageTitle>Ventas por Canal - BackOffice</PageTitle>
+
+<link href="css/reportes-compartido.css" rel="stylesheet" />
+
+<div class="reports-container">
+    <div class="report-header-card no-print animate__animated animate__fadeIn">
+        <div class="report-header-top">
+            <h2 class="report-page-title">
+                <i class="bi bi-hdd-network-fill"></i> Reporte Ventas Canal
+            </h2>
+            <button type="button" class="btn-export" @onclick="DescargarReportePdf">
+                <i class="bi bi-file-earmark-pdf-fill"></i> Descargar PDF Directo
+            </button>
+        </div>
+        <div class="report-header-filters">
+            <div class="filter-group">
+                <span class="filter-label">Desde:</span>
+                <input type="date" @bind="fechaInicio" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Hasta:</span>
+                <input type="date" @bind="fechaFin" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este Mes</button>
+                <button type="button" class="btn-preset @(presetActivo == "trimestre" ? "active" : "")" @onclick='() => AplicarPreset("trimestre")'>Últimos 90 Días</button>
+                <button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este Año</button>
+                <button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sliding Viewport Container -->
+    <div class="reports-viewport printable-report" id="report-view-area">
+        <div class="report-slide report-slide-active">
+            <div class="visual-header">
+                <h3 class="visual-title">Reporte de Ventas por Canal</h3>
+                <p class="visual-subtitle">Distribución del origen de ingresos comerciales por plataforma y asesoría.</p>
+            </div>
+
+            @if (loading)
+            {
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando datos...</span>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpis-grid">
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-hdd-network-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Canal Líder</span>
+                            <strong class="kpi-card-value">@canalLider</strong>
+                            <span class="kpi-card-trend trend-up">Mayor captación</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-blue"><i class="bi bi-globe"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Web</span>
+                            <strong class="kpi-card-value">$ @ingresoWeb.ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-neutral">Auto-gestión</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-teal"><i class="bi bi-person-badge-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Asesores / Admin</span>
+                            <strong class="kpi-card-value">$ @ingresoAsesores.ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-up">Manual</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-visual-card">
+                    <div class="visual-header">
+                        <h4 class="visual-title">Distribución Comercial por Canales</h4>
+                        <p class="visual-subtitle">Gráfico circular / donut del porcentaje de facturación captado por cada canal.</p>
+                    </div>
+                    <div class="chart-container" style="display: flex; align-items: center; justify-content: center; gap: 4rem; flex-wrap: wrap;">
+                        <svg class="svg-chart" width="220" height="220" viewBox="0 0 220 220" style="width:220px; height:220px; overflow:visible;">
+                            <!-- Background circle -->
+                            <circle cx="110" cy="110" r="80" fill="none" stroke="#f1f5f9" stroke-width="16" />
+                            @if (ventasCanalList.Any())
+                            {
+                                @(new MarkupString(GenerarDonutChartSvg()))
+                            }
+                        </svg>
+                        
+                        <div class="chart-legend-container" style="flex: 1; min-width: 250px;">
+                            @foreach (var c in ventasCanalList)
+                            {
+                                var pct = totalCanalVentas > 0 ? (double)(c.TotalFacturado / totalCanalVentas) * 100.0 : 0.0;
+                                <div class="legend-item" style="margin-bottom: 0.75rem; font-size: 0.9rem;">
+                                    <span class="legend-color-dot" style="background: @GetCanalColor(c.Canal);"></span>
+                                    <span style="flex: 1;">@c.Canal: <strong>$ @c.TotalFacturado.ToString("N2")</strong></span>
+                                    <span class="report-tab-badge">@pct.ToString("F1")%</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row">
+                        <h4 class="table-title">Desglose de Ventas por Canal</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead>
+                            <tr>
+                                <th>Nombre Canal</th>
+                                <th>Transacciones</th>
+                                <th>Ticket Promedio</th>
+                                <th>Total Facturado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (ventasCanalPaginadas.Any())
+                            {
+                                @foreach (var c in ventasCanalPaginadas)
+                                {
+                                    <tr>
+                                        <td><strong>@c.Canal</strong></td>
+                                        <td>@c.Transacciones</td>
+                                        <td>$ @c.TicketPromedio.ToString("N2")</td>
+                                        <td><strong class="text-blue">$ @c.TotalFacturado.ToString("N2")</strong></td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">No hay registros de canales comerciales.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="pagination-controls">
+                        <span class="page-indicator">Página @(pageCanal + 1) de @MaxPaginaCanal</span>
+                        <div class="pagination-btn-group">
+                            <button type="button" class="btn-pagination" disabled="@(pageCanal == 0)" @onclick="() => CambiarPaginaCanal(-1)">
+                                <i class="bi bi-chevron-left"></i> Ant.
+                            </button>
+                            <button type="button" class="btn-pagination" disabled="@(pageCanal >= MaxPaginaCanal - 1)" @onclick="() => CambiarPaginaCanal(1)">
+                                Sig. <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private DateTime fechaInicio = DateTime.Now.AddMonths(-3);
+    private DateTime fechaFin = DateTime.Now;
+    private string presetActivo = "trimestre";
+    private bool loading = true;
+
+    private string canalLider = "Ninguno";
+    private decimal ingresoWeb = 0;
+    private decimal ingresoAsesores = 0;
+    private decimal totalCanalVentas = 0;
+
+    private List<CanalVentaDto> ventasCanalList = new();
+    private int pageCanal = 0;
+    private const int PageSize = 10;
+    private int MaxPaginaCanal => Math.Max(1, (int)Math.Ceiling(ventasCanalList.Count / (double)PageSize));
+    private List<CanalVentaDto> ventasCanalPaginadas => ventasCanalList.Skip(pageCanal * PageSize).Take(PageSize).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AplicarPreset("trimestre");
+    }
+
+    private async Task OnDatesChanged()
+    {
+        presetActivo = "";
+        await CargarDatosReportesAsync();
+    }
+
+    private void AplicarPreset(string preset)
+    {
+        presetActivo = preset;
+        var hoy = DateTime.Now;
+        if (preset == "mes")
+        {
+            fechaInicio = new DateTime(hoy.Year, hoy.Month, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "trimestre")
+        {
+            fechaInicio = hoy.AddDays(-90);
+            fechaFin = hoy;
+        }
+        else if (preset == "anio")
+        {
+            fechaInicio = new DateTime(hoy.Year, 1, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "todo")
+        {
+            fechaInicio = new DateTime(2020, 1, 1);
+            fechaFin = hoy;
+        }
+        _ = CargarDatosReportesAsync();
+    }
+
+    private async Task CargarDatosReportesAsync()
+    {
+        loading = true;
+        StateHasChanged();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            var reportesBackOffice = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(r => r.Fecha >= fechaInicio && r.Fecha <= fechaFin)
+                .ToListAsync();
+
+            var ventasPeriodoList = await context.Facturas
+                .AsNoTracking()
+                .Where(f => f.Fechaentrega >= fechaInicio && f.Fechaentrega <= fechaFin)
+                .ToListAsync();
+
+            var groupedCanal = reportesBackOffice
+                .GroupBy(r => NormalizarCanalVenta(r.Canal))
+                .Select(g => new CanalVentaDto
+                {
+                    Canal = g.Key,
+                    Transacciones = g.Count(),
+                    TicketPromedio = g.Average(r => r.Valor),
+                    TotalFacturado = g.Sum(r => r.Valor)
+                })
+                .OrderByDescending(c => c.TotalFacturado)
+                .ToList();
+
+            // Simulate POS and Web channels from FACTURA
+            var posTxCount = ventasPeriodoList.Count(f => f.Tipopago == "01");
+            var posVolume = (decimal)ventasPeriodoList.Where(f => f.Tipopago == "01").Sum(f => f.Valortotal ?? 0m);
+
+            var webTxCount = ventasPeriodoList.Count(f => f.Tipopago == "19");
+            var webVolume = (decimal)ventasPeriodoList.Where(f => f.Tipopago == "19").Sum(f => f.Valortotal ?? 0m);
+
+            if (posVolume > 0)
+            {
+                var match = groupedCanal.FirstOrDefault(c => c.Canal == "Punto de Venta (POS)");
+                if (match != null) { match.Transacciones += posTxCount; match.TotalFacturado += posVolume; }
+                else { groupedCanal.Add(new CanalVentaDto { Canal = "Punto de Venta (POS)", Transacciones = posTxCount, TotalFacturado = posVolume }); }
+            }
+
+            if (webVolume > 0)
+            {
+                var match = groupedCanal.FirstOrDefault(c => c.Canal == "Web");
+                if (match != null) { match.Transacciones += webTxCount; match.TotalFacturado += webVolume; }
+                else { groupedCanal.Add(new CanalVentaDto { Canal = "Web", Transacciones = webTxCount, TotalFacturado = webVolume }); }
+            }
+
+            // recalculate average ticket
+            foreach (var item in groupedCanal)
+            {
+                if (item.Transacciones > 0) item.TicketPromedio = item.TotalFacturado / item.Transacciones;
+            }
+
+            ventasCanalList = groupedCanal.OrderByDescending(x => x.TotalFacturado).ToList();
+
+            canalLider = ventasCanalList.FirstOrDefault()?.Canal ?? "Ninguno";
+            ingresoWeb = ventasCanalList.FirstOrDefault(c => c.Canal.Contains("Web", StringComparison.OrdinalIgnoreCase))?.TotalFacturado ?? 0;
+            ingresoAsesores = ventasCanalList.FirstOrDefault(c => c.Canal.Contains("Asesores", StringComparison.OrdinalIgnoreCase))?.TotalFacturado ?? 0;
+            totalCanalVentas = ventasCanalList.Sum(c => c.TotalFacturado);
+        }
+        catch (Exception)
+        {
+            // Fail silent
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CambiarPaginaCanal(int step)
+    {
+        pageCanal += step;
+        if (pageCanal < 0) pageCanal = 0;
+        if (pageCanal >= MaxPaginaCanal) pageCanal = MaxPaginaCanal - 1;
+    }
+
+    private string GenerarDonutChartSvg()
+    {
+        if (totalCanalVentas <= 0) return "";
+        var sb = new System.Text.StringBuilder();
+        double currentOffset = 0;
+        double circumference = 502.65;
+
+        for (int i = 0; i < ventasCanalList.Count; i++)
+        {
+            var item = ventasCanalList[i];
+            double pct = (double)(item.TotalFacturado / totalCanalVentas);
+            double strokeLength = pct * circumference;
+            var color = GetCanalColor(item.Canal);
+
+            sb.Append($@"<circle class=""donut-segment"" cx=""110"" cy=""110"" r=""80"" fill=""none"" stroke=""{color}"" stroke-width=""16"" stroke-dasharray=""{strokeLength.ToString("F2", CultureInfo.InvariantCulture)} {circumference.ToString("F2", CultureInfo.InvariantCulture)}"" stroke-dashoffset=""{currentOffset.ToString("F2", CultureInfo.InvariantCulture)}"" />");
+            currentOffset -= strokeLength;
+        }
+
+        return sb.ToString();
+    }
+
+    private string GetCanalColor(string canal)
+    {
+        if (canal.Contains("Web", StringComparison.OrdinalIgnoreCase)) return "#2563eb"; 
+        if (canal.Contains("Asesores", StringComparison.OrdinalIgnoreCase) || canal.Contains("Admin", StringComparison.OrdinalIgnoreCase)) return "#7c3aed";
+        if (canal.Contains("API", StringComparison.OrdinalIgnoreCase)) return "#0891b2"; 
+        if (canal.Contains("Punto", StringComparison.OrdinalIgnoreCase)) return "#f97316"; 
+        return "#475569";
+    }
+
+    private static string NormalizarCanalVenta(string? canal)
+    {
+        var value = canal?.Trim();
+        if (string.IsNullOrWhiteSpace(value)) return "Web";
+
+        if (value.Contains("asesor", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("admin", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("backoffice", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("back office", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Números Asesores";
+        }
+        if (value.Contains("api", StringComparison.OrdinalIgnoreCase)) return "Canal de Integración API";
+        if (value.Contains("pos", StringComparison.OrdinalIgnoreCase) || value.Contains("punto", StringComparison.OrdinalIgnoreCase)) return "Punto de Venta (POS)";
+
+        return "Web";
+    }
+
+    private async Task DescargarReportePdf()
+    {
+        var filename = $"Reporte_Ventas_Canal_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
+        await JS.InvokeVoidAsync("window.downloadPdfReport", "report-view-area", filename);
+    }
+}

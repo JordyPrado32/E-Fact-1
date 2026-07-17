@@ -1,0 +1,738 @@
+@page "/e-contax/administracion/logs-inicio"
+
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.EContax
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject EContaxAdministracionService AdministracionService
+
+<PageTitle>Logs de Inicio | Numerica E-Contax</PageTitle>
+
+<div class="logs-shell" data-tour="logs.page">
+    <section class="logs-hero" data-tour="logs.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Auditoria de seguridad</span>
+            <h2>Historial de accesos</h2>
+            <p>
+                Revise inicios de sesion, eventos fallidos y actividad reciente. Los registros se conservan solo durante el mes actual.
+            </p>
+        </div>
+
+        
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Resultados filtrados</span>
+                <strong>@total</strong>
+                <small>Total de logs encontrados con los filtros actuales.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Visibles en pagina</span>
+                <strong>@items.Count</strong>
+                <small>Registros cargados en la pagina actual.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Accesos exitosos</span>
+                <strong>@LogsExitososVisibles</strong>
+                <small>Eventos exitosos visibles en la tabla actual.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Intentos fallidos</span>
+                <strong>@LogsFallidosVisibles</strong>
+                <small>Eventos fallidos visibles en la tabla actual.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="filters-card" data-tour="logs.filters">
+        <div class="filters-head">
+            <div>
+                <span class="section-kicker">Filtros y limpieza</span>
+                <h3>Control de registros</h3>
+                <p>Revise el rango visible y defina el periodo a limpiar desde un solo bloque operativo.</p>
+            </div>
+            <span class="table-badge">@GetRangoResumen()</span>
+        </div>
+
+        <div class="filters-panels">
+            <div class="filter-panel">
+                <div class="panel-head">
+                    <span class="section-kicker">Filtro temporal</span>
+                    <h4>Rango de consulta</h4>
+                </div>
+
+                <div class="filters-grid">
+                    <div class="form-field">
+                        <label class="field-label">Desde</label>
+                        <input type="date" class="form-control field-input" @bind="fechaDesde" />
+                    </div>
+
+                    <div class="form-field">
+                        <label class="field-label">Hasta</label>
+                        <input type="date" class="form-control field-input" @bind="fechaHasta" />
+                    </div>
+
+                    <div class="filters-actions">
+                        <button type="button" class="primary-btn" @onclick="AplicarFiltro">
+                            <i class="ri-filter-3-line"></i>
+                            <span>Filtrar registros</span>
+                        </button>
+
+                        <button type="button" class="secondary-btn" @onclick="ResetearFiltros">
+                            <i class="ri-refresh-line"></i>
+                            <span>Restablecer</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="filter-panel purge-panel">
+                <div class="panel-head">
+                    <span class="section-kicker">Limpieza por periodo</span>
+                    <h4>Eliminación Masiva</h4>
+                    <p></p>
+                </div>
+
+                <div class="period-chip-group" role="group" aria-label="Periodos de borrado">
+                    <button type="button"
+                            class="period-chip @(periodoBorrado == "hoy" ? "is-active" : string.Empty)"
+                            @onclick='() => SeleccionarPeriodoBorrado("hoy")'>
+                        Hoy
+                    </button>
+                    <button type="button"
+                            class="period-chip @(periodoBorrado == "7d" ? "is-active" : string.Empty)"
+                            @onclick='() => SeleccionarPeriodoBorrado("7d")'>
+                        Ultimos 7 dias
+                    </button>
+                    <button type="button"
+                            class="period-chip @(periodoBorrado == "30d" ? "is-active" : string.Empty)"
+                            @onclick='() => SeleccionarPeriodoBorrado("30d")'>
+                        Ultimos 30 dias
+                    </button>
+                    <button type="button"
+                            class="period-chip @(periodoBorrado == "mes" ? "is-active" : string.Empty)"
+                            @onclick='() => SeleccionarPeriodoBorrado("mes")'>
+                        Este mes
+                    </button>
+                </div>
+
+                <div class="purge-footer">
+
+                   
+                    <div class="purge-footer-actions">
+                        <button type="button"
+                                class="danger-btn danger-btn-solid"
+                                @onclick="ConfirmarBorrarTodo"
+                                disabled="@(cargando)">
+                            <i class="ri-delete-bin-2-line"></i>
+                            <span>Borrar todo</span>
+                        </button>
+                        <button type="button"
+                                class="primary-btn"
+                                @onclick="ConfirmarBorradoPeriodo"
+                                disabled="@(cargando)">
+                            <i class="ri-delete-bin-4-line"></i>
+                            <span>Borrar @PeriodoBorradoTitulo</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="table-card" data-tour="logs.table">
+        <div class="table-card-head">
+            <div>
+                
+                <h3>Eventos de acceso</h3>
+            </div>
+            <span class="table-badge">Pagina @(page) de @totalPages</span>
+        </div>
+
+        @if (cargando)
+        {
+            <div class="state-card">
+                <div class="state-icon">
+                    <i class="ri-loader-4-line"></i>
+                </div>
+                <h3>Procesando solicitud</h3>
+                <p>Consultando eventos y aplicando filtros sobre el historial.</p>
+            </div>
+        }
+        else if (items.Count == 0)
+        {
+            <div class="state-card state-card-empty">
+                <div class="state-icon">
+                    <i class="ri-inbox-line"></i>
+                </div>
+                <h3>No se encontraron registros</h3>
+                <p>Intente ajustar el rango de fechas o limpiar los filtros aplicados.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table logs-table mb-0">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Fecha y hora</th>
+                            <th>Estado</th>
+                            <th>Direccion IP</th>
+                            <th>Usuario</th>
+                            <th class="text-end">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var log in items)
+                        {
+                            <tr>
+                                <td>
+                                    <span class="id-pill">#@log.IdLog</span>
+                                </td>
+                                <td>
+                                    <div class="cell-main">
+                                        <strong>@log.FechaAcceso?.ToString("dd/MM/yyyy")</strong>
+                                        <span>@log.FechaAcceso?.ToString("HH:mm:ss")</span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="status-pill @(log.Exitoso == true ? "status-pill-success" : "status-pill-danger")">
+                                        <i class="@(log.Exitoso == true ? "ri-checkbox-circle-line" : "ri-error-warning-line")"></i>
+                                        @(log.Exitoso == true ? "Exitoso" : "Fallido")
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="code-pill">@log.DireccionIp</span>
+                                </td>
+                                <td>
+                                    <div class="browser-cell" title="@GetNombreUsuario(log)">
+                                        <div class="cell-main">
+                                            <strong>@GetNombreUsuario(log)</strong>
+                                            <span>@GetUsuarioSecundario(log)</span>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="text-end">
+                                    <div class="action-group">
+                                        <button type="button"
+                                                class="action-btn action-view"
+                                                title="Ver detalle"
+                                                @onclick="@(() => MostrarDetalle(log))">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                        <button type="button"
+                                                class="action-btn action-delete"
+                                                title="Eliminar registro"
+                                                @onclick="@(() => SolicitarEliminarRegistro(log.IdLog))">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-footer" data-tour="logs.footer">
+                <div class="footer-meta">
+                    Mostrando <strong>@items.Count</strong> de <strong>@total</strong> resultados
+                </div>
+
+                <div class="pagination-group">
+                    <button type="button" class="pager-btn" @onclick="Anterior" disabled="@(page <= 1)">
+                        <i class="ri-arrow-left-s-line"></i>
+                        <span>Anterior</span>
+                    </button>
+
+                    <span class="pagination-indicator">
+                        Pagina <strong>@(page)</strong>de<strong>@totalPages</strong>
+                    </span>
+
+                    <button type="button" class="pager-btn" @onclick="Siguiente" disabled="@(page >= totalPages)">
+                        <span>Siguiente</span>
+                        <i class="ri-arrow-right-s-line"></i>
+                    </button>
+                </div>
+            </div>
+        }
+    </section>
+</div>
+
+@if (mostrarModal && logSeleccionado != null)
+{
+    <div class="logs-modal-backdrop"></div>
+    <div class="logs-modal" role="dialog" aria-modal="true">
+        <div class="logs-modal-content">
+            <div class="logs-modal-header">
+                <div>
+                    <span class="section-kicker">Detalle del evento</span>
+                    <h3>Evento #@logSeleccionado.IdLog</h3>
+                    <p class="modal-subtitle">Revise usuario, origen y resultado del acceso desde una vista mas clara.</p>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarModal" aria-label="Cerrar">
+                    <i class="ri-close-line"></i>
+                </button>
+            </div>
+
+            <div class="logs-modal-body">
+                <div class="detail-summary-bar">
+                    <div class="detail-summary-item">
+                        <span>Usuario</span>
+                        <strong>@GetNombreUsuario(logSeleccionado)</strong>
+                        <small>@GetUsuarioSecundario(logSeleccionado)</small>
+                    </div>
+
+                    <div class="detail-summary-item">
+                        <span>Estado</span>
+                        <strong>@(logSeleccionado.Exitoso == true ? "Exitoso" : "Fallido")</strong>
+                        <small>@(logSeleccionado.FechaAcceso?.ToString("dd/MM/yyyy HH:mm:ss") ?? "Sin fecha")</small>
+                    </div>
+                </div>
+
+                <div class="detail-grid">
+                    <article class="detail-card">
+                        <span>Fecha completa</span>
+                        <strong>@(logSeleccionado.FechaAcceso?.ToString("dd/MM/yyyy HH:mm:ss") ?? "Sin fecha registrada")</strong>
+                    </article>
+
+                    <article class="detail-card">
+                        <span>Direccion IP</span>
+                        <strong>@(string.IsNullOrWhiteSpace(logSeleccionado.DireccionIp) ? "No disponible" : logSeleccionado.DireccionIp)</strong>
+                    </article>
+
+                    <article class="detail-card">
+                        <span>Usuario</span>
+                        <strong>@GetNombreUsuario(logSeleccionado)</strong>
+                    </article>
+
+                    <article class="detail-card">
+                        <span>Identificador</span>
+                        <strong>@GetUsuarioIdTexto(logSeleccionado)</strong>
+                    </article>
+
+                    <article class="detail-card detail-card-wide">
+                        <span>Navegador / User Agent</span>
+                        <div class="detail-block">@(string.IsNullOrWhiteSpace(logSeleccionado.Navegador) ? "Navegador no disponible." : logSeleccionado.Navegador)</div>
+                    </article>
+
+                    <article class="detail-card detail-card-wide">
+                        <span>Mensaje del sistema</span>
+                        <div class="detail-console">
+                            <pre>@(string.IsNullOrEmpty(logSeleccionado.DetalleError) ? "Sin errores registrados." : logSeleccionado.DetalleError)</pre>
+                        </div>
+                    </article>
+                </div>
+            </div>
+
+            <div class="logs-modal-footer">
+                <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal">
+                    Cerrar ventana
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showDeleteConfirm)
+{
+    <div class="logs-modal-backdrop"></div>
+    <div class="logs-modal" role="dialog" aria-modal="true">
+        <div class="logs-modal-content logs-modal-content-compact">
+            <div class="logs-modal-header logs-modal-header-danger">
+                <div>
+                    <span class="section-kicker">Confirmacion</span>
+                    <h3>@deleteConfirmTitle</h3>
+                    <p class="modal-subtitle">@deleteConfirmMessage</p>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarConfirmacionEliminar" aria-label="Cerrar">
+                    <i class="ri-close-line"></i>
+                </button>
+            </div>
+
+            <div class="logs-modal-body">
+                <div class="delete-confirm-card">
+                    <div class="delete-confirm-icon">
+                        <i class="ri-delete-bin-4-line"></i>
+                    </div>
+                    <div class="delete-confirm-copy">
+                        <strong>Esta accion eliminara registros de forma permanente.</strong>
+                        <span>Confirme solo si realmente desea continuar.</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="logs-modal-footer">
+                <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarConfirmacionEliminar">
+                    Cancelar
+                </button>
+                <button type="button" class="danger-btn" @onclick="ConfirmarEliminarAsync" disabled="@cargando">
+                    <i class="ri-delete-bin-4-line"></i>
+                    <span>Eliminar</span>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<LogIniciosSesion> items = new();
+    private LogIniciosSesion? logSeleccionado;
+    private bool mostrarModal;
+    private bool showDeleteConfirm;
+    private bool cargando;
+    private string? mensaje;
+    private string noticeClass = "notice-success";
+    private string deleteConfirmTitle = "Eliminar registro";
+    private string deleteConfirmMessage = string.Empty;
+    private Func<Task>? deleteConfirmAction;
+
+    private int page = 1;
+    private int pageSize = 12;
+    private int total;
+
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+    private string periodoBorrado = "7d";
+
+    private int totalPages => total == 0 ? 1 : (int)Math.Ceiling(total / (double)pageSize);
+    private int LogsExitososVisibles => items.Count(x => x.Exitoso == true);
+    private int LogsFallidosVisibles => items.Count(x => x.Exitoso != true);
+    private string PeriodoBorradoTitulo => periodoBorrado switch
+    {
+        "hoy" => "Hoy",
+        "30d" => "Ultimos 30 dias",
+        "mes" => "Este mes",
+        _ => "Ultimos 7 dias"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+
+        if (!await ValidarAccesoEContaxAsync(authState.User))
+            return;
+
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        var resultado = await AdministracionService.GetLogsInicioAsync(fechaDesde, fechaHasta, page, pageSize);
+        total = resultado.Total;
+
+        if (page > totalPages)
+        {
+            page = totalPages;
+            resultado = await AdministracionService.GetLogsInicioAsync(fechaDesde, fechaHasta, page, pageSize);
+        }
+
+        items = resultado.Items;
+        cargando = false;
+    }
+
+    private async Task Anterior()
+    {
+        if (page > 1)
+        {
+            page--;
+            await CargarAsync();
+        }
+    }
+
+    private async Task Siguiente()
+    {
+        if (page < totalPages)
+        {
+            page++;
+            await CargarAsync();
+        }
+    }
+
+    private async Task SolicitarEliminarRegistro(int id)
+    {
+        if (await JS.ConfirmDeleteAsync($"Eliminar registro #{id}", "El registro seleccionado se quitara del historial visible."))
+        {
+            await EliminarIndividual(id);
+        }
+    }
+
+    private void CerrarConfirmacionEliminar()
+    {
+        if (cargando)
+        {
+            return;
+        }
+
+        showDeleteConfirm = false;
+        deleteConfirmAction = null;
+        deleteConfirmTitle = "Eliminar registro";
+        deleteConfirmMessage = string.Empty;
+    }
+
+    private async Task ConfirmarEliminarAsync()
+    {
+        if (deleteConfirmAction is null)
+        {
+            return;
+        }
+
+        await deleteConfirmAction.Invoke();
+    }
+
+    private async Task EliminarIndividual(int id)
+    {
+        CerrarMensaje();
+        cargando = true;
+        try
+        {
+            if (await AdministracionService.EliminarLogInicioAsync(id))
+            {
+                MostrarMensaje("Exito: El registro ha sido eliminado.", "notice-success");
+                CerrarConfirmacionEliminar();
+                await CargarAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            MostrarMensaje("Error al intentar eliminar: " + ex.Message, "notice-error");
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task ConfirmarBorrarTodo()
+    {
+        if (await JS.ConfirmDeleteAsync("Borrar todos los registros", "Esta accion eliminara permanentemente todo el historial de accesos. No se puede deshacer."))
+        {
+            await EjecutarBorrarTodoAsync();
+        }
+    }
+
+    private async Task EjecutarBorrarTodoAsync()
+    {
+        CerrarMensaje();
+        cargando = true;
+        try
+        {
+            int eliminados = await AdministracionService.EliminarTodosLogsInicioAsync();
+            MostrarMensaje($"Exito: Se eliminaron {eliminados} registros del historial.", "notice-success");
+            page = 1;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            MostrarMensaje("Error al intentar borrar todo: " + ex.Message, "notice-error");
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task ConfirmarBorradoPeriodo()
+    {
+        var (inicio, fin, titulo) = ObtenerPeriodoBorrado();
+        var finVisible = fin.AddDays(-1);
+
+        if (await JS.ConfirmDeleteAsync($"Borrar {titulo}", $"Se eliminaran todos los logs entre {inicio:dd/MM/yyyy} y {finVisible:dd/MM/yyyy}."))
+        {
+            await EjecutarBorradoPeriodoAsync();
+        }
+    }
+
+    private async Task EjecutarBorradoPeriodoAsync()
+    {
+        var (inicio, fin, titulo) = ObtenerPeriodoBorrado();
+        CerrarMensaje();
+        cargando = true;
+        try
+        {
+            int eliminados = await AdministracionService.EliminarLogsInicioPeriodoAsync(inicio, fin);
+            MostrarMensaje($"Exito: Se eliminaron {eliminados} registros del periodo {titulo}.", "notice-success");
+            CerrarConfirmacionEliminar();
+            page = 1;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            MostrarMensaje("Error en el proceso de purga: " + ex.Message, "notice-error");
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task AplicarFiltro()
+    {
+        page = 1;
+        await CargarAsync();
+    }
+
+    private async Task ResetearFiltros()
+    {
+        fechaDesde = null;
+        fechaHasta = null;
+        page = 1;
+        CerrarMensaje();
+        await CargarAsync();
+    }
+
+    private void SeleccionarPeriodoBorrado(string periodo)
+    {
+        periodoBorrado = periodo;
+        MostrarMensaje(GetPeriodoBorradoConfirmacion(), "notice-info");
+    }
+
+    private (DateTime inicio, DateTime fin, string titulo) ObtenerPeriodoBorrado()
+    {
+        var hoy = DateTime.Today;
+
+        return periodoBorrado switch
+        {
+            "hoy" => (hoy, hoy.AddDays(1), "Hoy"),
+            "30d" => (hoy.AddDays(-29), hoy.AddDays(1), "Ultimos 30 dias"),
+            "mes" => (new DateTime(hoy.Year, hoy.Month, 1), new DateTime(hoy.Year, hoy.Month, 1).AddMonths(1), "Este mes"),
+            _ => (hoy.AddDays(-6), hoy.AddDays(1), "Ultimos 7 dias")
+        };
+    }
+
+    private static string GetBrowserPreview(string? navegador)
+    {
+        if (string.IsNullOrWhiteSpace(navegador))
+        {
+            return "Navegador no disponible";
+        }
+
+        const int max = 96;
+        return navegador.Length <= max ? navegador : navegador[..max] + "...";
+    }
+
+    private static string GetNombreUsuario(LogIniciosSesion log)
+    {
+        var usuario = log.IdUsuarioNavigation;
+        if (usuario is null)
+        {
+            return "Usuario no disponible";
+        }
+
+        var nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim();
+        return string.IsNullOrWhiteSpace(nombre) ? "Usuario no disponible" : nombre;
+    }
+
+    private static string GetUsuarioSecundario(LogIniciosSesion log)
+    {
+        if (!string.IsNullOrWhiteSpace(log.IdUsuarioNavigation?.Email))
+        {
+            return log.IdUsuarioNavigation.Email!;
+        }
+
+        return GetUsuarioIdTexto(log);
+    }
+
+    private static string GetUsuarioIdTexto(LogIniciosSesion log)
+        => log.IdUsuario.HasValue ? $"ID {log.IdUsuario.Value}" : "Sin usuario asociado";
+
+    private string GetPeriodoBorradoConfirmacion() => periodoBorrado switch
+    {
+        "hoy" => "Hoy seleccionado.",
+        "30d" => "Ultimos 30 dias seleccionados.",
+        "mes" => "Este mes seleccionado.",
+        _ => "Ultimos 7 dias seleccionados."
+    };
+
+    private void MostrarMensaje(string texto, string clase)
+    {
+        mensaje = texto;
+        noticeClass = clase;
+    }
+
+    private void CerrarMensaje()
+    {
+        mensaje = null;
+        noticeClass = "notice-success";
+    }
+
+    private string GetRangoResumen()
+    {
+        if (!fechaDesde.HasValue && !fechaHasta.HasValue)
+        {
+            return "Sin filtro de fechas";
+        }
+
+        var desde = fechaDesde?.ToString("dd/MM/yyyy") ?? "...";
+        var hasta = fechaHasta?.ToString("dd/MM/yyyy") ?? "...";
+        return $"{desde} - {hasta}";
+    }
+
+    private string GetPeriodoBorradoResumen()
+    {
+        var (inicio, fin, _) = ObtenerPeriodoBorrado();
+        return $"{inicio:dd/MM/yyyy} - {fin.AddDays(-1):dd/MM/yyyy}";
+    }
+
+    private void MostrarDetalle(LogIniciosSesion log)
+    {
+        logSeleccionado = log;
+        mostrarModal = true;
+    }
+
+    private void CerrarModal()
+    {
+        mostrarModal = false;
+        logSeleccionado = null;
+    }
+
+    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return false;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
+            return false;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        return true;
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value
+            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+}

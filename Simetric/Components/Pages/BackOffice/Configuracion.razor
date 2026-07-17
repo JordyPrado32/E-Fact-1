@@ -1,0 +1,1267 @@
+@page "/backoffice/configuracion"
+@page "/backoffice/configuracion/usuarios"
+@page "/backoffice/configuracion/sistemas"
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Components
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>Configuracion - BackOffice | Numerica</PageTitle>
+
+<div class="bo-config-page animate__animated animate__fadeIn">
+    <section class="config-header">
+        <div>
+            <span class="config-eyebrow">BackOffice</span>
+            <h2>Configuracion operativa</h2>
+            <p>Administra servicios, precios, equipo interno, canales comerciales y parametros base del negocio.</p>
+        </div>
+    </section>
+
+
+    <section class="config-summary-grid">
+        <article class="config-summary-card">
+            <span>Servicios activos</span>
+            <strong>@ServiciosActivos</strong>
+            <small>@servicios.Count servicio(s) registrados</small>
+        </article>
+        <article class="config-summary-card">
+            <span>Canales de venta</span>
+            <strong>@canalesVenta.Count</strong>
+            <small>Consolidado comercial</small>
+        </article>
+        <article class="config-summary-card">
+            <span>Usuarios internos</span>
+            <strong>@usuariosInternos.Count</strong>
+            <small>Equipo activo en BackOffice</small>
+        </article>
+        <article class="config-summary-card">
+            <span>Vendedores activos</span>
+            <strong>@topVendedores.Count</strong>
+            <small>Detectados desde ventas registradas</small>
+        </article>
+    </section>
+
+    <section class="config-content">
+        @if (isLoading)
+        {
+            <div class="config-empty">
+                <i class="ri-loader-4-line"></i>
+                <strong>Cargando configuracion</strong>
+                <span>Un momento...</span>
+            </div>
+        }
+        else if (activeTab == "servicios")
+        {
+            <div class="config-section-head">
+                <div>
+                    <h3>Servicios y Planes</h3>
+                    <p>Activa, ordena y revisa los módulos disponibles y sus planes comerciales.</p>
+                </div>
+                <button type="button" class="config-secondary-btn" @onclick="AbrirModalNuevoServicio"><i class="ri-add-line"></i> Nuevo servicio</button>
+            </div>
+
+            <div class="config-split-layout">
+                <!-- Panel izquierdo: Servicios -->
+                <div class="split-left-panel">
+                    <div class="config-table-wrap">
+                        <table class="config-table">
+                            <thead>
+                                <tr>
+                                    <th>Servicio</th>
+                                    <th>Clave</th>
+                                    <th>Estado</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var servicio in servicios)
+                                {
+                                    <tr @onclick='() => SeleccionarServicio(servicio.Clave)' class="service-row @(selectedServiceKey == servicio.Clave ? "is-selected" : "")">
+                                        <td>
+                                            <div class="table-name-cell">
+                                                <span class="service-icon" style="background:@(servicio.ColorHex ?? "#111827")"><i class="@(servicio.Icono ?? "ri-apps-2-line")"></i></span>
+                                                <div>
+                                                    <strong>@servicio.Nombre</strong>
+                                                    <small>@(servicio.Descripcion ?? "Sin descripción")</small>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>@servicio.Clave</td>
+                                        <td><span class="status-chip @(servicio.Estado ? "ok" : "off")">@(servicio.Estado ? "Activo" : "Inactivo")</span></td>
+                                        <td>
+                                            <div class="service-actions">
+                                                <button type="button" class="btn-icon" title="Editar servicio" @onclick:stopPropagation="true" @onclick="() => AbrirModalEditarServicio(servicio)">
+                                                    <i class="ri-pencil-line"></i>
+                                                </button>
+                                                <button type="button" class="btn-icon" title="Cambiar estado" @onclick:stopPropagation="true" @onclick="() => AlternarEstadoServicioAsync(servicio)">
+                                                    <i class="@(servicio.Estado ? "ri-toggle-fill" : "ri-toggle-line")"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Panel derecho: Tarifas -->
+                <div class="split-right-panel">
+                    <div class="panel-card">
+                        <div class="panel-card-header">
+                            <div>
+                                <h4>Planes de @selectedServiceKey</h4>
+                                <p>Lista base de planes y tarifas comerciales configuradas.</p>
+                            </div>
+                            <button type="button" class="config-secondary-btn btn-sm" @onclick="AbrirModalNuevoPrecio">
+                                <i class="ri-add-line"></i>
+                                Nuevo plan
+                            </button>
+                        </div>
+                        <div class="panel-card-body">
+                            @if (!GetPreciosDeServicio().Any())
+                            {
+                                <div class="prices-empty">
+                                    <i class="ri-price-tag-3-line"></i>
+                                    <span>No hay planes configurados.</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="prices-list">
+                                    @foreach (var precio in GetPreciosDeServicio())
+                                    {
+                                        <div class="price-item-card">
+                                            <div class="price-item-info">
+                                                <span class="price-cycle" style="font-weight: 700;">@precio.Ciclo</span>
+                                                @if (!string.IsNullOrWhiteSpace(precio.Incluye))
+                                                {
+                                                    <span class="price-includes" style="font-size: 0.85rem; color: #64748b; margin-top: 0.25rem;">@precio.Incluye</span>
+                                                }
+                                                <strong class="price-value" style="margin-top: 0.5rem; display: block;">$ @precio.Valor.ToString("N2")</strong>
+                                            </div>
+                                            <button type="button" class="btn-icon" @onclick="() => AbrirModalEditarPrecio(precio)" title="Editar plan">
+                                                <i class="ri-pencil-line"></i>
+                                            </button>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+
+        else if (activeTab == "canales")
+        {
+            <div class="config-section-head animate__animated animate__fadeIn">
+                <div>
+                    <h3>Canales y Roles</h3>
+                    <p>Administre los canales comerciales de venta y consulte los roles asignados a clientes de la plataforma.</p>
+                </div>
+            </div>
+
+            <div class="config-split-layout equal-split animate__animated animate__fadeIn">
+                <!-- Panel izquierdo: Canales de venta -->
+                <div class="split-left-panel">
+                    <div class="panel-card" style="height: 100%;">
+                        <div class="panel-card-header">
+                            <div>
+                                <h4>Canales de Venta</h4>
+                                <p>Orígenes comerciales usados en reportes y ventas.</p>
+                            </div>
+                            <span class="table-inline-note">Fuente: ventas registradas</span>
+                        </div>
+                        <div class="config-grid-cards">
+                            @foreach (var canal in canalesVenta)
+                            {
+                                <article class="config-mini-card">
+                                    <span class="channel-dot" style="background:@canal.Color; color:@canal.Color;"></span>
+                                    <div style="display: flex; flex-direction: column;">
+                                        <span class="card-title-strong">@canal.Nombre</span>
+                                        <small class="card-desc-small">@canal.Transacciones transacciones</small>
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel derecho: Roles de usuario -->
+                <div class="split-right-panel">
+                    <div class="panel-card" style="height: 100%;">
+                        <div class="panel-card-header">
+                            <div>
+                                <h4>Roles de Clientes</h4>
+                                <p>Roles permitidos para administración y acceso.</p>
+                            </div>
+                        </div>
+                        <div class="config-grid-cards">
+                            @foreach (var rol in rolesClientes)
+                            {
+                                <article class="config-mini-card column-layout">
+                                    <span class="card-meta-label">Rol permitido</span>
+                                    <span class="card-title-strong">@rol.NombreTipo</span>
+                                    <small class="card-desc-small">@(rol.Descripcion ?? "Disponible para administración de clientes")</small>
+                                </article>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+        else
+        {
+            <!-- Sección vacía -->
+        }
+    </section>
+
+    @if (showServiceModal)
+    {
+        <div class="precio-modal-backdrop" @onclick="CerrarServicioModal"></div>
+        <div class="precio-modal" role="dialog" aria-modal="true">
+            <div class="precio-modal-content animate__animated animate__zoomIn">
+                <div class="precio-modal-header">
+                    <h3>@(isEditService ? "Editar servicio" : "Nuevo servicio")</h3>
+                    <button type="button" class="btn-close" @onclick="CerrarServicioModal" style="background:none; border:none; font-size:1.5rem; cursor:pointer;">
+                        <i class="ri-close-line"></i>
+                    </button>
+                </div>
+                <div class="precio-modal-body">
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Clave</label>
+                        <input @bind="tempService.Clave" class="form-control field-input" placeholder="Ej. e-fact" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;" />
+                    </div>
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Nombre</label>
+                        <input @bind="tempService.Nombre" class="form-control field-input" placeholder="Nombre comercial" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;" />
+                    </div>
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Descripcion</label>
+                        <textarea @bind="tempService.Descripcion" class="form-control field-input" rows="2" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px; font-family:inherit; resize:vertical;"></textarea>
+                    </div>
+                    <div class="config-grid-2">
+                        <div class="form-field">
+                            <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Ruta</label>
+                            <input @bind="tempService.RutaAcceso" class="form-control field-input" placeholder="/mi-servicio" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;" />
+                        </div>
+                        <div class="form-field">
+                            <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Icono</label>
+                            <input @bind="tempService.Icono" class="form-control field-input" placeholder="ri-apps-2-line" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;" />
+                        </div>
+                    </div>
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Color</label>
+                        <input @bind="tempService.ColorHex" class="form-control field-input" placeholder="#111827" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;" />
+                    </div>
+                </div>
+                <div class="precio-modal-footer" style="padding:1rem 1.5rem; background:#f8fafc; border-top:1px solid #e2e8f0; display:flex; justify-content:flex-end; gap:0.75rem;">
+                    <button type="button" class="config-secondary-btn" @onclick="CerrarServicioModal">Cancelar</button>
+                    <button type="button" class="config-primary-btn" @onclick="GuardarServicioAsync">Guardar</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (showPrecioModal)
+    {
+        <div class="precio-modal-backdrop" @onclick="CerrarPrecioModal"></div>
+        <div class="precio-modal" role="dialog" aria-modal="true">
+            <div class="precio-modal-content animate__animated animate__zoomIn">
+                <div class="precio-modal-header">
+                    <h3>@(isEditPrecio ? "Modificar Plan" : "Nuevo Plan")</h3>
+                    <button type="button" class="btn-close" @onclick="CerrarPrecioModal" style="background:none; border:none; font-size:1.5rem; cursor:pointer;">
+                        <i class="ri-close-line"></i>
+                    </button>
+                </div>
+                <div class="precio-modal-body">
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Servicio</label>
+                        <input class="form-control field-input" value="@tempPrecio.Servicio" readonly disabled style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6;" />
+                    </div>
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Nombre del Plan / Ciclo</label>
+                        <input @bind="tempPrecio.Ciclo" class="form-control field-input" placeholder="Ej. Mensual, Anual, 1 año" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;" />
+                    </div>
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Qué incluye / Descripción</label>
+                        <textarea @bind="tempPrecio.Incluye" class="form-control field-input" placeholder="Ej. Certificado digital y validación de documentos" rows="2" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px; font-family:inherit; resize:vertical;"></textarea>
+                    </div>
+                    <div class="form-field">
+                        <label class="field-label" style="display:block; margin-bottom:0.25rem; font-weight:bold; font-size:0.85rem; color:#4b5563;">Precio / Valor ($)</label>
+                        <input type="number" step="0.01" @bind="tempPrecio.Valor" class="form-control field-input" style="width:100%; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;" />
+                    </div>
+                </div>
+                <div class="precio-modal-footer" style="padding:1rem 1.5rem; background:#f8fafc; border-top:1px solid #e2e8f0; display:flex; justify-content:flex-end; gap:0.75rem;">
+                    <button type="button" class="config-secondary-btn" @onclick="CerrarPrecioModal">Cancelar</button>
+                    <button type="button" class="config-primary-btn" @onclick="GuardarPrecio">Guardar</button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "tab")]
+    public string? TabQuery { get; set; }
+
+    private bool isLoading = true;
+    private string activeTab = "servicios";
+    private List<AppServicio> servicios = new();
+    private List<Usuario> usuariosInternos = new();
+    private List<TipoUsuario> rolesClientes = new();
+    private List<CanalConfigDto> canalesVenta = new();
+    private List<VendedorConfigDto> topVendedores = new();
+
+    private int ServiciosActivos => servicios.Count(s => s.Estado);
+
+    private readonly List<ConfigTabDto> tabs =
+    [
+        new("servicios", "Servicios y Planes", "ri-apps-2-line"),
+        new("canales", "Canales y Roles", "ri-route-line")
+    ];
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrWhiteSpace(TabQuery))
+        {
+            activeTab = TabQuery;
+            if (activeTab == "paquetes")
+            {
+                activeTab = "servicios";
+            }
+            else if (activeTab == "roles")
+            {
+                activeTab = "canales";
+            }
+        }
+    }
+
+    private bool showServiceModal;
+    private bool isEditService;
+    private AppServicio tempService = new();
+    private AppServicio? originalService;
+
+    private void AbrirModalNuevoServicio()
+    {
+        tempService = new AppServicio
+        {
+            Estado = true,
+            RequiereSuscripcion = true,
+            OrdenVisual = servicios.Any() ? servicios.Max(s => s.OrdenVisual) + 1 : 1,
+            ColorHex = "#111827",
+            Icono = "ri-apps-2-line"
+        };
+        originalService = null;
+        isEditService = false;
+        showServiceModal = true;
+    }
+
+    private void AbrirModalEditarServicio(AppServicio servicio)
+    {
+        originalService = servicio;
+        tempService = new AppServicio
+        {
+            ServicioId = servicio.ServicioId,
+            Clave = servicio.Clave,
+            Nombre = servicio.Nombre,
+            Descripcion = servicio.Descripcion,
+            RutaAcceso = servicio.RutaAcceso,
+            RequiereSuscripcion = servicio.RequiereSuscripcion,
+            Estado = servicio.Estado,
+            OrdenVisual = servicio.OrdenVisual,
+            Icono = servicio.Icono,
+            ColorHex = servicio.ColorHex,
+            FechaCreacion = servicio.FechaCreacion
+        };
+        isEditService = true;
+        showServiceModal = true;
+    }
+
+    private void CerrarServicioModal() => showServiceModal = false;
+
+    private async Task GuardarServicioAsync()
+    {
+        if (string.IsNullOrWhiteSpace(tempService.Clave) || string.IsNullOrWhiteSpace(tempService.Nombre))
+        {
+            await JS.ShowToastAsync("La clave y el nombre son obligatorios", "error");
+            return;
+        }
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var clave = tempService.Clave.Trim();
+        var duplicated = await context.AppServicios.AnyAsync(s => s.Clave == clave && s.ServicioId != tempService.ServicioId);
+        if (duplicated)
+        {
+            await JS.ShowToastAsync("Ya existe un servicio con esa clave", "error");
+            return;
+        }
+
+        if (isEditService && originalService is not null)
+        {
+            var dbItem = await context.AppServicios.FirstOrDefaultAsync(s => s.ServicioId == originalService.ServicioId);
+            if (dbItem is null)
+            {
+                await JS.ShowToastAsync("No se encontro el servicio", "error");
+                return;
+            }
+
+            dbItem.Clave = clave;
+            dbItem.Nombre = tempService.Nombre.Trim();
+            dbItem.Descripcion = tempService.Descripcion?.Trim();
+            dbItem.RutaAcceso = tempService.RutaAcceso?.Trim();
+            dbItem.Icono = tempService.Icono?.Trim();
+            dbItem.ColorHex = tempService.ColorHex?.Trim();
+            dbItem.OrdenVisual = tempService.OrdenVisual;
+        }
+        else
+        {
+            context.AppServicios.Add(new AppServicio
+            {
+                Clave = clave,
+                Nombre = tempService.Nombre.Trim(),
+                Descripcion = tempService.Descripcion?.Trim(),
+                RutaAcceso = tempService.RutaAcceso?.Trim(),
+                Icono = tempService.Icono?.Trim(),
+                ColorHex = tempService.ColorHex?.Trim(),
+                OrdenVisual = tempService.OrdenVisual,
+                Estado = true,
+                RequiereSuscripcion = true,
+                FechaCreacion = DateTime.Now
+            });
+        }
+
+        await context.SaveChangesAsync();
+        showServiceModal = false;
+        await CargarConfiguracionAsync();
+        await JS.ShowToastAsync(isEditService ? "Servicio actualizado" : "Servicio creado", "success");
+    }
+
+    private async Task AlternarEstadoServicioAsync(AppServicio servicio)
+    {
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var dbItem = await context.AppServicios.FirstOrDefaultAsync(s => s.ServicioId == servicio.ServicioId);
+        if (dbItem is null)
+            return;
+
+        dbItem.Estado = !dbItem.Estado;
+        await context.SaveChangesAsync();
+        await CargarConfiguracionAsync();
+        await JS.ShowToastAsync(dbItem.Estado ? "Servicio activado" : "Servicio desactivado", "success");
+    }
+
+    private async Task MostrarMensajeDesarrollo()
+    {
+        await JS.ShowToastAsync("Módulo en desarrollo", "info");
+    }
+
+    private List<PrecioConfigDto> preciosBase = new();
+
+    private string selectedServiceKey = "E-FACT";
+    private bool showPrecioModal;
+    private bool isEditPrecio;
+    private PrecioConfigDto tempPrecio = new();
+    private PrecioConfigDto? originalPrecio;
+
+    private List<PrecioConfigDto> GetPreciosDeServicio()
+    {
+        return preciosBase.Where(p => string.Equals(p.Servicio, selectedServiceKey, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    private void SeleccionarServicio(string clave)
+    {
+        selectedServiceKey = clave;
+    }
+
+    private void AbrirModalNuevoPrecio()
+    {
+        tempPrecio = new PrecioConfigDto(selectedServiceKey, "", 0.00m, "");
+        isEditPrecio = false;
+        showPrecioModal = true;
+    }
+
+    private void AbrirModalEditarPrecio(PrecioConfigDto precio)
+    {
+        originalPrecio = precio;
+        tempPrecio = new PrecioConfigDto(precio.Servicio, precio.Ciclo, precio.Valor, precio.Incluye);
+        isEditPrecio = true;
+        showPrecioModal = true;
+    }
+
+    private void CerrarPrecioModal()
+    {
+        showPrecioModal = false;
+    }
+
+    private async Task GuardarPrecio()
+    {
+        if (string.IsNullOrWhiteSpace(tempPrecio.Ciclo))
+        {
+            await JS.ShowToastAsync("El ciclo es obligatorio", "error");
+            return;
+        }
+        if (tempPrecio.Valor < 0)
+        {
+            await JS.ShowToastAsync("El precio no puede ser negativo", "error");
+            return;
+        }
+
+        if (isEditPrecio && originalPrecio != null)
+        {
+            originalPrecio.Ciclo = tempPrecio.Ciclo;
+            originalPrecio.Valor = tempPrecio.Valor;
+            originalPrecio.Incluye = tempPrecio.Incluye;
+            await JS.ShowToastAsync("Precio actualizado", "success");
+        }
+        else
+        {
+            preciosBase.Add(new PrecioConfigDto(tempPrecio.Servicio, tempPrecio.Ciclo, tempPrecio.Valor, tempPrecio.Incluye));
+            await JS.ShowToastAsync("Nuevo precio añadido", "success");
+        }
+
+        if (string.Equals(tempPrecio.Servicio, "E-FACT", StringComparison.OrdinalIgnoreCase))
+        {
+            SincronizarPlanesEFact();
+        }
+
+        showPrecioModal = false;
+    }
+
+    private void SincronizarPlanesEFact()
+    {
+        var efactPrecios = preciosBase.Where(p => string.Equals(p.Servicio, "E-FACT", StringComparison.OrdinalIgnoreCase)).ToList();
+        var nuevosPlanes = new List<EFactPlanDto>();
+        foreach (var p in efactPrecios)
+        {
+            int cantidad = 0;
+            string color = "slate";
+            string icono = "bi-file-earmark";
+            bool recomendado = false;
+
+            if (p.Ciclo.Contains("25", StringComparison.OrdinalIgnoreCase))
+            {
+                cantidad = 25;
+                color = "blue";
+                icono = "bi-cup-hot";
+            }
+            else if (p.Ciclo.Contains("120", StringComparison.OrdinalIgnoreCase))
+            {
+                cantidad = 120;
+                color = "orange";
+                icono = "bi-box2-heart";
+                recomendado = true;
+            }
+            else if (p.Ciclo.Contains("600", StringComparison.OrdinalIgnoreCase))
+            {
+                cantidad = 600;
+                color = "mint";
+                icono = "bi-boxes";
+            }
+            else if (p.Ciclo.Contains("ilimitado", StringComparison.OrdinalIgnoreCase) || p.Ciclo.Contains("ilimitados", StringComparison.OrdinalIgnoreCase))
+            {
+                cantidad = -1;
+                color = "green";
+                icono = "bi-stars";
+            }
+
+            nuevosPlanes.Add(new EFactPlanDto
+            {
+                Nombre = p.Ciclo,
+                CantidadDocs = cantidad,
+                Precio = p.Valor,
+                Descripcion = p.Incluye,
+                ColorClase = color,
+                Icono = icono,
+                EsRecomendado = recomendado
+            });
+        }
+
+        if (nuevosPlanes.Any())
+        {
+            EFactBillingConfig.EFactPlans = nuevosPlanes;
+        }
+    }
+
+    private readonly List<ParametroConfigDto> parametrosBase =
+    [
+        new("Moneda", "USD", "Formato monetario de ventas y reportes"),
+        new("IVA vigente", "15%", "Porcentaje usado en comprobantes"),
+        new("Canal web unificado", "Web", "Nombre unico para ventas de portal")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarConfiguracionAsync();
+        CargarPreciosBase();
+    }
+
+    private void CargarPreciosBase()
+    {
+        preciosBase.Clear();
+        foreach (var plan in EFactBillingConfig.EFactPlans)
+        {
+            preciosBase.Add(new PrecioConfigDto("E-FACT", plan.Nombre, plan.Precio, plan.Descripcion));
+        }
+
+        preciosBase.Add(new PrecioConfigDto("E-SIGN", "1 año", 21.91m, "Firma electrónica válida por 1 año para facturación y documentos."));
+        preciosBase.Add(new PrecioConfigDto("E-SIGN", "2 años", 34.60m, "Firma electrónica válida por 2 años con descuento comercial."));
+        preciosBase.Add(new PrecioConfigDto("E-SIGN", "3 años", 46.14m, "Firma electrónica válida por 3 años, óptimo para empresas medianas."));
+        preciosBase.Add(new PrecioConfigDto("E-SIGN", "4 años", 57.68m, "Firma electrónica válida por 4 años con el mejor precio anualizado."));
+    }
+
+    private async Task CargarConfiguracionAsync()
+    {
+        isLoading = true;
+        await using var context = await DbFactory.CreateDbContextAsync();
+
+        servicios = await context.AppServicios
+            .AsNoTracking()
+            .OrderBy(s => s.OrdenVisual)
+            .ThenBy(s => s.Nombre)
+            .ToListAsync();
+
+        usuariosInternos = await context.Usuarios
+            .AsNoTracking()
+            .Include(u => u.IdTipoUsuarioNavigation)
+            .Where(u => u.IdTipoUsuario == 7)
+            .OrderBy(u => u.Nombres)
+            .ThenBy(u => u.Apellidos)
+            .ToListAsync();
+
+        rolesClientes = await context.TipoUsuario
+            .AsNoTracking()
+            .Where(r => r.Estado == true && (r.IdTipoUsuario == 1 || r.IdTipoUsuario == 7))
+            .OrderBy(r => r.IdTipoUsuario)
+            .ToListAsync();
+
+        var ventasCanales = await context.ReporteVentasBackOffice
+            .AsNoTracking()
+            .Where(v => v.Canal != null)
+            .GroupBy(v => v.Canal!)
+            .Select(g => new { Canal = g.Key, Transacciones = g.Count() })
+            .ToListAsync();
+
+        canalesVenta = ventasCanales
+            .GroupBy(c => NormalizarCanal(c.Canal))
+            .Select(g => new CanalConfigDto(g.Key, g.Sum(x => x.Transacciones), GetCanalColor(g.Key)))
+            .OrderBy(c => c.Nombre)
+            .ToList();
+
+        topVendedores = await context.ReporteVentasBackOffice
+            .AsNoTracking()
+            .Where(v => !string.IsNullOrWhiteSpace(v.Vendedor) && v.Estado != "anulada")
+            .GroupBy(v => new { v.Vendedor, v.Canal })
+            .Select(g => new VendedorConfigDto(g.Key.Vendedor!, NormalizarCanal(g.Key.Canal), g.Count(), g.Sum(x => x.Valor)))
+            .OrderByDescending(v => v.Total)
+            .ThenBy(v => v.Nombre)
+            .Take(8)
+            .ToListAsync();
+
+        if (!canalesVenta.Any())
+        {
+            canalesVenta =
+            [
+                new("Web", 0, GetCanalColor("Web")),
+                new("Números Asesores", 0, GetCanalColor("Números Asesores")),
+                new("Punto de Venta", 0, GetCanalColor("Punto de Venta")),
+                new("API e-Fact", 0, GetCanalColor("API e-Fact"))
+            ];
+        }
+
+
+        isLoading = false;
+    }
+
+    private static string NormalizarCanal(string? canal)
+    {
+        var value = canal?.Trim();
+        if (string.IsNullOrWhiteSpace(value)) return "Web";
+        if (value.Contains("web", StringComparison.OrdinalIgnoreCase) || value.Contains("portal", StringComparison.OrdinalIgnoreCase)) return "Web";
+        if (value.Contains("asesor", StringComparison.OrdinalIgnoreCase) || value.Contains("admin", StringComparison.OrdinalIgnoreCase) || value.Contains("backoffice", StringComparison.OrdinalIgnoreCase)) return "Números Asesores";
+        if (value.Contains("api", StringComparison.OrdinalIgnoreCase)) return "API e-Fact";
+        return value;
+    }
+
+    private static string GetCanalColor(string canal)
+    {
+        if (canal.Contains("Web", StringComparison.OrdinalIgnoreCase)) return "#2563eb";
+        if (canal.Contains("Asesores", StringComparison.OrdinalIgnoreCase)) return "#7c3aed";
+        if (canal.Contains("API", StringComparison.OrdinalIgnoreCase)) return "#0891b2";
+        if (canal.Contains("Punto", StringComparison.OrdinalIgnoreCase)) return "#f97316";
+        return "#475569";
+    }
+
+    private sealed record VendedorConfigDto(string Nombre, string Canal, int Transacciones, decimal Total);
+    private sealed record ConfigTabDto(string Key, string Label, string Icon);
+    private class PrecioConfigDto
+    {
+        public string Servicio { get; set; } = "";
+        public string Ciclo { get; set; } = "";
+        public decimal Valor { get; set; }
+        public string Incluye { get; set; } = "";
+        
+        public PrecioConfigDto() {}
+        public PrecioConfigDto(string servicio, string ciclo, decimal valor, string incluye = "")
+        {
+            Servicio = servicio;
+            Ciclo = ciclo;
+            Valor = valor;
+            Incluye = incluye;
+        }
+    }
+    private sealed record ParametroConfigDto(string Nombre, string Valor, string Descripcion);
+    private sealed record CanalConfigDto(string Nombre, int Transacciones, string Color);
+}
+
+<style>
+    .bo-config-page {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+
+    .config-header,
+    .config-content,
+    .config-summary-card {
+        background: #ffffff;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+    }
+
+    .config-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: 1.5rem;
+    }
+
+    .config-eyebrow {
+        color: #4b5563;
+        font-size: 0.75rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+
+    .config-header h2,
+    .config-section-head h3 {
+        color: #111827;
+        margin: 0;
+    }
+
+    .config-header p,
+    .config-section-head p {
+        color: #64748b;
+        margin: 0.3rem 0 0;
+        font-size: 0.9rem;
+    }
+
+    .config-primary-btn,
+    .config-secondary-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        border-radius: 8px;
+        border: 1px solid #111827;
+        font-weight: 800;
+        text-decoration: none;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .config-primary-btn {
+        background: #111827;
+        color: #ffffff;
+        padding: 0.8rem 1rem;
+    }
+
+    .config-secondary-btn {
+        background: #ffffff;
+        color: #111827;
+        padding: 0.65rem 0.85rem;
+        font-size: 0.85rem;
+    }
+
+    .config-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .config-summary-card {
+        padding: 1rem;
+    }
+
+    .config-summary-card span,
+    .config-mini-card span {
+        color: #64748b;
+        font-size: 0.8rem;
+        font-weight: 800;
+        text-transform: uppercase;
+    }
+
+    .config-summary-card strong {
+        display: block;
+        color: #111827;
+        font-size: 1.8rem;
+        line-height: 1.1;
+        margin-top: 0.35rem;
+    }
+
+    .config-summary-card small,
+    .config-mini-card small,
+    .table-name-cell small {
+        color: #64748b;
+        display: block;
+        margin-top: 0.2rem;
+    }
+
+    .config-tabs {
+        display: flex;
+        gap: 0.6rem;
+        overflow-x: auto;
+        padding-bottom: 0.2rem;
+    }
+
+    .config-tab {
+        border: 1px solid #d1d5db;
+        background: #ffffff;
+        color: #374151;
+        border-radius: 8px;
+        padding: 0.7rem 0.85rem;
+        font-weight: 800;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .config-tab.active {
+        background: #111827;
+        border-color: #111827;
+        color: #ffffff;
+    }
+
+    .config-content {
+        padding: 1.25rem;
+        min-height: 420px;
+    }
+
+    .config-section-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .config-table-wrap {
+        border: 1px solid #d1d5db;
+        border-radius: 10px;
+        overflow-x: auto;
+    }
+
+    .config-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+    }
+
+    .config-table th {
+        background: #111827;
+        color: #ffffff;
+        padding: 0.85rem 1rem;
+        text-align: left;
+        text-transform: uppercase;
+        font-size: 0.72rem;
+        letter-spacing: 0.05em;
+    }
+
+    .config-table td {
+        padding: 0.9rem 1rem;
+        border-bottom: 1px solid #e5e7eb;
+        color: #1f2937;
+        vertical-align: middle;
+    }
+
+    .config-table tbody tr:nth-child(even) td {
+        background: #f3f4f6;
+    }
+
+    .table-name-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        min-width: 240px;
+    }
+
+    .service-actions {
+        display: flex;
+        gap: 0.45rem;
+        align-items: center;
+    }
+
+    .table-inline-note {
+        color: #64748b;
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+
+    .service-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+    }
+
+    .status-chip {
+        display: inline-flex;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.75rem;
+        font-weight: 800;
+    }
+
+    .status-chip.ok {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .status-chip.off {
+        background: #e5e7eb;
+        color: #374151;
+    }
+
+    .config-grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .config-mini-card {
+        border: 1px solid #d1d5db;
+        border-radius: 10px;
+        padding: 1rem;
+        background: #ffffff;
+    }
+
+    .config-mini-card strong {
+        display: block;
+        color: #111827;
+        font-size: 1.05rem;
+        margin-top: 0.35rem;
+    }
+
+    .channel-card,
+    .seller-card {
+        position: relative;
+        padding-left: 3rem;
+    }
+
+    .channel-dot,
+    .seller-card > i {
+        position: absolute;
+        left: 1rem;
+        top: 1.1rem;
+        width: 1rem;
+        height: 1rem;
+        border-radius: 4px;
+    }
+
+    .seller-card > i {
+        width: 1.4rem;
+        height: 1.4rem;
+        color: #111827;
+        font-size: 1.4rem;
+        top: 1rem;
+    }
+
+    .config-empty {
+        min-height: 300px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.35rem;
+        color: #64748b;
+    }
+
+    .config-empty i {
+        font-size: 2rem;
+    }
+
+    @@media (max-width: 900px) {
+        .config-header,
+        .config-section-head {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .config-summary-grid,
+        .config-grid-2 {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* Unified Services & Prices Layout */
+    .config-split-layout {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    /* Split layout with equal columns */
+    .config-split-layout.equal-split {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    /* Grid for cards */
+    .config-grid-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 0.75rem;
+    }
+
+    /* Mini card for channels and roles */
+    .config-mini-card {
+        margin: 0;
+        padding: 1rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        background: #f8fafc;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .config-mini-card:hover {
+        border-color: #cbd5e1;
+        background: #f1f5f9;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+    }
+
+    .config-mini-card.column-layout {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+
+    .channel-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+    }
+
+    .card-meta-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        color: #94a3b8;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+    }
+
+    .card-title-strong {
+        font-size: 0.95rem;
+        color: #111827;
+        font-weight: 700;
+    }
+
+    .card-desc-small {
+        font-size: 0.75rem;
+        color: #64748b;
+    }
+
+    .split-left-panel, .split-right-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .service-row {
+        cursor: pointer;
+        transition: background 0.2s ease;
+    }
+
+    .service-row:hover {
+        background: #f8fafc;
+    }
+
+    .service-row.is-selected {
+        background: #f1f5f9;
+        border-left: 4px solid #111827;
+    }
+
+    .panel-card {
+        background: #ffffff;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        padding: 1.25rem;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    }
+
+    .panel-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.25rem;
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 0.75rem;
+        gap: 1rem;
+    }
+
+    .panel-card-header h4 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #111827;
+    }
+
+    .panel-card-header p {
+        margin: 0.25rem 0 0 0;
+        font-size: 0.8rem;
+        color: #64748b;
+    }
+
+    .btn-sm {
+        padding: 0.4rem 0.75rem !important;
+        font-size: 0.8rem !important;
+    }
+
+    .prices-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .price-item-card {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        transition: border-color 0.2s;
+    }
+
+    .price-item-card:hover {
+        border-color: #cbd5e1;
+    }
+
+    .price-item-info {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .price-cycle {
+        font-size: 0.75rem;
+        color: #64748b;
+        text-transform: uppercase;
+        font-weight: 600;
+    }
+
+    .price-value {
+        font-size: 1.125rem;
+        font-weight: 700;
+        color: #111827;
+    }
+
+    .btn-icon {
+        background: transparent;
+        border: none;
+        color: #64748b;
+        cursor: pointer;
+        padding: 0.25rem;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+
+    .btn-icon:hover {
+        color: #111827;
+        background: #e2e8f0;
+    }
+
+    .prices-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 2.5rem 1rem;
+        color: #94a3b8;
+        gap: 0.5rem;
+    }
+
+    .prices-empty i {
+        font-size: 2rem;
+    }
+
+    /* Modal Styles */
+    .precio-modal-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(15, 23, 42, 0.4);
+        backdrop-filter: blur(4px);
+        z-index: 1050;
+    }
+
+    .precio-modal {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 1060;
+        width: 100%;
+        max-width: 420px;
+        padding: 1rem;
+    }
+
+    .precio-modal-content {
+        background: #ffffff;
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        overflow: hidden;
+    }
+
+    .precio-modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .precio-modal-header h3 {
+        margin: 0;
+        font-size: 1.125rem;
+        font-weight: 700;
+        color: #111827;
+    }
+
+    .precio-modal-body {
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+</style>

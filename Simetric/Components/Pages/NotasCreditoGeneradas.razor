@@ -1,0 +1,1373 @@
+@page "/facturacion/notas-credito-generadas"
+@page "/demo/notas-credito-generadas"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.DTOs
+@using Simetric.Services
+@using System.Text
+@using Simetric.Models.Glogales
+@attribute [AllowAnonymous]
+@inject FacturacionService FacturacionService
+@inject NotaCreditoService NotaCreditoService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject SweetAlertService AlertService
+@inject IJSRuntime JS
+@inject ISimpleExcelExportService SimpleExcelExportService
+
+<PageTitle>Notas de Crédito Generadas</PageTitle>
+
+@{
+    var notasFiltradas = NotasFiltradas;
+    var notasPaginaActual = NotasPaginaActual;
+    var totalFiltrado = notasFiltradas.Sum(x => x.Total);
+    var totalVisible = notasPaginaActual.Sum(x => x.Total);
+    var notasAutorizadas = notasFiltradas.Count(x => EstaAutorizada(x));
+    var notasNoAutorizadas = notasFiltradas.Count(x => ObtenerEstadoNotaTexto(x) == DocumentoAutorizacionHelper.EstadoNoAutorizado);
+    var notasPendientes = notasFiltradas.Count - notasAutorizadas - notasNoAutorizadas;
+}
+
+<div class="facturas-shell" data-tour="ncgen.page">
+    @if (mostrarResultadoOverlay)
+    {
+        <div class="facturas-inline-overlay" @onclick="CerrarResultadoOverlay">
+            <div class="facturas-inline-overlay-card facturas-inline-overlay-card-result is-error" @onclick:stopPropagation>
+                <div class="overlay-result-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <div>
+                    <strong>@tituloResultadoOverlay</strong>
+                    <span>@detalleResultadoOverlay</span>
+                </div>
+                <button type="button" class="overlay-close-btn" @onclick="CerrarResultadoOverlay">Cerrar</button>
+            </div>
+        </div>
+    }
+
+    <section class="facturas-hero" data-tour="ncgen.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Ajustes emitidos</span>
+            <h2>Mis notas de crédito con filtros, reporte y acciones unificadas</h2>
+            <p>
+                Busca por cliente, documento modificado o motivo, exporta el resultado visible y abre el
+                XML o PDF desde la misma vista.
+            </p>
+        </div>
+
+        <div class="hero-summary">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Notas filtradas</span>
+                <strong>@notasFiltradas.Count</strong>
+                <small>@ResumenRangoFechas</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Total filtrado</span>
+                <strong>$ @totalFiltrado.ToString("N2")</strong>
+                <small>Importe acumulado de las notas visibles en la consulta.</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Autorizadas</span>
+                <strong>@notasAutorizadas</strong>
+                <small>Pendientes: @notasPendientes | No autorizadas: @notasNoAutorizadas</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="toolbar-card" data-tour="ncgen.toolbar">
+        <div class="toolbar-copy">
+            <span class="toolbar-kicker">Busqueda y control</span>
+            <h3>Notas de crédito generadas</h3>
+            <p>Combina texto y rango de fechas para ubicar cualquier ajuste sin salir del panel.</p>
+            @if (isDemoMode)
+            {
+                <p class="text-muted mb-0">Modo demo: puedes revisar los comprobantes, pero XML, PDF y exportaciones están bloqueados.</p>
+            }
+        </div>
+
+        <div class="toolbar-actions toolbar-actions-expanded">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+
+                <input class="search-input"
+                       placeholder="Buscar por numero, factura, cliente o identificacion"
+                       @bind="Filtro"
+                       @bind:event="oninput" />
+
+                @if (!string.IsNullOrWhiteSpace(Filtro))
+                {
+                    <button class="search-clear" type="button" @onclick="LimpiarTexto" aria-label="Limpiar busqueda">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                }
+            </div>
+
+            <div class="date-filter-group">
+                <label class="date-filter-box">
+                    <span>Desde</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaDesde" />
+                </label>
+
+                <label class="date-filter-box">
+                    <span>Hasta</span>
+                    <InputDate class="date-filter-input" @bind-Value="FechaHasta" />
+                </label>
+            </div>
+
+            <button class="report-btn" type="button" @onclick="DescargarReporteAsync">
+                <i class="bi bi-file-earmark-spreadsheet"></i>
+                <span>Descargar Excel</span>
+            </button>
+
+            <button class="refresh-btn" type="button" @onclick="Recargar">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>Refrescar</span>
+            </button>
+
+            @if (HayFiltrosActivos)
+            {
+                <button class="filter-reset-btn" type="button" @onclick="LimpiarFiltros">
+                    <i class="bi bi-eraser"></i>
+                    <span>Limpiar filtros</span>
+                </button>
+            }
+        </div>
+    </section>
+
+    @if (cargando)
+    {
+        <section class="state-card">
+            <div class="state-icon">
+                <span class="spinner-border"></span>
+            </div>
+            <h3>Cargando notas de crédito</h3>
+            <p>Estamos organizando tu historial para dejar visibles los ajustes mas recientes.</p>
+        </section>
+    }
+    else if (notasFiltradas.Count == 0)
+    {
+        <section class="state-card state-card-empty">
+            <div class="state-icon">
+                <i class="bi bi-inbox"></i>
+            </div>
+            <h3>No hay resultados</h3>
+            <p>
+                @(HayFiltrosActivos
+                    ? "No encontramos notas de credito con los filtros aplicados. Ajusta el texto o las fechas."
+                    : "Todavia no existen notas de credito para mostrar en este panel.")
+            </p>
+        </section>
+    }
+    else
+    {
+        <section class="table-card" data-tour="ncgen.table">
+
+            <div class="table-card-head">
+                <div>
+                    <span class="table-kicker">Listado</span>
+                    <h3>Notas de crédito</h3>
+                    <p>Consulta documento modificado, cliente, estado y total en una sola tabla.</p>
+                </div>
+
+                <div class="table-head-actions">
+                    <label class="page-size-box" for="nc-page-size">
+                        <span>Ver</span>
+                        <select id="nc-page-size" class="page-size-select" @bind="RegistrosPorPagina">
+                            @foreach (var opcion in pageSizeOptions)
+                            {
+                                <option value="@opcion">@opcion</option>
+                            }
+                        </select>
+                        <span>registros</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="table-wrap list-table-wrap">
+
+                <table class="table table-hover align-middle mb-0 facturas-table responsive-list-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 128px;">Fecha sustento</th>
+                            <th style="width: 188px;">Numero de nota</th>
+                            <th style="width: 176px;">Factura modificada</th>
+                            <th>Cliente</th>
+                            <th style="width: 180px;">Estado</th>
+                            <th class="text-end" style="width: 132px;">Total</th>
+                            <th class="text-end actions-header-facturas">Acciones</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @foreach (var notaEntry in notasPaginaActual.Select((item, index) => new { Item = item, Index = index }))
+                        {
+                            var item = notaEntry.Item;
+
+                            // Evaluamos si el campo Estado es false (Anulada)
+                            var esAnulada = (item.Estado == false);
+
+                            var estaAutorizado = EstaAutorizada(item);
+
+                            <tr class="@(esAnulada ? "table-light text-muted" : "")">
+
+                                <td data-label="Fecha sustento">
+                                    <span class="invoice-date">
+                                        @(item.FechaDocumentoModificado?.ToString("dd/MM/yyyy") ?? "-")
+                                    </span>
+                                </td>
+
+                                <td data-label="Numero de nota">
+                                    <span class="invoice-pill">
+                                        @item.NumeroCompleto
+                                    </span>
+                                </td>
+
+                                <td data-label="Factura modificada">
+                                    <span class="invoice-id">
+                                        @item.NumeroDocModificado
+                                    </span>
+                                </td>
+
+                                <td data-label="Cliente">
+                                    <div class="client-cell">
+                                        <strong>@item.Cliente</strong>
+                                        <span>@item.IdentificacionCliente</span>
+                                    </div>
+                                </td>
+
+                                <td data-label="Estado">
+                                    <div class="d-flex flex-column gap-1 align-items-start">
+                                        @if (esAnulada)
+                                        {
+                                            <span class="status-pill status-pill-danger fw-bold" style="background-color: #f8d7da; color: #842029; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;">
+                                                ANULADA
+                                            </span>
+
+                                            @* Si previamente el string contenía "AUTORIZADO", mostramos la advertencia del SRI *@
+                                            @if (estaAutorizado)
+                                            {
+                                                <small class="text-danger d-block mt-1" style="font-size: 0.72rem; line-height: 1.2;">
+                                                    <i class="bi bi-exclamation-triangle-fill"></i> Recuerde anular este comprobante en el portal del SRI.
+                                                </small>
+                                            }
+                                        }
+                                        else if (estaAutorizado)
+                                        {
+                                            <span class="status-pill @ObtenerEstadoNotaClase(item)">
+                                                @ObtenerEstadoNotaTexto(item)
+                                            </span>
+                                            @if (EstaNotaVencida(item))
+                                            {
+                                                <span class="status-pill status-pill-warning text-dark">
+                                                    Vencido
+                                                </span>
+                                            }
+                                            <span class="authorization-number" title="@ObtenerNumeroAutorizacionTexto(item)">
+                                                Autorizacion: @ObtenerNumeroAutorizacionTexto(item)
+                                            </span>
+                                        }
+                                        else if (EsNoAutorizada(item))
+                                        {
+                                            <span class="status-with-info">
+                                                <span class="status-pill @ObtenerEstadoNotaClase(item)">
+                                                    @ObtenerEstadoNotaTexto(item)
+                                                </span>
+                                                <button class="status-info-btn"
+                                                        type="button"
+                                                        title="@ObtenerErrorSriTexto(item)"
+                                                        @onclick="() => MostrarErrorSriNotaCredito(item)">
+                                                    <i class="bi bi-info-circle-fill"></i>
+                                                </button>
+                                            </span>
+                                            @if (EstaNotaVencida(item))
+                                            {
+                                                <span class="status-pill status-pill-danger">
+                                                    Vencido
+                                                </span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="status-pill status-pill-warning text-dark">
+                                                PENDIENTE
+                                            </span>
+                                            @if (EstaNotaVencida(item))
+                                            {
+                                                <span class="status-pill status-pill-danger">
+                                                    Vencido
+                                                </span>
+                                            }
+                                            <button class="btn btn-sm btn-outline-warning mt-1 py-0 px-2"
+                                                    style="font-size: 0.75rem; border-radius: 20px;"
+                                                    disabled="@(procesandoReenvio || procesandoAnulacion)"
+                                                    @onclick="() => ReenviarAlSriAsync(item)">
+                                                <i class="bi bi-send-fill me-1"></i> Reenviar
+                                            </button>
+                                        }
+                                    </div>
+                                </td>
+
+                                <td class="text-end" data-label="Total">
+                                    <span class="amount-pill">
+                                        <span class="currency-symbol">$</span>
+                                        <span class="currency-value">@item.Total.ToString("N2")</span>
+                                    </span>
+                                </td>
+
+                                <td class="text-end" data-label="Acciones">
+                                     <!-- Desktop: Inline summarized compact icon buttons -->
+                                     <div class="actions-desktop-inline gap-1 justify-content-end row-actions-inline-desktop">
+                                         <button class="row-action-btn row-action-view"
+                                                 type="button"
+                                                 title="Ver"
+                                                 @onclick="async () => await VerNotaAsync(item.Sec)">
+                                             <i class="bi bi-eye"></i>
+                                         </button>
+
+                                         <button class="row-action-btn row-action-xml"
+                                                 type="button"
+                                                 title="Descargar XML"
+                                                 disabled="@(!EstaAutorizada(item))"
+                                                 @onclick="async () => await AbrirXmlAsync(item.Sec)">
+                                             <i class="bi bi-filetype-xml"></i>
+                                         </button>
+
+                                         <button class="row-action-btn row-action-pdf"
+                                                 type="button"
+                                                 title="Descargar PDF"
+                                                 disabled="@(!EstaAutorizada(item))"
+                                                 @onclick="async () => await AbrirPdfAsync(item.Sec)">
+                                             <i class="bi bi-file-earmark-pdf"></i>
+                                         </button>
+
+                                         <button class="row-action-btn row-action-mail"
+                                                 type="button"
+                                                 title="Reenviar correo"
+                                                 disabled="@(procesandoReenvio || procesandoAnulacion)"
+                                                 @onclick="async () => await ReenviarCorreoNotaAsync(item.Sec)">
+                                             <i class="bi bi-envelope"></i>
+                                         </button>
+
+                                         @if (!esAnulada)
+                                         {
+                                             <button class="row-action-btn row-action-danger"
+                                                     type="button"
+                                                     title="Anular"
+                                                     disabled="@(procesandoAnulacion || procesandoReenvio)"
+                                                     @onclick="() => ConfirmarAnularNotaAsync(item)">
+                                                 <i class="bi bi-trash3"></i>
+                                             </button>
+                                         }
+                                     </div>
+
+                                     <!-- Mobile: Dropdown -->
+                                     <div class="actions-mobile-dropdown actions-dropdown">
+                                         <button class="actions-dropdown-btn" type="button">
+                                             <i class="bi bi-three-dots"></i>
+                                         </button>
+                                         <div class="actions-dropdown-content">
+                                             <button class="actions-dropdown-item item-view" type="button"
+                                                     @onclick="async () => await VerNotaAsync(item.Sec)">
+                                                 <i class="bi bi-eye"></i>
+                                                 <span>Ver</span>
+                                             </button>
+
+                                             <button class="actions-dropdown-item item-xml" type="button"
+                                                     @onclick="async () => await AbrirXmlAsync(item.Sec)">
+                                                 <i class="bi bi-filetype-xml"></i>
+                                                 <span>Descargar XML</span>
+                                             </button>
+
+                                             <button class="actions-dropdown-item item-pdf" type="button"
+                                                     @onclick="async () => await AbrirPdfAsync(item.Sec)">
+                                                 <i class="bi bi-file-earmark-pdf"></i>
+                                                 <span>Descargar PDF</span>
+                                             </button>
+
+                                             <button class="actions-dropdown-item" type="button"
+                                                     disabled="@(procesandoReenvio || procesandoAnulacion)"
+                                                     @onclick="async () => await ReenviarCorreoNotaAsync(item.Sec)">
+                                                 <i class="bi bi-envelope"></i>
+                                                 <span>Reenviar correo</span>
+                                             </button>
+
+                                             @if (!esAnulada)
+                                             {
+                                                 <button class="actions-dropdown-item item-cancel" type="button"
+                                                         disabled="@(procesandoAnulacion || procesandoReenvio)"
+                                                         @onclick="() => ConfirmarAnularNotaAsync(item)">
+                                                     <i class="bi bi-trash3"></i>
+                                                     <span>Anular</span>
+                                                 </button>
+                                             }
+                                         </div>
+                                     </div>
+                                 </td>
+
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+            </div>
+
+            <div class="table-footer">
+                <div class="footer-metrics">
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados visibles</span>
+                        <strong>@notasPaginaActual.Count</strong>
+                    </div>
+
+                    <div class="footer-metric">
+                        <span class="footer-label">Resultados filtrados</span>
+                        <strong>@notasFiltradas.Count</strong>
+                    </div>
+
+                    <div class="footer-metric footer-metric-highlight">
+                        <span class="footer-label">Total visible</span>
+                        <strong>$ @totalVisible.ToString("N2")</strong>
+                    </div>
+                </div>
+
+                @if (TotalPaginas > 1)
+                {
+                    <nav class="pagination-nav" aria-label="Paginacion de notas de credito">
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaAnterior"
+                                disabled="@(PaginaActualSegura == 1)">
+                            <i class="bi bi-chevron-left"></i>
+                            <span>Anterior</span>
+                        </button>
+
+                        @foreach (var pagina in PaginasVisibles)
+                        {
+                            var paginaLocal = pagina;
+
+                            <button class="pagination-btn @(paginaLocal == PaginaActualSegura ? "is-active" : null)"
+                                    @onclick="() => IrAPagina(paginaLocal)">
+                                @paginaLocal
+                            </button>
+                        }
+
+                        <button class="pagination-btn pagination-btn-direction"
+                                @onclick="PaginaSiguiente"
+                                disabled="@(PaginaActualSegura == TotalPaginas)">
+                            <span>Siguiente</span>
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </nav>
+                }
+            </div>
+
+        </section>
+    }
+
+</div>
+
+
+@if (mostrarModal && notaSeleccionada != null)
+{
+    <div class="factura-modal-backdrop" @onclick="CerrarModal"></div>
+
+    <div class="modal fade show d-block factura-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable factura-modal-dialog">
+            <div class="modal-content factura-modal-content">
+
+                <div class="modal-header factura-modal-header">
+                    <div>
+                        <span class="modal-kicker">Comprobante generado</span>
+                        <h5 class="modal-title mb-0">
+                            Nota de Crédito @notaSeleccionada.NotaCredito.NumNotaCredito
+                        </h5>
+                    </div>
+
+                    <button type="button" class="btn-close" @onclick="CerrarModal"></button>
+                </div>
+
+                <div class="modal-body factura-modal-body">
+                    <NotaCreditoPreview Model="notaSeleccionada" />
+                </div>
+
+                <div class="modal-footer factura-modal-footer">
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirXmlAsync(notaSeleccionada.NotaCredito.Sec)">
+                        Abrir XML
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(notaSeleccionada.NotaCredito.Sec)">
+                        Abrir PDF A4
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(notaSeleccionada.NotaCredito.Sec, FormatoImpresionDocumento.Termica80mm)">
+                        Termica 80mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            @onclick="() => AbrirPdfAsync(notaSeleccionada.NotaCredito.Sec, FormatoImpresionDocumento.Termica50mm)">
+                        Termica 50mm
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-accent modal-link-btn"
+                            disabled="@(procesandoReenvio || procesandoAnulacion)"
+                            @onclick="() => ReenviarCorreoNotaAsync(notaSeleccionada.NotaCredito.Sec)">
+                        Reenviar correo
+                    </button>
+
+                    <button class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal">
+                        Cerrar
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private int currentUserId;
+    private bool cargando = true;
+    private bool isDemoMode;
+    private List<NotaCreditoListDto> notas = new();
+    private readonly int[] pageSizeOptions = { 5, 10, 20, 50 };
+    private int paginaActual = 1;
+    private int registrosPorPagina = 10;
+    private bool mostrarModal;
+    private NotaCreditoDetalleViewDto? notaSeleccionada;
+    private string filtro = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+    private bool procesandoReenvio = false;
+    private bool mostrarResultadoOverlay;
+    private string tituloResultadoOverlay = string.Empty;
+    private string detalleResultadoOverlay = string.Empty;
+    private List<Simetric.Models.Emisor> emisores = new();
+    private int RegistrosPorPagina
+    {
+        get => registrosPorPagina;
+        set
+        {
+            registrosPorPagina = value;
+            paginaActual = 1;
+        }
+    }
+
+    private string Filtro
+    {
+        get => filtro;
+        set
+        {
+            if (filtro == value)
+                return;
+
+            filtro = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaDesde
+    {
+        get => fechaDesde;
+        set
+        {
+            if (fechaDesde == value)
+                return;
+
+            fechaDesde = value;
+            paginaActual = 1;
+        }
+    }
+
+    private DateTime? FechaHasta
+    {
+        get => fechaHasta;
+        set
+        {
+            if (fechaHasta == value)
+                return;
+
+            fechaHasta = value;
+            paginaActual = 1;
+        }
+    }
+
+    private bool HayFiltrosActivos =>
+        !string.IsNullOrWhiteSpace(Filtro) || FechaDesde.HasValue || FechaHasta.HasValue;
+
+    private string ResumenRangoFechas
+    {
+        get
+        {
+            if (FechaDesde.HasValue && FechaHasta.HasValue)
+                return $"{FechaDesde.Value:dd/MM/yyyy} al {FechaHasta.Value:dd/MM/yyyy}";
+
+            if (FechaDesde.HasValue)
+                return $"Desde {FechaDesde.Value:dd/MM/yyyy}";
+
+            if (FechaHasta.HasValue)
+                return $"Hasta {FechaHasta.Value:dd/MM/yyyy}";
+
+            return "Todas las fechas";
+        }
+    }
+
+    private string NombreClienteDetalle =>
+        notaSeleccionada?.Cliente != null
+            ? (!string.IsNullOrWhiteSpace(notaSeleccionada.Cliente.Nombrerazonsocial)
+                ? notaSeleccionada.Cliente.Nombrerazonsocial
+                : ((notaSeleccionada.Cliente.Nombres ?? "") + " " + (notaSeleccionada.Cliente.Apellidos ?? "")).Trim())
+            : "";
+
+    private List<NotaCreditoListDto> NotasFiltradas =>
+        notas
+            .Where(CumpleFiltroNota)
+            .ToList();
+
+    private List<NotaCreditoListDto> NotasPaginaActual =>
+        NotasFiltradas
+            .Skip((PaginaActualSegura - 1) * registrosPorPagina)
+            .Take(registrosPorPagina)
+            .ToList();
+
+    private int TotalPaginas =>
+        NotasFiltradas.Count == 0
+            ? 0
+            : (int)Math.Ceiling(NotasFiltradas.Count / (double)registrosPorPagina);
+
+    private int PaginaActualSegura =>
+        TotalPaginas == 0
+            ? 1
+            : Math.Min(paginaActual, TotalPaginas);
+
+    private int RegistroInicialPagina =>
+        NotasFiltradas.Count == 0
+            ? 0
+            : ((PaginaActualSegura - 1) * registrosPorPagina) + 1;
+
+    private int RegistroFinalPagina =>
+        NotasFiltradas.Count == 0
+            ? 0
+            : Math.Min(PaginaActualSegura * registrosPorPagina, NotasFiltradas.Count);
+
+    private IEnumerable<int> PaginasVisibles
+    {
+        get
+        {
+            if (TotalPaginas == 0)
+                return Array.Empty<int>();
+
+            var inicio = Math.Max(1, PaginaActualSegura - 2);
+            var fin = Math.Min(TotalPaginas, inicio + 4);
+
+            if (fin - inicio < 4)
+                inicio = Math.Max(1, fin - 4);
+
+            return Enumerable.Range(inicio, fin - inicio + 1);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        isDemoMode = EsRutaDemoNotasCredito();
+        await Recargar();
+    }
+
+    private async Task Recargar()
+    {
+        cargando = true;
+
+        if (isDemoMode)
+        {
+            notas = CrearDemoNotasCredito();
+            paginaActual = 1;
+            cargando = false;
+            return;
+        }
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+
+        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+
+        currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+
+        if (currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/", true);
+            return;
+        }
+
+        notas = await NotaCreditoService.ListarNotasCreditoUsuarioAsync(currentUserId);
+        paginaActual = 1;
+
+        cargando = false;
+    }
+
+    private bool CumpleFiltroNota(NotaCreditoListDto nota)
+    {
+        if (!string.IsNullOrWhiteSpace(Filtro))
+        {
+            var filtroActual = Filtro.Trim();
+            var coincideTexto =
+                (nota.NumeroNotaCredito ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (nota.NumeroCompleto ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (nota.NumeroDocModificado ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (nota.Cliente ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (nota.IdentificacionCliente ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (nota.Motivo ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (nota.NumeroAutorizacion ?? string.Empty).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                ObtenerEstadoNotaTexto(nota).Contains(filtroActual, StringComparison.OrdinalIgnoreCase) ||
+                (EstaNotaVencida(nota) && "vencido".Contains(filtroActual, StringComparison.OrdinalIgnoreCase));
+
+            if (!coincideTexto)
+                return false;
+        }
+
+        var fechaReferencia = nota.FechaDocumentoModificado?.Date;
+
+        if (FechaDesde.HasValue && (!fechaReferencia.HasValue || fechaReferencia.Value < FechaDesde.Value.Date))
+            return false;
+
+        if (FechaHasta.HasValue && (!fechaReferencia.HasValue || fechaReferencia.Value > FechaHasta.Value.Date))
+            return false;
+
+        return true;
+    }
+
+    private async Task VerNotaAsync(int sec)
+    {
+        if (isDemoMode)
+        {
+            notaSeleccionada = CrearDemoDetalleNota(sec);
+        }
+        else
+        {
+            notaSeleccionada =
+                await NotaCreditoService.GetNotaCreditoDetalleUsuarioAsync(sec, currentUserId);
+        }
+
+        if (notaSeleccionada != null)
+            mostrarModal = true;
+    }
+
+    private async Task AbrirXmlAsync(int sec)
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync("Abriendo XML demo de nota de crédito.");
+            await JS.InvokeVoidAsync("open", ObtenerDemoXmlNota(sec), "_blank");
+            return;
+        }
+
+        var xmlUrl = await NotaCreditoService.AsegurarXmlNotaCreditoUsuarioAsync(sec, currentUserId);
+        if (string.IsNullOrWhiteSpace(xmlUrl))
+        {
+            await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la nota de credito.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", xmlUrl, "_blank");
+    }
+
+    private async Task AbrirPdfAsync(int sec, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync($"Abriendo PDF demo {formato.ObtenerEtiqueta()} de nota de crédito.");
+            await JS.InvokeVoidAsync("open", ObtenerDemoPdfNota(sec), "_blank");
+            return;
+        }
+
+        var pdfUrl = await NotaCreditoService.AsegurarPdfNotaCreditoUsuarioAsync(sec, currentUserId, formato);
+        if (string.IsNullOrWhiteSpace(pdfUrl))
+        {
+            await AlertService.ShowWarningAsync($"No se pudo generar o ubicar el PDF {formato.ObtenerEtiqueta()} de la nota de credito.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", pdfUrl, "_blank");
+    }
+
+    private async Task ReenviarCorreoNotaAsync(int sec)
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync("Modo demo: el reenvío de correo está bloqueado.");
+            return;
+        }
+
+        if (procesandoReenvio)
+            return;
+
+        try
+        {
+            procesandoReenvio = true;
+            var resultado = await NotaCreditoService.IntentarEnviarNotaCreditoPorCorreoAsync(sec);
+
+            if (mostrarModal)
+                notaSeleccionada = await NotaCreditoService.GetNotaCreditoDetalleUsuarioAsync(sec, currentUserId);
+
+            if (resultado.Enviado || resultado.YaEnviado)
+                await AlertService.ShowSuccessAsync(resultado.Mensaje, "Correo");
+            else if (resultado.PendienteAutorizacion || resultado.SinDestinatarios)
+                await AlertService.ShowWarningAsync(resultado.Mensaje, "Correo");
+            else
+                await AlertService.ShowErrorAsync(resultado.Mensaje, "Correo");
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync(ex.Message, "Correo");
+        }
+        finally
+        {
+            procesandoReenvio = false;
+        }
+    }
+
+    private async Task DescargarReporteAsync()
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync("Modo demo: la exportación Excel está bloqueada.");
+            return;
+        }
+
+        var notasFiltradas = NotasFiltradas;
+        if (notasFiltradas.Count == 0)
+        {
+            await AlertService.ShowInfoAsync("No hay datos para exportar con los filtros actuales.");
+            return;
+        }
+
+        var archivo = SimpleExcelExportService.Create(
+            $"notas_credito_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+            new ExcelSheetData(
+                "NotasCredito",
+                new[]
+                {
+                    "Fecha sustento",
+                    "Numero nota",
+                    "Factura modificada",
+                    "Cliente",
+                    "Identificacion",
+                    "Estado",
+                    "Numero autorizacion",
+                    "Subtotal",
+                    "IVA",
+                    "Total"
+                },
+                notasFiltradas
+                    .Select(item => (IReadOnlyList<string>)new[]
+                    {
+                        item.FechaDocumentoModificado?.ToString("yyyy-MM-dd") ?? string.Empty,
+                        item.NumeroCompleto ?? string.Empty,
+                        item.NumeroDocModificado ?? string.Empty,
+                        item.Cliente ?? string.Empty,
+                        item.IdentificacionCliente ?? string.Empty,
+                        ObtenerEstadoNotaTexto(item),
+                        ObtenerNumeroAutorizacionTexto(item),
+                        item.Subtotal.ToString("N2"),
+                        item.Iva.ToString("N2"),
+                        item.Total.ToString("N2")
+                    })
+                    .ToList()));
+
+        await using var stream = new MemoryStream(archivo.Content);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+    }
+
+    private void LimpiarTexto() => Filtro = string.Empty;
+
+    private void LimpiarFiltros()
+    {
+        Filtro = string.Empty;
+        FechaDesde = null;
+        FechaHasta = null;
+    }
+
+    private void PaginaAnterior()
+    {
+        if (PaginaActualSegura > 1)
+            paginaActual = PaginaActualSegura - 1;
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (PaginaActualSegura < TotalPaginas)
+            paginaActual = PaginaActualSegura + 1;
+    }
+
+    private void IrAPagina(int pagina)
+    {
+        paginaActual = Math.Clamp(pagina, 1, Math.Max(TotalPaginas, 1));
+    }
+
+    private static bool EstaAutorizada(NotaCreditoListDto nota) =>
+        DocumentoAutorizacionHelper.EstaAutorizado(nota.Autorizado);
+
+    private static string ObtenerEstadoNotaTexto(NotaCreditoListDto nota) =>
+        ObtenerEstadoNotaTexto(nota.Autorizado);
+
+    private static string ObtenerEstadoNotaTexto(string? autorizado) =>
+        DocumentoAutorizacionHelper.ObtenerEstadoVisual(
+            autorizado,
+            DocumentoAutorizacionHelper.EstaAutorizado(autorizado));
+
+    private static bool EsNoAutorizada(NotaCreditoListDto nota) =>
+        ObtenerEstadoNotaTexto(nota) == DocumentoAutorizacionHelper.EstadoNoAutorizado;
+
+    private static string ObtenerErrorSriTexto(NotaCreditoListDto nota)
+    {
+        var mensaje = (nota.MensajeSri ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(mensaje))
+            return mensaje;
+
+        return string.IsNullOrWhiteSpace(nota.Autorizado)
+            ? "El SRI no devolvio un detalle de error para esta nota de credito."
+            : nota.Autorizado;
+    }
+
+    private void MostrarErrorSriNotaCredito(NotaCreditoListDto nota)
+    {
+        tituloResultadoOverlay = "Error SRI";
+        detalleResultadoOverlay = ObtenerErrorSriTexto(nota);
+        mostrarResultadoOverlay = true;
+    }
+
+    private void CerrarResultadoOverlay()
+    {
+        mostrarResultadoOverlay = false;
+        tituloResultadoOverlay = string.Empty;
+        detalleResultadoOverlay = string.Empty;
+    }
+
+    private static string ObtenerNumeroAutorizacionTexto(NotaCreditoListDto nota) =>
+        ObtenerNumeroAutorizacionTexto(nota.Autorizado, nota.NumeroAutorizacion);
+
+    private static string ObtenerNumeroAutorizacionTexto(string? autorizado, string? numeroAutorizacion) =>
+        DocumentoAutorizacionHelper.ObtenerNumeroAutorizacionVisual(
+            autorizado,
+            DocumentoAutorizacionHelper.EstaAutorizado(autorizado),
+            numeroAutorizacion);
+
+    private static string ObtenerEstadoNotaClase(NotaCreditoListDto nota)
+    {
+        var estado = ObtenerEstadoNotaTexto(nota);
+        return estado == DocumentoAutorizacionHelper.EstadoAutorizado
+            ? "status-pill-success"
+            : estado == DocumentoAutorizacionHelper.EstadoNoAutorizado
+                ? "status-pill-danger"
+                : "status-pill-info";
+    }
+
+    private static bool EstaNotaVencida(NotaCreditoListDto nota) =>
+        nota.SaldoPendienteDocumento > 0m &&
+        nota.FechaVencimientoDocumento.HasValue &&
+        nota.FechaVencimientoDocumento.Value.Date < DateTime.Today;
+
+    private void CerrarModal()
+    {
+        mostrarModal = false;
+        notaSeleccionada = null;
+    }
+
+    private bool EsRutaDemoNotasCredito() =>
+        NavManager.Uri.Contains("/demo/notas-credito-generadas", StringComparison.OrdinalIgnoreCase);
+
+    private static List<NotaCreditoListDto> CrearDemoNotasCredito() =>
+    [
+        new()
+        {
+            Sec = 901,
+            NumeroNotaCredito = "87",
+            Serie = "001001",
+            TipoIdentificacionCliente = "RUC",
+            Cliente = "Distribuidora Nova",
+            IdentificacionCliente = "1793344556001",
+            NumeroDocModificado = "001-001-000001102",
+            FechaDocumentoModificado = DateTime.Today.AddDays(-3),
+            Subtotal = 49.35m,
+            Iva = 7.40m,
+            Total = 56.75m,
+            Motivo = "Descuento comercial posterior",
+            Estado = true,
+            Autorizado = "AUTORIZADO"
+        },
+        new()
+        {
+            Sec = 902,
+            NumeroNotaCredito = "88",
+            Serie = "001001",
+            TipoIdentificacionCliente = "RUC",
+            Cliente = "Comercial Andina S.A.",
+            IdentificacionCliente = "1790012345001",
+            NumeroDocModificado = "001-001-000001118",
+            FechaDocumentoModificado = DateTime.Today.AddDays(-6),
+            Subtotal = 120.00m,
+            Iva = 18.00m,
+            Total = 138.00m,
+            Motivo = "Devolución parcial de mercadería",
+            Estado = true,
+            Autorizado = "AUTORIZADO"
+        },
+        new()
+        {
+            Sec = 903,
+            NumeroNotaCredito = "89",
+            Serie = "001001",
+            TipoIdentificacionCliente = "RUC",
+            Cliente = "Ferretería Central",
+            IdentificacionCliente = "0999988877001",
+            NumeroDocModificado = "001-001-000001125",
+            FechaDocumentoModificado = DateTime.Today.AddDays(-9),
+            Subtotal = 80.00m,
+            Iva = 12.00m,
+            Total = 92.00m,
+            Motivo = "Ajuste por error de precio",
+            Estado = false,
+            Autorizado = "PENDIENTE"
+        }
+    ];
+
+    private static NotaCreditoDetalleViewDto? CrearDemoDetalleNota(int sec)
+    {
+        return sec switch
+        {
+            901 => new NotaCreditoDetalleViewDto
+            {
+                NumeroCompleto = "001-001-000000087",
+                NumeroDocModificadoVisual = "001-001-000001102",
+                TipoIdentificacionCliente = "RUC",
+                Emisor = CrearDemoEmisorComun(),
+                Cliente = new Simetric.Models.Cliente
+                {
+                    Nombrerazonsocial = "Distribuidora Nova",
+                    Numeroidentificacion = "1793344556001",
+                    Direccion = "Av. Eloy Alfaro y Gaspar de Villarroel"
+                },
+                NotaCredito = new Simetric.Models.NotaCredito
+                {
+                    Sec = 901,
+                    NumNotaCredito = "87",
+                    FechaEmiDocModificado = DateTime.Today.AddDays(-3),
+                    Motivo = "Descuento comercial posterior",
+                    Subtotal = 49.35m,
+                    Iva = 7.40m,
+                    ValorTotal = 56.75m
+                },
+                Detalles =
+                [
+                    new() { CodigoInterno = "AJU-001", Descripcion = "Descuento sobre servicio implementado", Cantidad = 1m, PrecioUnitario = 49.35m, Descuento = 0m, Subtotal = 49.35m, TarifaIva = 15m, ValorIva = 7.40m, Total = 56.75m }
+                ]
+            },
+            902 => new NotaCreditoDetalleViewDto
+            {
+                NumeroCompleto = "001-001-000000088",
+                NumeroDocModificadoVisual = "001-001-000001118",
+                TipoIdentificacionCliente = "RUC",
+                Emisor = CrearDemoEmisorComun(),
+                Cliente = new Simetric.Models.Cliente
+                {
+                    Nombrerazonsocial = "Comercial Andina S.A.",
+                    Numeroidentificacion = "1790012345001",
+                    Direccion = "Av. Amazonas N34-451"
+                },
+                NotaCredito = new Simetric.Models.NotaCredito
+                {
+                    Sec = 902,
+                    NumNotaCredito = "88",
+                    FechaEmiDocModificado = DateTime.Today.AddDays(-6),
+                    Motivo = "Devolución parcial de mercadería",
+                    Subtotal = 120.00m,
+                    Iva = 18.00m,
+                    ValorTotal = 138.00m
+                },
+                Detalles =
+                [
+                    new() { CodigoInterno = "TEL-001", Descripcion = "Tela drill devuelta", Cantidad = 3m, PrecioUnitario = 40m, Descuento = 0m, Subtotal = 120m, TarifaIva = 15m, ValorIva = 18m, Total = 138m }
+                ]
+            },
+            903 => new NotaCreditoDetalleViewDto
+            {
+                NumeroCompleto = "001-001-000000089",
+                NumeroDocModificadoVisual = "001-001-000001125",
+                TipoIdentificacionCliente = "RUC",
+                Emisor = CrearDemoEmisorComun(),
+                Cliente = new Simetric.Models.Cliente
+                {
+                    Nombrerazonsocial = "Ferretería Central",
+                    Numeroidentificacion = "0999988877001",
+                    Direccion = "Cdla. Kennedy Norte"
+                },
+                NotaCredito = new Simetric.Models.NotaCredito
+                {
+                    Sec = 903,
+                    NumNotaCredito = "89",
+                    FechaEmiDocModificado = DateTime.Today.AddDays(-9),
+                    Motivo = "Ajuste por error de precio",
+                    Subtotal = 80.00m,
+                    Iva = 12.00m,
+                    ValorTotal = 92.00m
+                },
+                Detalles =
+                [
+                    new() { CodigoInterno = "HER-010", Descripcion = "Ajuste comercial herramienta industrial", Cantidad = 1m, PrecioUnitario = 80m, Descuento = 0m, Subtotal = 80m, TarifaIva = 15m, ValorIva = 12m, Total = 92m }
+                ]
+            },
+            _ => null
+        };
+    }
+
+    private static Simetric.Models.Emisor CrearDemoEmisorComun() =>
+        new Simetric.Models.Emisor
+        {
+            RazonSocial = "Numerica e-fact Demo",
+            Ruc = "1799999999001",
+            DireccionMatriz = "Av. Principal 123 y Colón, Quito",
+            LlevaContabilidad = "SI"
+        };
+
+    private static string ObtenerDemoXmlNota(int sec) =>
+        sec switch
+        {
+            901 => "/notas_de_credito/1755584451001_04_000000003.xml",
+            902 => "/notas_de_credito/1755584451001_04_000000004.xml",
+            903 => "/notas_de_credito/1755584451001_04_000000005.xml",
+            _ => "/notas_de_credito/1755584451001_04_000000003.xml"
+        };
+
+    private static string ObtenerDemoPdfNota(int sec) =>
+        sec switch
+        {
+            901 => "/notas_de_credito/1755584451001_04_000000003.pdf",
+            902 => "/notas_de_credito/1755584451001_04_000000004.pdf",
+            903 => "/notas_de_credito/1755584451001_04_000000004.pdf",
+            _ => "/notas_de_credito/1755584451001_04_000000003.pdf"
+        };
+    private bool procesandoAnulacion = false;
+
+    private async Task ConfirmarAnularNotaAsync(NotaCreditoListDto item)
+    {
+        if (procesandoAnulacion) return;
+
+        // Cuadro de diálogo de confirmación nativo e infalible vía JS Interop
+        var confirmado = await JS.InvokeAsync<bool>("confirm",
+            $"¿Está seguro de anular la Nota de Crédito N° {item.NumeroCompleto}?\n\nEsta acción cambiará el estado a ANULADA en el sistema interno.");
+
+        if (confirmado)
+        {
+            try
+            {
+                procesandoAnulacion = true;
+
+                // Consumimos el método directo de tu servicio
+                var exito = await NotaCreditoService.AnularNotaCreditoDirectoAsync(item.Sec);
+
+                if (exito)
+                {
+                    item.Estado = false; // Forzamos actualización en memoria de la UI
+
+                    await AlertService.ShowSuccessAsync("Nota de crédito anulada internamente de forma correcta.");
+
+                    await Recargar(); // Refrescamos el listado completo
+                }
+                else
+                {
+                    await AlertService.ShowErrorAsync("No se pudo completar la anulación en la base de datos.");
+                }
+            }
+            catch (Exception ex)
+            {
+                await AlertService.ShowErrorAsync($"Error al intentar anular: {ex.Message}");
+            }
+            finally
+            {
+                procesandoAnulacion = false;
+            }
+        }
+    }
+    private List<CorreoOpcionalFacturaInput> correosOpcionalesFactura = new();
+    private class CorreoOpcionalFacturaInput
+    {
+        public string Correo { get; set; } = string.Empty;
+        public string CorreoOriginal { get; set; } = string.Empty;
+        public bool GuardarEnCliente { get; set; }
+        public bool EsPersistidoCliente { get; set; }
+    }
+    private List<FacturaCorreoDestinoDto> ObtenerCorreosOpcionalesNC()
+    {
+        NormalizarCorreosOpcionalesFactura();
+
+        return correosOpcionalesFactura
+            .Where(x => !string.IsNullOrWhiteSpace(x.Correo))
+            .Select(x => new FacturaCorreoDestinoDto
+            {
+                Correo = x.Correo,
+                GuardarEnCliente = x.EsPersistidoCliente || x.GuardarEnCliente
+            })
+            .ToList();
+    }
+    private void NormalizarCorreosOpcionalesFactura()
+    {
+        foreach (var correo in correosOpcionalesFactura)
+            correo.Correo = (correo.Correo ?? string.Empty).Trim();
+    }
+    private Simetric.Models.Cliente cliente = new();
+    private async Task ReenviarAlSriAsync(NotaCreditoListDto nc)
+    {
+        if (procesandoReenvio)
+            return;
+
+        try
+        {
+            string pathCertificado = "";
+            string pass = "";
+            string rutaXml = string.Empty;
+            var correosNC = new List<FacturaCorreoDestinoDto>();
+            mensajeSRI m = new mensajeSRI();
+            var mensajeResultado = string.Empty;
+            procesandoReenvio = true;
+            var resultadoSri = await NotaCreditoService.EmitirNotaCreditoSriAsync(nc.Sec, currentUserId);
+            if (resultadoSri.Autorizada)
+            {
+                if (resultadoSri.ResultadoCorreo?.Error == true)
+                    await AlertService.ShowWarningAsync(resultadoSri.Message, "Nota de crédito autorizada con observaciones");
+                else
+                    await AlertService.ShowSuccessAsync(resultadoSri.Message, "Nota de crédito autorizada");
+            }
+            else
+            {
+                await AlertService.ShowWarningAsync(resultadoSri.Message, "Nota de crédito con observaciones");
+            }
+
+            await Recargar();
+            return;
+        if (string.IsNullOrWhiteSpace(rutaXml) || !File.Exists(rutaXml))
+        {
+            await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML físico de la nota de crédito.");
+            return;
+        }
+
+        if (!emisores.Any())
+        {
+            await AlertService.ShowWarningAsync("No existe un emisor activo con certificado configurado para reenviar esta nota.");
+            return;
+        }
+
+        if (emisores.Any())
+        {
+            pathCertificado = $"App_Data/{emisores.First().PathCertificado}";
+            pass = emisores.First().ClaveCertificado;
+            //EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass).Wait();
+            m = await NotaCreditoService.EnviarXmlAApiFrameworkConReintentosAsync(rutaXml, pathCertificado, pass);
+        }
+
+        if (m.autorizacion != "")
+        {
+
+            await NotaCreditoService.ActualizarAutorizacionNCAsync(nc.Sec, m.autorizacion, m.fecha, "", "AUTORIZADO");
+            var resultadoCorreo = await NotaCreditoService.IntentarEnviarNotaCreditoPorCorreoAsync(nc.Sec, rutaXml);
+            mensajeResultado = correosNC.Any() || !string.IsNullOrWhiteSpace(cliente.Correo)
+            ? "Factura guardada correctamente. El procesamiento de archivos y el envío por correo continuarán en segundo plano."
+            : "Factura guardada correctamente."; if (resultadoCorreo.Error)
+                await AlertService.ShowWarningAsync(mensajeResultado, "Factura guardada con observaciones");
+            else
+                await AlertService.ShowSuccessAsync(mensajeResultado, "Factura guardada");
+        }
+        else
+        {
+            await NotaCreditoService.ActualizarAutorizacionNCAsync(nc.Sec, m.autorizacion, m.fecha, m.xml, "ERROR SRI" + m.mensaje);
+            await AlertService.ShowWarningAsync("La nota de credito no fue autorizada por el SRI: " + m.mensaje, "Nota de credito con observaciones");
+        }
+        }
+        catch (Exception ex)
+        {
+            var mensaje = ex is OperationCanceledException or TaskCanceledException
+                ? "El reenvío tardó demasiado en completarse. Intenta nuevamente."
+                : ex.Message;
+            await AlertService.ShowErrorAsync(mensaje, "Error al reenviar");
+        }
+        finally
+        {
+            procesandoReenvio = false;
+        }
+    }
+    public async Task<mensajeSRI> EnviarXmlAApiFrameworkAsync(string rutaArchivoxml, string rutaFirma, string password)
+    {
+        try
+        {
+            string apiUrl = "http://localhost:8090/api/xml/process"; //produccion
+            //string apiUrl = "https://localhost:44372/api/xml/process"; //pruebas
+
+            if (!File.Exists(rutaArchivoxml))
+            {
+                throw new FileNotFoundException($"No se encontró el archivo XML en la ruta: {rutaArchivoxml}");
+            }
+            if (!File.Exists(rutaFirma))
+            {
+                throw new FileNotFoundException($"No se encontró el archivo de firma (.p12) en la ruta: {rutaFirma}");
+            }
+
+            rutaFirma = Path.Combine(Directory.GetCurrentDirectory(), "App_Data\\certs", "path\\" + Path.GetFileName(rutaFirma));
+            var solicitudData = new
+            {
+                RutaXml = rutaArchivoxml,
+                RutaFirma = rutaFirma,
+                PasswordFirma = password
+            };
+
+            string jsonPayload = System.Text.Json.JsonSerializer.Serialize(solicitudData);
+            var jsonContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+            var request = new HttpRequestMessage(HttpMethod.Post, apiUrl)
+            {
+                Content = jsonContent
+            };
+
+            request.Headers.Add("X-Api-Key", "E-factSimetricNumericaKey2026*#");
+            request.Headers.UserAgent.ParseAdd("NumericaSoftwareClient/1.0");
+
+            var handler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+            };
+
+            using (var client = new HttpClient(handler))
+            {
+                client.Timeout = TimeSpan.FromSeconds(80);
+                HttpResponseMessage response = await client.SendAsync(request).ConfigureAwait(false);
+                string xmlRespuesta = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    // 2. DESERIALIZAR la respuesta XML recibida al objeto mensajeSRI
+                    var serializer = new System.Xml.Serialization.XmlSerializer(typeof(mensajeSRI));
+                    using (var reader = new System.IO.StringReader(xmlRespuesta))
+                    {
+                        return (mensajeSRI)serializer.Deserialize(reader);
+                    }
+                }
+                else
+                {
+                    // Si la API responde un error controlado (400, 404, 500)
+                    throw new Exception($"Respuesta de error de la API: {xmlRespuesta}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // 3. En caso de error, mapeamos la excepción a un objeto mensajeSRI de error
+            // Reemplaza "xml" o las propiedades según cómo se llamen en tu clase real
+            return new mensajeSRI
+            {
+                xml = $"<error><tipo>ExcepcionBlazor</tipo><mensaje>{ex.Message}</mensaje></error>"
+                // Si tienes propiedades como 'estado' o 'mensaje', inicialízalas aquí
+            };
+        }
+    }
+}

@@ -1,0 +1,1604 @@
+@page "/backoffice/facturacion"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Hosting
+@using Simetric.DTOs
+@using Simetric.Models
+@using Simetric.Services
+@using System.IO
+@using System.Security.Claims
+@inject AuthenticationStateProvider AuthStateProvider
+@inject CedulaLookupService CedulaLookupService
+@inject EmisorSistemaService EmisorSistemaService
+@inject FacturacionService FacturacionService
+@inject ConfiguracionService ConfiguracionService
+@inject IWebHostEnvironment HostEnvironment
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+@inject SweetAlertService AlertService
+
+@rendermode InteractiveServer
+
+<PageTitle>Facturacion - BackOffice | Numerica</PageTitle>
+
+<div class="bo-facturacion-page animate__animated animate__fadeIn">
+    <section class="hero-card">
+        <div>
+            <span class="hero-kicker">BackOffice</span>
+            <h2>Emisor maestro y facturas del sistema</h2>
+            <p>
+                Desde aqui se configura el emisor global exclusivo de la empresa y se revisan las facturas
+                emitidas automaticamente por recargas.
+            </p>
+        </div>
+        <div class="hero-status-group">
+            <div class="hero-status">
+                <span>Emisor maestro</span>
+                <strong>@(emisorConfigurado ? "Configurado" : "Pendiente")</strong>
+            </div>
+            <div class="hero-status">
+                <span>Firma</span>
+                <strong>@(firmaConfigurada ? "Lista" : "Pendiente")</strong>
+            </div>
+            <div class="hero-status">
+                <span>Facturas sistema</span>
+                <strong>@facturasSistema.Count</strong>
+            </div>
+        </div>
+    </section>
+
+    @if (tieneAcceso && !cargando)
+    {
+        <section class="panel-card summary-panel">
+            <div class="sequence-summary">
+                <div class="sequence-chip">
+                    <span>RUC emisor</span>
+                    <strong>@RucEmisorActual</strong>
+                </div>
+                <div class="sequence-chip">
+                    <span>Razon social</span>
+                    <strong>@RazonSocialEmisorActual</strong>
+                </div>
+                <div class="sequence-chip">
+                    <span>Serie principal</span>
+                    <strong>@SeriePrincipalSistemaActual</strong>
+                </div>
+                <div class="sequence-chip">
+                    <span>Ultima factura sistema</span>
+                    <strong>@UltimaFacturaSistema</strong>
+                </div>
+                <div class="sequence-chip">
+                    <span>Autorizadas</span>
+                    <strong>@TotalFacturasAutorizadasSistema</strong>
+                </div>
+                <div class="sequence-chip">
+                    <span>Pendientes</span>
+                    <strong>@TotalFacturasPendientesSistema</strong>
+                </div>
+            </div>
+        </section>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(feedbackMessage))
+    {
+        <div class="feedback-banner @(feedbackIsSuccess ? "is-success" : "is-error")">
+            @feedbackMessage
+        </div>
+    }
+
+    @if (cargando)
+    {
+        <div class="state-card">
+            <div class="spinner-border text-primary" role="status"></div>
+            <p>Cargando configuracion de facturacion del sistema...</p>
+        </div>
+    }
+    else if (!tieneAcceso)
+    {
+        <div class="state-card">
+            <h3>Acceso restringido</h3>
+            <p>Solo los usuarios autorizados pueden revisar o editar el emisor maestro del sistema.</p>
+        </div>
+    }
+    else
+    {
+        <div class="content-grid">
+            <section class="panel-card">
+                <div class="panel-head">
+                    <div>
+                        <span class="panel-kicker">Configuracion global</span>
+                        <h3>Emisor maestro del sistema</h3>
+                    </div>
+                    <button type="button" class="secondary-btn" @onclick="RecargarAsync" disabled="@guardando">
+                        Actualizar
+                    </button>
+                </div>
+
+                <EditForm Model="@formModel" OnValidSubmit="@GuardarAsync">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary class="text-danger small" />
+
+                    <div class="field field-full lookup-panel">
+                        <label>Busqueda rapida RUC / cedula</label>
+                        <div class="lookup-row">
+                            <InputText @bind-Value="identificacionBusqueda"
+                                       class="field-input"
+                                       placeholder="Ingresa 10 digitos para cedula o 13 para RUC" />
+                            <button type="button"
+                                    class="secondary-btn lookup-btn"
+                                    @onclick="ConsultarIdentificacionAsync"
+                                    disabled="@consultandoIdentificacion">
+                                @(consultandoIdentificacion ? "Consultando..." : "Buscar")
+                            </button>
+                        </div>
+                        <small class="field-help">
+                            Si consultas RUC, se carga el emisor maestro completo. Si consultas cedula, se precarga la razon social y podras completar luego el RUC definitivo.
+                        </small>
+                    </div>
+
+                    <details class="form-accordion" open>
+                        <summary class="form-section-heading">
+                            <span>1</span>
+                            <strong>Informacion fiscal</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body form-grid">
+                            <div class="field">
+                                <label>Razon social</label>
+                                <InputText @bind-Value="formModel.RazonSocial" class="field-input" />
+                            </div>
+                            <div class="field">
+                                <label>RUC</label>
+                                <InputText @bind-Value="formModel.Ruc" class="field-input" />
+                            </div>
+                            <div class="field field-full">
+                                <label>Nombre comercial</label>
+                                <InputText @bind-Value="formModel.NomComercial" class="field-input" />
+                                <small class="field-help">Debes ingresar razon social o nombre comercial. No es obligatorio completar ambos.</small>
+                            </div>
+                            <div class="field">
+                                <label>Lleva contabilidad</label>
+                                <InputSelect @bind-Value="formModel.LlevaContabilidad" class="field-input">
+                                    <option value="SI">SI</option>
+                                    <option value="NO">NO</option>
+                                </InputSelect>
+                            </div>
+                            <div class="field">
+                                <label>Ambiente</label>
+                                <InputSelect @bind-Value="formModel.TipoAmbiente" class="field-input">
+                                    <option value="1">Pruebas</option>
+                                    <option value="2">Produccion</option>
+                                </InputSelect>
+                            </div>
+                            <div class="field">
+                                <label>Tipo emision</label>
+                                <InputSelect @bind-Value="formModel.TipoEmision" class="field-input">
+                                    <option value="1">Normal</option>
+                                </InputSelect>
+                            </div>
+                            <div class="field">
+                                <label>Establecimiento</label>
+                                <InputText @bind-Value="formModel.CodEstablecimiento" class="field-input" maxlength="3" />
+                            </div>
+                            <div class="field">
+                                <label>Punto emision</label>
+                                <InputText @bind-Value="formModel.CodPuntoEmision" class="field-input" maxlength="3" />
+                            </div>
+                            <div class="field field-full">
+                                <label>Direccion matriz</label>
+                                <InputText @bind-Value="formModel.DireccionMatriz" class="field-input" />
+                            </div>
+                            <div class="field field-full">
+                                <label>Direccion establecimiento</label>
+                                <InputText @bind-Value="formModel.DirEstablecimiento" class="field-input" />
+                            </div>
+                        </div>
+                    </details>
+
+                    <details class="form-accordion">
+                        <summary class="form-section-heading">
+                            <span>2</span>
+                            <strong>Contacto y firma</strong>
+                            <i class="bi bi-chevron-down"></i>
+                        </summary>
+                        <div class="form-accordion-body form-grid">
+                            <div class="field">
+                                <label>Telefono</label>
+                                <InputText @bind-Value="formModel.Telefono" class="field-input" />
+                            </div>
+                            <div class="field">
+                                <label>Email</label>
+                                <InputText @bind-Value="formModel.Email" class="field-input" />
+                            </div>
+                            <div class="field">
+                                <label>Certificado .p12</label>
+                                <InputFile OnChange="SubirPathCertificado" accept=".p12" class="field-input file-input" />
+                                @if (!string.IsNullOrWhiteSpace(nombrePathCertificadoActual))
+                                {
+                                    <small class="field-help">Actual: @nombrePathCertificadoActual</small>
+                                }
+                            </div>
+                            <div class="field">
+                                <label>Clave certificado</label>
+                                <div class="password-field">
+                                    <InputText @bind-Value="formModel.ClaveCertificado"
+                                               type="@(mostrarClaveCertificado ? "text" : "password")"
+                                               class="field-input password-input" />
+                                    <button type="button"
+                                            class="password-toggle-btn"
+                                            @onclick="ToggleClaveCertificado"
+                                            aria-label="@(mostrarClaveCertificado ? "Ocultar clave del certificado" : "Mostrar clave del certificado")"
+                                            title="@(mostrarClaveCertificado ? "Ocultar clave" : "Mostrar clave")">
+                                        <i class="bi @(mostrarClaveCertificado ? "bi-eye-slash" : "bi-eye")"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                    <div class="form-actions">
+                        <button type="submit" class="primary-btn" disabled="@guardando">
+                            @(guardando ? "Guardando..." : "Guardar emisor maestro")
+                        </button>
+                    </div>
+                </EditForm>
+            </section>
+
+            <section class="panel-card">
+                <div class="panel-head">
+                    <div>
+                        <span class="panel-kicker">Facturacion automatica</span>
+                        <h3>Facturas del sistema por recargas</h3>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="secondary-btn" @onclick="IrAMisFacturasBackOffice">
+                            Mis facturas backoffice
+                        </button>
+                        <button type="button" class="secondary-btn" @onclick="RecargarFacturasAsync">
+                            Recargar
+                        </button>
+                    </div>
+                </div>
+
+                @if (!facturasSistema.Any())
+                {
+                    <div class="state-card compact">
+                        <p>No hay facturas de recargas emitidas con el emisor maestro todavia.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="table-wrap">
+                        <table class="facturas-table">
+                            <thead>
+                                <tr>
+                                    <th>Numero</th>
+                                    <th>Fecha</th>
+                                    <th>Cliente</th>
+                                    <th>Identificacion</th>
+                                    <th>Total</th>
+                                    <th>Estado SRI</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var factura in facturasSistema)
+                                {
+                                    <tr>
+                                        <td>@factura.NumeroCompleto</td>
+                                        <td>@factura.FechaEmision?.ToString("dd/MM/yyyy")</td>
+                                        <td>@factura.Cliente</td>
+                                        <td>@factura.IdentificacionCliente</td>
+                                        <td>$ @(factura.Total?.ToString("N2") ?? "0.00")</td>
+                                        <td>
+                                            <span class="state-pill @(DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.EstadoSri) ? "ok" : "warn")">
+                                                @(string.IsNullOrWhiteSpace(factura.EstadoSri) ? "PENDIENTE" : factura.EstadoSri)
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="table-actions">
+                                                <button type="button" class="link-btn" @onclick="() => VerFacturaAsync(factura.Codfactura)">Ver</button>
+                                                <button type="button" class="link-btn" @onclick="() => AbrirXmlAsync(factura.Codfactura)">XML</button>
+                                                <button type="button" class="link-btn" @onclick="() => AbrirPdfAsync(factura.Codfactura)">PDF</button>
+                                                <button type="button" class="link-btn" @onclick="() => ReintentarSriAsync(factura)">SRI</button>
+                                                <button type="button" class="link-btn" @onclick="() => ReenviarCorreoAsync(factura)">Correo</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+        </div>
+
+        <section class="panel-card">
+            <div class="panel-head">
+                <div>
+                    <span class="panel-kicker">Historial real</span>
+                    <h3>Mis facturas backoffice</h3>
+                </div>
+            </div>
+
+            <div class="state-card compact">
+                <p>Las facturas del backoffice ahora viven en una vista separada para no mezclar la configuracion maestra con tu historial personal.</p>
+                <div class="form-actions">
+                    <button type="button" class="secondary-btn" @onclick="IrAMisFacturasBackOffice">
+                        Abrir mis facturas backoffice
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel-card">
+            <div class="panel-head">
+                <div>
+                    <span class="panel-kicker">Punto de emision</span>
+                    <h3>Caja maestra del sistema</h3>
+                </div>
+            </div>
+
+            @if (ownerUserId <= 0)
+            {
+                <div class="state-card compact">
+                    <p>Configura primero el emisor maestro para poder activar su caja principal.</p>
+                </div>
+            }
+            else
+            {
+                <div class="sequence-summary">
+                    <div class="sequence-chip">
+                        <span>Caja principal</span>
+                        <strong>@(cajasSistema.FirstOrDefault(c => (c.NumCaja ?? 0) == 1) is Caja cajaPrincipal ? FormatearSerie(cajaPrincipal.SerieFactura) : "No configurada")</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Puntos activos</span>
+                        <strong>@cajasSistema.Count</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Serie usada por sistema</span>
+                        <strong>@(secuenciaSistema?.SerieVisual ?? "--")</strong>
+                    </div>
+                </div>
+
+                <div class="box-form">
+                    <div class="field field-sequence">
+                        <label>Establecimiento</label>
+                        <InputText @bind-Value="cajaForm.Establecimiento" class="field-input" maxlength="3" />
+                    </div>
+                    <div class="field field-sequence">
+                        <label>Punto de emision</label>
+                        <InputText @bind-Value="cajaForm.PuntoEmision" class="field-input" maxlength="3" />
+                    </div>
+                </div>
+
+                <div class="field-help">Serie vista previa: <strong>@SerieCajaPreview</strong></div>
+
+                <div class="form-actions">
+                    <button type="button" class="primary-btn" @onclick="GuardarCajaSistemaAsync" disabled="@guardandoCaja">
+                        @(guardandoCaja ? "Guardando..." : "Guardar caja del sistema")
+                    </button>
+                </div>
+
+                @if (cajasSistema.Any())
+                {
+                    <div class="table-wrap top-gap">
+                        <table class="facturas-table">
+                            <thead>
+                                <tr>
+                                    <th>Caja</th>
+                                    <th>Serie</th>
+                                    <th>Estado</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var caja in cajasSistema.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec))
+                                {
+                                    <tr>
+                                        <td>@(caja.NumCaja ?? 0)</td>
+                                        <td>@FormatearSerie(caja.SerieFactura)</td>
+                                        <td>@((caja.NumCaja ?? 0) == 1 ? "Principal" : "Activa")</td>
+                                        <td>
+                                            <div class="table-actions">
+                                                <button type="button" class="link-btn" @onclick="() => SeleccionarCajaSistema(caja)">Editar</button>
+                                                @if ((caja.NumCaja ?? 0) != 1)
+                                                {
+                                                    <button type="button" class="link-btn" @onclick="() => MarcarCajaPrincipalSistemaAsync(caja)">Marcar principal</button>
+                                                }
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+        </section>
+
+        <section class="panel-card">
+            <div class="panel-head">
+                <div>
+                    <span class="panel-kicker">Control de secuencia</span>
+                    <h3>Secuencia del facturador del sistema</h3>
+                </div>
+            </div>
+
+            @if (secuenciaSistema is null)
+            {
+                <div class="state-card compact">
+                    <p>Configura primero el emisor maestro y asegúrate de que la cuenta dueña tenga caja activa para poder definir la secuencia.</p>
+                </div>
+            }
+            else
+            {
+                <div class="sequence-summary">
+                    <div class="sequence-chip">
+                        <span>Serie actual</span>
+                        <strong>@secuenciaSistema.SerieVisual</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Ultima secuencia registrada</span>
+                        <strong>@(string.IsNullOrWhiteSpace(secuenciaSistema.UltimaSecuencia) ? "No definida" : secuenciaSistema.UltimaSecuencia)</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Siguiente factura</span>
+                        <strong>@(string.IsNullOrWhiteSpace(secuenciaSistema.SiguienteSecuencia) ? "000000001" : secuenciaSistema.SiguienteSecuencia)</strong>
+                    </div>
+                </div>
+
+                <div class="sequence-form">
+                    <label class="check-row">
+                        <input type="checkbox" @bind="secuenciaForm.YaFacturoAntes" />
+                        <span>El sistema ya emitio facturas antes con esta serie</span>
+                    </label>
+
+                    @if (secuenciaForm.YaFacturoAntes)
+                    {
+                        <div class="field field-sequence">
+                            <label>Ultima secuencia emitida</label>
+                            <InputText @bind-Value="secuenciaForm.UltimaSecuencia" class="field-input" placeholder="Ej: 000000125" />
+                            <small class="field-help">Aqui debes indicar la ultima factura ya usada. El sistema emitira la siguiente para evitar duplicados.</small>
+                        </div>
+                    }
+
+                    <div class="form-actions">
+                        <button type="button" class="primary-btn" @onclick="GuardarSecuenciaAsync" disabled="@guardandoSecuencia">
+                            @(guardandoSecuencia ? "Guardando..." : "Guardar secuencia del sistema")
+                        </button>
+                    </div>
+                </div>
+            }
+        </section>
+
+        @if (facturaSeleccionada?.Factura != null)
+        {
+            <section class="panel-card detail-card">
+                <div class="panel-head">
+                    <div>
+                        <span class="panel-kicker">Detalle</span>
+                        <h3>Factura @($"{facturaSeleccionada.Factura.Serie}-{facturaSeleccionada.Factura.Numfactura}")</h3>
+                    </div>
+                </div>
+                <div class="detail-grid">
+                    <div><strong>Cliente:</strong> @(facturaSeleccionada.Cliente?.Nombrerazonsocial ?? $"{facturaSeleccionada.Cliente?.Nombres} {facturaSeleccionada.Cliente?.Apellidos}".Trim())</div>
+                    <div><strong>Identificacion:</strong> @facturaSeleccionada.Cliente?.Numeroidentificacion</div>
+                    <div><strong>Total:</strong> $ @(facturaSeleccionada.Factura.Valortotal?.ToString("N2") ?? "0.00")</div>
+                    <div><strong>Estado SRI:</strong> @facturaSeleccionada.Factura.Estadoenviosri</div>
+                    <div class="detail-full"><strong>Notas:</strong> @facturaSeleccionada.Factura.Notas</div>
+                </div>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private const long MaxCertificadoSize = 5 * 1024 * 1024;
+
+    private readonly List<FacturaListDto> facturasSistema = new();
+    private EmisorSistemaFormModel formModel = new();
+    private FacturaViewDto? facturaSeleccionada;
+    private bool cargando = true;
+    private bool guardando;
+    private bool tieneAcceso;
+    private bool emisorConfigurado;
+    private bool firmaConfigurada;
+    private bool guardandoSecuencia;
+    private bool guardandoCaja;
+    private bool consultandoIdentificacion;
+    private bool mostrarClaveCertificado;
+    private int currentUserId;
+    private int ownerUserId;
+    private string? feedbackMessage;
+    private bool feedbackIsSuccess;
+    private string? nombrePathCertificadoActual;
+    private string identificacionBusqueda = string.Empty;
+    private EmisorSistemaSecuenciaInfo? secuenciaSistema;
+    private SecuenciaSistemaFormModel secuenciaForm = new();
+    private readonly List<Caja> cajasSistema = new();
+    private Caja? cajaSistemaSeleccionada;
+    private CajaSistemaFormModel cajaForm = new();
+    private string SerieCajaPreview => $"{NormalizarCodigoPreview(cajaForm.Establecimiento)}-{NormalizarCodigoPreview(cajaForm.PuntoEmision)}";
+    private string RucEmisorActual => string.IsNullOrWhiteSpace(formModel.Ruc) ? "--" : formModel.Ruc;
+    private string RazonSocialEmisorActual => FirstNonEmpty(formModel.RazonSocial, formModel.NomComercial) ?? "--";
+    private string SeriePrincipalSistemaActual => FormatearSerie(cajasSistema.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).FirstOrDefault()?.SerieFactura);
+    private string UltimaFacturaSistema => facturasSistema.FirstOrDefault()?.NumeroCompleto ?? "--";
+    private int TotalFacturasAutorizadasSistema => facturasSistema.Count(f => DocumentoAutorizacionHelper.EstaAutorizado(f.Autorizado, f.EstadoSri));
+    private int TotalFacturasPendientesSistema => Math.Max(facturasSistema.Count - TotalFacturasAutorizadasSistema, 0);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        currentUserId = int.TryParse(
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value ??
+            user.FindFirst("IdUsuario")?.Value,
+            out var idUsuario)
+            ? idUsuario
+            : 0;
+
+        var role = user.FindFirst("IdTipoUsuario")?.Value;
+        tieneAcceso = currentUserId > 0 && (role == "7" || role == "2");
+        await RecargarAsync();
+    }
+
+    private async Task RecargarAsync()
+    {
+        cargando = true;
+        try
+        {
+            if (!tieneAcceso)
+                return;
+
+            var emisor = await EmisorSistemaService.GetEmisorSistemaAsync();
+            emisorConfigurado = emisor != null;
+            firmaConfigurada = !string.IsNullOrWhiteSpace(emisor?.PathCertificado) &&
+                               !string.IsNullOrWhiteSpace(emisor?.ClaveCertificado);
+            ownerUserId = emisor?.IdUsuario ?? 0;
+            nombrePathCertificadoActual = string.IsNullOrWhiteSpace(emisor?.PathCertificado)
+                ? null
+                : Path.GetFileName(emisor.PathCertificado);
+            formModel = EmisorSistemaFormModel.FromEntity(emisor);
+            secuenciaSistema = await EmisorSistemaService.GetSecuenciaFacturaSistemaAsync();
+            secuenciaForm = SecuenciaSistemaFormModel.FromInfo(secuenciaSistema);
+            await RecargarCajasSistemaAsync();
+
+            await RecargarFacturasAsync();
+        }
+        catch (Exception ex)
+        {
+            SetFeedback(ex.Message, false);
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task RecargarFacturasAsync()
+    {
+        if (!tieneAcceso)
+            return;
+
+        facturasSistema.Clear();
+        facturasSistema.AddRange(await EmisorSistemaService.ListarFacturasRecargasSistemaAsync());
+
+    }
+
+    private async Task RecargarCajasSistemaAsync()
+    {
+        cajasSistema.Clear();
+        cajaSistemaSeleccionada = null;
+        cajaForm = new();
+
+        cajasSistema.AddRange(await ConfiguracionService.GetCajasSistemaActivasAsync());
+        cajaSistemaSeleccionada = cajasSistema.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).FirstOrDefault();
+        if (cajaSistemaSeleccionada != null)
+            cajaForm = CajaSistemaFormModel.FromCaja(cajaSistemaSeleccionada);
+    }
+
+    private async Task GuardarAsync()
+    {
+        if (!tieneAcceso || currentUserId <= 0)
+            return;
+
+        guardando = true;
+        try
+        {
+            SincronizarSerieEmisorCaja();
+            var resultado = await EmisorSistemaService.GuardarAsync(currentUserId, formModel.ToEntity());
+            SetFeedback(resultado.Message, resultado.Success);
+            if (resultado.Success)
+                await RecargarAsync();
+        }
+        catch (Exception ex)
+        {
+            SetFeedback(ex.Message, false);
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private void ToggleClaveCertificado()
+        => mostrarClaveCertificado = !mostrarClaveCertificado;
+
+    private void SincronizarSerieEmisorCaja()
+    {
+        var establecimiento = NormalizarCodigo(formModel.CodEstablecimiento) ?? "001";
+        var punto = NormalizarCodigo(formModel.CodPuntoEmision) ?? "001";
+
+        formModel.CodEstablecimiento = establecimiento;
+        formModel.CodPuntoEmision = punto;
+        cajaForm.Establecimiento = establecimiento;
+        cajaForm.PuntoEmision = punto;
+    }
+
+    private async Task ConsultarIdentificacionAsync()
+    {
+        if (!tieneAcceso)
+            return;
+
+        var identificacionNormalizada = NormalizarIdentificacion(identificacionBusqueda);
+        if (identificacionNormalizada.Length is not (10 or 13))
+        {
+            SetFeedback("Ingresa una cedula de 10 digitos o un RUC de 13 digitos para consultar.", false);
+            return;
+        }
+
+        consultandoIdentificacion = true;
+        try
+        {
+            var resultado = await CedulaLookupService.ConsultarAsync(identificacionNormalizada);
+            if (!resultado.Success)
+            {
+                SetFeedback(resultado.Mensaje ?? "No fue posible consultar la identificacion.", false);
+                return;
+            }
+
+            if (!resultado.Found)
+            {
+                SetFeedback(resultado.Mensaje ?? "No se encontraron datos para la identificacion consultada.", false);
+                return;
+            }
+
+            AplicarResultadoIdentificacion(resultado, identificacionNormalizada);
+        }
+        catch (Exception ex)
+        {
+            SetFeedback(ex.Message, false);
+        }
+        finally
+        {
+            consultandoIdentificacion = false;
+        }
+    }
+
+    private async Task GuardarSecuenciaAsync()
+    {
+        if (!tieneAcceso)
+            return;
+
+        guardandoSecuencia = true;
+        try
+        {
+            var resultado = await EmisorSistemaService.GuardarSecuenciaFacturaSistemaAsync(
+                currentUserId,
+                secuenciaForm.YaFacturoAntes,
+                secuenciaForm.UltimaSecuencia);
+
+            SetFeedback(resultado.Message, resultado.Success);
+            if (resultado.Success)
+            {
+                secuenciaSistema = await EmisorSistemaService.GetSecuenciaFacturaSistemaAsync();
+                secuenciaForm = SecuenciaSistemaFormModel.FromInfo(secuenciaSistema);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetFeedback(ex.Message, false);
+        }
+        finally
+        {
+            guardandoSecuencia = false;
+        }
+    }
+
+    private async Task GuardarCajaSistemaAsync()
+    {
+        if (!tieneAcceso || ownerUserId <= 0)
+            return;
+
+        var establecimiento = NormalizarCodigo(cajaForm.Establecimiento);
+        var punto = NormalizarCodigo(cajaForm.PuntoEmision);
+
+        if (establecimiento is null || punto is null)
+        {
+            SetFeedback("La caja del sistema requiere establecimiento y punto de emision validos de 3 digitos.", false);
+            return;
+        }
+
+        guardandoCaja = true;
+        try
+        {
+            var serie = $"{establecimiento}-{punto}";
+            var modelo = cajaSistemaSeleccionada is null
+                ? CrearNuevaCajaSistemaBase()
+                : ClonarCaja(cajaSistemaSeleccionada);
+
+            modelo.IdUsuario = ownerUserId;
+            modelo.EsCajaSistema = true;
+            modelo.SerieFactura = serie;
+            modelo.SerieNotasCred = serie;
+            modelo.SerieGuia = serie;
+            modelo.SerieCompras = serie;
+            modelo.SerieDebitos = serie;
+            modelo.Estado = true;
+
+            var ok = await ConfiguracionService.SaveCajaAsync(modelo, currentUserId);
+            if (!ok)
+            {
+                SetFeedback("No se pudo guardar la caja del sistema. Verifica que la serie no este duplicada y que la cuenta tenga datos validos.", false);
+                return;
+            }
+
+            SetFeedback($"Caja del sistema guardada correctamente con la serie {serie}.", true);
+            await RecargarAsync();
+        }
+        catch (Exception ex)
+        {
+            SetFeedback(ex.Message, false);
+        }
+        finally
+        {
+            guardandoCaja = false;
+        }
+    }
+
+    private void SeleccionarCajaSistema(Caja caja)
+    {
+        cajaSistemaSeleccionada = caja;
+        cajaForm = CajaSistemaFormModel.FromCaja(caja);
+    }
+
+    private async Task MarcarCajaPrincipalSistemaAsync(Caja caja)
+    {
+        if (!tieneAcceso || ownerUserId <= 0)
+            return;
+
+        var ok = await ConfiguracionService.MarcarCajaPrincipalAsync(caja.Sec, ownerUserId, soloCajasSistema: true);
+        if (!ok)
+        {
+            SetFeedback("No se pudo marcar la caja del sistema como principal.", false);
+            return;
+        }
+
+        SetFeedback($"La serie {FormatearSerie(caja.SerieFactura)} ahora es la caja principal del sistema.", true);
+        await RecargarAsync();
+    }
+
+    private void IrAMisFacturasBackOffice()
+        => NavManager.NavigateTo("/backoffice/mis-facturas-backoffice");
+
+    private async Task VerFacturaAsync(int codfactura)
+    {
+        facturaSeleccionada = await FacturacionService.GetFacturaCompletaAsync(codfactura);
+    }
+
+    private async Task AbrirXmlAsync(int codfactura)
+    {
+        var xmlUrl = await FacturacionService.AsegurarXmlFacturaAsync(codfactura);
+        if (string.IsNullOrWhiteSpace(xmlUrl))
+        {
+            await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la factura.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", xmlUrl, "_blank");
+    }
+
+    private async Task AbrirPdfAsync(int codfactura)
+    {
+        var pdfUrl = await FacturacionService.AsegurarPdfFacturaAsync(codfactura);
+        if (string.IsNullOrWhiteSpace(pdfUrl))
+        {
+            await AlertService.ShowWarningAsync("No se pudo generar o ubicar el PDF de la factura.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", pdfUrl, "_blank");
+    }
+
+    private async Task ReintentarSriAsync(FacturaListDto factura)
+    {
+        var resultado = await FacturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
+        await RecargarFacturasAsync();
+
+        if (string.Equals(resultado.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
+            await AlertService.ShowSuccessAsync(resultado.mensaje ?? "Factura autorizada correctamente.", "SRI");
+        else
+            await AlertService.ShowWarningAsync(resultado.mensaje ?? "La factura sigue pendiente o con observaciones.", "SRI");
+    }
+
+    private async Task ReenviarCorreoAsync(FacturaListDto factura)
+    {
+        var resultado = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, forzarReenvio: true);
+        if (resultado.Enviado || resultado.YaEnviado)
+            await AlertService.ShowSuccessAsync(resultado.Mensaje, "Correo");
+        else if (resultado.PendienteAutorizacion || resultado.SinDestinatarios)
+            await AlertService.ShowWarningAsync(resultado.Mensaje, "Correo");
+        else
+            await AlertService.ShowErrorAsync(resultado.Mensaje, "Correo");
+    }
+
+    private Task SubirPathCertificado(InputFileChangeEventArgs e)
+    {
+        return SubirArchivoP12(e, relativePath =>
+        {
+            formModel.PathCertificado = relativePath;
+            nombrePathCertificadoActual = e.File?.Name;
+        });
+    }
+
+    private async Task SubirArchivoP12(InputFileChangeEventArgs e, Action<string> asignarRuta)
+    {
+        if (e.FileCount != 1 || e.File is null)
+        {
+            SetFeedback("Debes seleccionar un unico archivo .p12.", false);
+            return;
+        }
+
+        var file = e.File;
+        if (!string.Equals(Path.GetExtension(file.Name), ".p12", StringComparison.OrdinalIgnoreCase))
+        {
+            SetFeedback("Solo se permiten archivos .p12.", false);
+            return;
+        }
+
+        if (file.Size <= 0 || file.Size > MaxCertificadoSize)
+        {
+            SetFeedback("El certificado debe ser valido y no superar 5 MB.", false);
+            return;
+        }
+
+        await using var source = file.OpenReadStream(MaxCertificadoSize);
+        await using var ms = new MemoryStream();
+        await source.CopyToAsync(ms);
+        var relativePath = await GuardarArchivoCertificadoAsync(ms.ToArray());
+        asignarRuta(relativePath);
+        SetFeedback("Certificado cargado correctamente. Guarda para confirmar el cambio.", true);
+    }
+
+    private async Task<string> GuardarArchivoCertificadoAsync(byte[] bytes)
+    {
+        var relativePath = $"certs/system/{Guid.NewGuid():N}.p12";
+        var physicalPath = Path.Combine(
+            HostEnvironment.ContentRootPath,
+            "App_Data",
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+        var directory = Path.GetDirectoryName(physicalPath);
+        if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
+            Directory.CreateDirectory(directory);
+
+        await File.WriteAllBytesAsync(physicalPath, bytes);
+        return relativePath;
+    }
+
+    private void SetFeedback(string message, bool success)
+    {
+        feedbackMessage = message;
+        feedbackIsSuccess = success;
+    }
+
+    private void AplicarResultadoIdentificacion(CedulaLookupResult resultado, string identificacionNormalizada)
+    {
+        identificacionBusqueda = resultado.Ruc ?? resultado.Cedula ?? identificacionNormalizada;
+
+        var razonSocial = FirstNonEmpty(resultado.RazonSocial, resultado.NombreCompleto);
+        if (!string.IsNullOrWhiteSpace(razonSocial))
+        {
+            formModel.RazonSocial = razonSocial;
+            if (string.IsNullOrWhiteSpace(formModel.NomComercial))
+                formModel.NomComercial = razonSocial;
+        }
+
+        var nombreComercial = FirstNonEmpty(resultado.NombreComercial, resultado.RazonSocial, resultado.NombreCompleto);
+        if (!string.IsNullOrWhiteSpace(nombreComercial))
+            formModel.NomComercial = nombreComercial;
+
+        var llevaContabilidad = NormalizarLlevaContabilidad(resultado.ObligadoLlevarContabilidad);
+        if (!string.IsNullOrWhiteSpace(llevaContabilidad))
+            formModel.LlevaContabilidad = llevaContabilidad;
+
+        var direccion = FirstNonEmpty(resultado.DireccionEstablecimiento, resultado.DireccionMatriz);
+        if (!string.IsNullOrWhiteSpace(resultado.DireccionMatriz))
+            formModel.DireccionMatriz = resultado.DireccionMatriz.Trim();
+        if (!string.IsNullOrWhiteSpace(direccion))
+            formModel.DirEstablecimiento = direccion.Trim();
+
+        var establecimiento = NormalizarCodigo(resultado.NumeroEstablecimiento);
+        if (!string.IsNullOrWhiteSpace(establecimiento))
+        {
+            formModel.CodEstablecimiento = establecimiento;
+            cajaForm.Establecimiento = establecimiento;
+        }
+
+        if (string.IsNullOrWhiteSpace(cajaForm.PuntoEmision) || NormalizarCodigo(cajaForm.PuntoEmision) is null)
+            cajaForm.PuntoEmision = NormalizarCodigo(formModel.CodPuntoEmision) ?? "001";
+
+        formModel.CodPuntoEmision = NormalizarCodigo(cajaForm.PuntoEmision) ?? "001";
+
+        if (string.Equals(resultado.Tipo, "ruc", StringComparison.OrdinalIgnoreCase))
+        {
+            formModel.Ruc = resultado.Ruc ?? identificacionNormalizada;
+            SetFeedback(
+                string.IsNullOrWhiteSpace(establecimiento)
+                    ? "Datos del emisor maestro cargados desde la consulta de RUC."
+                    : $"Datos del emisor maestro cargados desde la consulta de RUC. Se detecto el establecimiento {establecimiento} y se precargo tambien en la caja del sistema.",
+                true);
+            return;
+        }
+
+        SetFeedback("Datos base cargados desde la cedula. Recuerda completar el RUC definitivo del emisor maestro antes de guardar.", true);
+    }
+
+    private Caja CrearNuevaCajaSistemaBase()
+    {
+        var principal = cajasSistema.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).FirstOrDefault();
+        var siguienteNumero = cajasSistema.Select(c => c.NumCaja ?? 0).DefaultIfEmpty(0).Max() + 1;
+
+        return new Caja
+        {
+            IdUsuario = ownerUserId,
+            NumCaja = siguienteNumero,
+            idJefe = ownerUserId,
+            IdEmpresa = principal?.IdEmpresa is > 0 ? principal.IdEmpresa : 1,
+            IdSucursal = principal?.IdSucursal is > 0 ? principal.IdSucursal : 1
+        };
+    }
+
+    private static Caja ClonarCaja(Caja caja) => new()
+    {
+        Sec = caja.Sec,
+        NumCaja = caja.NumCaja,
+        IdUsuario = caja.IdUsuario,
+        IdEmpresa = caja.IdEmpresa,
+        IdSucursal = caja.IdSucursal,
+        SerieFactura = caja.SerieFactura,
+        SerieCompras = caja.SerieCompras,
+        SerieGuia = caja.SerieGuia,
+        SerieDebitos = caja.SerieDebitos,
+        SerieNotasCred = caja.SerieNotasCred,
+        Estado = caja.Estado
+    };
+
+    private static string FormatearSerie(string? serie)
+    {
+        var digits = new string((serie ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (digits.Length >= 6)
+            return $"{digits[..3]}-{digits.Substring(3, 3)}";
+
+        return string.IsNullOrWhiteSpace(serie) ? "--" : serie.Trim();
+    }
+
+    private static string? NormalizarCodigo(string? value)
+    {
+        var digits = new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (digits.Length == 0 || digits == "000")
+            return null;
+
+        return digits.Length >= 3 ? digits[^3..] : digits.PadLeft(3, '0');
+    }
+
+    private static string NormalizarCodigoPreview(string? value)
+        => NormalizarCodigo(value) ?? "000";
+
+    private static string NormalizarIdentificacion(string? value)
+        => new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    private static string? FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
+
+    private static string NormalizarLlevaContabilidad(string? value)
+        => string.Equals(value?.Trim(), "SI", StringComparison.OrdinalIgnoreCase) ? "SI" : "NO";
+
+    private sealed class EmisorSistemaFormModel
+    {
+        public string RazonSocial { get; set; } = string.Empty;
+        public string NomComercial { get; set; } = string.Empty;
+        public string Ruc { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Telefono { get; set; } = string.Empty;
+        public string LlevaContabilidad { get; set; } = "SI";
+        public string TipoAmbiente { get; set; } = "1";
+        public string TipoEmision { get; set; } = "1";
+        public string CodEstablecimiento { get; set; } = "001";
+        public string CodPuntoEmision { get; set; } = "001";
+        public string DireccionMatriz { get; set; } = string.Empty;
+        public string DirEstablecimiento { get; set; } = string.Empty;
+        public string? PathCertificado { get; set; }
+        public string? ClaveCertificado { get; set; }
+
+        public static EmisorSistemaFormModel FromEntity(Emisor? emisor)
+        {
+            if (emisor == null)
+                return new EmisorSistemaFormModel();
+
+            return new EmisorSistemaFormModel
+            {
+                RazonSocial = emisor.RazonSocial ?? string.Empty,
+                NomComercial = emisor.NomComercial ?? string.Empty,
+                Ruc = emisor.Ruc ?? string.Empty,
+                Email = emisor.Email ?? string.Empty,
+                Telefono = emisor.Telefono ?? string.Empty,
+                LlevaContabilidad = string.IsNullOrWhiteSpace(emisor.LlevaContabilidad) ? "SI" : emisor.LlevaContabilidad,
+                TipoAmbiente = string.IsNullOrWhiteSpace(emisor.TipoAmbiente) ? "1" : emisor.TipoAmbiente,
+                TipoEmision = string.IsNullOrWhiteSpace(emisor.TipoEmision) ? "1" : emisor.TipoEmision,
+                CodEstablecimiento = string.IsNullOrWhiteSpace(emisor.CodEstablecimiento) ? "001" : emisor.CodEstablecimiento,
+                CodPuntoEmision = string.IsNullOrWhiteSpace(emisor.CodPuntoEmision) ? "001" : emisor.CodPuntoEmision,
+                DireccionMatriz = emisor.DireccionMatriz ?? string.Empty,
+                DirEstablecimiento = emisor.DirEstablecimiento ?? string.Empty,
+                PathCertificado = emisor.PathCertificado
+            };
+        }
+
+        public Emisor ToEntity() => new()
+        {
+            RazonSocial = RazonSocial,
+            NomComercial = NomComercial,
+            Ruc = Ruc,
+            Email = Email,
+            Telefono = Telefono,
+            LlevaContabilidad = LlevaContabilidad,
+            TipoAmbiente = TipoAmbiente,
+            TipoEmision = TipoEmision,
+            CodEstablecimiento = CodEstablecimiento,
+            CodPuntoEmision = CodPuntoEmision,
+            DireccionMatriz = DireccionMatriz,
+            DirEstablecimiento = DirEstablecimiento,
+            PathCertificado = PathCertificado,
+            ClaveCertificado = ClaveCertificado
+        };
+    }
+
+    private sealed class SecuenciaSistemaFormModel
+    {
+        public bool YaFacturoAntes { get; set; }
+        public string UltimaSecuencia { get; set; } = string.Empty;
+
+        public static SecuenciaSistemaFormModel FromInfo(EmisorSistemaSecuenciaInfo? info)
+        {
+            return new SecuenciaSistemaFormModel
+            {
+                YaFacturoAntes = !string.IsNullOrWhiteSpace(info?.UltimaSecuencia),
+                UltimaSecuencia = info?.UltimaSecuencia ?? string.Empty
+            };
+        }
+    }
+
+    private sealed class CajaSistemaFormModel
+    {
+        public string Establecimiento { get; set; } = "001";
+        public string PuntoEmision { get; set; } = "001";
+
+        public static CajaSistemaFormModel FromCaja(Caja? caja)
+        {
+            var digits = new string((caja?.SerieFactura ?? string.Empty).Where(char.IsDigit).ToArray()).PadLeft(6, '0');
+            return new CajaSistemaFormModel
+            {
+                Establecimiento = digits[..3],
+                PuntoEmision = digits.Substring(3, 3)
+            };
+        }
+    }
+}
+
+<style>
+    .bo-facturacion-page {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow-x: clip;
+        box-sizing: border-box;
+    }
+
+    .bo-facturacion-page *,
+    .bo-facturacion-page *::before,
+    .bo-facturacion-page *::after {
+        box-sizing: border-box;
+    }
+
+    .hero-card,
+    .panel-card,
+    .state-card,
+    .feedback-banner {
+        background: #fff;
+        border: 1px solid #dbe3ef;
+        border-radius: 16px;
+        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+    }
+
+    .hero-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1.25rem;
+        color: #0f172a;
+    }
+
+    .hero-kicker,
+    .panel-kicker {
+        display: inline-flex;
+        text-transform: uppercase;
+        font-size: 0.72rem;
+        letter-spacing: 0.06em;
+        color: #2563eb;
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+    }
+
+    .hero-card h2,
+    .panel-card h3 {
+        margin: 0;
+        color: #0f172a;
+        font-weight: 800;
+    }
+
+    .hero-card p {
+        margin: 0.35rem 0 0;
+        max-width: 760px;
+        color: #64748b;
+        font-size: 0.92rem;
+    }
+
+    .hero-status-group {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(110px, 1fr));
+        gap: 0.75rem;
+        min-width: 350px;
+    }
+
+    .hero-status {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 0.9rem 1rem;
+    }
+
+    .hero-status span,
+    .hero-status strong {
+        display: block;
+    }
+
+    .hero-status span {
+        font-size: 0.78rem;
+        color: #64748b;
+    }
+
+    .hero-status strong {
+        font-size: 1rem;
+        margin-top: 0.2rem;
+        color: #0f172a;
+    }
+
+    .feedback-banner {
+        padding: 0.95rem 1rem;
+        font-weight: 600;
+    }
+
+    .feedback-banner.is-success {
+        background: #ecfdf3;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+    }
+
+    .feedback-banner.is-error {
+        background: #fef2f2;
+        color: #991b1b;
+        border: 1px solid #fecaca;
+    }
+
+    .content-grid {
+        display: grid;
+        grid-template-columns: 1.1fr 1fr;
+        gap: 1.25rem;
+        width: 100%;
+    }
+
+    .panel-card,
+    .state-card {
+        padding: 1.25rem;
+    }
+
+    .panel-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1.1rem;
+    }
+
+    .panel-head h3 {
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    .panel-head .panel-kicker {
+        margin-bottom: 0.18rem;
+    }
+
+    .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .form-accordion {
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        background: #fff;
+        margin-top: 1rem;
+        overflow: hidden;
+    }
+
+    .form-section-heading {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        padding: 0.85rem 1rem;
+        cursor: pointer;
+        color: #0f172a;
+        background: #f8fafc;
+        font-weight: 700;
+        list-style: none;
+    }
+
+    .form-section-heading::-webkit-details-marker {
+        display: none;
+    }
+
+    .form-section-heading span {
+        display: inline-grid;
+        place-items: center;
+        width: 1.65rem;
+        height: 1.65rem;
+        border-radius: 999px;
+        background: #2563eb;
+        color: #fff;
+        font-size: 0.8rem;
+    }
+
+    .form-section-heading i {
+        margin-left: auto;
+        color: #64748b;
+        transition: transform 0.2s ease;
+    }
+
+    .form-accordion[open] .form-section-heading i {
+        transform: rotate(180deg);
+    }
+
+    .form-accordion-body {
+        padding: 1rem;
+    }
+
+    .field {
+        display: grid;
+        gap: 0.4rem;
+    }
+
+    .field-full {
+        grid-column: 1 / -1;
+    }
+
+    .field label {
+        font-size: 0.85rem;
+        color: #334155;
+        font-weight: 600;
+    }
+
+    .field-input {
+        width: 100%;
+        border: 1px solid #d5deea;
+        border-radius: 10px;
+        padding: 0.78rem 0.9rem;
+        background: #fff;
+        color: #0f172a;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .field-input:focus {
+        outline: none;
+        border-color: #93c5fd;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .password-field {
+        position: relative;
+    }
+
+    .password-input {
+        padding-right: 3rem;
+    }
+
+    .password-toggle-btn {
+        position: absolute;
+        top: 50%;
+        right: 0.7rem;
+        transform: translateY(-50%);
+        width: 2rem;
+        height: 2rem;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: #64748b;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: color 0.2s ease, background-color 0.2s ease;
+    }
+
+    .password-toggle-btn:hover {
+        color: #2563eb;
+        background: rgba(37, 99, 235, 0.08);
+    }
+
+    .field-help {
+        color: #64748b;
+        font-size: 0.8rem;
+    }
+
+    .lookup-panel {
+        padding: 1rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        background: #f8fafc;
+    }
+
+    .lookup-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.75rem;
+        align-items: center;
+    }
+
+    .lookup-btn {
+        white-space: nowrap;
+    }
+
+    .form-actions {
+        margin-top: 1rem;
+    }
+
+    .sequence-summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .sequence-chip {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 0.95rem 1rem;
+        background: #f8fafc;
+    }
+
+    .sequence-chip span,
+    .sequence-chip strong {
+        display: block;
+    }
+
+    .sequence-chip span {
+        font-size: 0.78rem;
+        color: #64748b;
+        margin-bottom: 0.35rem;
+    }
+
+    .sequence-chip strong {
+        color: #0f172a;
+        font-size: 1rem;
+    }
+
+    .sequence-form {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .box-form {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .top-gap {
+        margin-top: 1rem;
+    }
+
+    .check-row {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        color: #0f172a;
+        font-weight: 600;
+    }
+
+    .field-sequence {
+        max-width: 360px;
+    }
+
+    .primary-btn,
+    .secondary-btn,
+    .link-btn {
+        border-radius: 10px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+
+    .primary-btn {
+        background: #2563eb;
+        color: #fff;
+        border: 1px solid #2563eb;
+        padding: 0.78rem 1rem;
+    }
+
+    .primary-btn:hover:not(:disabled) {
+        background: #1d4ed8;
+        border-color: #1d4ed8;
+    }
+
+    .secondary-btn {
+        background: #f8fafc;
+        color: #2563eb;
+        border: 1px solid #cbd5e1;
+        padding: 0.7rem 0.95rem;
+    }
+
+    .secondary-btn:hover:not(:disabled) {
+        background: #eff6ff;
+        border-color: #93c5fd;
+    }
+
+    .primary-btn:disabled,
+    .secondary-btn:disabled,
+    .link-btn:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+    }
+
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #eef2f7;
+        border-radius: 14px;
+    }
+
+    .facturas-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+    }
+
+    .facturas-table th,
+    .facturas-table td {
+        padding: 0.85rem 0.75rem;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: left;
+        vertical-align: top;
+    }
+
+    .facturas-table th {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        color: #64748b;
+        letter-spacing: 0.06em;
+        background: #f8fafc;
+    }
+
+    .table-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+    }
+
+    .link-btn {
+        background: #eff6ff;
+        color: #1d4ed8;
+        border: 1px solid #dbeafe;
+        padding: 0.45rem 0.7rem;
+    }
+
+    .link-btn:hover:not(:disabled) {
+        background: #dbeafe;
+    }
+
+    .state-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.35rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 700;
+    }
+
+    .state-pill.ok {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .state-pill.warn {
+        background: #fff7ed;
+        color: #9a3412;
+    }
+
+    .detail-card {
+        margin-top: 0;
+    }
+
+    .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem 1rem;
+        color: #1e293b;
+    }
+
+    .detail-full {
+        grid-column: 1 / -1;
+    }
+
+    .state-card {
+        display: grid;
+        place-items: center;
+        gap: 0.75rem;
+        text-align: center;
+        min-height: 180px;
+        color: #64748b;
+    }
+
+    .state-card.compact {
+        min-height: 120px;
+    }
+
+    @@media (max-width: 1100px) {
+        .content-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .hero-card {
+            flex-direction: column;
+        }
+
+        .hero-status-group {
+            min-width: auto;
+        }
+    }
+
+    @@media (max-width: 720px) {
+        .form-grid,
+        .detail-grid,
+        .hero-status-group,
+        .sequence-summary,
+        .box-form {
+            grid-template-columns: 1fr;
+        }
+
+        .lookup-row {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>

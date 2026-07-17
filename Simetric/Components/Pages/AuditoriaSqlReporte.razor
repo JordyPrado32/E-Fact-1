@@ -1,0 +1,641 @@
+@page "/reportes/auditoria-sql"
+@layout Simetric.Components.Layout.MainLayout
+@rendermode InteractiveServer
+
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+
+<PageTitle>Auditoria SQL | Numerica e-fact</PageTitle>
+
+@{
+    var itemsFiltrados = AuditoriasFiltradas;
+    var itemsPagina = AuditoriasPagina;
+}
+
+<div class="audit-shell">
+    @if (cargando)
+    {
+        <section class="audit-state">
+            <div class="state-icon">
+                <span class="spinner-border" role="status"></span>
+            </div>
+            <h3>Cargando auditoria SQL</h3>
+            <p>Estamos reuniendo los cambios auditados de la base de datos.</p>
+        </section>
+    }
+    else
+    {
+        <section class="audit-hero">
+            <div class="hero-copy">
+                <span class="hero-kicker">Auditoria operativa</span>
+                <h1>Historial SQL de cambios del sistema</h1>
+                <p>
+                    Revisa altas, modificaciones y eliminaciones registradas en la tabla de auditoria,
+                    con contexto de usuario, entidad, ruta y valores JSON.
+                </p>
+            </div>
+
+            <div class="hero-summary">
+                <article class="summary-card summary-card-primary">
+                    <span>Registros filtrados</span>
+                    <strong>@itemsFiltrados.Count</strong>
+                    <small>@ResumenFechas</small>
+                </article>
+
+                <article class="summary-card">
+                    <span>Creaciones</span>
+                    <strong>@itemsFiltrados.Count(x => x.Accion.Contains("CREAR", StringComparison.OrdinalIgnoreCase))</strong>
+                    <small>Eventos de alta visibles</small>
+                </article>
+
+                <article class="summary-card">
+                    <span>Modificaciones</span>
+                    <strong>@itemsFiltrados.Count(x => x.Accion.Contains("MODIFICAR", StringComparison.OrdinalIgnoreCase))</strong>
+                    <small>Cambios o ajustes registrados</small>
+                </article>
+
+                <article class="summary-card">
+                    <span>Eliminaciones</span>
+                    <strong>@itemsFiltrados.Count(x => x.Accion.Contains("ELIMINAR", StringComparison.OrdinalIgnoreCase))</strong>
+                    <small>Borrados logicos o fisicos visibles</small>
+                </article>
+            </div>
+        </section>
+
+        <section class="filters-card">
+            <div class="filters-head">
+                <div>
+                    <span class="section-kicker">Consulta</span>
+                    <h2>Filtra por accion, usuario, entidad o rango de fechas</h2>
+                </div>
+                <span class="filters-badge">@itemsFiltrados.Count resultado(s)</span>
+            </div>
+
+            <div class="filters-grid">
+                <label class="field-card">
+                    <span class="field-label">Accion</span>
+                    <select class="field-input" @bind="accionFiltro" @bind:after="OnFiltersChanged">
+                        <option value="">Todas</option>
+                        @foreach (var accion in AccionesDisponibles)
+                        {
+                            <option value="@accion">@accion</option>
+                        }
+                    </select>
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Desde</span>
+                    <input type="date" class="field-input" value="@FechaDesdeInputValue" @onchange="OnFechaDesdeChanged" />
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Hasta</span>
+                    <input type="date" class="field-input" value="@FechaHastaInputValue" @onchange="OnFechaHastaChanged" />
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Usuario</span>
+                    <input type="text"
+                           class="field-input"
+                           placeholder="Nombre, correo o Id"
+                           @bind="usuarioFiltro"
+                           @bind:event="oninput"
+                           @bind:after="OnFiltersChanged" />
+                </label>
+
+                <label class="field-card field-card-wide">
+                    <span class="field-label">Busqueda general</span>
+                    <input type="text"
+                           class="field-input"
+                           placeholder="Entidad, tabla, campo, ruta o IP"
+                           @bind="textoFiltro"
+                           @bind:event="oninput"
+                           @bind:after="OnFiltersChanged" />
+                </label>
+
+                <div class="field-card field-card-actions">
+                    <span class="field-label">Acciones</span>
+                    <div class="actions-stack">
+                        <button type="button" class="hero-btn hero-btn-primary" @onclick="OnFiltersChanged">
+                            Aplicar filtros
+                        </button>
+                        <button type="button" class="hero-btn hero-btn-secondary" @onclick="LimpiarFiltros">
+                            Limpiar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="table-card">
+            <div class="table-head">
+                <div>
+                    <span class="section-kicker">Bitacora</span>
+                    <h2>Eventos de auditoria SQL</h2>
+                </div>
+
+                <div class="table-meta">
+                    <span>Pagina @paginaActual de @TotalPaginas</span>
+                </div>
+            </div>
+
+            @if (itemsFiltrados.Count == 0)
+            {
+                <div class="audit-state audit-state-inline">
+                    <div class="state-icon">
+                        <i class="bi bi-inbox"></i>
+                    </div>
+                    <h3>No encontramos eventos</h3>
+                    <p>Ajusta los filtros o amplia el rango para revisar mas actividad.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="audit-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Usuario</th>
+                                <th>Accion</th>
+                                <th>Entidad</th>
+                                <th>Campos</th>
+                                <th>Ruta / IP</th>
+                                <th class="text-end">Detalle</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in itemsPagina)
+                            {
+                                <tr>
+                                    <td data-label="Fecha">
+                                        <div class="cell-stack">
+                                            <strong>@item.Fecha.ToString("dd/MM/yyyy")</strong>
+                                            <span>@item.Fecha.ToString("HH:mm:ss")</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Usuario">
+                                        <div class="cell-stack">
+                                            <strong>@item.UsuarioNombre</strong>
+                                            <span>@item.UsuarioSecundario</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Accion">
+                                        <span class="action-pill @ObtenerClaseAccion(item.Accion)">
+                                            @item.Accion
+                                        </span>
+                                    </td>
+                                    <td data-label="Entidad">
+                                        <div class="cell-stack">
+                                            <strong>@item.Entidad</strong>
+                                            <span>@item.Tabla</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Campos">
+                                        <span>@item.CamposAfectadosResumen</span>
+                                    </td>
+                                    <td data-label="Ruta / IP">
+                                        <div class="cell-stack">
+                                            <strong>@item.Ruta</strong>
+                                            <span>@item.DireccionIp</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Detalle" class="text-end">
+                                        <button type="button" class="detail-btn" @onclick="() => AbrirDetalle(item)">
+                                            Detalle
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-footer">
+                    <span>Mostrando @itemsPagina.Count de @itemsFiltrados.Count evento(s).</span>
+
+                    <div class="pager-group">
+                        <button type="button" class="pager-btn" @onclick="PaginaAnterior" disabled="@(paginaActual <= 1)">Anterior</button>
+                        <span>Pagina @paginaActual de @TotalPaginas</span>
+                        <button type="button" class="pager-btn" @onclick="PaginaSiguiente" disabled="@(paginaActual >= TotalPaginas)">Siguiente</button>
+                    </div>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@if (mostrarDetalle && auditoriaSeleccionada is not null)
+{
+    <div class="audit-modal-backdrop"></div>
+    <div class="audit-modal" role="dialog" aria-modal="true">
+        <div class="audit-modal-content">
+            <div class="audit-modal-header">
+                <div>
+                    <span class="section-kicker">Detalle de auditoria</span>
+                    <h3>Evento #@auditoriaSeleccionada.IdAuditoria</h3>
+                    <p class="modal-subtitle">@auditoriaSeleccionada.Accion | @auditoriaSeleccionada.Entidad | @auditoriaSeleccionada.Fecha.ToString("dd/MM/yyyy HH:mm:ss")</p>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarDetalle" aria-label="Cerrar">
+                    <i class="ri-close-line"></i>
+                </button>
+            </div>
+
+            <div class="audit-modal-body">
+                <div class="detail-grid">
+                    <article class="detail-card">
+                        <span>Usuario</span>
+                        <strong>@auditoriaSeleccionada.UsuarioNombre</strong>
+                        <small>@auditoriaSeleccionada.UsuarioSecundario</small>
+                    </article>
+
+                    <article class="detail-card">
+                        <span>Tabla</span>
+                        <strong>@auditoriaSeleccionada.Tabla</strong>
+                        <small>@auditoriaSeleccionada.Entidad</small>
+                    </article>
+
+                    <article class="detail-card">
+                        <span>Ruta</span>
+                        <strong>@auditoriaSeleccionada.Ruta</strong>
+                        <small>@auditoriaSeleccionada.DireccionIp</small>
+                    </article>
+
+                    <article class="detail-card">
+                        <span>Campos</span>
+                        <strong>@auditoriaSeleccionada.CamposAfectadosResumen</strong>
+                        <small>Campos impactados</small>
+                    </article>
+
+                    <article class="detail-card detail-card-wide">
+                        <span>Valores previos</span>
+                        <div class="json-block"><pre>@auditoriaSeleccionada.ValoresPreviosPretty</pre></div>
+                    </article>
+
+                    <article class="detail-card detail-card-wide">
+                        <span>Valor nuevo</span>
+                        <div class="json-block"><pre>@auditoriaSeleccionada.ValorNuevoPretty</pre></div>
+                    </article>
+
+                    <article class="detail-card detail-card-wide">
+                        <span>Detalles</span>
+                        <div class="json-block"><pre>@auditoriaSeleccionada.DetallesPretty</pre></div>
+                    </article>
+                </div>
+            </div>
+
+            <div class="audit-modal-footer">
+                <button type="button" class="hero-btn hero-btn-secondary" @onclick="CerrarDetalle">
+                    Cerrar ventana
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private const int PageSize = 15;
+
+    private List<AuditoriaVistaItem> auditorias = new();
+    private bool cargando = true;
+    private int paginaActual = 1;
+    private string accionFiltro = string.Empty;
+    private string textoFiltro = string.Empty;
+    private string usuarioFiltro = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+    private bool mostrarDetalle;
+    private AuditoriaVistaItem? auditoriaSeleccionada;
+
+    private string FechaDesdeInputValue
+    {
+        get => fechaDesde?.ToString("yyyy-MM-dd") ?? string.Empty;
+        set => fechaDesde = DateTime.TryParse(value, out var fecha) ? fecha.Date : null;
+    }
+
+    private string FechaHastaInputValue
+    {
+        get => fechaHasta?.ToString("yyyy-MM-dd") ?? string.Empty;
+        set => fechaHasta = DateTime.TryParse(value, out var fecha) ? fecha.Date : null;
+    }
+
+    private List<string> AccionesDisponibles => auditorias
+        .Select(x => x.Accion)
+        .Where(x => !string.IsNullOrWhiteSpace(x))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x)
+        .ToList();
+
+    private List<AuditoriaVistaItem> AuditoriasFiltradas => AplicarFiltros(auditorias);
+
+    private List<AuditoriaVistaItem> AuditoriasPagina => AuditoriasFiltradas
+        .Skip((paginaActual - 1) * PageSize)
+        .Take(PageSize)
+        .ToList();
+
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(AuditoriasFiltradas.Count / (double)PageSize));
+
+    private string ResumenFechas
+    {
+        get
+        {
+            if (fechaDesde.HasValue || fechaHasta.HasValue)
+            {
+                return $"{(fechaDesde?.ToString("dd/MM/yyyy") ?? "inicio")} a {(fechaHasta?.ToString("dd/MM/yyyy") ?? "hoy")}";
+            }
+
+            return "Todos los periodos visibles";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (!(authState.User.Identity?.IsAuthenticated ?? false))
+        {
+            Navigation.NavigateTo("/", true);
+            return;
+        }
+
+        await RecargarAsync();
+    }
+
+    private async Task RecargarAsync()
+    {
+        cargando = true;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var data = await context.Auditorias
+            .AsNoTracking()
+            .Include(x => x.Usuario)
+            .OrderByDescending(x => x.Fecha)
+            .ThenByDescending(x => x.IdAuditoria)
+            .ToListAsync();
+
+        auditorias = data.Select(MapearAuditoria).ToList();
+        paginaActual = 1;
+        cargando = false;
+    }
+
+    private Task OnFiltersChanged()
+    {
+        paginaActual = 1;
+        return Task.CompletedTask;
+    }
+
+    private Task OnFechaDesdeChanged(ChangeEventArgs args)
+    {
+        FechaDesdeInputValue = Convert.ToString(args.Value) ?? string.Empty;
+        return OnFiltersChanged();
+    }
+
+    private Task OnFechaHastaChanged(ChangeEventArgs args)
+    {
+        FechaHastaInputValue = Convert.ToString(args.Value) ?? string.Empty;
+        return OnFiltersChanged();
+    }
+
+    private void LimpiarFiltros()
+    {
+        accionFiltro = string.Empty;
+        textoFiltro = string.Empty;
+        usuarioFiltro = string.Empty;
+        fechaDesde = null;
+        fechaHasta = null;
+        paginaActual = 1;
+    }
+
+    private void PaginaAnterior()
+    {
+        if (paginaActual > 1)
+        {
+            paginaActual--;
+        }
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (paginaActual < TotalPaginas)
+        {
+            paginaActual++;
+        }
+    }
+
+    private void AbrirDetalle(AuditoriaVistaItem item)
+    {
+        auditoriaSeleccionada = item;
+        mostrarDetalle = true;
+    }
+
+    private void CerrarDetalle()
+    {
+        mostrarDetalle = false;
+        auditoriaSeleccionada = null;
+    }
+
+    private List<AuditoriaVistaItem> AplicarFiltros(IEnumerable<AuditoriaVistaItem> origen)
+    {
+        var query = origen.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(accionFiltro))
+        {
+            query = query.Where(x => string.Equals(x.Accion, accionFiltro, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (fechaDesde.HasValue)
+        {
+            query = query.Where(x => x.Fecha.Date >= fechaDesde.Value.Date);
+        }
+
+        if (fechaHasta.HasValue)
+        {
+            query = query.Where(x => x.Fecha.Date <= fechaHasta.Value.Date);
+        }
+
+        if (!string.IsNullOrWhiteSpace(usuarioFiltro))
+        {
+            var filtro = usuarioFiltro.Trim();
+            query = query.Where(x =>
+                x.UsuarioNombre.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                x.UsuarioSecundario.Contains(filtro, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(textoFiltro))
+        {
+            var filtro = textoFiltro.Trim();
+            query = query.Where(x =>
+                x.Accion.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                x.Entidad.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                x.Tabla.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                x.CamposAfectadosResumen.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                x.Ruta.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                x.DireccionIp.Contains(filtro, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return query
+            .OrderByDescending(x => x.Fecha)
+            .ThenByDescending(x => x.IdAuditoria)
+            .ToList();
+    }
+
+    private static AuditoriaVistaItem MapearAuditoria(Auditoria auditoria)
+    {
+        var entidad = LeerValorDetalle(auditoria.Detalles, "Entidad");
+        var tabla = LeerValorDetalle(auditoria.Detalles, "Tabla");
+        var ruta = LeerValorDetalle(auditoria.Detalles, "Ruta");
+        var direccionIp = LeerValorDetalle(auditoria.Detalles, "DireccionIP");
+        var campos = LeerCamposAfectados(auditoria.Detalles);
+        var usuarioNombre = auditoria.Usuario?.NombreCompleto;
+
+        return new AuditoriaVistaItem
+        {
+            IdAuditoria = auditoria.IdAuditoria,
+            Fecha = auditoria.Fecha,
+            Accion = string.IsNullOrWhiteSpace(auditoria.Accion) ? "SIN_ACCION" : auditoria.Accion.Trim(),
+            UsuarioNombre = string.IsNullOrWhiteSpace(usuarioNombre) ? "Sistema / proceso" : usuarioNombre.Trim(),
+            UsuarioSecundario = auditoria.IdUsuario.HasValue
+                ? $"IdUsuario {auditoria.IdUsuario.Value} | {ValorOrDash(auditoria.Usuario?.Email)}"
+                : "Sin usuario asociado",
+            Entidad = string.IsNullOrWhiteSpace(entidad) ? "No identificada" : entidad,
+            Tabla = string.IsNullOrWhiteSpace(tabla) ? "Sin tabla" : tabla,
+            CamposAfectadosResumen = campos.Count == 0 ? "Sin detalle de campos" : string.Join(", ", campos),
+            Ruta = string.IsNullOrWhiteSpace(ruta) ? "Sin ruta" : ruta,
+            DireccionIp = string.IsNullOrWhiteSpace(direccionIp) ? "Sin IP" : direccionIp,
+            ValoresPreviosPretty = PrettyJson(auditoria.ValoresPrevios),
+            ValorNuevoPretty = PrettyJson(auditoria.ValorNuevo),
+            DetallesPretty = PrettyJson(auditoria.Detalles)
+        };
+    }
+
+    private static string LeerValorDetalle(string? json, string propiedad)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return string.Empty;
+            }
+
+            if (!document.RootElement.TryGetProperty(propiedad, out var valor))
+            {
+                return string.Empty;
+            }
+
+            return valor.ValueKind switch
+            {
+                JsonValueKind.String => valor.GetString() ?? string.Empty,
+                JsonValueKind.Number => valor.ToString(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => valor.ToString()
+            };
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static List<string> LeerCamposAfectados(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return new List<string>();
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("CamposAfectados", out var campos) ||
+                campos.ValueKind != JsonValueKind.Array)
+            {
+                return new List<string>();
+            }
+
+            return campos.EnumerateArray()
+                .Select(x => x.GetString())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!.Trim())
+                .ToList();
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    private static string PrettyJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return "Sin datos registrados.";
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    private static string ValorOrDash(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
+
+    private static string ObtenerClaseAccion(string accion)
+    {
+        if (accion.Contains("CREAR", StringComparison.OrdinalIgnoreCase))
+        {
+            return "action-ok";
+        }
+
+        if (accion.Contains("ELIMINAR", StringComparison.OrdinalIgnoreCase))
+        {
+            return "action-danger";
+        }
+
+        if (accion.Contains("MODIFICAR", StringComparison.OrdinalIgnoreCase))
+        {
+            return "action-warn";
+        }
+
+        return "action-info";
+    }
+
+    private sealed class AuditoriaVistaItem
+    {
+        public int IdAuditoria { get; init; }
+        public DateTime Fecha { get; init; }
+        public string Accion { get; init; } = string.Empty;
+        public string UsuarioNombre { get; init; } = string.Empty;
+        public string UsuarioSecundario { get; init; } = string.Empty;
+        public string Entidad { get; init; } = string.Empty;
+        public string Tabla { get; init; } = string.Empty;
+        public string CamposAfectadosResumen { get; init; } = string.Empty;
+        public string Ruta { get; init; } = string.Empty;
+        public string DireccionIp { get; init; } = string.Empty;
+        public string ValoresPreviosPretty { get; init; } = string.Empty;
+        public string ValorNuevoPretty { get; init; } = string.Empty;
+        public string DetallesPretty { get; init; } = string.Empty;
+    }
+}

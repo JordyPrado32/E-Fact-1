@@ -1,0 +1,745 @@
+@page "/e-contax/perfil"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
+@using Simetric.Auth
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using Simetric.ViewModels
+@using System.IO
+@using Simetric.Data
+@using Microsoft.EntityFrameworkCore
+@inject IUsuarioService UsuarioService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IWebHostEnvironment Env
+@inject AuthenticationStateProvider AuthStateProvider
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+@{
+    var nombreCompleto = GetNombreCompleto();
+}
+
+<PageTitle>Mi Perfil | @PageBrandTitle</PageTitle>
+
+<div class="profile-shell @(IsEContaxContext ? "profile-shell-econtax" : string.Empty)" data-tour="perfil.page">
+    @if (perfil == null)
+    {
+        <section class="profile-state-card">
+            <div class="profile-state-icon">
+                <span class="spinner-border text-primary" role="status"></span>
+            </div>
+            <h3>Cargando tu perfil</h3>
+            <p>Preparando tu informacion.</p>
+        </section>
+    }
+    else
+    {
+        <EditForm Model="@perfil" OnValidSubmit="GuardarCambios">
+            <DataAnnotationsValidator />
+
+            <div class="profile-grid">
+                <aside class="profile-aside-card" data-tour="perfil.avatar">
+                    <div class="profile-panel-head">
+                        <div>
+                            <span class="panel-kicker">Avatar</span>
+                            <h3>Imagen</h3>
+                        </div>
+
+                        <span class="profile-pill">@GetAvatarCountLabel()</span>
+                    </div>
+
+                    <div class="profile-avatar-stage">
+                        <div class="profile-avatar-frame">
+                            <img src="@GetAvatarPreviewSrc()" class="profile-avatar-preview" alt="Vista previa del avatar" />
+                        </div>
+
+                        <div class="profile-avatar-copy">
+                            <strong>@nombreCompleto</strong>
+                            <span>@GetAvatarCaption()</span>
+                        </div>
+                    </div>
+
+                    <div class="profile-avatar-library">
+                        <div class="profile-section-head">
+                            <h4>Seleccion</h4>
+                            <span class="profile-section-caption">Biblioteca</span>
+                        </div>
+
+                        @if (listaAvatares.Any())
+                        {
+                            <div class="profile-avatar-grid">
+                                @{
+                                    var esInitialsActual = !string.IsNullOrWhiteSpace(perfil.AvatarUrl) && perfil.AvatarUrl.Contains("avatar_initials_");
+                                    var initialsPreview = GenerarSvgIniciales();
+                                }
+                                <button type="button"
+                                        title="Iniciales del nombre"
+                                        class="avatar-picker @(esInitialsActual ? "avatar-picker-active" : string.Empty)"
+                                        @onclick="() => SeleccionarAvatarInitials()">
+                                    <img src="@initialsPreview" alt="Iniciales" />
+                                </button>
+                                @foreach (var imgNombre in listaAvatares)
+                                {
+                                    var rutaRelativa = $"images/Avatars/{imgNombre}";
+                                    var avatarSrc = $"/images/Avatars/{imgNombre}";
+                                    var esAvatarActual = string.Equals(perfil.AvatarUrl, rutaRelativa, StringComparison.OrdinalIgnoreCase);
+
+                                    <button type="button"
+                                            title="@imgNombre"
+                                            class="avatar-picker @(esAvatarActual ? "avatar-picker-active" : string.Empty)"
+                                            @onclick="() => SeleccionarAvatar(imgNombre)">
+                                        <img src="@avatarSrc" alt="Avatar disponible @imgNombre" />
+                                    </button>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="profile-avatar-empty">
+                                <i class="bi bi-images"></i>
+                                <span>Sin avatares disponibles.</span>
+                            </div>
+                        }
+                    </div>
+                </aside>
+
+                <section class="profile-form-card" data-tour="perfil.form">
+                    <div class="profile-panel-head profile-panel-head-form">
+                        <div>
+                            <span class="panel-kicker">Cuenta</span>
+                            <h3>Informacion</h3>
+                        </div>
+                    </div>
+
+                    <ValidationSummary class="profile-validation" />
+
+                    <div class="profile-form-grid">
+                        <div class="profile-field-card profile-field-wide profile-field-card-readonly">
+                            <div class="profile-field-top">
+                                <label class="profile-field-label">Correo electronico</label>
+                                
+                            </div>
+
+                            <div class="profile-input-shell profile-input-shell-readonly">
+                                <span class="profile-input-icon">
+                                    <i class="bi bi-envelope-paper-heart"></i>
+                                </span>
+                                <input type="text" class="profile-field-input profile-field-input-readonly" value="@perfil.Email" readonly />
+                            </div>
+                        </div>
+
+                        <div class="profile-field-card profile-field-wide profile-field-card-readonly">
+                            <div class="profile-field-top">
+                                <label class="profile-field-label">Identificación (Cédula o RUC)</label>
+                            </div>
+
+                            <div class="profile-input-shell profile-input-shell-readonly">
+                                <span class="profile-input-icon">
+                                    <i class="bi bi-card-text"></i>
+                                </span>
+                                <input type="text" class="profile-field-input profile-field-input-readonly" value="@perfil.Identificacion" readonly />
+                            </div>
+                        </div>
+
+                        <div class="profile-field-card">
+                            <div class="profile-field-top">
+                                <label class="profile-field-label">Nombres</label>
+                                
+                            </div>
+
+                            <div class="profile-input-shell">
+                                <span class="profile-input-icon">
+                                    <i class="bi bi-person-badge"></i>
+                                </span>
+                                <InputText @bind-Value="perfil.Nombres" class="profile-field-input" maxlength="60" />
+                            </div>
+
+                            <ValidationMessage For="@(() => perfil.Nombres)" class="profile-field-error" />
+                        </div>
+
+                        <div class="profile-field-card">
+                            <div class="profile-field-top">
+                                <label class="profile-field-label">Apellidos</label>
+                                
+                            </div>
+
+                            <div class="profile-input-shell">
+                                <span class="profile-input-icon">
+                                    <i class="bi bi-person-vcard"></i>
+                                </span>
+                                <InputText @bind-Value="perfil.Apellidos" class="profile-field-input" maxlength="60" />
+                            </div>
+
+                            <ValidationMessage For="@(() => perfil.Apellidos)" class="profile-field-error" />
+                        </div>
+
+                        <div class="profile-field-card profile-field-wide">
+                            <div class="profile-field-top">
+                                <label class="profile-field-label">Fecha de nacimiento</label>
+                            </div>
+
+                            <div class="profile-input-shell">
+                                <span class="profile-input-icon">
+                                    <i class="bi bi-calendar3"></i>
+                                </span>
+                                <InputDate @bind-Value="perfil.FechaNacimiento"
+                                           class="profile-field-input"
+                                           min="@FechaNacimientoMinima"
+                                           max="@FechaNacimientoMaxima" />
+                            </div>
+
+                            <ValidationMessage For="@(() => perfil.FechaNacimiento)" class="profile-field-error" />
+                        </div>
+
+                        <div class="profile-field-card profile-field-wide">
+                            <div class="profile-field-top">
+                                <label class="profile-field-label">Tipo de Cliente</label>
+                            </div>
+
+                            <div class="profile-input-shell">
+                                <span class="profile-input-icon">
+                                    <i class="bi bi-person-workspace"></i>
+                                </span>
+                                <InputSelect @bind-Value="perfil.TipoCliente" class="profile-field-input">
+                                    <option value="">Seleccione tipo de cliente...</option>
+                                    @foreach (var tc in tipoClientesList)
+                                    {
+                                        <option value="@tc.TclCodigo">@tc.TclDescripcion</option>
+                                    }
+                                </InputSelect>
+                            </div>
+
+                            <ValidationMessage For="@(() => perfil.TipoCliente)" class="profile-field-error" />
+                        </div>
+                    </div>
+
+                    <section class="profile-security-card" data-tour="perfil.security">
+                        <div class="profile-security-head">
+                            <div>
+                                <span class="panel-kicker">Seguridad</span>
+                                <h4>Clave de acceso</h4>
+                            </div>
+
+                            <div class="profile-security-controls">
+                                <span class="profile-security-badge @(cambiarPassword ? "profile-security-badge-active" : string.Empty)">
+                                    @GetEstadoSeguridad()
+                                </span>
+
+                                <label class="profile-toggle">
+                                    <input type="checkbox" @bind="cambiarPassword" />
+                                    <span class="profile-toggle-track"></span>
+                                    <span class="profile-toggle-label">Cambiar</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        @if (cambiarPassword)
+                        {
+                            <div class="profile-password-grid">
+                                <div class="profile-field-card">
+                                    <div class="profile-field-top">
+                                        <label class="profile-field-label">Nueva contraseña</label>
+                                        <span class="profile-field-tag">Privada</span>
+                                    </div>
+
+                                    <div class="profile-input-shell">
+                                        <span class="profile-input-icon">
+                                            <i class="bi bi-shield-lock"></i>
+                                        </span>
+                                        <InputText @bind-Value="perfil.NuevaPassword" type="password" class="profile-field-input" />
+                                    </div>
+
+                                    <ValidationMessage For="@(() => perfil.NuevaPassword)" class="profile-field-error" />
+                                </div>
+
+                                <div class="profile-field-card">
+                                    <div class="profile-field-top">
+                                        <label class="profile-field-label">Confirmar contraseña</label>
+                                        <span class="profile-field-tag">Verificar</span>
+                                    </div>
+
+                                    <div class="profile-input-shell">
+                                        <span class="profile-input-icon">
+                                            <i class="bi bi-patch-check"></i>
+                                        </span>
+                                        <InputText @bind-Value="perfil.ConfirmarPassword" type="password" class="profile-field-input" />
+                                    </div>
+
+                                    <ValidationMessage For="@(() => perfil.ConfirmarPassword)" class="profile-field-error" />
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="profile-security-placeholder">
+                                <div class="profile-security-placeholder-icon">
+                                    <i class="bi bi-shield-check"></i>
+                                </div>
+
+                                <div class="profile-security-placeholder-copy">
+                                    <strong>Sin cambios en contraseña</strong>
+                                    <span></span>
+                                </div>
+                            </div>
+                        }
+                    </section>
+
+                    <div class="profile-form-footer" data-tour="perfil.save">
+                        
+
+                        <button type="submit" class="primary-btn profile-save-btn">
+                            <i class="bi bi-save2-fill"></i>
+                            <span>Guardar cambios</span>
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </EditForm>
+    }
+</div>
+
+@code {
+    private const string DefaultAvatarUrl = "/images/avatars/Avatar-Boy.jpg";
+    private bool IsEContaxContext => IsEContaxPath(Nav.Uri);
+    private string PageBrandTitle => IsEContaxContext ? "Numerica E-Contax" : "Numerica e-fact";
+
+    private PerfilViewModel? perfil;
+    private List<string> listaAvatares = new();
+    private List<Tipocliente> tipoClientesList = new();
+    private bool cambiarPassword;
+    private int? usuarioIdActual;
+    private bool esAdmin;
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var claimIdUsuario = authState.User.FindFirst("IdUsuario")?.Value;
+        var claimTipoUsuario = authState.User.FindFirst("IdTipoUsuario")?.Value;
+
+        // Validamos si el ID corresponde al administrador (Asumiendo que Admin es 1)
+        // Ajusta el "1" si tu ID de administrador en la base de datos es distinto
+        esAdmin = claimTipoUsuario == "2";
+        CargarListaAvatares();
+
+        
+        if (!int.TryParse(claimIdUsuario, out var idUsuario))
+        {
+            Nav.NavigateTo("/login");
+            return;
+        }
+
+        usuarioIdActual = idUsuario;
+        if (IsEContaxContext)
+        {
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        }
+
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            tipoClientesList = await context.Tipoclientes.OrderBy(tc => tc.TclCodigo).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al cargar tipos de cliente: {ex.Message}");
+        }
+
+        try
+        {
+            var userDb = await UsuarioService.ObtenerUsuarioPorId(idUsuario);
+            if (userDb is not null)
+            {
+                perfil = new PerfilViewModel
+                {
+                    Nombres = userDb.Nombres,
+                    Apellidos = userDb.Apellidos,
+                    Email = userDb.Email,
+                    AvatarUrl = userDb.AvatarUrl,
+                    FechaNacimiento = userDb.FechaNacimiento,
+                    FotoByte = userDb.FirmaElectronica,
+                    Identificacion = userDb.Identificacion,
+                    TipoCliente = userDb.TipoCliente
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al cargar datos: {ex.Message}");
+        }
+    }
+
+    private void CargarListaAvatares()
+    {
+        try
+        {
+            var folderPath = Path.Combine(Env.WebRootPath, "images", "Avatars");
+            if (Directory.Exists(folderPath))
+            {
+                // Nombre exacto del archivo que mencionaste
+                string avatarRestringido = "avatar_18e35752-9dbd-40a4-8c62-970a2dfc1dfb.png";
+
+                var archivos = Directory.GetFiles(folderPath)
+                    .Select(Path.GetFileName)
+                    .Where(f => !string.IsNullOrEmpty(f) &&
+                                !f.Equals("Avatar-Boy.jpg", StringComparison.OrdinalIgnoreCase) &&
+                                (f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                                 f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                                 f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)));
+
+                // FILTRO: Si NO es administrador, excluimos el avatar restringido
+                if (!esAdmin)
+                {
+                    archivos = archivos.Where(f => f != null && !f.Equals(avatarRestringido, StringComparison.OrdinalIgnoreCase));
+                }
+
+                listaAvatares = archivos
+                    .OrderByDescending(f => f != null && f.StartsWith("Bandera-", StringComparison.OrdinalIgnoreCase))
+                    .ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
+                    .ToList()!;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al cargar avatares: {ex.Message}");
+        }
+    }
+
+    private async Task SeleccionarAvatar(string nombreArchivo)
+    {
+        if (perfil is null || usuarioIdActual is null)
+        {
+            return;
+        }
+
+        perfil.AvatarUrl = $"images/Avatars/{nombreArchivo}";
+        perfil.FotoByte = null;
+        var actualizado = await UsuarioService.ActualizarAvatar(usuarioIdActual.Value, perfil.AvatarUrl);
+        if (!actualizado)
+        {
+            await JS.InvokeVoidAsync("Swal.fire", "Error", "No se pudo actualizar el avatar.", "error");
+            return;
+        }
+
+        var usuarioActualizado = await UsuarioService.ObtenerUsuarioPorId(usuarioIdActual.Value);
+        if (usuarioActualizado is not null && AuthStateProvider is CustomAuthStateProvider authProvider)
+        {
+            await authProvider.UpdateAuthenticationState(usuarioActualizado);
+        }
+
+        await JS.InvokeVoidAsync("Swal.fire", "¡Éxito!", "Avatar actualizado correctamente.", "success");
+    }
+
+    private async Task GuardarCambios()
+    {
+        if (perfil == null || usuarioIdActual is null)
+        {
+             return; 
+    }
+
+        // Alerta de confirmación
+        var result = await JS.InvokeAsync<SweetAlertResult>("Swal.fire", new
+        {
+            title = "¿Guardar cambios?",
+            text = "Se actualizará la información de tu perfil.",
+            icon = "question",
+            showCancelButton = true,
+            confirmButtonText = "Sí, guardar",
+            cancelButtonText = "Cancelar",
+            confirmButtonColor = "#00A896",
+            cancelButtonColor = "#d33"
+        });
+
+        // Si el usuario confirma, procedemos con la lógica existente
+        if (result.IsConfirmed)
+        {
+            if (!cambiarPassword)
+            {
+                 perfil.NuevaPassword = null; 
+             perfil.ConfirmarPassword = null; 
+        }
+
+             perfil.Nombres = NormalizarTexto(perfil.Nombres); 
+         perfil.Apellidos = NormalizarTexto(perfil.Apellidos); 
+
+            if (!string.IsNullOrWhiteSpace(perfil.AvatarUrl) && perfil.AvatarUrl.Contains("avatar_initials_"))
+            {
+                try
+                {
+                    var initials = GetInitials();
+                    var bgColor = GetBackgroundColorForInitials(initials);
+                    var svgContent = $"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'>" +
+                                     $"<rect width='100' height='100' fill='{bgColor}'/>" +
+                                     $"<text x='50%' y='55%' font-family='Arial, sans-serif' font-size='40' font-weight='bold' fill='#ffffff' text-anchor='middle' dominant-baseline='middle'>{initials}</text>" +
+                                     $"</svg>";
+
+                    var uploadsFolder = Path.Combine(Env.WebRootPath, "images", "Avatars", "uploads");
+                    var uniqueName = $"avatar_initials_{usuarioIdActual}_{Guid.NewGuid()}.svg";
+                    var newFilePath = Path.Combine(uploadsFolder, uniqueName);
+
+                    await File.WriteAllTextAsync(newFilePath, svgContent, System.Text.Encoding.UTF8);
+
+                    try
+                    {
+                        var oldPath = Path.Combine(Env.WebRootPath, perfil.AvatarUrl.TrimStart('/'));
+                        if (File.Exists(oldPath))
+                        {
+                            File.Delete(oldPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error al eliminar avatar anterior al regenerar: {ex.Message}");
+                    }
+
+                    perfil.AvatarUrl = $"images/Avatars/uploads/{uniqueName}";
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error al regenerar avatar con iniciales tras cambio de nombre: {ex.Message}");
+                }
+            }
+
+         var exito = await UsuarioService.ActualizarPerfil(usuarioIdActual.Value, perfil); 
+
+        if (exito)
+            {
+                 var usuarioActualizado = await UsuarioService.ObtenerUsuarioPorId(usuarioIdActual.Value); 
+            if (usuarioActualizado is not null && AuthStateProvider is CustomAuthStateProvider authProvider)
+                {
+                     await authProvider.UpdateAuthenticationState(usuarioActualizado); 
+            }
+
+                 await JS.InvokeVoidAsync("Swal.fire", "¡Éxito!", "Perfil actualizado correctamente.", "success"); 
+             cambiarPassword = false; 
+        }
+            else
+            {
+                 await JS.InvokeVoidAsync("Swal.fire", "Error", "No se pudo actualizar el perfil.", "error");
+        }
+        }
+    }
+    public class SweetAlertResult
+    {
+        public bool IsConfirmed { get; set; }
+        public bool IsDenied { get; set; }
+        public bool IsDismissed { get; set; }
+    }
+    private string GetNombreCompleto()
+    {
+        if (perfil is null)
+        {
+            return "Tu cuenta";
+        }
+
+        return string.Join(" ", new[] { perfil.Nombres, perfil.Apellidos }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+    }
+
+    private string GetEstadoAvatar()
+    {
+        if (string.IsNullOrWhiteSpace(perfil?.AvatarUrl) ||
+            perfil.AvatarUrl.EndsWith("default.png", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Base";
+        }
+
+        return "Activo";
+    }
+
+    private string GetEstadoSeguridad() => cambiarPassword ? "Editando" : "Estable";
+
+    private string FechaNacimientoMinima => "1920-01-01";
+
+    private string FechaNacimientoMaxima => DateTime.Today.AddYears(-18).ToString("yyyy-MM-dd");
+
+    private string GetAvatarCountLabel() =>
+        listaAvatares.Count == 1 ? "1 opcion" : $"{listaAvatares.Count} opciones";
+
+    private string GetAvatarCaption()
+    {
+        if (string.IsNullOrWhiteSpace(perfil?.AvatarUrl) ||
+            perfil.AvatarUrl.EndsWith("default.png", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Avatar base";
+        }
+
+        return "Avatar seleccionado";
+    }
+
+    private string GetAvatarPreviewSrc()
+    {
+        if (!string.IsNullOrWhiteSpace(perfil?.AvatarUrl))
+        {
+            return ResolveAvatarUrl(perfil.AvatarUrl);
+        }
+
+        if (perfil?.FotoByte is { Length: > 0 })
+        {
+            return $"data:image/png;base64,{Convert.ToBase64String(perfil.FotoByte)}";
+        }
+
+        return DefaultAvatarUrl;
+    }
+
+    private string GetInitials()
+    {
+        var firstInit = string.Empty;
+        var lastInit = string.Empty;
+
+        if (perfil is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(perfil.Nombres))
+            {
+                var parts = perfil.Nombres.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    firstInit = parts[0][0].ToString().ToUpper();
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(perfil.Apellidos))
+            {
+                var parts = perfil.Apellidos.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    lastInit = parts[0][0].ToString().ToUpper();
+                }
+            }
+        }
+
+        var initials = firstInit + lastInit;
+        return string.IsNullOrWhiteSpace(initials) ? "?" : initials;
+    }
+
+    private string GetBackgroundColorForInitials(string initials)
+    {
+        string[] premiumColors = new[] {
+            "#006bb5", // n-blue
+            "#2c3e50", // n-dark
+            "#e67e22", // orange
+            "#27ae60", // green
+            "#9b59b6", // purple
+            "#e74c3c", // red
+            "#1abc9c", // turquoise
+            "#34495e", // wet asphalt
+            "#2980b9", // belize hole
+            "#8e44ad"  // wisteria
+        };
+        int hash = 0;
+        foreach (char c in initials)
+        {
+            hash += c;
+        }
+        return premiumColors[Math.Abs(hash) % premiumColors.Length];
+    }
+
+    private string GenerarSvgIniciales()
+    {
+        var initials = GetInitials();
+        var bgColor = GetBackgroundColorForInitials(initials);
+        
+        var svg = $"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'>" +
+                  $"<rect width='100' height='100' fill='{bgColor}'/>" +
+                  $"<text x='50%' y='55%' font-family='Arial, sans-serif' font-size='40' font-weight='bold' fill='#ffffff' text-anchor='middle' dominant-baseline='middle'>{initials}</text>" +
+                  $"</svg>";
+        
+        var base64Svg = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg));
+        return $"data:image/svg+xml;base64,{base64Svg}";
+    }
+
+    private async Task SeleccionarAvatarInitials()
+    {
+        if (perfil is null || usuarioIdActual is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var initials = GetInitials();
+            var bgColor = GetBackgroundColorForInitials(initials);
+            var svgContent = $"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'>" +
+                             $"<rect width='100' height='100' fill='{bgColor}'/>" +
+                             $"<text x='50%' y='55%' font-family='Arial, sans-serif' font-size='40' font-weight='bold' fill='#ffffff' text-anchor='middle' dominant-baseline='middle'>{initials}</text>" +
+                             $"</svg>";
+
+            var uploadsFolder = Path.Combine(Env.WebRootPath, "images", "Avatars", "uploads");
+            if (!Directory.Exists(uploadsFolder))
+            {
+                Directory.CreateDirectory(uploadsFolder);
+            }
+
+            // Eliminar avatar anterior del usuario si ya era uno subido físicamente para no acumular basura
+            if (!string.IsNullOrWhiteSpace(perfil.AvatarUrl) && perfil.AvatarUrl.Contains("images/Avatars/uploads/"))
+            {
+                try
+                {
+                    var oldPath = Path.Combine(Env.WebRootPath, perfil.AvatarUrl.TrimStart('/'));
+                    if (File.Exists(oldPath))
+                    {
+                        File.Delete(oldPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error al eliminar avatar anterior: {ex.Message}");
+                }
+            }
+
+            var uniqueName = $"avatar_initials_{usuarioIdActual}_{Guid.NewGuid()}.svg";
+            var filePath = Path.Combine(uploadsFolder, uniqueName);
+            
+            await File.WriteAllTextAsync(filePath, svgContent, System.Text.Encoding.UTF8);
+            
+            perfil.AvatarUrl = $"images/Avatars/uploads/{uniqueName}";
+            perfil.FotoByte = null;
+
+            var actualizado = await UsuarioService.ActualizarAvatar(usuarioIdActual.Value, perfil.AvatarUrl);
+            if (!actualizado)
+            {
+                await JS.InvokeVoidAsync("Swal.fire", "Error", "No se pudo actualizar el avatar con las iniciales.", "error");
+                return;
+            }
+
+            var usuarioActualizado = await UsuarioService.ObtenerUsuarioPorId(usuarioIdActual.Value);
+            if (usuarioActualizado is not null && AuthStateProvider is CustomAuthStateProvider authProvider)
+            {
+                await authProvider.UpdateAuthenticationState(usuarioActualizado);
+            }
+
+            await JS.InvokeVoidAsync("Swal.fire", "¡Éxito!", "Avatar actualizado con iniciales correctamente.", "success");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al generar archivo de avatar con iniciales: {ex.Message}");
+            await JS.InvokeVoidAsync("Swal.fire", "Error", "No se pudo generar el avatar con iniciales.", "error");
+        }
+    }
+
+    private static string ResolveAvatarUrl(string? avatarUrl)
+    {
+        if (string.IsNullOrWhiteSpace(avatarUrl))
+        {
+            return DefaultAvatarUrl;
+        }
+
+        if (avatarUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            avatarUrl.StartsWith("/", StringComparison.Ordinal))
+        {
+            return avatarUrl;
+        }
+
+        return avatarUrl.StartsWith("images/", StringComparison.OrdinalIgnoreCase)
+            ? $"/{avatarUrl}"
+            : avatarUrl;
+    }
+
+    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(Nav, location);
+
+    private static string NormalizarTexto(string? texto) =>
+        string.Join(
+            " ",
+            (texto ?? string.Empty)
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+}

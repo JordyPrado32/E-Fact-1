@@ -1,0 +1,391 @@
+@page "/configuracion/mfa"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
+@using Simetric.Data
+@using Microsoft.EntityFrameworkCore
+@using OtpNet
+@using QRCoder
+@using System.Security.Claims
+@using Simetric.Services
+
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject SecurityService Security
+
+<PageTitle>Configuracion MFA | Numerica e-fact</PageTitle>
+
+@{
+    var isMfaActive = userInDb?.MfaHabilitado == true;
+    var stageDescription = isMfaActive
+        ? "La verificacion adicional ya esta aplicada en la cuenta."
+        : step == 2
+            ? "Falta validar el primer codigo generado por la app."
+            : "Puedes activarla ahora mismo sin hacer scroll adicional.";
+}
+
+<div class="mfa-shell-page" data-tour="mfa.page">
+    <section class="mfa-hero" data-tour="mfa.hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Seguridad avanzada</span>
+            <h2>Autenticacion multifactor</h2>
+            <p>
+                Activa o desactiva el segundo factor desde una vista breve, directa y sin
+                bloques de informacion innecesarios.
+            </p>
+        </div>
+
+        <div class="hero-status">
+            <article class="summary-card summary-card-primary">
+                <span class="summary-label">Estado</span>
+                <strong>@GetStatusTitle()</strong>
+                <small>@GetStatusDescription()</small>
+            </article>
+
+            <article class="summary-card">
+                <span class="summary-label">Etapa</span>
+                <strong>@GetCurrentStageLabel()</strong>
+                <small>@stageDescription</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="action-panel" data-tour="mfa.panel">
+        @if (userInDb == null)
+        {
+            <div class="state-card">
+                <div class="state-icon">
+                    <i class="ri-loader-4-line"></i>
+                </div>
+                <h3>@(string.IsNullOrWhiteSpace(errorMsg) ? "Preparando configuracion MFA" : "No se pudo cargar la configuracion")</h3>
+                <p>@(string.IsNullOrWhiteSpace(errorMsg) ? "Consultando la informacion del usuario y el estado actual del segundo factor." : errorMsg)</p>
+            </div>
+        }
+        else if (userInDb.MfaHabilitado == true)
+        {
+            <div class="action-card action-card-success">
+                <div class="action-card-head">
+                    <div class="status-orb status-orb-success">
+                        <i class="ri-shield-check-line"></i>
+                    </div>
+                    <div>
+                        <span class="panel-kicker">Proteccion activa</span>
+                        <h3>MFA ya esta habilitado</h3>
+                        <p>La cuenta requiere un codigo temporal al iniciar sesion.</p>
+                    </div>
+                </div>
+
+                <div class="quick-notes">
+                    <div class="security-note">
+                        <i class="ri-smartphone-line"></i>
+                        <span>Compatible con Google Authenticator, Microsoft Authenticator y cualquier app TOTP.</span>
+                    </div>
+                    <div class="security-note">
+                        <i class="ri-shield-star-line"></i>
+                        <span>Si lo desactivas, el acceso volvera a depender solo de la contrasena principal.</span>
+                    </div>
+                </div>
+
+                <div class="action-bar">
+                    <button type="button" class="danger-btn" data-tour="mfa.primary-action" @onclick="DesactivarMFA">
+                        <i class="ri-shield-cross-line"></i>
+                        <span>Desactivar MFA</span>
+                    </button>
+                </div>
+            </div>
+        }
+        else if (step == 1)
+        {
+            <div class="action-card">
+                <div class="action-card-head">
+                    <div class="status-orb status-orb-idle">
+                        <i class="ri-shield-keyhole-line"></i>
+                    </div>
+                    <div>
+                        <span class="panel-kicker">Activacion rapida</span>
+                        <h3>Activa MFA en menos de un minuto</h3>
+                        <p>Generaremos un QR para vincular tu aplicacion y luego validar un codigo de 6 digitos.</p>
+                    </div>
+                </div>
+
+                <div class="quick-notes">
+                    <div class="security-note">
+                        <i class="ri-qr-scan-2-line"></i>
+                        <span>Necesitas una aplicacion autenticadora compatible con codigos TOTP.</span>
+                    </div>
+                    <div class="security-note">
+                        <i class="ri-time-line"></i>
+                        <span>La activacion se completa en dos pasos y sin salir de esta pantalla.</span>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(errorMsg))
+                {
+                    <div class="status-banner status-banner-error">
+                        <i class="ri-error-warning-line"></i>
+                        <span>@errorMsg</span>
+                    </div>
+                }
+
+                <div class="action-bar">
+                    <button type="button" class="primary-btn" data-tour="mfa.primary-action" @onclick="IniciarConfiguracion">
+                        <i class="ri-arrow-right-line"></i>
+                        <span>Activar MFA</span>
+                    </button>
+                </div>
+            </div>
+        }
+        else if (step == 2)
+        {
+            <div class="action-card">
+                <div class="action-card-head action-card-head-split">
+                    <div>
+                        <span class="panel-kicker">Vinculacion</span>
+                        <h3>Escanea y confirma</h3>
+                        <p>Escanea el QR y valida el codigo actual para terminar la activacion.</p>
+                    </div>
+
+                    <button type="button" class="link-btn" @onclick="CancelarConfiguracion">
+                        <i class="ri-arrow-left-line"></i>
+                        <span>Cancelar</span>
+                    </button>
+                </div>
+
+                <div class="setup-grid" data-tour="mfa.setup">
+                    <section class="setup-step">
+                        <div class="step-chip">1</div>
+                        <h4>Escanea el QR</h4>
+                        <p>Registra este secreto en tu aplicacion autenticadora.</p>
+
+                        <div class="qr-shell">
+                            <img src="@qrCodeImage" alt="QR de configuracion MFA" />
+                        </div>
+
+                        <div class="secret-box">
+                            <span class="secret-label">Clave manual</span>
+                            <code>@secretKey</code>
+                        </div>
+                    </section>
+
+                    <section class="setup-step">
+                        <div class="step-chip">2</div>
+                        <h4>Ingresa el codigo</h4>
+                        <p>Escribe el codigo de 6 digitos generado por la app.</p>
+
+                        <div class="field-control">
+                            <span class="field-icon">
+                                <i class="ri-smartphone-line"></i>
+                            </span>
+                            <input @bind="verificationCode"
+                                   class="field-input field-input-with-icon otp-input"
+                                   placeholder="000000"
+                                   maxlength="6"
+                                   inputmode="numeric"
+                                   oninput="this.value = this.value.replace(/[^0-9]/g, '');" />
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(errorMsg))
+                        {
+                            <div class="status-banner status-banner-error">
+                                <i class="ri-error-warning-line"></i>
+                                <span>@errorMsg</span>
+                            </div>
+                        }
+
+                        <div class="action-bar">
+                            <button type="button"
+                                    class="primary-btn"
+                                    data-tour="mfa.primary-action"
+                                    @onclick="FinalizarConfiguracion"
+                                    disabled="@(verificationCode?.Length != 6)">
+                                <i class="ri-link"></i>
+                                <span>Confirmar activacion</span>
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private Usuario? userInDb;
+    private int step = 1;
+
+    private string? secretKey;
+    private string? qrCodeImage;
+    private string? verificationCode;
+    private string? errorMsg;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarDatosUsuario();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && userInDb == null)
+        {
+            await CargarDatosUsuario();
+            StateHasChanged();
+        }
+    }
+
+    private async Task CargarDatosUsuario()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity == null || !user.Identity.IsAuthenticated)
+            {
+                errorMsg = "No hay una sesion activa. Inicia sesion nuevamente.";
+                return;
+            }
+
+            var userIdClaim = user.FindFirst("UsuarioId")?.Value
+                ?? user.FindFirst("IdUsuario")?.Value
+                ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (int.TryParse(userIdClaim, out int id))
+            {
+                using var context = await DbFactory.CreateDbContextAsync();
+                userInDb = await context.Usuarios.AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.IdUsuario == id);
+            }
+        }
+        catch (Exception)
+        {
+            errorMsg = "Error al conectar con la base de datos.";
+        }
+    }
+
+    private async Task CancelarConfiguracion()
+    {
+        step = 1;
+        LimpiarVariables();
+        await Security.RegistrarLogInicioSesionAsync(userInDb?.IdUsuario, false, "MFA: configuracion cancelada");
+    }
+
+    private async Task IniciarConfiguracion()
+    {
+        errorMsg = null;
+        verificationCode = null;
+
+        try
+        {
+            if (userInDb == null)
+            {
+                return;
+            }
+
+            byte[] secretBytes = KeyGeneration.GenerateRandomKey(20);
+            secretKey = Base32Encoding.ToString(secretBytes);
+
+            string issuer = "SimetricApp";
+            string account = userInDb.Email ?? "User";
+            string provisionUrl = $"otpauth://totp/{issuer}:{account}?secret={secretKey}&issuer={issuer}&digits=6";
+
+            using QRCodeGenerator qrGenerator = new QRCodeGenerator();
+            using QRCodeData qrCodeData = qrGenerator.CreateQrCode(provisionUrl, QRCodeGenerator.ECCLevel.Q);
+            using PngByteQRCode qrCode = new PngByteQRCode(qrCodeData);
+            byte[] qrCodeAsBytes = qrCode.GetGraphic(20);
+            qrCodeImage = $"data:image/png;base64,{Convert.ToBase64String(qrCodeAsBytes)}";
+
+            step = 2;
+            await Security.RegistrarLogInicioSesionAsync(userInDb.IdUsuario, false, "MFA: inicio proceso");
+        }
+        catch (Exception)
+        {
+            errorMsg = "No se pudo generar el codigo de configuracion.";
+        }
+    }
+
+    private async Task FinalizarConfiguracion()
+    {
+        errorMsg = null;
+        if (userInDb == null || string.IsNullOrWhiteSpace(secretKey))
+        {
+            return;
+        }
+
+        try
+        {
+            byte[] secretBytes = Base32Encoding.ToBytes(secretKey);
+            var totp = new Totp(secretBytes);
+
+            if (totp.VerifyTotp(verificationCode, out _))
+            {
+                using var context = await DbFactory.CreateDbContextAsync();
+                var dbUser = await context.Usuarios.FindAsync(userInDb.IdUsuario);
+
+                if (dbUser != null)
+                {
+                    dbUser.MfaSecretKey = secretKey;
+                    dbUser.MfaHabilitado = true;
+                    await context.SaveChangesAsync();
+
+                    userInDb = dbUser;
+                    step = 1;
+                    LimpiarVariables();
+                    await Security.RegistrarLogInicioSesionAsync(dbUser.IdUsuario, true, "MFA: activado correctamente");
+                }
+            }
+            else
+            {
+                errorMsg = "Codigo incorrecto. Intenta de nuevo.";
+            }
+        }
+        catch (Exception)
+        {
+            errorMsg = "Error al validar el codigo.";
+        }
+    }
+
+    private async Task DesactivarMFA()
+    {
+        try
+        {
+            if (userInDb == null)
+            {
+                return;
+            }
+
+            using var context = await DbFactory.CreateDbContextAsync();
+            var dbUser = await context.Usuarios.FindAsync(userInDb.IdUsuario);
+            if (dbUser != null)
+            {
+                dbUser.MfaHabilitado = false;
+                dbUser.MfaSecretKey = null;
+                await context.SaveChangesAsync();
+                userInDb = dbUser;
+                StateHasChanged();
+                await Security.RegistrarLogInicioSesionAsync(dbUser.IdUsuario, true, "MFA: desactivado");
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private string GetStatusTitle() =>
+        userInDb?.MfaHabilitado == true ? "Proteccion activa" : "Sin proteccion MFA";
+
+    private string GetStatusDescription() =>
+        userInDb?.MfaHabilitado == true
+            ? "La cuenta ya requiere un codigo de autenticacion al iniciar sesion."
+            : "Activa un segundo factor para reducir accesos no autorizados.";
+
+    private string GetCurrentStageLabel() =>
+        userInDb?.MfaHabilitado == true ? "Configurado" : step == 2 ? "Validacion pendiente" : "Listo para activar";
+
+    private void LimpiarVariables()
+    {
+        secretKey = null;
+        qrCodeImage = null;
+        verificationCode = null;
+        errorMsg = null;
+    }
+}

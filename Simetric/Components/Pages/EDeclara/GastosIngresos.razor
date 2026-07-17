@@ -1,0 +1,950 @@
+@page "/e-declara/gastos-ingresos"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using System.Text.Json
+@using System.ComponentModel.DataAnnotations
+@using Simetric.Services
+@using Simetric.Services.EDeclara
+@using Simetric.Models
+@using Simetric.DTOs
+@using System.IO.Compression
+
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IConfiguration Configuration
+@inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JSRuntime
+@inject Simetric.Services.IReporteComprobantesExcelService ExcelService
+
+<PageTitle>Gastos / Ingresos | E-Declara</PageTitle>
+
+<div class="edeclara-page">
+    
+    <!-- Hero Header -->
+    <header class="edeclara-hero">
+        <span class="hero-eyebrow">Módulo Tributario · E-Declara</span>
+        <h2>Gastos / Ingresos</h2>
+        <p>
+            Descarga y consulta tus comprobantes electrónicos directamente desde el portal del SRI para el período seleccionado.
+        </p>
+    </header>
+
+    @if (cargandoPagina)
+    {
+        <div class="edeclara-panel text-center py-5">
+            <span class="spinner-border text-primary" role="status"></span>
+            <p class="mt-3 text-muted">Preparando entorno de consulta del SRI...</p>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(errorInicial))
+    {
+        <div class="edeclara-state-alert edeclara-state-error">
+            <i class="bi bi-exclamation-octagon-fill"></i>
+            <div>
+                <strong>Error al iniciar:</strong> @errorInicial
+            </div>
+        </div>
+    }
+    else
+    {
+        <!-- Form Panel -->
+        <div class="edeclara-panel">
+            <h3 class="panel-title">
+                <i class="bi bi-search"></i> Parámetros de Consulta SRI
+            </h3>
+
+            @if (!string.IsNullOrWhiteSpace(errorMessage))
+            {
+                <div class="edeclara-state-alert edeclara-state-error mb-3">
+                    <i class="bi bi-exclamation-circle-fill"></i>
+                    <div>@errorMessage</div>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(successMessage))
+            {
+                <div class="edeclara-state-alert edeclara-state-success mb-3">
+                    <i class="bi bi-check-circle-fill"></i>
+                    <div>@successMessage</div>
+                </div>
+            }
+
+            <div class="form-grid">
+                
+                <!-- Tipo de Periodo -->
+                <div class="form-group">
+                    <label class="form-label-n">Tipo de Período</label>
+                    <select class="input-n-premium" @bind="tipoPeriodo">
+                        <option value="Mensual">Mensual</option>
+                        <option value="Semestral">Semestral</option>
+                    </select>
+                </div>
+
+                <!-- RUC / Usuario SRI -->
+                <div class="form-group">
+                    <label class="form-label-n">RUC / Usuario SRI *</label>
+                    <input type="text" class="input-n-premium" placeholder="1712345678001" @bind="selectedRuc" />
+                </div>
+
+                <!-- Password SRI -->
+                <div class="form-group">
+                    <label class="form-label-n">Contraseña SRI *</label>
+                    <div class="input-wrapper">
+                        <input type="@(showPassword ? "text" : "password")" class="input-n-premium" placeholder="••••••••" @bind="password" />
+                        <button type="button" class="btn-eye-n" @onclick="TogglePasswordVisibility">
+                            <i class="bi @(showPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Anio -->
+                <div class="form-group">
+                    <label class="form-label-n">Año *</label>
+                    <select class="input-n-premium" @bind="anio">
+                        <option value="2026">2026</option>
+                        <option value="2025">2025</option>
+                        <option value="2024">2024</option>
+                        <option value="2023">2023</option>
+                        <option value="2022">2022</option>
+                    </select>
+                </div>
+
+                @if (tipoPeriodo == "Mensual")
+                {
+                    <!-- Mes -->
+                    <div class="form-group">
+                        <label class="form-label-n">Mes *</label>
+                        <select class="input-n-premium" @bind="mes">
+                            <option value="1">Enero</option>
+                            <option value="2">Febrero</option>
+                            <option value="3">Marzo</option>
+                            <option value="4">Abril</option>
+                            <option value="5">Mayo</option>
+                            <option value="6">Junio</option>
+                            <option value="7">Julio</option>
+                            <option value="8">Agosto</option>
+                            <option value="9">Septiembre</option>
+                            <option value="10">Octubre</option>
+                            <option value="11">Noviembre</option>
+                            <option value="12">Diciembre</option>
+                        </select>
+                    </div>
+                }
+                else
+                {
+                    <!-- Semestre -->
+                    <div class="form-group">
+                        <label class="form-label-n">Semestre *</label>
+                        <select class="input-n-premium" @bind="selectedSemestre">
+                            <option value="1">1er Semestre (Enero - Junio)</option>
+                            <option value="2">2do Semestre (Julio - Diciembre)</option>
+                        </select>
+                    </div>
+                }
+
+                <!-- Comprobante -->
+                <div class="form-group">
+                    <label class="form-label-n">Tipo de Comprobante *</label>
+                    <select class="input-n-premium" @bind="comprobante">
+                        <option value="1">Facturas</option>
+                        <option value="2">Liquidaciones de Compra</option>
+                        <option value="3">Notas de Crédito</option>
+                        <option value="4">Notas de Débito</option>
+                        <option value="5">Comprobantes de Retención</option>
+                        <option value="6">Guías de Remisión</option>
+                    </select>
+                </div>
+
+            </div>
+
+            <div class="actions-row">
+                <button type="button" class="btn-search" disabled="@isSearching" @onclick="ConsultarSriAsync">
+                    @if (isSearching)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                        <span>Descargando...</span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-cloud-arrow-down"></i>
+                        <span>Consultar SRI</span>
+                    }
+                </button>
+            </div>
+        </div>
+
+        @if (isSearching)
+        {
+            <div class="edeclara-panel">
+                <div class="loading-panel">
+                    <div class="loading-spinner"></div>
+                    <h4>@loadingProgressMessage</h4>
+                    <p>Esto puede tardar dependiendo del tipo de período seleccionado y de la respuesta del SRI.</p>
+                </div>
+            </div>
+        }
+        else if (sriResult != null)
+        {
+            @if (isSearching)
+            {
+                <div class="edeclara-panel mb-3 py-3 px-4 d-flex align-items-center gap-3" style="border-left: 4px solid #6C63FF;">
+                    <div class="spinner-border text-primary spinner-border-sm" role="status" style="color: #6C63FF !important;"></div>
+                    <div>
+                        <strong class="text-dark d-block" style="font-size: 0.9rem;">Consulta en progreso...</strong>
+                        <span class="text-muted small">@loadingProgressMessage</span>
+                    </div>
+                </div>
+            }
+
+            <!-- Summary metrics cards -->
+            <div class="summary-grid">
+                
+                <div class="summary-card summary-card-primary">
+                    <span class="summary-label">Total Documentos</span>
+                    <strong>@sriResult.listaComprobantes?.Count</strong>
+                    <small>Comprobantes recibidos del SRI</small>
+                </div>
+
+                <div class="summary-card">
+                    <span class="summary-label">Suma Impuestos (IVA)</span>
+                    <strong>$ @totalImpuestos.ToString("N2")</strong>
+                    <small>Total IVA de comprobantes</small>
+                </div>
+
+                <div class="summary-card summary-card-success">
+                    <span class="summary-label">Importe Total Acumulado</span>
+                    <strong>$ @totalImporte.ToString("N2")</strong>
+                    <small>Suma total con impuestos</small>
+                </div>
+
+            </div>
+
+            <!-- Table Panel -->
+            <div class="edeclara-panel results-panel">
+                <div class="panel-header-row d-flex justify-content-between align-items-center mb-3">
+                    <h3 class="panel-title mb-0">
+                        <i class="bi bi-file-earmark-spreadsheet"></i> Comprobantes Recibidos - @sriResult.razonSocial
+                    </h3>
+                    @if (sriResult.listaComprobantes != null && sriResult.listaComprobantes.Any())
+                    {
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn-zip-export" @onclick="DescargarTodosXmlZipAsync" disabled="@exportandoZip">
+                                @if (exportandoZip)
+                                {
+                                    <span class="spinner-border spinner-border-sm" role="status"></span>
+                                    <span>Comprimiendo...</span>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-file-earmark-zip-fill"></i>
+                                    <span>Descargar Todo (ZIP)</span>
+                                }
+                            </button>
+                            <button type="button" class="btn-excel-export" @onclick="ExportarExcelAsync" disabled="@exportandoExcel">
+                                @if (exportandoExcel)
+                                {
+                                    <span class="spinner-border spinner-border-sm" role="status"></span>
+                                    <span>Exportando...</span>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-file-earmark-excel-fill"></i>
+                                    <span>Descargar Excel</span>
+                                }
+                            </button>
+                        </div>
+                    }
+                </div>
+
+                @if (sriResult.listaComprobantes != null && sriResult.listaComprobantes.Any())
+                {
+                    <div class="table-container">
+                        <table class="sri-table">
+                            <thead>
+                                <tr>
+                                    <th>Razón Social Emisor</th>
+                                    <th>Tipo</th>
+                                    <th>Fecha Emisión</th>
+                                    <th>Número Autorización</th>
+                                    <th class="text-end">Base / Subtotal</th>
+                                    <th class="text-end">IVA</th>
+                                    <th class="text-end">Total</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var item in GetPaginatedComprobantes())
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="fw-bold">@item.razonSocial</div>
+                                        </td>
+                                        <td>
+                                            <span class="document-type-pill @GetDocumentTypeCss(item.tipoDocumento)">
+                                                @item.tipoDocumento
+                                            </span>
+                                        </td>
+                                        <td>@item.fechaEmision</td>
+                                        <td>
+                                            <span class="text-muted small" style="font-family: monospace;">@item.numeroAutorizacion</span>
+                                        </td>
+                                        <td class="text-end">$ @item.importeTotal.ToString("N2")</td>
+                                        <td class="text-end">$ @item.impuestos.ToString("N2")</td>
+                                        <td class="text-end fw-bold">$ @item.total.ToString("N2")</td>
+                                        <td>
+                                            <div class="action-badges">
+                                                @if (!string.IsNullOrWhiteSpace(item.xmlLink))
+                                                {
+                                                    <button type="button" class="action-badge badge-excel" title="Descargar como Excel" @onclick="() => DescargarIndividualExcelAsync(item)">
+                                                        <i class="bi bi-file-earmark-excel-fill"></i> Descargar Excel
+                                                    </button>
+                                                    <button type="button" class="action-badge badge-txt" title="Descargar como Texto Plano" @onclick="() => DescargarIndividualTxtAsync(item)">
+                                                        <i class="bi bi-file-earmark-text-fill"></i> TXT
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted small">No disponible</span>
+                                                }
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    @if (totalPages > 1)
+                    {
+                        <div class="edeclara-pagination">
+                            <span class="text-muted small">Página @currentPage de @totalPages (Mostrando @GetPaginatedComprobantes().Count() de @sriResult.listaComprobantes.Count comprobantes)</span>
+                            <div class="pagination-buttons">
+                                <button type="button" class="btn-pagination" disabled="@(currentPage == 1)" @onclick="GoToFirstPage">
+                                    <i class="bi bi-chevron-double-left"></i>
+                                </button>
+                                <button type="button" class="btn-pagination" disabled="@(currentPage == 1)" @onclick="GoToPreviousPage">
+                                    <i class="bi bi-chevron-left"></i>
+                                </button>
+                                
+                                @for (int i = Math.Max(1, currentPage - 2); i <= Math.Min(totalPages, currentPage + 2); i++)
+                                {
+                                    var pageNum = i;
+                                    <button type="button" class="btn-pagination @(pageNum == currentPage ? "active" : "")" @onclick="() => GoToPage(pageNum)">
+                                        @pageNum
+                                    </button>
+                                }
+                                
+                                <button type="button" class="btn-pagination" disabled="@(currentPage == totalPages)" @onclick="GoToNextPage">
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                                <button type="button" class="btn-pagination" disabled="@(currentPage == totalPages)" @onclick="GoToLastPage">
+                                    <i class="bi bi-chevron-double-right"></i>
+                                </button>
+                            </div>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="empty-panel">
+                        <i class="bi bi-info-circle"></i>
+                        <p>@emptyStateMessage</p>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <!-- Initial Empty State -->
+            <div class="edeclara-panel">
+                <div class="empty-panel">
+                    <i class="bi bi-cloud-download"></i>
+                    <p>Complete los parámetros y haga clic en "Consultar SRI" para descargar sus comprobantes.</p>
+                </div>
+            </div>
+        }
+    }
+
+</div>
+
+@code {
+    private bool cargandoPagina = true;
+    private string? errorInicial;
+
+    private string selectedRuc = "";
+    private string password = "";
+    private string anio = DateTime.Now.Year.ToString();
+    private string tipoPeriodo = "Mensual";
+    private int mes = DateTime.Now.Month;
+    private int selectedSemestre = 1;
+    private int comprobante = 1;
+    private bool xmlPdf = true;
+
+    private bool isSearching = false;
+    private string? errorMessage;
+    private string? successMessage;
+    private SriResponse? sriResult;
+    private bool showPassword = false;
+    private string loadingProgressMessage = "Conectando con el SRI...";
+    private string emptyStateMessage = "No se encontraron comprobantes para el periodo y parámetros seleccionados.";
+    private int currentPage = 1;
+    private const int PageSize = 5;
+    private int totalPages => sriResult?.listaComprobantes != null ? (int)Math.Ceiling(sriResult.listaComprobantes.Count / (double)PageSize) : 0;
+
+    // Totals accumulation
+    private decimal totalImpuestos => sriResult?.listaComprobantes?.Sum(x => x.impuestos) ?? 0;
+    private decimal totalImporte => sriResult?.listaComprobantes?.Sum(x => x.total) ?? 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated != true)
+            {
+                NavManager.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+
+            if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+            {
+                NavManager.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+
+            var isSuperAdmin = string.Equals(
+                user.FindFirst("IdTipoUsuario")?.Value,
+                AppAccessService.AdminRoleId,
+                StringComparison.OrdinalIgnoreCase);
+
+            var access = await AppAccessService.CanAccessAsync(userId, EDeclaraRoutes.ServiceKey, isSuperAdmin);
+            if (!access.HasAccess)
+            {
+                NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EDeclaraRoutes.ServiceKey)}", forceLoad: true);
+                return;
+            }
+
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
+        }
+        catch (Exception ex)
+        {
+            errorInicial = $"Ocurrió un problema al inicializar el servicio de consulta: {ex.Message}";
+        }
+        finally
+        {
+            cargandoPagina = false;
+        }
+    }
+
+    private void TogglePasswordVisibility()
+    {
+        showPassword = !showPassword;
+    }
+
+    private async Task<List<SriComprobante>> DescargarMesAsync(string baseUrl, string ruc, string pwd, string year, int month, int compType)
+    {
+        var compList = new List<SriComprobante>();
+        bool isCurrentMonth = (year == DateTime.Today.Year.ToString() && month == DateTime.Today.Month);
+
+        if (isCurrentMonth)
+        {
+            int currentDay = DateTime.Today.Day;
+            var tasks = Enumerable.Range(1, currentDay).Select(async d =>
+            {
+                try
+                {
+                    var query = $"Usuario={Uri.EscapeDataString(ruc)}&Password={Uri.EscapeDataString(pwd)}&UsuarioAdicional={Uri.EscapeDataString("")}&Dia={d}&Anio={year}&Mes={month}&Comprobante={compType}&XMLpdf=true";
+                    var url = $"{baseUrl.TrimEnd('/')}/DescargaComprobantes/GetElectrnicosRecibidos?{query}";
+
+                    using var client = HttpClientFactory.CreateClient();
+                    client.Timeout = TimeSpan.FromMinutes(3);
+
+                    var response = await client.GetAsync(url);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var content = await response.Content.ReadAsStringAsync();
+                        var dayResult = JsonSerializer.Deserialize<SriResponse>(content, new JsonSerializerOptions
+                        {
+                            PropertyNameCaseInsensitive = true
+                        });
+                        if (dayResult?.listaComprobantes != null)
+                        {
+                            lock (compList)
+                            {
+                                compList.AddRange(dayResult.listaComprobantes);
+                            }
+                        }
+                    }
+                    // Si es un BadRequest o falla (día vacío), simplemente se pasa de él.
+                }
+                catch
+                {
+                    // Ignorar errores de red para días específicos
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
+        else
+        {
+            // Mes pasado completo
+            var query = $"Usuario={Uri.EscapeDataString(ruc)}&Password={Uri.EscapeDataString(pwd)}&UsuarioAdicional={Uri.EscapeDataString("")}&Dia=0&Anio={year}&Mes={month}&Comprobante={compType}&XMLpdf=true";
+            var url = $"{baseUrl.TrimEnd('/')}/DescargaComprobantes/GetElectrnicosRecibidos?{query}";
+
+            using var client = HttpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromMinutes(10);
+
+            var response = await client.GetAsync(url);
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                var monthResult = JsonSerializer.Deserialize<SriResponse>(content, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+                if (monthResult?.listaComprobantes != null)
+                {
+                    compList.AddRange(monthResult.listaComprobantes);
+                }
+            }
+            else
+            {
+                var errContent = await response.Content.ReadAsStringAsync();
+                if (response.StatusCode == System.Net.HttpStatusCode.BadRequest && 
+                    (errContent.Contains("No se generó") || errContent.Contains("No existen datos") || errContent.Contains("no se encontraron")))
+                {
+                    // Vacío
+                }
+                else
+                {
+                    throw new Exception($"La API local devolvió un código de error ({response.StatusCode}): {errContent}");
+                }
+            }
+        }
+
+        return compList;
+    }
+
+    private async Task ConsultarSriAsync()
+    {
+        if (string.IsNullOrWhiteSpace(selectedRuc))
+        {
+            errorMessage = "Ingrese un número de RUC / Usuario válido.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            errorMessage = "La contraseña del SRI es obligatoria.";
+            return;
+        }
+
+        isSearching = true;
+        errorMessage = null;
+        successMessage = null;
+        emptyStateMessage = "Buscando comprobantes...";
+        sriResult = null;
+        currentPage = 1;
+        StateHasChanged();
+
+        try
+        {
+            var baseUrl = Configuration["ApiDescargaComprobantes:BaseUrl"] ?? "http://localhost:5077";
+
+            if (tipoPeriodo == "Semestral")
+            {
+                int mesInicio = selectedSemestre == 1 ? 1 : 7;
+                int mesFin = selectedSemestre == 1 ? 6 : 12;
+
+                var allComprobantes = new List<SriComprobante>();
+                string? lastRazonSocial = null;
+                string? lastRuc = null;
+                int completedMonths = 0;
+                var failedMonthNames = new List<string>();
+
+                loadingProgressMessage = "Descargando semestre en paralelo...";
+                StateHasChanged();
+
+                var tasks = Enumerable.Range(mesInicio, 6).Select(async m =>
+                {
+                    try
+                    {
+                        var monthList = await DescargarMesAsync(baseUrl, selectedRuc, password, anio, m, comprobante);
+                        lock (allComprobantes)
+                        {
+                            allComprobantes.AddRange(monthList);
+                            if (monthList.Any())
+                            {
+                                lastRazonSocial = monthList.FirstOrDefault(x => !string.IsNullOrEmpty(x.razonSocial))?.razonSocial;
+                            }
+                            lastRuc = selectedRuc;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        lock (failedMonthNames)
+                        {
+                            failedMonthNames.Add(ObtenerNombreMes(m));
+                        }
+                    }
+                    finally
+                    {
+                        Interlocked.Increment(ref completedMonths);
+                        loadingProgressMessage = $"Descargando semestre: {completedMonths} de 6 meses procesados...";
+                        await InvokeAsync(StateHasChanged);
+                    }
+                });
+
+                await Task.WhenAll(tasks);
+
+                sriResult = new SriResponse
+                {
+                    ruc = lastRuc ?? selectedRuc,
+                    razonSocial = lastRazonSocial ?? "Contribuyente",
+                    numeroComprobantes = allComprobantes.Count.ToString(),
+                    listaComprobantes = allComprobantes
+                };
+
+                if (failedMonthNames.Any())
+                {
+                    errorMessage = $"No se pudo completar la descarga para los siguientes meses: {string.Join(", ", failedMonthNames)}. Puede intentar consultarlos individualmente.";
+                    if (!allComprobantes.Any())
+                    {
+                        emptyStateMessage = "No se pudo descargar ningún comprobante del semestre.";
+                    }
+                }
+                else
+                {
+                    successMessage = $"Consulta semestral realizada con éxito. Se descargaron {allComprobantes.Count} comprobantes.";
+                    if (!allComprobantes.Any())
+                    {
+                        emptyStateMessage = "No se encontraron comprobantes para el periodo y parámetros seleccionados.";
+                    }
+                }
+            }
+            else
+            {
+                loadingProgressMessage = "Descargando comprobantes del mes seleccionado...";
+                StateHasChanged();
+
+                var list = await DescargarMesAsync(baseUrl, selectedRuc, password, anio, mes, comprobante);
+                
+                sriResult = new SriResponse
+                {
+                    ruc = selectedRuc,
+                    razonSocial = list.FirstOrDefault(x => !string.IsNullOrEmpty(x.razonSocial))?.razonSocial ?? "Contribuyente",
+                    numeroComprobantes = list.Count.ToString(),
+                    listaComprobantes = list
+                };
+
+                if (!list.Any())
+                {
+                    emptyStateMessage = "No se encontraron comprobantes para el periodo y parámetros seleccionados.";
+                }
+                else
+                {
+                    successMessage = $"Se descargaron exitosamente {list.Count} comprobantes recibidos del SRI.";
+                }
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            emptyStateMessage = $"Error al conectar con el servicio local de descarga del SRI. Verifique que la API se esté ejecutando. Detalles: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            emptyStateMessage = $"Error al procesar la solicitud: {ex.Message}";
+        }
+        finally
+        {
+            isSearching = false;
+            StateHasChanged();
+        }
+    }
+
+    private string ObtenerNombreMes(int m)
+    {
+        return m switch
+        {
+            1 => "Enero",
+            2 => "Febrero",
+            3 => "Marzo",
+            4 => "Abril",
+            5 => "Mayo",
+            6 => "Junio",
+            7 => "Julio",
+            8 => "Agosto",
+            9 => "Septiembre",
+            10 => "Octubre",
+            11 => "Noviembre",
+            12 => "Diciembre",
+            _ => m.ToString()
+        };
+    }
+
+    private IEnumerable<SriComprobante> GetPaginatedComprobantes()
+    {
+        if (sriResult?.listaComprobantes == null) return Enumerable.Empty<SriComprobante>();
+        return sriResult.listaComprobantes.Skip((currentPage - 1) * PageSize).Take(PageSize);
+    }
+
+    private void GoToFirstPage() { currentPage = 1; }
+    private void GoToPreviousPage() { if (currentPage > 1) currentPage--; }
+    private void GoToNextPage() { if (currentPage < totalPages) currentPage++; }
+    private void GoToLastPage() { currentPage = totalPages; }
+    private void GoToPage(int pageNum) { currentPage = pageNum; }
+
+    private string GetDocumentTypeCss(string type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return "pill-other";
+        return type.ToLower().Contains("factura") ? "pill-factura" : "pill-other";
+    }
+
+    private bool exportandoExcel = false;
+
+    private async Task ExportarExcelAsync()
+    {
+        if (sriResult?.listaComprobantes == null || !sriResult.listaComprobantes.Any())
+        {
+            return;
+        }
+
+        exportandoExcel = true;
+        errorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var request = new ReporteComprobantesPdfRequest
+            {
+                NombreEmisor = sriResult.razonSocial,
+                RucEmisor = sriResult.ruc,
+                NombreUsuario = "Usuario E-Declara",
+                GeneradoEn = DateTime.Now,
+                Filtros = new ReporteComprobantesFiltroDto
+                {
+                    TipoDocumento = comprobante switch
+                    {
+                        1 => "FACTURA",
+                        2 => "LIQUIDACION_COMPRA",
+                        3 => "NOTA_CREDITO",
+                        4 => "NOTA_DEBITO",
+                        5 => "RETENCION",
+                        6 => "GUIA_REMISION",
+                        _ => "TODOS"
+                    },
+                    FechaDesde = null,
+                    FechaHasta = null
+                },
+                Items = sriResult.listaComprobantes.Select(x => new ReporteComprobanteItemDto
+                {
+                    TipoDocumento = x.tipoDocumento,
+                    FechaEmision = DateTime.TryParse(x.fechaEmision, out var d) ? d : (DateTime?)null,
+                    NumeroDocumento = x.numeroAutorizacion,
+                    TerceroNombre = x.razonSocial,
+                    TerceroIdentificacion = "",
+                    TerceroRol = "Emisor",
+                    EstadoDocumento = "AUTORIZADO",
+                    BaseImponible = x.importeTotal,
+                    Iva = x.impuestos,
+                    Total = x.total,
+                    NumeroAutorizacion = x.numeroAutorizacion,
+                    ClaveAcceso = x.numeroAutorizacion
+                }).ToList()
+            };
+
+            var excelFile = await ExcelService.GenerarExcelAsync(request);
+            using var stream = new MemoryStream(excelFile.Content);
+            using var streamRef = new DotNetStreamReference(stream);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", excelFile.FileName, streamRef, excelFile.ContentType);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al generar Excel: {ex.Message}";
+        }
+        finally
+        {
+            exportandoExcel = false;
+            StateHasChanged();
+        }
+    }
+
+    private bool exportandoZip = false;
+
+    private async Task DescargarTodosXmlZipAsync()
+    {
+        if (sriResult?.listaComprobantes == null || !sriResult.listaComprobantes.Any())
+        {
+            return;
+        }
+
+        exportandoZip = true;
+        errorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var physicalPath = Configuration["ApiDescargaComprobantes:PhysicalRecibidosPath"];
+            if (string.IsNullOrWhiteSpace(physicalPath))
+            {
+                physicalPath = @"C:\Users\Aricita\source\repos\API\API\Comprobantes\ApiNesSoftDescargaComprobantesWSV4\recibidos";
+            }
+
+            using var memoryStream = new MemoryStream();
+            using (var archive = new ZipArchive(memoryStream, ZipArchiveMode.Create, true))
+            {
+                int addedFiles = 0;
+                foreach (var item in sriResult.listaComprobantes)
+                {
+                    if (string.IsNullOrWhiteSpace(item.xmlLink)) continue;
+
+                    var uri = new Uri(item.xmlLink);
+                    var fileNameXml = Path.GetFileName(uri.LocalPath);
+                    var filePath = Path.Combine(physicalPath, selectedRuc, fileNameXml);
+
+                    if (File.Exists(filePath))
+                    {
+                        var fileNameTxt = $"{item.numeroAutorizacion}.txt";
+                        var entry = archive.CreateEntry(fileNameTxt, CompressionLevel.Optimal);
+                        using var entryStream = entry.Open();
+                        using var fileStream = File.OpenRead(filePath);
+                        await fileStream.CopyToAsync(entryStream);
+                        addedFiles++;
+                    }
+                }
+
+                if (addedFiles == 0)
+                {
+                    errorMessage = $"No se encontraron los archivos XML físicos en la ruta del servidor local: {Path.Combine(physicalPath, selectedRuc)}";
+                    return;
+                }
+            }
+
+            memoryStream.Seek(0, SeekOrigin.Begin);
+            using var streamRef = new DotNetStreamReference(memoryStream);
+            var zipName = $"comprobantes_{selectedRuc}_{anio}_{mes}_{comprobante}.zip";
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", zipName, streamRef, "application/zip");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al generar el archivo ZIP: {ex.Message}";
+        }
+        finally
+        {
+            exportandoZip = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DescargarIndividualExcelAsync(SriComprobante item)
+    {
+        try
+        {
+            var request = new ReporteComprobantesPdfRequest
+            {
+                NombreEmisor = sriResult?.razonSocial ?? "Contribuyente",
+                RucEmisor = sriResult?.ruc ?? selectedRuc,
+                NombreUsuario = "Usuario E-Declara",
+                GeneradoEn = DateTime.Now,
+                Filtros = new ReporteComprobantesFiltroDto
+                {
+                    TipoDocumento = item.tipoDocumento.ToUpper(),
+                    FechaDesde = null,
+                    FechaHasta = null
+                },
+                Items = new List<ReporteComprobanteItemDto>
+                {
+                    new ReporteComprobanteItemDto
+                    {
+                        TipoDocumento = item.tipoDocumento,
+                        FechaEmision = DateTime.TryParse(item.fechaEmision, out var d) ? d : (DateTime?)null,
+                        NumeroDocumento = item.numeroAutorizacion,
+                        TerceroNombre = item.razonSocial,
+                        TerceroIdentificacion = "",
+                        TerceroRol = "Emisor",
+                        EstadoDocumento = "AUTORIZADO",
+                        BaseImponible = item.importeTotal,
+                        Iva = item.impuestos,
+                        Total = item.total,
+                        NumeroAutorizacion = item.numeroAutorizacion,
+                        ClaveAcceso = item.numeroAutorizacion
+                    }
+                }
+            };
+
+            var excelFile = await ExcelService.GenerarExcelAsync(request);
+            using var stream = new MemoryStream(excelFile.Content);
+            using var streamRef = new DotNetStreamReference(stream);
+            var fileName = $"{item.numeroAutorizacion}.xls";
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef, excelFile.ContentType);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al generar Excel individual: {ex.Message}";
+        }
+    }
+
+    private async Task DescargarIndividualTxtAsync(SriComprobante item)
+    {
+        if (string.IsNullOrWhiteSpace(item.xmlLink)) return;
+
+        try
+        {
+            var physicalPath = Configuration["ApiDescargaComprobantes:PhysicalRecibidosPath"];
+            if (string.IsNullOrWhiteSpace(physicalPath))
+            {
+                physicalPath = @"C:\Users\Aricita\source\repos\API\API\Comprobantes\ApiNesSoftDescargaComprobantesWSV4\recibidos";
+            }
+
+            var uri = new Uri(item.xmlLink);
+            var fileNameXml = Path.GetFileName(uri.LocalPath);
+            var filePath = Path.Combine(physicalPath, selectedRuc, fileNameXml);
+
+            if (File.Exists(filePath))
+            {
+                var bytes = await File.ReadAllBytesAsync(filePath);
+                var fileNameTxt = $"{item.numeroAutorizacion}.txt";
+                
+                using var stream = new MemoryStream(bytes);
+                using var streamRef = new DotNetStreamReference(stream);
+                await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileNameTxt, streamRef, "text/plain");
+            }
+            else
+            {
+                errorMessage = $"No se encontró el archivo XML físico en el servidor local ({fileNameXml}).";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al descargar el XML como texto plano: {ex.Message}";
+        }
+    }
+
+    // Response models from local API
+    private sealed class SriResponse
+    {
+        public string ruc { get; set; } = string.Empty;
+        public string razonSocial { get; set; } = string.Empty;
+        public string numeroComprobantes { get; set; } = string.Empty;
+        public List<SriComprobante> listaComprobantes { get; set; } = new();
+    }
+
+    private sealed class SriComprobante
+    {
+        public string razonSocial { get; set; } = string.Empty;
+        public string tipoDocumento { get; set; } = string.Empty;
+        public string numeroAutorizacion { get; set; } = string.Empty;
+        public string fechaEmision { get; set; } = string.Empty;
+        public string fechaAutorizacion { get; set; } = string.Empty;
+        public decimal total { get; set; }
+        public decimal impuestos { get; set; }
+        public decimal importeTotal { get; set; }
+        public string xmlLink { get; set; } = string.Empty;
+        public string pdfLink { get; set; } = string.Empty;
+    }
+}

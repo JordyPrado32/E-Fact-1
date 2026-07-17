@@ -1,0 +1,1979 @@
+@page "/backoffice/cobros"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.DTOs
+@using Simetric.Services
+@using System.Security.Claims
+@using System.Text.Json
+@using System.IO
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject NavigationManager NavManager
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
+@inject CompraDocumentosFacturacionService CompraDocumentosFacturacionService
+@inject FacturacionService FacturacionService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject AuditService AuditService
+@inject IJSRuntime JS
+
+<PageTitle>Cobros y Caja - BackOffice | Numerica</PageTitle>
+
+<div class="cobros-wrapper animate__animated animate__fadeIn">
+    @if (aprobandoTransferenciaId is > 0)
+    {
+        <div class="invoice-emission-overlay" role="status" aria-live="polite">
+            <div class="invoice-emission-card">
+                <span class="spinner-border text-primary" aria-hidden="true"></span>
+                <strong>Aprobando recarga y emitiendo factura</strong>
+                <p>Estamos enviando la factura al SRI. No cierres esta pantalla.</p>
+            </div>
+        </div>
+    }
+    <!-- Header Section -->
+    <header class="cobros-header">
+        <div class="header-text">
+            <h2>Gestión de Cobros y Caja</h2>
+            <p>Control operativo de ventas por cobrar, registro de cobros, conciliación de comprobantes y activación de licencias.</p>
+        </div>
+    </header>
+
+    @if (isLoading)
+    {
+        <div class="text-center my-5 py-5">
+            <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+                <span class="visually-hidden">Cargando transacciones...</span>
+            </div>
+            <p class="mt-3 text-muted fw-bold">Cargando información de cobros...</p>
+        </div>
+    }
+    else
+    {
+        <!-- Action Feedback Alert Banner -->
+        @if (!string.IsNullOrEmpty(feedbackMessage))
+        {
+            <div class="action-notification-alert @(feedbackIsSuccess ? "success" : "error")">
+                <i class="bi @(feedbackIsSuccess ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+                <span>@feedbackMessage</span>
+                @if (!string.IsNullOrWhiteSpace(facturaAutorizadaPdfUrl))
+                {
+                    <button type="button" class="authorized-pdf-btn" @onclick="AbrirFacturaAutorizadaAsync">
+                        <i class="bi bi-file-earmark-pdf"></i> Abrir PDF autorizado
+                    </button>
+                }
+            </div>
+        }
+
+        @if (countSolicitudesDocumentosPendientes > 0)
+        {
+            <div class="action-notification-alert info">
+                <i class="bi bi-bell-fill"></i>
+                <span>@countSolicitudesDocumentosPendientes usuario(s) solicita(n) aprobacion de transaccion de documentos por transferencia.</span>
+            </div>
+        }
+
+        <!-- KPI Summary Cards -->
+        <section class="kpi-grid">
+            <div class="kpi-card is-warning">
+                <div class="kpi-card-content">
+                    <span class="kpi-title">Pendiente por Cobrar</span>
+                    <strong class="kpi-value text-warning">$@montoPendiente.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                    <span class="kpi-desc">@countPendientes transacciones pendientes</span>
+                </div>
+                <div class="kpi-icon-wrapper">
+                    <i class="bi bi-hourglass-split"></i>
+                </div>
+            </div>
+            <div class="kpi-card is-success">
+                <div class="kpi-card-content">
+                    <span class="kpi-title">Cobrado (Mes Actual)</span>
+                    <strong class="kpi-value text-success">$@montoCobradoMes.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                    <span class="kpi-desc">@countCobradoMes cobros en @DateTime.Now.ToString("MMMM", new System.Globalization.CultureInfo("es-ES"))</span>
+                </div>
+                <div class="kpi-icon-wrapper">
+                    <i class="bi bi-cash-coin"></i>
+                </div>
+            </div>
+            <div class="kpi-card is-primary">
+                <div class="kpi-card-content">
+                    <span class="kpi-title">Cobros Históricos</span>
+                    <strong class="kpi-value text-primary">@countTotalCobrados</strong>
+                    <span class="kpi-desc">Conciliaciones totales exitosas</span>
+                </div>
+                <div class="kpi-icon-wrapper">
+                    <i class="bi bi-check-circle-fill"></i>
+                </div>
+            </div>
+        </section>
+
+        <!-- Navigation Tabs -->
+        <div class="tabs-container">
+            <button type="button" class="tab-btn @(activeTab == "pendientes" ? "active" : "")" @onclick='() => SetActiveTab("pendientes")'>
+                Ventas por Cobrar (@countPendientes)
+            </button>
+            <button type="button" class="tab-btn @(activeTab == "pagados" ? "active" : "")" @onclick='() => SetActiveTab("pagados")'>
+                Historial de Pagos Recibidos (@countTotalCobrados)
+            </button>
+            @if (esAdministradorBackOffice)
+            {
+                <button type="button" class="tab-btn @(activeTab == "auditoria" ? "active" : "")" @onclick='() => SetActiveTab("auditoria")'>
+                    Auditoria contadores (@countAuditoriasTransferencias)
+                </button>
+            }
+        </div>
+
+        <!-- Filters / Search toolbar -->
+        <div class="filters-toolbar">
+            <div class="filters-grid">
+                <div class="filter-input-wrap">
+                    <i class="bi bi-search filter-input-icon"></i>
+                    <input type="text" class="filter-input" placeholder="Buscar por cliente, plan, comprobante..." @bind="searchQuery" @bind:event="oninput" @bind:after="OnSearchChanged" />
+                </div>
+                <div>
+                    <select class="filter-select" @bind="filterProducto" @bind:after="OnFiltersChanged">
+                        <option value="ALL">Todos los servicios</option>
+                        <option value="e-fact">e-Fact (Documentos)</option>
+                        <option value="e-sign">e-Sign (Firma)</option>
+                    </select>
+                </div>
+                <div class="date-filter-group">
+                    <span>Desde:</span>
+                    <input type="date" class="filter-date" @bind="filterFechaInicio" @bind:after="OnFiltersChanged" />
+                </div>
+                <div class="date-filter-group">
+                    <span>Hasta:</span>
+                    <input type="date" class="filter-date" @bind="filterFechaFin" @bind:after="OnFiltersChanged" />
+                </div>
+                @if (HasActiveFilters())
+                {
+                    <button type="button" class="btn-clear-filters" @onclick="ClearFilters">
+                        <i class="bi bi-x-lg"></i> Limpiar Filtros
+                    </button>
+                }
+            </div>
+        </div>
+
+        <!-- Data Table Container -->
+        <div class="table-card">
+            <div class="table-card-head">
+                @if (activeTab == "auditoria")
+                {
+                    <h3>Auditoria de Aprobaciones por Transferencia</h3>
+                    <p>Registro de contadores que aprobaron transferencias, con fecha, hora, cliente, comprobante y resultado de factura.</p>
+                }
+                else
+                {
+                <h3>
+                    @(activeTab == "pendientes" ? "Ventas y Solicitudes Pendientes de Conciliación" : "Registro Histórico de Cobros e Ingresos")
+                </h3>
+                <p>
+                    @(activeTab == "pendientes" 
+                        ? "Listado de ventas manuales o solicitudes en línea esperando la confirmación de pago y carga de evidencia bancaria." 
+                        : "Detalle de cobros acreditados con su respectiva fecha de pago, método de pago, referencia de comprobante e imagen de soporte.")
+                </p>
+                }
+            </div>
+
+            <div class="table-wrap">
+                <table class="cobros-table @(activeTab == "pendientes" ? "is-pending" : activeTab == "auditoria" ? "is-audit" : "is-paid")">
+                    <thead>
+                        @if (activeTab == "pendientes")
+                        {
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Servicio</th>
+                                <th>Paquete / Plan</th>
+                                <th>Valor</th>
+                                <th>Fecha Venta</th>
+                                <th>Canal</th>
+                                <th>Vendedor</th>
+                                <th style="text-align: right;">Acciones</th>
+                            </tr>
+                        }
+                        else if (activeTab == "auditoria")
+                        {
+                            <tr>
+                                <th>Contador</th>
+                                <th>Fecha / Hora</th>
+                                <th>Cliente</th>
+                                <th>Servicio</th>
+                                <th>Valor</th>
+                                <th>Comprobante</th>
+                                <th>Factura</th>
+                                <th>Resultado</th>
+                            </tr>
+                        }
+                        else
+                        {
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Servicio</th>
+                                <th>Paquete / Plan</th>
+                                <th>Monto Cobrado</th>
+                                <th>Fecha Pago</th>
+                                <th>Método Pago</th>
+                                <th>Comprobante</th>
+                                <th>Observaciones</th>
+                            </tr>
+                        }
+                    </thead>
+                    <tbody>
+                        @if (activeTab == "auditoria")
+                        {
+                            @if (!paginatedAuditRows.Any())
+                            {
+                                <tr>
+                                    <td colspan="8" class="table-empty">
+                                        <i class="bi bi-info-circle"></i>
+                                        No se encontraron aprobaciones de transferencia con los filtros actuales.
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var audit in paginatedAuditRows)
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="client-cell">
+                                                <span class="client-name">@audit.Contador</span>
+                                                <span class="client-email">@audit.ContadorEmail</span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="date-text">@audit.FechaAprobacion.ToString("dd/MM/yyyy HH:mm:ss")</span>
+                                        </td>
+                                        <td>
+                                            <div class="client-cell">
+                                                <span class="client-name">@audit.Cliente</span>
+                                                <span class="client-email">@audit.EmailCliente</span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="product-badge @(audit.Producto == "e-sign" ? "esign" : "efact")">
+                                                <i class="bi @(audit.Producto == "e-sign" ? "bi-key-fill" : "bi-file-earmark-check-fill")"></i>
+                                                @audit.Producto
+                                            </span>
+                                            <div class="audit-plan">@GetCleanPlanName(audit.PlanPaquete)</div>
+                                        </td>
+                                        <td>
+                                            <span class="value-bold text-success">$@audit.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</span>
+                                        </td>
+                                        <td>
+                                            <span class="comprobante-ref">@audit.Comprobante</span>
+                                        </td>
+                                        <td>
+                                            <span class="audit-chip @(audit.FacturaGenerada ? "success" : "warning")">
+                                                @(audit.FacturaGenerada ? (string.IsNullOrWhiteSpace(audit.NumeroFactura) ? $"#{audit.CodFactura}" : audit.NumeroFactura) : "No generada")
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="date-text observacion-text" title="@audit.Mensaje">@audit.Mensaje</span>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        }
+                        else if (!paginatedRows.Any())
+                        {
+                            <tr>
+                                <td colspan="@(activeTab == "pendientes" ? 8 : 8)" class="table-empty">
+                                    <i class="bi bi-info-circle"></i>
+                                    No se encontraron registros de cobros que coincidan con los filtros.
+                                </td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var row in paginatedRows)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="client-cell">
+                                            <span class="client-name">@GetClientCleanName(row.Cliente)</span>
+                                            <span class="client-email">@GetClientEmail(row.Cliente)</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="product-badge @(row.Producto == "e-sign" ? "esign" : "efact")">
+                                            <i class="bi @(row.Producto == "e-sign" ? "bi-key-fill" : "bi-file-earmark-check-fill")"></i>
+                                            @row.Producto
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="value-bold">@GetCleanPlanName(row.PlanPaquete)</span>
+                                    </td>
+                                    <td>
+                                        <span class="value-bold @(activeTab == "pendientes" ? "text-warning" : "text-success")">
+                                            $@row.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="date-text">@row.Fecha.ToString("dd/MM/yyyy HH:mm")</span>
+                                    </td>
+                                    @if (activeTab == "pendientes")
+                                    {
+                                        <td>
+                                            <span class="date-text">@row.Canal</span>
+                                        </td>
+                                        <td>
+                                            <span class="date-text">@(string.IsNullOrEmpty(row.Vendedor) ? "Sistema" : row.Vendedor)</span>
+                                        </td>
+                                        <td>
+                                            <div class="actions-cell">
+                                                @if (EsSolicitudTransferenciaDocumentos(row))
+                                                {
+                                                    @if (HasComprobanteImage(row))
+                                                    {
+                                                        <button type="button" class="btn-action evidence" title="Ver comprobante" @onclick="() => ShowEvidencePreview(row)">
+                                                            <i class="bi bi-image"></i> Ver
+                                                        </button>
+                                                    }
+                                                    <button type="button" class="btn-action collect" @onclick="() => AprobarSolicitudDocumentosAsync(row)" disabled="@isSaving">
+                                                        <i class="bi bi-check-circle"></i> @(aprobandoTransferenciaId == row.IdReporte ? "Emitiendo..." : "Aprobar")
+                                                    </button>
+                                                    <button type="button" class="btn-action void" @onclick="() => ConfirmAnularVenta(row)">
+                                                        <i class="bi bi-x-circle"></i> Rechazar
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <button type="button" class="btn-action collect" @onclick="() => OpenRegistrarCobroModal(row)">
+                                                        <i class="bi bi-wallet2"></i> Cobrar
+                                                    </button>
+                                                    <button type="button" class="btn-action void" @onclick="() => ConfirmAnularVenta(row)">
+                                                        <i class="bi bi-x-circle"></i> Anular
+                                                    </button>
+                                                }
+                                            </div>
+                                        </td>
+                                    }
+                                    else
+                                    {
+                                        <td>
+                                            <span class="payment-method-badge">@row.FormaPago</span>
+                                        </td>
+                                        <td>
+                                            <div class="comprobante-cell">
+                                                <span class="comprobante-ref">@GetComprobanteRef(row.Observacion)</span>
+                                                @if (HasComprobanteImage(row))
+                                                {
+                                                    <button type="button" class="btn-view-evidence" title="Ver captura de comprobante" @onclick="() => ShowEvidencePreview(row)">
+                                                        <i class="bi bi-image"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="date-text observacion-text" title="@GetObservacionLimpia(row.Observacion)">@GetObservacionLimpia(row.Observacion)</span>
+                                        </td>
+                                    }
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination Grid -->
+            @if (totalPages > 1)
+            {
+                <div class="pager-container">
+                    <span class="pager-info">
+                        Mostrando del @((currentPage - 1) * pageSize + 1) al @Math.Min(currentPage * pageSize, CurrentFilteredCount) de @CurrentFilteredCount registros
+                    </span>
+                    <div class="pager-buttons">
+                        <button type="button" class="pager-btn" disabled="@(currentPage == 1)" @onclick="() => SetPage(1)">
+                            <i class="bi bi-chevron-double-left"></i>
+                        </button>
+                        <button type="button" class="pager-btn" disabled="@(currentPage == 1)" @onclick="() => SetPage(currentPage - 1)">
+                            <i class="bi bi-chevron-left"></i>
+                        </button>
+                        @for (int i = Math.Max(1, currentPage - 2); i <= Math.Min(totalPages, currentPage + 2); i++)
+                        {
+                            int pageNum = i;
+                            <button type="button" class="pager-btn @(currentPage == pageNum ? "active" : "")" @onclick="() => SetPage(pageNum)">
+                                @pageNum
+                            </button>
+                        }
+                        <button type="button" class="pager-btn" disabled="@(currentPage == totalPages)" @onclick="() => SetPage(currentPage + 1)">
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                        <button type="button" class="pager-btn" disabled="@(currentPage == totalPages)" @onclick="() => SetPage(totalPages)">
+                            <i class="bi bi-chevron-double-right"></i>
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<!-- Modal: Registrar Cobro -->
+@if (showCobroModal && selectedVenta != null)
+{
+    <div class="modal-overlay">
+        <div class="modal-content-container animate__animated animate__zoomIn">
+            <header class="modal-header-n">
+                <h4>Confirmar Pago y Registrar Cobro</h4>
+                <button type="button" class="btn-close-n" @onclick="CloseCobroModal" disabled="@isSaving">&times;</button>
+            </header>
+            <div class="modal-body-n">
+                <!-- Modal Level Notifications -->
+                @if (!string.IsNullOrEmpty(modalError))
+                {
+                    <div class="action-notification-alert error" style="margin-bottom: 1rem;">
+                        <i class="bi bi-exclamation-triangle-fill"></i>
+                        <span>@modalError</span>
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(modalSuccess))
+                {
+                    <div class="action-notification-alert success" style="margin-bottom: 1rem;">
+                        <i class="bi bi-check-circle-fill"></i>
+                        <span>@modalSuccess</span>
+                    </div>
+                }
+
+                <!-- Summary of sale -->
+                <div class="modal-detail-banner">
+                    <div class="banner-item">
+                        <label>Cliente</label>
+                        <span>@GetClientCleanName(selectedVenta.Cliente)</span>
+                    </div>
+                    <div class="banner-item">
+                        <label>Total a Cobrar</label>
+                        <span class="price">$@selectedVenta.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</span>
+                    </div>
+                    <div class="banner-item">
+                        <label>Servicio</label>
+                        <span>@selectedVenta.Producto.ToUpper()</span>
+                    </div>
+                    <div class="banner-item">
+                        <label>Plan / Paquete</label>
+                        <span>@GetCleanPlanName(selectedVenta.PlanPaquete)</span>
+                    </div>
+                </div>
+
+                <!-- Date of payment -->
+                <div class="form-group-n">
+                    <label>Fecha de Pago *</label>
+                    <input type="date" class="input-n-premium" @bind="fechaPago" disabled="@isSaving" />
+                </div>
+
+                <!-- Method of payment -->
+                <div class="form-group-n">
+                    <label>Método de Pago *</label>
+                    <select class="input-n-premium" @bind="metodoPago" disabled="@isSaving">
+                        <option value="Transferencia">Transferencia Bancaria</option>
+                        <option value="Depósito Bancario">Depósito Bancario</option>
+                        <option value="Tarjeta de Crédito">Tarjeta de Crédito</option>
+                        <option value="Efectivo">Efectivo</option>
+                        <option value="Otros">Otros</option>
+                    </select>
+                </div>
+
+                <!-- Voucher reference -->
+                <div class="form-group-n">
+                    <label>Comprobante / Referencia *</label>
+                    <input type="text" class="input-n-premium" placeholder="Ej. N° de transferencia o depósito" @bind="comprobanteRef" disabled="@isSaving" />
+                </div>
+
+                <!-- Image evidence upload -->
+                <div class="form-group-n">
+                    <label>Captura del Comprobante (Opcional)</label>
+                    <label for="evidence-upload" class="upload-zone" style='display: @(selectedFile == null ? "flex" : "none");'>
+                        <i class="bi bi-cloud-arrow-up-fill"></i>
+                        <span class="upload-text">Haz clic aquí para cargar captura de pago</span>
+                        <span class="upload-sub">Formatos permitidos: JPG, PNG (máx. 5MB)</span>
+                    </label>
+                    <InputFile OnChange="HandleFileSelected" id="evidence-upload" style="display: none;" accept="image/*" />
+
+                    @if (selectedFile != null)
+                    {
+                        <div class="file-preview-banner">
+                            <div class="file-preview-info">
+                                <i class="bi bi-file-earmark-image-fill"></i>
+                                <span>@selectedFile.Name (@(Math.Round(selectedFile.Size / 1024.0, 1)) KB)</span>
+                            </div>
+                            <button type="button" class="btn-remove-file" title="Eliminar archivo" @onclick="RemoveSelectedFile" disabled="@isSaving">
+                                <i class="bi bi-trash-fill"></i>
+                            </button>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(uploadError))
+                    {
+                        <span class="text-danger font-sm fw-bold mt-1">@uploadError</span>
+                    }
+                </div>
+
+                <!-- Additional comments -->
+                <div class="form-group-n">
+                    <label>Observaciones Adicionales</label>
+                    <textarea class="input-n-premium" rows="3" placeholder="Detalles de conciliación, banco, etc." @bind="observaciones" disabled="@isSaving"></textarea>
+                </div>
+            </div>
+            <footer class="modal-footer-n">
+                <button type="button" class="btn-cancel-n" @onclick="CloseCobroModal" disabled="@isSaving">Cancelar</button>
+                <button type="button" class="btn-save-n" @onclick="SaveCobro" disabled="@(isSaving || string.IsNullOrWhiteSpace(comprobanteRef))">
+                    @if (isSaving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true" style="width: 1rem; height: 1rem;"></span>
+                        <span>Procesando...</span>
+                    }
+                    else
+                    {
+                        <span>Confirmar Cobro</span>
+                    }
+                </button>
+            </footer>
+        </div>
+    </div>
+}
+
+<!-- Modal: Vista Previa Comprobante -->
+@if (!string.IsNullOrEmpty(previewImageUrl))
+{
+    <div class="modal-overlay" @onclick="CloseEvidencePreview">
+        <div class="modal-content-container large animate__animated animate__zoomIn" @onclick:stopPropagation>
+            <header class="modal-header-n">
+                <h4>Evidencia de Comprobante de Pago</h4>
+                <button type="button" class="btn-close-n" @onclick="CloseEvidencePreview">&times;</button>
+            </header>
+            <div class="modal-body-n">
+                <div class="preview-image-wrap">
+                    <img src="@previewImageUrl" class="preview-img-tag" alt="Comprobante de cobro" />
+                </div>
+            </div>
+            <footer class="modal-footer-n">
+                <a href="@previewImageUrl" target="_blank" class="btn-save-n text-decoration-none" style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                    <i class="bi bi-box-arrow-up-right"></i> Abrir en pestaña nueva
+                </a>
+                <button type="button" class="btn-cancel-n" @onclick="CloseEvidencePreview">Cerrar</button>
+            </footer>
+        </div>
+    </div>
+}
+
+<!-- Modal: Confirmar Anulación -->
+@if (showAnularModal && selectedVenta != null)
+{
+    <div class="modal-overlay">
+        <div class="modal-content-container animate__animated animate__zoomIn">
+            <header class="modal-header-n" style="background: #9f1239;">
+                <h4>@(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Rechazar Transaccion" : "Anular Transaccion")</h4>
+                <button type="button" class="btn-close-n" @onclick="CloseAnularModal">&times;</button>
+            </header>
+            <div class="modal-body-n">
+                <p class="text-slate-700">@(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Esta seguro de rechazar esta solicitud de compra de documentos?" : "Esta seguro de que desea anular esta venta registrada?")</p>
+                <div class="modal-detail-banner" style="background-color: #fff1f2; border-color: #fecdd3;">
+                    <div class="banner-item">
+                        <label>Cliente</label>
+                        <span>@GetClientCleanName(selectedVenta.Cliente)</span>
+                    </div>
+                    <div class="banner-item">
+                        <label>Monto</label>
+                        <span class="price" style="color: #be123c;">$@selectedVenta.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</span>
+                    </div>
+                    <div class="banner-item">
+                        <label>Servicio</label>
+                        <span>@selectedVenta.Producto.ToUpper()</span>
+                    </div>
+                    <div class="banner-item">
+                        <label>Plan / Paquete</label>
+                        <span>@GetCleanPlanName(selectedVenta.PlanPaquete)</span>
+                    </div>
+                </div>
+                <p class="text-danger small fw-bold">@(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Esta accion notificara el rechazo en el historial del usuario y no acreditara documentos." : "Esta accion marcara el estado de la venta como anulada y no aprovisionara ningun servicio.")</p>
+            </div>
+            <footer class="modal-footer-n">
+                <button type="button" class="btn-cancel-n" @onclick="CloseAnularModal">Cancelar</button>
+                <button type="button" class="btn-save-n" style="background: linear-gradient(135deg, #e11d48, #be123c); box-shadow: 0 2px 4px rgba(225, 29, 72, 0.2);" @onclick="SaveAnulacion">
+                    @(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Confirmar Rechazo" : "Confirmar Anulacion")
+                </button>
+            </footer>
+        </div>
+    </div>
+}
+
+@code {
+    private const string AccionAprobacionTransferencia = "APROBACION_TRANSFERENCIA_FACTURA_BACKOFFICE";
+    private bool isLoading = true;
+    private string activeTab = "pendientes";
+    private string searchQuery = "";
+    private string filterProducto = "ALL";
+    private DateTime? filterFechaInicio;
+    private DateTime? filterFechaFin;
+
+    // Data lists
+    private List<ReporteVentaBackOffice> allVentas = new();
+    private List<ReporteVentaBackOffice> filteredRows = new();
+    private List<ReporteVentaBackOffice> paginatedRows = new();
+    private HashSet<int> ventasConComprobanteArchivo = new();
+    private List<AuditoriaTransferenciaDto> allAuditoriasTransferencias = new();
+    private List<AuditoriaTransferenciaDto> filteredAuditRows = new();
+    private List<AuditoriaTransferenciaDto> paginatedAuditRows = new();
+    private bool auditoriasCargadas;
+    private bool esAdministradorBackOffice;
+
+    // KPI Counters
+    private decimal montoPendiente = 0;
+    private int countPendientes = 0;
+    private decimal montoCobradoMes = 0;
+    private int countCobradoMes = 0;
+    private int countTotalCobrados = 0;
+    private int countSolicitudesDocumentosPendientes = 0;
+    private int countAuditoriasTransferencias = 0;
+
+    // Pagination
+    private int currentPage = 1;
+    private const int pageSize = 5;
+    private int totalPages = 0;
+    private int CurrentFilteredCount => activeTab == "auditoria" ? filteredAuditRows.Count : filteredRows.Count;
+
+    // Modals control
+    private bool showCobroModal = false;
+    private bool showAnularModal = false;
+    private ReporteVentaBackOffice? selectedVenta;
+
+    // Registrar Cobro Form Fields
+    private DateTime fechaPago = DateTime.Today;
+    private string metodoPago = "Transferencia";
+    private string comprobanteRef = "";
+    private string observaciones = "";
+    private Microsoft.AspNetCore.Components.Forms.IBrowserFile? selectedFile;
+    private string? uploadError;
+
+    // Preview Image Url
+    private string? previewImageUrl;
+
+    private string? modalError;
+    private string? modalSuccess;
+    private bool isSaving = false;
+    private int? currentUserId;
+    private int? aprobandoTransferenciaId;
+    private string? facturaAutorizadaPdfUrl;
+
+    // Feedback notifications
+    private string? feedbackMessage;
+    private bool feedbackIsSuccess = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarUsuarioActualAsync();
+        await LoadVentasData();
+    }
+
+    private async Task CargarUsuarioActualAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var role = auth.User.FindFirst("IdTipoUsuario")?.Value ?? auth.User.FindFirst(ClaimTypes.Role)?.Value;
+        var tipoCliente = auth.User.FindFirst("TipoCliente")?.Value;
+        var idRaw = auth.User.FindFirst("IdUsuario")?.Value ?? auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        currentUserId = int.TryParse(idRaw, out var id) && id > 0 ? id : null;
+
+        if (currentUserId.HasValue)
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var dbUser = await context.Usuarios.AsNoTracking().FirstOrDefaultAsync(u => u.IdUsuario == currentUserId.Value);
+            if (dbUser is not null)
+            {
+                esAdministradorBackOffice = dbUser.IdTipoUsuario == 7 &&
+                                             dbUser.TipoCliente != 2 &&
+                                             dbUser.TipoCliente != 3;
+                return;
+            }
+        }
+
+        esAdministradorBackOffice = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
+                                     !string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase) &&
+                                     !string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task LoadVentasData()
+    {
+        isLoading = true;
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            allVentas = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .OrderByDescending(v => v.Fecha)
+                .Select(v => new ReporteVentaBackOffice
+                {
+                    IdReporte = v.IdReporte,
+                    Cliente = v.Cliente,
+                    Producto = v.Producto,
+                    PlanPaquete = v.PlanPaquete,
+                    Valor = v.Valor,
+                    Fecha = v.Fecha,
+                    Canal = v.Canal,
+                    Vendedor = v.Vendedor,
+                    Estado = v.Estado,
+                    FormaPago = v.FormaPago,
+                    Observacion = v.Observacion
+                })
+                .ToListAsync();
+            ventasConComprobanteArchivo = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(v => v.ComprobanteArchivo != null)
+                .Select(v => v.IdReporte)
+                .ToHashSetAsync();
+
+            // Calculate KPIs
+            var now = DateTime.Now;
+
+            montoPendiente = allVentas
+                .Where(v => v.Estado == "pendiente")
+                .Sum(v => v.Valor);
+
+            countPendientes = allVentas
+                .Count(v => v.Estado == "pendiente");
+
+            countSolicitudesDocumentosPendientes = allVentas
+                .Count(v => v.Estado == "pendiente" && EsSolicitudTransferenciaDocumentos(v));
+
+            montoCobradoMes = allVentas
+                .Where(v => v.Estado == "pagada" && v.Fecha.Month == now.Month && v.Fecha.Year == now.Year)
+                .Sum(v => v.Valor);
+
+            countCobradoMes = allVentas
+                .Count(v => v.Estado == "pagada" && v.Fecha.Month == now.Month && v.Fecha.Year == now.Year);
+
+            countTotalCobrados = allVentas
+                .Count(v => v.Estado == "pagada");
+
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Error al cargar los datos: {ex.Message}", false);
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        if (activeTab == "auditoria")
+        {
+            var auditQuery = allAuditoriasTransferencias.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                var cleanSearch = searchQuery.Trim().ToLowerInvariant();
+                auditQuery = auditQuery.Where(a =>
+                    a.Contador.ToLowerInvariant().Contains(cleanSearch) ||
+                    a.ContadorEmail.ToLowerInvariant().Contains(cleanSearch) ||
+                    a.Cliente.ToLowerInvariant().Contains(cleanSearch) ||
+                    a.EmailCliente.ToLowerInvariant().Contains(cleanSearch) ||
+                    a.Comprobante.ToLowerInvariant().Contains(cleanSearch) ||
+                    a.NumeroFactura.ToLowerInvariant().Contains(cleanSearch) ||
+                    a.Mensaje.ToLowerInvariant().Contains(cleanSearch));
+            }
+
+            if (filterProducto != "ALL")
+            {
+                auditQuery = auditQuery.Where(a => a.Producto.Equals(filterProducto, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (filterFechaInicio.HasValue)
+            {
+                auditQuery = auditQuery.Where(a => a.FechaAprobacion.Date >= filterFechaInicio.Value.Date);
+            }
+
+            if (filterFechaFin.HasValue)
+            {
+                auditQuery = auditQuery.Where(a => a.FechaAprobacion.Date <= filterFechaFin.Value.Date);
+            }
+
+            filteredAuditRows = auditQuery.ToList();
+            totalPages = (int)Math.Ceiling(filteredAuditRows.Count / (double)pageSize);
+            if (currentPage < 1) currentPage = 1;
+            if (totalPages > 0 && currentPage > totalPages) currentPage = totalPages;
+            Paginate();
+            return;
+        }
+
+        // Filter by tab
+        var query = allVentas.AsEnumerable();
+        if (activeTab == "pendientes")
+        {
+            query = query.Where(v => v.Estado == "pendiente");
+        }
+        else
+        {
+            query = query.Where(v => v.Estado == "pagada");
+        }
+
+        // Search text filter
+        if (!string.IsNullOrWhiteSpace(searchQuery))
+        {
+            var cleanSearch = searchQuery.Trim().ToLower();
+            query = query.Where(v =>
+                v.Cliente.ToLower().Contains(cleanSearch) ||
+                v.PlanPaquete.ToLower().Contains(cleanSearch) ||
+                (v.Vendedor != null && v.Vendedor.ToLower().Contains(cleanSearch)) ||
+                (v.Observacion != null && v.Observacion.ToLower().Contains(cleanSearch))
+            );
+        }
+
+        // Product filter
+        if (filterProducto != "ALL")
+        {
+            query = query.Where(v => v.Producto.Equals(filterProducto, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Date range filter
+        if (filterFechaInicio.HasValue)
+        {
+            query = query.Where(v => v.Fecha.Date >= filterFechaInicio.Value.Date);
+        }
+        if (filterFechaFin.HasValue)
+        {
+            query = query.Where(v => v.Fecha.Date <= filterFechaFin.Value.Date);
+        }
+
+        filteredRows = query.ToList();
+
+        // Calculate paging
+        totalPages = (int)Math.Ceiling(filteredRows.Count / (double)pageSize);
+        if (currentPage < 1) currentPage = 1;
+        if (totalPages > 0 && currentPage > totalPages) currentPage = totalPages;
+
+        Paginate();
+    }
+
+    private async Task LoadAuditoriasTransferenciasAsync()
+    {
+        isLoading = true;
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var auditoriasDb = await context.Auditorias
+                .AsNoTracking()
+                .Where(a => a.Accion == AccionAprobacionTransferencia)
+                .OrderByDescending(a => a.Fecha)
+                .Select(a => new Auditoria
+                {
+                    IdAuditoria = a.IdAuditoria,
+                    IdUsuario = a.IdUsuario,
+                    Fecha = a.Fecha,
+                    Accion = a.Accion,
+                    ValorNuevo = a.ValorNuevo,
+                    Detalles = a.Detalles
+                })
+                .Take(200)
+                .ToListAsync();
+
+            var usuariosIds = auditoriasDb
+                .Where(a => a.IdUsuario.HasValue)
+                .Select(a => a.IdUsuario!.Value)
+                .Distinct()
+                .ToList();
+
+            var usuarios = usuariosIds.Count == 0
+                ? new Dictionary<int, Usuario>()
+                : await context.Usuarios
+                    .AsNoTracking()
+                    .Where(u => usuariosIds.Contains(u.IdUsuario))
+                    .ToDictionaryAsync(u => u.IdUsuario);
+
+            foreach (var auditoria in auditoriasDb)
+            {
+                if (auditoria.IdUsuario.HasValue && usuarios.TryGetValue(auditoria.IdUsuario.Value, out var usuario))
+                {
+                    auditoria.Usuario = usuario;
+                }
+            }
+
+            allAuditoriasTransferencias = auditoriasDb
+                .Select(MapAuditoriaTransferencia)
+                .ToList();
+            countAuditoriasTransferencias = allAuditoriasTransferencias.Count;
+            auditoriasCargadas = true;
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Error al cargar auditoria de contadores: {ex.Message}", false);
+            allAuditoriasTransferencias = new();
+            filteredAuditRows = new();
+            paginatedAuditRows = new();
+            countAuditoriasTransferencias = 0;
+            auditoriasCargadas = true;
+            ApplyFilters();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void Paginate()
+    {
+        if (activeTab == "auditoria")
+        {
+            paginatedAuditRows = filteredAuditRows
+                .Skip((currentPage - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+            return;
+        }
+
+        paginatedRows = filteredRows
+            .Skip((currentPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+    }
+
+    private async Task SetActiveTab(string tab)
+    {
+        activeTab = tab;
+        currentPage = 1;
+
+        if (activeTab == "auditoria" && !esAdministradorBackOffice)
+        {
+            activeTab = "pendientes";
+        }
+
+        if (activeTab == "auditoria" && !auditoriasCargadas)
+        {
+            await LoadAuditoriasTransferenciasAsync();
+            return;
+        }
+
+        ApplyFilters();
+    }
+
+    private void SetPage(int pageNum)
+    {
+        currentPage = pageNum;
+        Paginate();
+    }
+
+    private void OnSearchChanged()
+    {
+        currentPage = 1;
+        ApplyFilters();
+    }
+
+    private void OnFiltersChanged()
+    {
+        currentPage = 1;
+        ApplyFilters();
+    }
+
+    private bool HasActiveFilters()
+    {
+        return !string.IsNullOrWhiteSpace(searchQuery) ||
+               filterProducto != "ALL" ||
+               filterFechaInicio.HasValue ||
+               filterFechaFin.HasValue;
+    }
+
+    private void ClearFilters()
+    {
+        searchQuery = "";
+        filterProducto = "ALL";
+        filterFechaInicio = null;
+        filterFechaFin = null;
+        currentPage = 1;
+        ApplyFilters();
+    }
+
+    // Modal Action triggers
+    private void OpenRegistrarCobroModal(ReporteVentaBackOffice venta)
+    {
+        selectedVenta = venta;
+        fechaPago = DateTime.Today;
+        metodoPago = "Transferencia";
+        comprobanteRef = "";
+        observaciones = "";
+        selectedFile = null;
+        uploadError = null;
+        modalError = null;
+        modalSuccess = null;
+        isSaving = false;
+        showCobroModal = true;
+    }
+
+    private void CloseCobroModal()
+    {
+        showCobroModal = false;
+        selectedVenta = null;
+        selectedFile = null;
+        uploadError = null;
+        modalError = null;
+        modalSuccess = null;
+        isSaving = false;
+    }
+
+    private void ConfirmAnularVenta(ReporteVentaBackOffice venta)
+    {
+        selectedVenta = venta;
+        showAnularModal = true;
+    }
+
+    private void CloseAnularModal()
+    {
+        showAnularModal = false;
+        selectedVenta = null;
+    }
+
+    // File input handlers
+    private void HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        uploadError = null;
+        selectedFile = e.File;
+        if (selectedFile != null)
+        {
+            if (selectedFile.Size > 5 * 1024 * 1024)
+            {
+                uploadError = "El archivo supera el límite de 5 MB.";
+                selectedFile = null;
+                return;
+            }
+            if (!selectedFile.ContentType.StartsWith("image/"))
+            {
+                uploadError = "Solo se permiten archivos de imagen.";
+                selectedFile = null;
+                return;
+            }
+        }
+    }
+
+    private void RemoveSelectedFile()
+    {
+        selectedFile = null;
+        uploadError = null;
+    }
+
+    // Action execution saves
+    private async Task SaveCobro()
+    {
+        if (selectedVenta == null || string.IsNullOrWhiteSpace(comprobanteRef)) return;
+
+        modalError = null;
+        modalSuccess = null;
+        isSaving = true;
+        
+        try
+        {
+            byte[]? fileBytes = null;
+
+            // Handle image upload save if any
+            if (selectedFile != null)
+            {
+                try
+                {
+                    using var stream = selectedFile.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+                    using var ms = new MemoryStream();
+                    await stream.CopyToAsync(ms);
+                    fileBytes = ms.ToArray();
+                }
+                catch (Exception fileEx)
+                {
+                    modalError = $"Error al leer el archivo: {fileEx.Message}";
+                    isSaving = false;
+                    return;
+                }
+            }
+
+            using var context = await DbFactory.CreateDbContextAsync();
+            var dbVenta = await context.ReporteVentasBackOffice.FindAsync(selectedVenta.IdReporte);
+
+            if (dbVenta != null && dbVenta.Estado != "pagada")
+            {
+                // Set payment properties
+                dbVenta.Estado = "pagada";
+                dbVenta.Fecha = fechaPago;
+                dbVenta.FormaPago = TruncateStr(metodoPago, 50);
+
+                if (fileBytes != null)
+                {
+                    dbVenta.ComprobanteArchivo = fileBytes;
+                }
+
+                var cleanObs = string.IsNullOrWhiteSpace(observaciones) ? "" : observaciones.Trim();
+                dbVenta.Observacion = TruncateStr($"[Comprobante: {comprobanteRef.Trim()}] {cleanObs}", 500);
+
+                await context.SaveChangesAsync();
+
+                // Call license activation
+                await ActivarLicenciaUsuario(dbVenta);
+
+                modalSuccess = "¡Cobro registrado exitosamente! El servicio ha sido aprovisionado.";
+                
+                // Refresh background lists
+                await LoadVentasData();
+                
+                // Keep modal open briefly to show success, then close
+                await Task.Delay(1500);
+                CloseCobroModal();
+            }
+            else
+            {
+                modalError = "El registro de venta no existe o ya ha sido marcado como pagado.";
+                isSaving = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            modalError = $"Error de base de datos al registrar cobro: {ex.Message}";
+            isSaving = false;
+        }
+    }
+
+    private async Task AprobarSolicitudDocumentosAsync(ReporteVentaBackOffice venta)
+    {
+        if (!EsSolicitudTransferenciaDocumentos(venta) || isSaving)
+        {
+            return;
+        }
+
+        if (!await ConfirmarAprobacionSolicitudDocumentosAsync(venta))
+        {
+            return;
+        }
+
+        isSaving = true;
+        aprobandoTransferenciaId = venta.IdReporte;
+        facturaAutorizadaPdfUrl = null;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var dbVenta = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.IdReporte == venta.IdReporte);
+            if (dbVenta is null || dbVenta.Estado == "pagada")
+            {
+                ShowFeedback("La solicitud ya no esta pendiente.", false);
+                return;
+            }
+
+            var fechaAprobacion = DateTime.Now;
+            var observacionOriginal = dbVenta.Observacion;
+
+            CompraDocumentosFacturaResultado resultadoFactura;
+            try
+            {
+                resultadoFactura = await EmitirFacturaTransferenciaAsync(dbVenta);
+            }
+            catch (Exception ex)
+            {
+                resultadoFactura = CompraDocumentosFacturaResultado.Error(ex.Message);
+            }
+
+            var observacionAprobada = TruncateStr($"Aprobado por BackOffice. {observacionOriginal}", 500);
+            context.Database.SetCommandTimeout(10);
+            var filasActualizadas = await context.ReporteVentasBackOffice
+                .Where(v => v.IdReporte == dbVenta.IdReporte && v.Estado != "pagada")
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(v => v.Estado, "pagada")
+                    .SetProperty(v => v.Fecha, fechaAprobacion)
+                    .SetProperty(v => v.FormaPago, "Transferencia Bancaria")
+                    .SetProperty(v => v.Observacion, observacionAprobada));
+            if (filasActualizadas == 0)
+            {
+                ShowFeedback("La solicitud ya fue procesada por otro usuario.", false);
+                return;
+            }
+
+            dbVenta.Estado = "pagada";
+            dbVenta.Fecha = fechaAprobacion;
+            dbVenta.FormaPago = "Transferencia Bancaria";
+            dbVenta.Observacion = observacionAprobada;
+
+            await AuditService.TryRegistrarAuditoriaAsync(
+                currentUserId,
+                "APROBACION_TRANSFERENCIA_FACTURA_BACKOFFICE",
+                new
+                {
+                    dbVenta.IdReporte,
+                    Estado = "pendiente",
+                    Observacion = observacionOriginal
+                },
+                new
+                {
+                    dbVenta.IdReporte,
+                    dbVenta.Estado,
+                    dbVenta.Fecha,
+                    dbVenta.FormaPago,
+                    dbVenta.Observacion,
+                    FacturaGenerada = resultadoFactura.Exito,
+                    resultadoFactura.CodFactura,
+                    resultadoFactura.NumeroFactura,
+                    resultadoFactura.Autorizada,
+                    resultadoFactura.EstadoSri
+                },
+                new
+                {
+                    AprobadoPorUsuario = currentUserId,
+                    FechaAprobacion = fechaAprobacion,
+                    HoraAprobacion = fechaAprobacion.ToString("HH:mm:ss"),
+                    Cliente = GetClientCleanName(dbVenta.Cliente),
+                    Email = GetClientEmail(dbVenta.Cliente),
+                    dbVenta.Producto,
+                    dbVenta.PlanPaquete,
+                    dbVenta.Valor,
+                    Comprobante = GetComprobanteRef(observacionOriginal),
+                    resultadoFactura.Mensaje
+                });
+
+            venta.Estado = dbVenta.Estado;
+            venta.Fecha = dbVenta.Fecha;
+            venta.FormaPago = dbVenta.FormaPago;
+            venta.Observacion = dbVenta.Observacion;
+            countSolicitudesDocumentosPendientes = Math.Max(0, countSolicitudesDocumentosPendientes - 1);
+            countPendientes = Math.Max(0, countPendientes - 1);
+            montoPendiente = Math.Max(0, montoPendiente - dbVenta.Valor);
+
+            var cliente = GetClientCleanName(dbVenta.Cliente);
+            if (resultadoFactura.Autorizada && resultadoFactura.CodFactura > 0)
+            {
+                facturaAutorizadaPdfUrl = await FacturacionService.AsegurarPdfFacturaAsync(resultadoFactura.CodFactura);
+            }
+
+            ShowFeedback(
+                resultadoFactura.Autorizada
+                    ? $"Solicitud aprobada para {cliente}. Factura {resultadoFactura.NumeroFactura ?? resultadoFactura.CodFactura.ToString()} autorizada por el SRI. {resultadoFactura.Mensaje}"
+                    : resultadoFactura.Exito
+                        ? $"Solicitud aprobada para {cliente}, pero la factura guardada no fue autorizada por el SRI. Estado: {resultadoFactura.EstadoSri ?? "Sin estado"}. {resultadoFactura.Mensaje}"
+                        : $"Solicitud aprobada para {cliente}, pero no se pudo guardar o emitir la factura automatica: {resultadoFactura.Mensaje}",
+                resultadoFactura.Autorizada);
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"No se pudo aprobar la solicitud: {ex.Message}", false);
+        }
+        finally
+        {
+            aprobandoTransferenciaId = null;
+            isSaving = false;
+        }
+    }
+
+    private async Task<bool> ConfirmarAprobacionSolicitudDocumentosAsync(ReporteVentaBackOffice venta)
+    {
+        var cliente = GetClientCleanName(venta.Cliente);
+        var mensaje = $"Se aprobará la recarga de {cliente} por ${venta.Valor:N2}. " +
+                      "Esta acción acreditará los documentos y generará la factura automática.";
+
+        try
+        {
+            var resultado = await JS.InvokeAsync<JsonElement>("Swal.fire", new
+            {
+                icon = "question",
+                title = "Confirmar aprobación",
+                text = mensaje,
+                showCancelButton = true,
+                confirmButtonText = "Sí, aprobar",
+                cancelButtonText = "Cancelar",
+                reverseButtons = true,
+                focusCancel = true
+            });
+
+            return resultado.TryGetProperty("isConfirmed", out var confirmado) && confirmado.GetBoolean();
+        }
+        catch (JSException)
+        {
+            return await JS.InvokeAsync<bool>("confirm", mensaje);
+        }
+    }
+
+    private async Task AbrirFacturaAutorizadaAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(facturaAutorizadaPdfUrl))
+            await JS.InvokeVoidAsync("open", facturaAutorizadaPdfUrl, "_blank");
+    }
+
+    private async Task SaveAnulacion()
+    {
+        if (selectedVenta == null) return;
+
+        isLoading = true;
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var dbVenta = await context.ReporteVentasBackOffice.FindAsync(selectedVenta.IdReporte);
+            if (dbVenta != null && dbVenta.Estado != "anulada")
+            {
+                dbVenta.Estado = "anulada";
+                await context.SaveChangesAsync();
+
+                if (EsSolicitudTransferenciaDocumentos(dbVenta))
+                {
+                    await ActualizarHistorialCompraDocumentosAsync(dbVenta, aprobado: false);
+                }
+
+                ShowFeedback(EsSolicitudTransferenciaDocumentos(dbVenta)
+                    ? "Solicitud rechazada. El usuario vera el estado en su historial."
+                    : "Venta anulada correctamente.", true);
+                CloseAnularModal();
+                await LoadVentasData();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Error al anular venta: {ex.Message}", false);
+            isLoading = false;
+        }
+    }
+
+    // Activar Licencia Logic
+    private async Task ActivarLicenciaUsuario(ReporteVentaBackOffice venta)
+    {
+        var parts = venta.Cliente.Split('|');
+        if (parts.Length < 2) return;
+        var email = parts[1].Trim();
+
+        using var context = await DbFactory.CreateDbContextAsync();
+        var user = await context.Usuarios.FirstOrDefaultAsync(u => u.Email == email);
+        if (user == null) return;
+
+        if (venta.Producto == "e-sign")
+        {
+            var service = await context.AppServicios.FirstOrDefaultAsync(s => s.Clave.ToLower().Contains("sign"));
+            if (service == null) return;
+
+            var sub = await context.UsuarioServicioSuscripciones
+                .FirstOrDefaultAsync(s => s.IdUsuario == user.IdUsuario && s.ServicioId == service.ServicioId);
+
+            if (sub == null)
+            {
+                sub = new UsuarioServicioSuscripcion
+                {
+                    IdUsuario = user.IdUsuario,
+                    ServicioId = service.ServicioId,
+                    FechaCreacion = DateTime.Now
+                };
+                context.UsuarioServicioSuscripciones.Add(sub);
+            }
+
+            sub.Estado = "ACTIVO";
+            sub.FechaInicio = DateTime.Today;
+            sub.PlanActual = venta.PlanPaquete;
+            sub.FechaActualizacion = DateTime.Now;
+
+            if (venta.PlanPaquete.Contains("Vitalicio", StringComparison.OrdinalIgnoreCase))
+            {
+                sub.EsVitalicia = true;
+                sub.FechaFin = null;
+                sub.CicloActual = "Vitalicio";
+            }
+            else
+            {
+                int years = 1;
+                var matchYears = System.Text.RegularExpressions.Regex.Match(venta.PlanPaquete, @"\d+");
+                if (matchYears.Success)
+                {
+                    years = int.Parse(matchYears.Value);
+                }
+
+                sub.EsVitalicia = false;
+                var baseDate = (sub.FechaFin.HasValue && sub.FechaFin.Value > DateTime.Today) ? sub.FechaFin.Value : DateTime.Today;
+                sub.FechaFin = baseDate.AddYears(years);
+                sub.CicloActual = $"{years} {(years == 1 ? "Año" : "Años")}";
+            }
+
+            sub.Observacion = $"Activado automáticamente por cobro Ref #{venta.IdReporte}. Canal: {venta.Canal}. Forma de Pago: {venta.FormaPago}.";
+            await context.SaveChangesAsync();
+        }
+        else if (venta.Producto == "e-fact")
+        {
+            bool isIlimitado = venta.PlanPaquete.Contains("Ilimitado", StringComparison.OrdinalIgnoreCase);
+            int docsCount = 0;
+
+            if (!isIlimitado)
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(venta.PlanPaquete, @"\d+");
+                docsCount = match.Success ? int.Parse(match.Value) : 50;
+                user.SaldoDocumentos += docsCount;
+            }
+
+            var history = LeerHistorial(user.HistorialComprasDocumentosJson);
+            var compraId = ObtenerCompraDocumentosId(venta);
+            var itemExistente = string.IsNullOrWhiteSpace(compraId)
+                ? null
+                : history.FirstOrDefault(item => string.Equals(item.Id, compraId, StringComparison.OrdinalIgnoreCase));
+
+            if (itemExistente is not null)
+            {
+                itemExistente.Estado = "Aprobado";
+                itemExistente.SaldoAplicado = true;
+                itemExistente.Reference = $"BO-{venta.IdReporte}";
+                itemExistente.AuthorizationCode = GetComprobanteRef(venta.Observacion);
+                itemExistente.Descripcion = $"Transferencia aprobada: {venta.PlanPaquete}";
+                itemExistente.EsIlimitado = isIlimitado;
+                itemExistente.EsPermanente = isIlimitado;
+                itemExistente.VigenciaHasta = isIlimitado ? null : itemExistente.VigenciaHasta;
+            }
+            else
+            {
+                var newItem = new CompraDocumentosHistorialItem
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Fecha = DateTime.Now,
+                    Documentos = docsCount,
+                    MontoTotal = venta.Valor,
+                    Estado = "Aprobado",
+                    Descripcion = $"Venta BackOffice: {venta.PlanPaquete} (Ref #{venta.IdReporte})",
+                    SaldoAplicado = true,
+                    EsIlimitado = isIlimitado,
+                    EsPermanente = true,
+                    VigenciaHasta = null,
+                    Reference = $"BO-{venta.IdReporte}",
+                    AuthorizationCode = GetComprobanteRef(venta.Observacion)
+                };
+                history.Insert(0, newItem);
+            }
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            user.HistorialComprasDocumentosJson = JsonSerializer.Serialize(history, options);
+
+            if (isIlimitado)
+            {
+                var service = await context.AppServicios.FirstOrDefaultAsync(s => s.Clave.ToLower().Contains("fact"));
+                if (service != null)
+                {
+                    var sub = await context.UsuarioServicioSuscripciones
+                        .FirstOrDefaultAsync(s => s.IdUsuario == user.IdUsuario && s.ServicioId == service.ServicioId);
+
+                    if (sub == null)
+                    {
+                        sub = new UsuarioServicioSuscripcion
+                        {
+                            IdUsuario = user.IdUsuario,
+                            ServicioId = service.ServicioId,
+                            FechaCreacion = DateTime.Now
+                        };
+                        context.UsuarioServicioSuscripciones.Add(sub);
+                    }
+
+                    sub.Estado = "ACTIVO";
+                    sub.FechaInicio = DateTime.Today;
+                    sub.EsVitalicia = true;
+                    sub.FechaFin = null;
+                    sub.PlanActual = "Plan Ilimitado";
+                    sub.CicloActual = "Vitalicio";
+                    sub.FechaActualizacion = DateTime.Now;
+                    sub.Observacion = $"Activado automáticamente por plan ilimitado Ref #{venta.IdReporte}. Canal: {venta.Canal}. Forma de Pago: {venta.FormaPago}.";
+                }
+            }
+
+            context.Entry(user).State = EntityState.Modified;
+            await context.SaveChangesAsync();
+        }
+    }
+
+    private List<CompraDocumentosHistorialItem> LeerHistorial(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new List<CompraDocumentosHistorialItem>();
+
+        try
+        {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(json, options) 
+                   ?? new List<CompraDocumentosHistorialItem>();
+        }
+        catch
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaAsync(ReporteVentaBackOffice venta)
+    {
+        var email = GetClientEmail(venta.Cliente);
+        var compraId = ObtenerCompraDocumentosId(venta);
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(compraId))
+        {
+            return CompraDocumentosFacturaResultado.Error("No se pudo identificar la compra o el usuario.");
+        }
+
+        using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios.FirstOrDefaultAsync(u => u.Email == email);
+        if (usuario is null)
+        {
+            return CompraDocumentosFacturaResultado.Error("No se encontro el usuario titular de la compra.");
+        }
+
+        var historial = LeerHistorial(usuario.HistorialComprasDocumentosJson);
+        var compra = historial.FirstOrDefault(x => string.Equals(x.Id, compraId, StringComparison.OrdinalIgnoreCase));
+        if (compra is null)
+        {
+            return CompraDocumentosFacturaResultado.Error("No se encontro la compra aprobada en el historial.");
+        }
+
+        var saldoYaAplicado = compra.SaldoAplicado;
+        var esIlimitado = compra.EsIlimitado || venta.PlanPaquete.Contains("Ilimitado", StringComparison.OrdinalIgnoreCase);
+        if (!saldoYaAplicado && !esIlimitado)
+        {
+            usuario.SaldoDocumentos = Math.Max(0, usuario.SaldoDocumentos) + Math.Max(0, compra.Documentos);
+        }
+
+        compra.Estado = "Aprobado";
+        compra.SaldoAplicado = true;
+        compra.EsIlimitado = esIlimitado;
+        compra.EsPermanente = esIlimitado;
+        compra.Reference = $"BO-{venta.IdReporte}";
+        compra.AuthorizationCode = GetComprobanteRef(venta.Observacion);
+        compra.Descripcion = $"Transferencia aprobada: {venta.PlanPaquete}";
+        usuario.FechaUltimaRecargaDocumentos = DateTime.Now;
+
+        if (!saldoYaAplicado && esIlimitado)
+        {
+            var serviceId = await context.AppServicios
+                .AsNoTracking()
+                .Where(s => s.Clave.ToLower().Contains("fact"))
+                .Select(s => (int?)s.ServicioId)
+                .FirstOrDefaultAsync();
+            if (serviceId.HasValue)
+            {
+                var subscription = await context.UsuarioServicioSuscripciones
+                    .FirstOrDefaultAsync(s => s.IdUsuario == usuario.IdUsuario && s.ServicioId == serviceId.Value);
+                if (subscription is null)
+                {
+                    subscription = new UsuarioServicioSuscripcion
+                    {
+                        IdUsuario = usuario.IdUsuario,
+                        ServicioId = serviceId.Value,
+                        FechaCreacion = DateTime.Now
+                    };
+                    context.UsuarioServicioSuscripciones.Add(subscription);
+                }
+
+                subscription.Estado = "ACTIVO";
+                subscription.FechaInicio = DateTime.Today;
+                subscription.EsVitalicia = true;
+                subscription.FechaFin = null;
+                subscription.PlanActual = "Plan Ilimitado";
+                subscription.CicloActual = "Vitalicio";
+                subscription.FechaActualizacion = DateTime.Now;
+                subscription.Observacion = $"Activado automaticamente por plan ilimitado Ref #{venta.IdReporte}.";
+            }
+        }
+
+        var resultado = await CompraDocumentosFacturacionService.EmitirFacturaAsync(
+            usuario.IdUsuario,
+            compra,
+            $"BO-{venta.IdReporte}",
+            GetComprobanteRef(venta.Observacion));
+
+        compra.CodFactura = resultado.CodFactura > 0 ? resultado.CodFactura : compra.CodFactura;
+        compra.NumeroFactura = !string.IsNullOrWhiteSpace(resultado.NumeroFactura)
+            ? resultado.NumeroFactura
+            : compra.NumeroFactura;
+        compra.FechaFactura ??= resultado.CodFactura > 0 ? DateTime.Now : null;
+        compra.FacturaAutorizada = resultado.CodFactura > 0 ? resultado.Autorizada : compra.FacturaAutorizada;
+        compra.EstadoFactura = !string.IsNullOrWhiteSpace(resultado.EstadoSri)
+            ? resultado.EstadoSri
+            : compra.EstadoFactura;
+        compra.MensajeFactura = resultado.Mensaje;
+
+        usuario.HistorialComprasDocumentosJson = JsonSerializer.Serialize(
+            historial,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        await context.SaveChangesAsync();
+
+        return resultado;
+    }
+
+    // Helper text parsers
+    private string GetClientCleanName(string rawCliente)
+    {
+        if (string.IsNullOrEmpty(rawCliente)) return "Usuario";
+        var parts = rawCliente.Split('|');
+        return parts[0].Trim();
+    }
+
+    private string GetClientEmail(string rawCliente)
+    {
+        if (string.IsNullOrEmpty(rawCliente)) return string.Empty;
+        var parts = rawCliente.Split('|');
+        return parts.Length > 1 ? parts[1].Trim() : string.Empty;
+    }
+
+    private string GetCleanPlanName(string planName)
+    {
+        if (string.IsNullOrEmpty(planName)) return string.Empty;
+        return planName.Replace("Venta BackOffice: ", "").Split('(')[0].Trim();
+    }
+
+    private string GetComprobanteRef(string? obs)
+    {
+        if (string.IsNullOrEmpty(obs)) return "S/N";
+        if (obs.StartsWith("[Comprobante:"))
+        {
+            var endIdx = obs.IndexOf(']');
+            if (endIdx > 13)
+            {
+                return obs.Substring(13, endIdx - 13).Trim();
+            }
+        }
+
+        const string comprobanteTransferencia = "N. comprobante:";
+        var comprobanteIdx = obs.IndexOf(comprobanteTransferencia, StringComparison.OrdinalIgnoreCase);
+        if (comprobanteIdx >= 0)
+        {
+            var valueStart = comprobanteIdx + comprobanteTransferencia.Length;
+            var endIdx = obs.IndexOf('.', valueStart);
+            var value = endIdx > valueStart
+                ? obs.Substring(valueStart, endIdx - valueStart)
+                : obs.Substring(valueStart);
+
+            value = value.Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return "S/N";
+    }
+
+    private bool HasComprobanteImage(ReporteVentaBackOffice row)
+    {
+        if (ventasConComprobanteArchivo.Contains(row.IdReporte)) return true;
+        var obs = row.Observacion;
+        if (string.IsNullOrEmpty(obs)) return false;
+        return obs.Contains("[Imagen:") && obs.Contains("/uploads/comprobantes/");
+    }
+
+    private string GetEvidenceImageUrl(string? obs)
+    {
+        if (string.IsNullOrEmpty(obs)) return "";
+        var startTag = "[Imagen:";
+        var startIdx = obs.IndexOf(startTag);
+        if (startIdx >= 0)
+        {
+            var contentStart = startIdx + startTag.Length;
+            var endIdx = obs.IndexOf(']', contentStart);
+            if (endIdx > contentStart)
+            {
+                return obs.Substring(contentStart, endIdx - contentStart).Trim();
+            }
+        }
+        return "";
+    }
+
+    private string GetObservacionLimpia(string? obs)
+    {
+        if (string.IsNullOrEmpty(obs)) return string.Empty;
+        if (obs.StartsWith("Aprobado por BackOffice", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Aprobado por BackOffice";
+        }
+
+        if (obs.Contains("[AprobadoBackOffice:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Aprobado por BackOffice";
+        }
+
+        var workingObs = obs;
+        
+        // Remove Comprobante tag
+        if (workingObs.StartsWith("[Comprobante:"))
+        {
+            var endIdx = workingObs.IndexOf(']');
+            if (endIdx > 0)
+            {
+                workingObs = workingObs.Substring(endIdx + 1).Trim();
+            }
+        }
+
+        // Remove Imagen tag
+        var imgTagIdx = workingObs.IndexOf("[Imagen:");
+        if (imgTagIdx >= 0)
+        {
+            var endIdx = workingObs.IndexOf(']', imgTagIdx);
+            if (endIdx > 0)
+            {
+                workingObs = (workingObs.Substring(0, imgTagIdx) + workingObs.Substring(endIdx + 1)).Trim();
+            }
+        }
+
+        const string compraDocsTag = "[CompraDocs:";
+        if (workingObs.Contains(compraDocsTag, StringComparison.OrdinalIgnoreCase) &&
+            workingObs.Contains("Solicitud pendiente", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Solicitud pendiente de aprobacion por compra de documentos.";
+        }
+
+        return workingObs.Length > 95 ? $"{workingObs[..95].Trim()}..." : workingObs;
+    }
+
+    private static bool EsSolicitudTransferenciaDocumentos(ReporteVentaBackOffice? row)
+    {
+        if (row is null)
+        {
+            return false;
+        }
+
+        return row.Producto.Equals("e-fact", StringComparison.OrdinalIgnoreCase) &&
+               row.Canal.Contains("Transferencia Web", StringComparison.OrdinalIgnoreCase) &&
+               !string.IsNullOrWhiteSpace(ObtenerCompraDocumentosId(row));
+    }
+
+    private static string ObtenerCompraDocumentosId(ReporteVentaBackOffice row)
+    {
+        var obs = row.Observacion;
+        if (string.IsNullOrWhiteSpace(obs))
+        {
+            return string.Empty;
+        }
+
+        const string startTag = "[CompraDocs:";
+        var startIdx = obs.IndexOf(startTag, StringComparison.OrdinalIgnoreCase);
+        if (startIdx < 0)
+        {
+            return string.Empty;
+        }
+
+        var contentStart = startIdx + startTag.Length;
+        var endIdx = obs.IndexOf(']', contentStart);
+        return endIdx > contentStart
+            ? obs.Substring(contentStart, endIdx - contentStart).Trim()
+            : string.Empty;
+    }
+
+    private async Task ActualizarHistorialCompraDocumentosAsync(ReporteVentaBackOffice venta, bool aprobado)
+    {
+        var compraId = ObtenerCompraDocumentosId(venta);
+        if (string.IsNullOrWhiteSpace(compraId))
+        {
+            return;
+        }
+
+        var email = GetClientEmail(venta.Cliente);
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return;
+        }
+
+        using var context = await DbFactory.CreateDbContextAsync();
+        var user = await context.Usuarios.FirstOrDefaultAsync(u => u.Email == email);
+        if (user is null)
+        {
+            return;
+        }
+
+        var history = LeerHistorial(user.HistorialComprasDocumentosJson);
+        var item = history.FirstOrDefault(x => string.Equals(x.Id, compraId, StringComparison.OrdinalIgnoreCase));
+        if (item is null)
+        {
+            return;
+        }
+
+        item.Estado = aprobado ? "Aprobado" : "Rechazado";
+        item.SaldoAplicado = aprobado;
+        item.Reference = $"BO-{venta.IdReporte}";
+        item.AuthorizationCode = GetComprobanteRef(venta.Observacion);
+        item.Descripcion = aprobado
+            ? $"Transferencia aprobada: {venta.PlanPaquete}"
+            : $"Transferencia rechazada: {venta.PlanPaquete}";
+
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        user.HistorialComprasDocumentosJson = JsonSerializer.Serialize(history, options);
+        context.Entry(user).State = EntityState.Modified;
+        await context.SaveChangesAsync();
+    }
+
+    private async Task ShowEvidencePreview(ReporteVentaBackOffice row)
+    {
+        if (ventasConComprobanteArchivo.Contains(row.IdReporte))
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var comprobante = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(v => v.IdReporte == row.IdReporte)
+                .Select(v => v.ComprobanteArchivo)
+                .FirstOrDefaultAsync();
+            if (comprobante is { Length: > 0 })
+            {
+                previewImageUrl = $"data:image/png;base64,{Convert.ToBase64String(comprobante)}";
+                return;
+            }
+        }
+
+        previewImageUrl = GetEvidenceImageUrl(row.Observacion);
+    }
+
+    private void CloseEvidencePreview()
+    {
+        previewImageUrl = null;
+    }
+
+    private void ShowFeedback(string message, bool isSuccess)
+    {
+        feedbackMessage = message;
+        feedbackIsSuccess = isSuccess;
+        
+        // Auto clear feedback after 8 seconds
+        Task.Delay(8000).ContinueWith(_ => {
+            feedbackMessage = null;
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private static string TruncateStr(string? value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Length <= maxLength ? value : value[..maxLength];
+    }
+
+    private static AuditoriaTransferenciaDto MapAuditoriaTransferencia(Auditoria auditoria)
+    {
+        using var detalles = TryParseJson(auditoria.Detalles);
+        using var nuevo = TryParseJson(auditoria.ValorNuevo);
+
+        var contador = auditoria.Usuario?.NombreCompleto;
+        if (string.IsNullOrWhiteSpace(contador))
+        {
+            contador = auditoria.IdUsuario.HasValue ? $"Usuario #{auditoria.IdUsuario}" : "Usuario no registrado";
+        }
+
+        var fechaAprobacion = GetJsonDateTime(detalles, "FechaAprobacion") ?? auditoria.Fecha;
+        var producto = GetJsonString(detalles, "Producto");
+
+        return new AuditoriaTransferenciaDto
+        {
+            IdAuditoria = auditoria.IdAuditoria,
+            IdUsuario = auditoria.IdUsuario,
+            Contador = contador,
+            ContadorEmail = auditoria.Usuario?.Email ?? string.Empty,
+            FechaAprobacion = fechaAprobacion,
+            Cliente = GetJsonString(detalles, "Cliente", "Cliente no disponible"),
+            EmailCliente = GetJsonString(detalles, "Email"),
+            Producto = string.IsNullOrWhiteSpace(producto) ? "e-fact" : producto,
+            PlanPaquete = GetJsonString(detalles, "PlanPaquete"),
+            Valor = GetJsonDecimal(detalles, "Valor"),
+            Comprobante = GetJsonString(detalles, "Comprobante", "Sin referencia"),
+            FacturaGenerada = GetJsonBool(nuevo, "FacturaGenerada"),
+            CodFactura = GetJsonInt(nuevo, "CodFactura"),
+            NumeroFactura = GetJsonString(nuevo, "NumeroFactura"),
+            Mensaje = GetJsonString(detalles, "Mensaje", "Aprobacion registrada")
+        };
+    }
+
+    private static JsonDocument? TryParseJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonDocument.Parse(json);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string GetJsonString(JsonDocument? document, string propertyName, string fallback = "")
+    {
+        if (document?.RootElement.TryGetProperty(propertyName, out var property) == true)
+        {
+            return property.ValueKind switch
+            {
+                JsonValueKind.String => property.GetString() ?? fallback,
+                JsonValueKind.Number => property.GetRawText(),
+                JsonValueKind.True => "Si",
+                JsonValueKind.False => "No",
+                _ => fallback
+            };
+        }
+
+        return fallback;
+    }
+
+    private static DateTime? GetJsonDateTime(JsonDocument? document, string propertyName)
+    {
+        var raw = GetJsonString(document, propertyName);
+        return DateTime.TryParse(raw, out var value) ? value : null;
+    }
+
+    private static decimal GetJsonDecimal(JsonDocument? document, string propertyName)
+    {
+        if (document?.RootElement.TryGetProperty(propertyName, out var property) == true)
+        {
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetDecimal(out var value))
+            {
+                return value;
+            }
+
+            if (property.ValueKind == JsonValueKind.String &&
+                decimal.TryParse(property.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out value))
+            {
+                return value;
+            }
+        }
+
+        return 0m;
+    }
+
+    private static int GetJsonInt(JsonDocument? document, string propertyName)
+    {
+        if (document?.RootElement.TryGetProperty(propertyName, out var property) == true)
+        {
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var value))
+            {
+                return value;
+            }
+
+            if (property.ValueKind == JsonValueKind.String && int.TryParse(property.GetString(), out value))
+            {
+                return value;
+            }
+        }
+
+        return 0;
+    }
+
+    private static bool GetJsonBool(JsonDocument? document, string propertyName)
+    {
+        if (document?.RootElement.TryGetProperty(propertyName, out var property) == true)
+        {
+            if (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False)
+            {
+                return property.GetBoolean();
+            }
+
+            if (property.ValueKind == JsonValueKind.String && bool.TryParse(property.GetString(), out var value))
+            {
+                return value;
+            }
+        }
+
+        return false;
+    }
+
+    private sealed class AuditoriaTransferenciaDto
+    {
+        public int IdAuditoria { get; set; }
+        public int? IdUsuario { get; set; }
+        public string Contador { get; set; } = string.Empty;
+        public string ContadorEmail { get; set; } = string.Empty;
+        public DateTime FechaAprobacion { get; set; }
+        public string Cliente { get; set; } = string.Empty;
+        public string EmailCliente { get; set; } = string.Empty;
+        public string Producto { get; set; } = "e-fact";
+        public string PlanPaquete { get; set; } = string.Empty;
+        public decimal Valor { get; set; }
+        public string Comprobante { get; set; } = string.Empty;
+        public bool FacturaGenerada { get; set; }
+        public int CodFactura { get; set; }
+        public string NumeroFactura { get; set; } = string.Empty;
+        public string Mensaje { get; set; } = string.Empty;
+    }
+}

@@ -1,0 +1,621 @@
+@page "/configuracion/identificaciones"
+@using Simetric.Models
+@using Simetric.Services
+@inject IdentificacionService IdeService
+@inject IJSRuntime JS
+
+@{
+    var totalActivos = lista.Count;
+}
+
+<PageTitle>Identificaciones | Numerica e-fact</PageTitle>
+
+<style>
+    .field-error {
+        color: #dc3545 !important;
+        font-size: 0.86rem;
+        font-weight: 600;
+        margin-top: 6px;
+        display: block;
+    }
+
+    .input-error {
+        border: 1px solid #dc3545 !important;
+        box-shadow: 0 0 0 0.15rem rgba(220, 53, 69, 0.15) !important;
+    }
+</style>
+
+<div class="ids-shell" data-tour="identificaciones.page">
+    <section class="table-card" data-tour="identificaciones.table">
+        <div class="table-card-head" data-tour="identificaciones.hero">
+            <div>
+                <span class="table-kicker">Busqueda y control</span>
+                <h3>Identificaciones registradas</h3>
+                <p>Filtra por codigo o descripcion y administra tus registros desde una sola vista.</p>
+            </div>
+
+            <button class="primary-btn ids-primary-btn" @onclick="AbrirModalNueva">
+                <i class="bi bi-plus-circle"></i>
+                <span>Nueva</span>
+            </button>
+        </div>
+
+        <div class="ids-toolbar" data-tour="identificaciones.toolbar">
+            <div class="search-box">
+                <span class="search-icon">
+                    <i class="bi bi-search"></i>
+                </span>
+
+                <input type="search"
+                       class="search-input"
+                       placeholder="Buscar por codigo o descripcion"
+                       @bind="SearchTerm"
+                       @bind:event="oninput" />
+            </div>
+
+            <select class="filter-select filter-select-small" @bind="PageSize">
+                <option value="5">5 registros</option>
+                <option value="10">10 registros</option>
+                <option value="20">20 registros</option>
+            </select>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="state-card">
+                <div class="state-icon">
+                    <span class="spinner-border text-primary" role="status"></span>
+                </div>
+                <h3>Cargando identificaciones</h3>
+                <p>Estamos consultando el catalogo de documentos oficiales.</p>
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(pageErrorMessage))
+        {
+            <div class="state-card state-card-error">
+                <div class="state-icon">
+                    <i class="bi bi-exclamation-octagon"></i>
+                </div>
+                <h3>No pudimos cargar la informacion</h3>
+                <p>@pageErrorMessage</p>
+            </div>
+        }
+        else if (!IdentificacionesFiltradas.Any())
+        {
+            <div class="state-card state-card-empty">
+                <div class="state-icon">
+                    <i class="bi bi-search"></i>
+                </div>
+                <h3>Sin resultados</h3>
+                <p>No encontramos identificaciones con los filtros actuales.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table table-hover align-middle mb-0 ids-table">
+                    <thead>
+                        <tr>
+                            <th class="ps-4" style="width: 180px;">Codigo</th>
+                            <th>Descripcion</th>
+                            <th class="text-center" style="width: 160px;">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in IdentificacionesPaginadas)
+                        {
+                            <tr @key="item.IdeSec">
+                                <td class="ps-4">
+                                    <span class="code-pill">@item.IdeCodigo</span>
+                                </td>
+                                <td>
+                                    <div class="cell-main">
+                                        <strong>@item.IdeDescripcion</strong>
+                                    </div>
+                                </td>
+                                <td class="text-center">
+                                    <div class="action-group">
+                                        <button class="action-btn action-view" @onclick="() => VerDetalles(item.IdeSec)" title="Ver detalle">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                        <button class="action-btn action-edit" @onclick="() => AbrirModal(item)" title="Editar">
+                                            <i class="bi bi-pencil-square"></i>
+                                        </button>
+                                        <button class="action-btn action-delete" @onclick="() => ConfirmarEliminar(item)" title="Eliminar">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="ids-pagination">
+                <span class="ids-pagination-meta">
+                    Mostrando @CurrentPageStart - @CurrentPageEnd de @CurrentTotalRecords registros
+                </span>
+
+                <div class="ids-pagination-actions">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaAnterior" disabled="@(currentPage <= 1)">
+                        <i class="bi bi-chevron-left"></i>
+                    </button>
+                    <span class="ids-page-indicator">Pagina @currentPage de @CurrentTotalPages</span>
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="PaginaSiguiente" disabled="@(currentPage >= CurrentTotalPages)">
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        }
+    </section>
+</div>
+
+@if (showModal)
+{
+    <div class="ids-modal-backdrop"></div>
+    <div class="modal fade show d-block ids-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content ids-modal-content animate__animated animate__zoomIn animate__faster">
+                <div class="modal-header ids-modal-header @(isReadOnly ? "is-readonly" : "is-editable")">
+                    <div>
+                        <span class="modal-kicker">Mantenimiento</span>
+                        <h5 class="modal-title fw-bold">
+                            <i class="bi @(isReadOnly ? "bi-eye" : "bi-pencil-square") me-2"></i>
+                            @(isReadOnly ? "Vista de detalle" : (EsNuevoRegistro ? "Nueva identificacion" : "Editar identificacion"))
+                        </h5>
+                    </div>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CerrarModal" disabled="@isSaving"></button>
+                </div>
+
+                <div class="modal-body ids-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(errorMessage))
+                    {
+                        <div class="alert alert-danger d-flex align-items-center mb-3 border-0 animate__animated animate__shakeX">
+                            <i class="bi bi-exclamation-octagon-fill me-2 fs-5"></i>
+                            <div>@errorMessage</div>
+                        </div>
+                    }
+
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="field-label">Codigo</label>
+                            <input type="text"
+                                   value="@temp.IdeCodigo"
+                                   @oninput="OnCodigoChanged"
+                                   class="@GetInputClass(nameof(temp.IdeCodigo))"
+                                   readonly="@isReadOnly"
+                                   maxlength="10" />
+                            @if (errors.ContainsKey(nameof(temp.IdeCodigo)))
+                            {
+                                <span class="field-error">@errors[nameof(temp.IdeCodigo)]</span>
+                            }
+                        </div>
+
+                        <div class="col-md-8">
+                            <label class="field-label">Descripcion</label>
+                            <input type="text"
+                                   value="@temp.IdeDescripcion"
+                                   @oninput="OnDescripcionChanged"
+                                   class="@GetInputClass(nameof(temp.IdeDescripcion))"
+                                   readonly="@isReadOnly"
+                                   maxlength="80" />
+                            @if (errors.ContainsKey(nameof(temp.IdeDescripcion)))
+                            {
+                                <span class="field-error">@errors[nameof(temp.IdeDescripcion)]</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer ids-modal-footer">
+                    <button type="button" class="secondary-btn secondary-btn-quiet" @onclick="CerrarModal" disabled="@isSaving">Cerrar</button>
+                    @if (!isReadOnly)
+                    {
+                        <button type="button" class="primary-btn" @onclick="Guardar" disabled="@isSaving">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2"></span>
+                                <span>Procesando...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-save me-2"></i>
+                                <span>@(EsNuevoRegistro ? "Crear registro" : "Guardar cambios")</span>
+                            }
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Identificacion> lista = new();
+    private Identificacion temp = new();
+    private bool isLoading = true;
+    private bool showModal;
+    private bool isReadOnly;
+    private bool isSaving;
+    private string? pageErrorMessage;
+    private string? errorMessage;
+    private string searchTerm = string.Empty;
+    private int pageSize = 10;
+    private int currentPage = 1;
+
+    private readonly Dictionary<string, string> errors = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarDatos();
+    }
+
+    private string SearchTerm
+    {
+        get => searchTerm;
+        set
+        {
+            if (searchTerm == value)
+            {
+                return;
+            }
+
+            searchTerm = value;
+            currentPage = 1;
+        }
+    }
+
+    private int PageSize
+    {
+        get => pageSize;
+        set
+        {
+            if (pageSize == value)
+            {
+                return;
+            }
+
+            pageSize = value;
+            currentPage = 1;
+            AjustarPaginaActual();
+        }
+    }
+
+    private bool EsNuevoRegistro => temp.IdeSec == 0;
+
+    private IEnumerable<Identificacion> IdentificacionesFiltradas =>
+        lista
+            .Where(item => CoincideBusqueda(item, searchTerm))
+            .OrderBy(item => ParseCodigoNumerico(item.IdeCodigo))
+            .ThenBy(item => (item.IdeCodigo ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => (item.IdeDescripcion ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase);
+
+    private IEnumerable<Identificacion> IdentificacionesPaginadas =>
+        IdentificacionesFiltradas
+            .Skip((currentPage - 1) * PageSize)
+            .Take(PageSize);
+
+    private int CurrentTotalRecords => IdentificacionesFiltradas.Count();
+    private int CurrentTotalPages => Math.Max(1, (int)Math.Ceiling(CurrentTotalRecords / (double)PageSize));
+    private int CurrentPageStart => CurrentTotalRecords == 0 ? 0 : ((currentPage - 1) * PageSize) + 1;
+    private int CurrentPageEnd => CurrentTotalRecords == 0 ? 0 : Math.Min(CurrentTotalRecords, currentPage * PageSize);
+
+    private async Task CargarDatos()
+    {
+        isLoading = true;
+        pageErrorMessage = null;
+
+        try
+        {
+            lista = await IdeService.GetAllActiveAsync();
+            AjustarPaginaActual();
+        }
+        catch (Exception ex)
+        {
+            lista = new List<Identificacion>();
+            pageErrorMessage = $"Error al cargar las identificaciones: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void AbrirModalNueva()
+    {
+        AbrirModal();
+    }
+
+    private void AbrirModal(Identificacion? item = null)
+    {
+        isReadOnly = false;
+        isSaving = false;
+        errorMessage = null;
+        errors.Clear();
+
+        temp = item is null
+            ? new Identificacion
+            {
+                IdeSec = 0,
+                IdeCodigo = string.Empty,
+                IdeDescripcion = string.Empty,
+                Estado = true
+            }
+            : new Identificacion
+            {
+                IdeSec = item.IdeSec,
+                IdeCodigo = item.IdeCodigo,
+                IdeDescripcion = item.IdeDescripcion,
+                Estado = item.Estado
+            };
+
+        showModal = true;
+    }
+
+    private async Task VerDetalles(int id)
+    {
+        var item = await IdeService.GetByIdAsync(id);
+        if (item is null)
+        {
+            await JS.InvokeVoidAsync("Swal.fire", new
+            {
+                icon = "warning",
+                title = "Registro no disponible",
+                text = "No fue posible cargar la identificacion seleccionada.",
+                confirmButtonText = "Aceptar"
+            });
+            return;
+        }
+
+        errors.Clear();
+        errorMessage = null;
+        isReadOnly = true;
+        isSaving = false;
+
+        temp = new Identificacion
+        {
+            IdeSec = item.IdeSec,
+            IdeCodigo = item.IdeCodigo,
+            IdeDescripcion = item.IdeDescripcion,
+            Estado = item.Estado
+        };
+
+        showModal = true;
+    }
+
+    private void CerrarModal()
+    {
+        if (isSaving)
+        {
+            return;
+        }
+
+        LimpiarModal();
+    }
+
+    private void LimpiarModal()
+    {
+        showModal = false;
+        isReadOnly = false;
+        errorMessage = null;
+        errors.Clear();
+        temp = new Identificacion();
+    }
+
+    private void OnCodigoChanged(ChangeEventArgs e)
+    {
+        var valor = e.Value?.ToString() ?? string.Empty;
+        valor = new string(valor.Where(char.IsDigit).ToArray());
+
+        if (valor.Length > 10)
+        {
+            valor = valor[..10];
+        }
+
+        temp.IdeCodigo = valor;
+        ValidarCampoCodigo();
+    }
+
+    private void OnDescripcionChanged(ChangeEventArgs e)
+    {
+        var valor = e.Value?.ToString() ?? string.Empty;
+
+        if (valor.Length > 80)
+        {
+            valor = valor[..80];
+        }
+
+        temp.IdeDescripcion = valor;
+        ValidarCampoDescripcion();
+    }
+
+    private string GetInputClass(string field) =>
+        errors.ContainsKey(field)
+            ? "form-control field-input input-error"
+            : "form-control field-input";
+
+    private void ValidarCampoCodigo()
+    {
+        errors.Remove(nameof(temp.IdeCodigo));
+
+        var codigo = (temp.IdeCodigo ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(codigo))
+        {
+            errors[nameof(temp.IdeCodigo)] = "El codigo es obligatorio.";
+            return;
+        }
+
+        if (!codigo.All(char.IsDigit))
+        {
+            errors[nameof(temp.IdeCodigo)] = "El codigo solo permite numeros.";
+            return;
+        }
+
+        var codigoDuplicado = lista.Any(item =>
+            item.IdeSec != temp.IdeSec &&
+            string.Equals((item.IdeCodigo ?? string.Empty).Trim(), codigo, StringComparison.OrdinalIgnoreCase));
+
+        if (codigoDuplicado)
+        {
+            errors[nameof(temp.IdeCodigo)] = "Ya existe una identificacion con ese codigo.";
+        }
+    }
+
+    private void ValidarCampoDescripcion()
+    {
+        errors.Remove(nameof(temp.IdeDescripcion));
+
+        var descripcion = (temp.IdeDescripcion ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(descripcion))
+        {
+            errors[nameof(temp.IdeDescripcion)] = "La descripcion es obligatoria.";
+            return;
+        }
+
+        var descripcionDuplicada = lista.Any(item =>
+            item.IdeSec != temp.IdeSec &&
+            string.Equals((item.IdeDescripcion ?? string.Empty).Trim(), descripcion, StringComparison.OrdinalIgnoreCase));
+
+        if (descripcionDuplicada)
+        {
+            errors[nameof(temp.IdeDescripcion)] = "Ya existe una identificacion con esa descripcion.";
+        }
+    }
+
+    private bool ValidarFormulario()
+    {
+        errors.Clear();
+        ValidarCampoCodigo();
+        ValidarCampoDescripcion();
+        return errors.Count == 0;
+    }
+
+    private async Task Guardar()
+    {
+        if (isSaving)
+        {
+            return;
+        }
+
+        errorMessage = null;
+        temp.IdeCodigo = (temp.IdeCodigo ?? string.Empty).Trim();
+        temp.IdeDescripcion = (temp.IdeDescripcion ?? string.Empty).Trim();
+        temp.Estado ??= true;
+
+        if (!ValidarFormulario())
+        {
+            errorMessage = "Corrige los campos marcados antes de guardar.";
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            var success = await IdeService.SaveAsync(temp);
+
+            if (!success)
+            {
+                errorMessage = "No se pudo guardar. Verifica si el codigo o la descripcion ya existen.";
+                return;
+            }
+
+            LimpiarModal();
+            await CargarDatos();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task ConfirmarEliminar(Identificacion item)
+    {
+        var resultado = await JS.InvokeAsync<System.Text.Json.JsonElement>("Swal.fire", new
+        {
+            icon = "warning",
+            title = "Dar de baja identificacion",
+            text = $"Se desactivara la identificacion {item.IdeCodigo} - {item.IdeDescripcion}.",
+            showCancelButton = true,
+            confirmButtonText = "Si, eliminar",
+            cancelButtonText = "Cancelar",
+            reverseButtons = true,
+            focusCancel = true,
+            confirmButtonColor = "#c23b4b",
+            cancelButtonColor = "#7a8da2"
+        });
+
+        if (!resultado.TryGetProperty("isConfirmed", out var confirmacion) || !confirmacion.GetBoolean())
+        {
+            return;
+        }
+
+        var eliminado = await IdeService.DeleteLogicalAsync(item.IdeSec);
+
+        if (!eliminado)
+        {
+            await JS.InvokeVoidAsync("Swal.fire", new
+            {
+                icon = "error",
+                title = "No se pudo eliminar",
+                text = "Intenta nuevamente en unos segundos.",
+                confirmButtonText = "Aceptar"
+            });
+            return;
+        }
+
+        await CargarDatos();
+
+        await JS.InvokeVoidAsync("Swal.fire", new
+        {
+            icon = "success",
+            title = "Registro eliminado",
+            text = "La identificacion fue dada de baja correctamente.",
+            timer = 1800,
+            showConfirmButton = false
+        });
+    }
+
+    private void PaginaAnterior()
+    {
+        if (currentPage > 1)
+        {
+            currentPage--;
+        }
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (currentPage < CurrentTotalPages)
+        {
+            currentPage++;
+        }
+    }
+
+    private void AjustarPaginaActual()
+    {
+        currentPage = Math.Min(Math.Max(1, currentPage), CurrentTotalPages);
+    }
+
+    private static bool CoincideBusqueda(Identificacion item, string termino)
+    {
+        if (string.IsNullOrWhiteSpace(termino))
+        {
+            return true;
+        }
+
+        var filtro = termino.Trim();
+
+        return (item.IdeCodigo ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase)
+            || (item.IdeDescripcion ?? string.Empty).Contains(filtro, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ParseCodigoNumerico(string? codigo) =>
+        int.TryParse(codigo?.Trim(), out var numero) ? numero : int.MaxValue;
+}

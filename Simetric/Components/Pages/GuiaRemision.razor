@@ -1,0 +1,2054 @@
+@page "/facturacion/guia-remision"
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
+@using System.Globalization
+@using Simetric.DTOs
+@using Simetric.Components.Shared
+@using Simetric.Models
+@using Simetric.Services
+@using EmisorModel = Simetric.Models.Emisor
+@using GuiaModel = Simetric.Models.GuiaRemision
+
+@inject AuthenticationStateProvider AuthStateProvider
+@inject FacturacionService FacturacionService
+@inject GuiaRemisionService GuiaRemisionService
+@inject IdentificacionService IdentificacionService
+@inject InitialSequencePromptService InitialSequencePromptService
+@inject SweetAlertService AlertService
+@inject EmisionControlService EmisionControlService
+@inject NavigationManager NavigationManager
+@inject IWebHostEnvironment WebHostEnvironment
+@inject IGuiaRemisionPdfService GuiaRemisionPdfService
+
+<PageTitle>Guia de Remision | Numerica e-fact</PageTitle>
+
+<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern compact-guia-page docs-unified-page" data-tour="guia.page">
+    <DocumentoEmisionToast Message="@mensajeRapidoEmision"
+                           IsError="@mensajeRapidoEsError"
+                           PdfUrl="@documentoGeneradoPdfUrl"
+                           OnOpenPdf="AbrirDocumentoGeneradoAsync">
+        <AdditionalActions>
+            @if (!mensajeRapidoEsError && !string.IsNullOrWhiteSpace(documentoGeneradoPdfUrl))
+            {
+                <button type="button" class="documento-emision-accion" @onclick="NuevaGuiaDesdeAvisoAsync">
+                    Nueva guía
+                </button>
+            }
+        </AdditionalActions>
+    </DocumentoEmisionToast>
+
+    <InitialSequenceModal Visible="@mostrarModalSecuenciaInicial"
+                          Title="Configuracion inicial de secuencia"
+                          Description="Antes de emitir tu primera guia de remision en este sistema, indicanos si ya habias generado guias anteriormente."
+                          QuestionLabel="Ya habias generado guias de remision antes?"
+                          SequenceLabel="Ingresa la secuencia donde te quedaste"
+                          SequencePlaceholder="Ej: 000000125"
+                          SequenceHint="Si te quedaste en la 125, la siguiente sera la 126."
+                          HadPreviousDocuments="usuarioYaEmitioAntes"
+                          HadPreviousDocumentsChanged="OnCambioRespuestaSecuencia"
+                          PreviousSequence="@secuenciaAnteriorManual"
+                          PreviousSequenceChanged="OnSecuenciaAnteriorManualChanged"
+                          ErrorMessage="@errorSecuenciaInicial"
+                          OnDismiss="@(() => mostrarModalSecuenciaInicial = false)"
+                          OnConfirm="ConfirmarSecuenciaInicialAsync" />
+
+    <section class="docs-form-hero" data-tour="guia.hero">
+        <div class="docs-form-hero-body">
+            <!-- Columna 1: Info (Izquierda) -->
+            <div class="docs-form-hero-copy invoice-heading-card nc-heading-card">
+                <div class="invoice-heading-head nc-heading-head">
+                    <span class="invoice-heading-icon nc-heading-icon"><i class="bi bi-truck"></i></span>
+                    <span class="docs-form-kicker-blue">Auto carga desde factura</span>
+                </div>
+                <h2 class="docs-form-title" style="font-size: 1.18rem !important; line-height: 1.18 !important;">Nueva guia de remision</h2>
+                <p class="docs-form-text">
+                    Carga la factura de origen, valida el traslado <br /> y guarda la guia de remisión.
+                </p>
+                <div class="invoice-heading-meter nc-heading-meter"><span></span></div>
+            </div>
+
+            <!-- Columna 2: Toolbar (Derecha) conteniendo Pills a la izquierda y Botones apilados a la derecha -->
+            <div class="docs-form-toolbar">
+                <!-- Pills (Centro) -->
+                <div class="n-invoice-id-strip nc-id-strip" aria-label="Identificadores de la guia de remision">
+                    <div class="n-invoice-id-pill nc-id-pill">
+                        <span>Serie guia</span>
+                        @if (seriesDocumento.Count > 1)
+                        {
+                            <select class="n-input text-center fw-bold"
+                                    value="@serieGuiaRawActual"
+                                    @onchange="OnSerieDocumentoChangedAsync"
+                                    disabled="@sinCaja"
+                                    aria-label="Seleccionar serie de guia">
+                                @foreach (var serie in seriesDocumento)
+                                {
+                                    <option value="@serie.SerieRaw">@serie.SerieVisual</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <strong>@serieGuiaVisual</strong>
+                        }
+                    </div>
+                    <div class="n-invoice-id-pill nc-id-pill">
+                        <span>Número de guía</span>
+                        <strong>@secuencialGuiaVisual</strong>
+                    </div>
+                </div>
+
+                <!-- Botones apilados verticalmente -->
+                <div class="nc-toolbar-actions">
+                    <button type="button" class="n-btn n-btn-secondary" @onclick="AbrirHistorialGuiasAsync">
+                        <i class="bi bi-clock-history me-2"></i> Historial
+                    </button>
+
+                    <button type="button" class="n-btn n-btn-secondary" @onclick="LimpiarFormularioAsync">
+                        <i class="bi bi-arrow-clockwise me-2"></i> Limpiar pantalla
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="n-card mb-4 compact-card" data-tour="guia.form">
+        <div class="n-card-header">
+            <h5><i class="bi bi-diagram-3 me-2"></i> Datos operativos de la guia</h5>
+            <small class="d-none d-sm-flex"><i class="bi bi-info-circle me-1"></i> Completa transportista, destinatario y fechas</small>
+        </div>
+
+        <div class="n-card-body">
+            @if (sinCaja)
+            {
+                <div class="alert alert-warning border-0 rounded-4 mb-3 w-100">
+                    Tu caja activa no tiene configurada una serie de guía. Configura <code>serieGuia</code> para emitir este documento.
+                </div>
+            }
+
+            <!-- Top Selectors Grid -->
+            <div class="row g-3 mb-4">
+                <!-- Fila 1 -->
+                <div class="col-md-6">
+                    <label class="n-label fw-bold">Identificación Transportista</label>
+                    <div class="n-client-search-input position-relative">
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-truck n-input-icon"></i>
+                            <input class="n-input n-input-with-icon"
+                                   placeholder="Buscar transportista por identificación o nombre..."
+                                   value="@textoBusquedaTransportista"
+                                   @oninput="OnBusquedaTransportistaInput"
+                                   @onblur="OcultarSugerenciasTransportistaConDelay"
+                                   autocomplete="off" />
+                            @if (mostrarSugerenciasTransportista && sugerenciasTransportista.Any())
+                            {
+                                <ul class="n-suggestions" style="z-index: 1001; position: absolute; width: 100%; max-height: 250px; overflow-y: auto;">
+                                    @foreach (var t in sugerenciasTransportista)
+                                    {
+                                        <li @key="t.Codigo" @onclick="() => SeleccionarTransportista(t)" style="cursor: pointer;">
+                                            <strong>@t.RazonSocial</strong><br />
+                                            <small>Identificación: @t.NumeroIdentificacion | Placa: @t.Placa</small>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-4">
+                    <label class="n-label fw-bold guia-action-spacer" aria-hidden="true">Acción</label>
+                    <button type="button" class="n-btn n-btn-secondary guia-new-transporter-btn w-100" @onclick="AbrirModalNuevoTransportista">
+                        <i class="bi bi-truck-front me-2"></i> Nuevo Transportista
+                    </button>
+                </div>
+
+                <div class="col-md-2">
+                    <label class="n-label fw-bold">Punto de Emisión</label>
+                    <div class="n-input-wrapper">
+                        <i class="bi bi-house n-input-icon"></i>
+                        @if (seriesDocumento.Count > 1)
+                        {
+                            <select class="n-input n-select n-input-with-icon"
+                                    value="@serieGuiaRawActual"
+                                    @onchange="OnSerieDocumentoChangedAsync"
+                                    disabled="@sinCaja">
+                                @foreach (var serie in seriesDocumento)
+                                {
+                                    <option value="@serie.SerieRaw">@serie.SerieVisual</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <input type="text" class="n-input n-input-with-icon" value="@serieGuiaVisual" disabled />
+                        }
+                    </div>
+                </div>
+
+                <!-- Fila 2 -->
+                <div class="col-md-6">
+                    <label class="n-label fw-bold">Cliente</label>
+                    <div class="n-client-search-input position-relative">
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-person n-input-icon"></i>
+                            <input class="n-input n-input-with-icon"
+                                   placeholder="Buscar cliente por identificación o nombre..."
+                                   value="@textoBusquedaCliente"
+                                   @oninput="OnBusquedaClienteInput"
+                                   @onblur="OcultarSugerenciasClienteConDelay"
+                                   autocomplete="off" />
+                            @if (mostrarSugerenciasCliente && sugerenciasCliente.Any())
+                            {
+                                <ul class="n-suggestions" style="z-index: 1001; position: absolute; width: 100%; max-height: 250px; overflow-y: auto;">
+                                    @foreach (var c in sugerenciasCliente)
+                                    {
+                                        <li @key="c.Codcliente" @onclick="() => SeleccionarCliente(c)" style="cursor: pointer;">
+                                            <strong>@ObtenerNombreCliente(c)</strong><br />
+                                            <small>Identificación: @c.Numeroidentificacion | Teléfono: @(c.Celular ?? c.Telefonoconvencional ?? "-")</small>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <label class="n-label fw-bold">Factura (Opcional)</label>
+                    <div class="n-client-search-input position-relative">
+                        <div class="n-input-wrapper">
+                            <i class="bi bi-file-earmark-text n-input-icon"></i>
+                            <input class="n-input n-input-with-icon"
+                                   placeholder="Seleccionar Factura (OPCIONAL)"
+                                   value="@numFacturaBuscar"
+                                   @oninput="BuscarFacturasAutoAsync"
+                                   @onfocus="() => { mostrarListaFacturas = true; }"
+                                   @onblur="OcultarListaConDelay"
+                                   autocomplete="off" />
+                            @if (mostrarListaFacturas && listaFacturas.Any())
+                            {
+                                <ul class="n-suggestions" style="z-index: 1001; position: absolute; width: 100%; max-height: 250px; overflow-y: auto;">
+                                    @foreach (var f in listaFacturas)
+                                    {
+                                        <li @key="f.Codfactura" @onmousedown="PrepararSeleccionFactura" @onclick="() => SeleccionarFacturaDesdeListaAsync(f)" style="cursor: pointer;">
+                                            <strong>@f.Numfactura</strong><br />
+                                            <small>Cliente: @f.ClienteNombre</small>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Separador Información -->
+            <div class="my-3 py-2 text-center fw-bold rounded-2" style="background-color: #e2e8f0; color: #334155; font-size: 0.85rem; letter-spacing: 0.05em; text-transform: uppercase;">
+                Información
+            </div>
+
+            <!-- Columnas de Información -->
+            <div class="guia-form-panels">
+                <section class="guia-form-panel">
+                    <h4 class="guia-section-title">Información del Transportista</h4>
+
+                    <div class="manual-entry-grid">
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Identificación</label>
+                            <input type="text"
+                                   class="n-input"
+                                   @bind="transportista.NumeroIdentificacion"
+                                   @bind:event="oninput"
+                                   @onblur="BuscarTransportistaPorIdentificacionAsync"
+                                   maxlength="15" />
+                        </div>
+
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Placa</label>
+                            <input type="text" class="n-input" @bind="transportista.Placa" placeholder="Placa" maxlength="10" />
+                        </div>
+
+                        <div class="manual-field manual-span-12">
+                            <label class="n-label">Razón Social</label>
+                            <input type="text" class="n-input" @bind="transportista.RazonSocial" maxlength="150" />
+                        </div>
+
+                        <!-- Información Requerida Divider -->
+                        <div class="manual-field manual-span-12 my-2 text-center">
+                            <div class="n-badge" style="background-color: #e2e8f0; color: #475569; padding: 0.35rem 1rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; display: inline-block;">
+                                Información Requerida
+                            </div>
+                        </div>
+
+                        <div class="manual-field manual-span-8">
+                            <label class="n-label">Contribuyente Especial</label>
+                            <input type="text" class="n-input" @bind="transportista.ContribuyenteEsp" placeholder="N° Contribuyente Especial" maxlength="50" />
+                        </div>
+
+                        <div class="manual-field manual-span-4 d-flex align-items-center gap-2" style="padding-top: 1.6rem;">
+                            <label class="n-label mb-0" style="font-weight: 600; font-size: 0.8rem;">Obli. Conta.</label>
+                            <input type="checkbox"
+                                   checked="@(transportista.OblCont == "SI")"
+                                   @onchange="@(e => transportista.OblCont = ((bool)e.Value) ? "SI" : "NO")"
+                                   style="width: 18px; height: 18px; cursor: pointer; flex-shrink: 0;" />
+                        </div>
+
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Fecha Emisión</label>
+                            <input type="date"
+                                   class="n-input guia-fecha-emision"
+                                   value="@DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)"
+                                   disabled
+                                   aria-label="Fecha de emisión" />
+                        </div>
+
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Fecha Inicio Traslado</label>
+                            <InputDate class="n-input" @bind-Value="guia.FechaIniTransporte" min="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                        </div>
+
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Fecha Fin Traslado</label>
+                            <InputDate class="n-input" @bind-Value="guia.FechaFinTransporte" />
+                        </div>
+
+                        <div class="manual-field manual-span-6">
+                            <label class="n-label">Detalle</label>
+                            <input type="text" class="n-input" @bind="guia.Mensaje" placeholder="Detalle o mensaje" maxlength="500" />
+                        </div>
+
+                        <div class="manual-field manual-span-12">
+                            <label class="n-label">Dirección de Origen</label>
+                            <input type="text" class="n-input" @bind="guia.DireccionPartida" placeholder="Dirección de Origen" maxlength="500" />
+                        </div>
+                    </div>
+                </section>
+
+                <section class="guia-form-panel">
+                    <h4 class="guia-section-title">Información de cliente o factura (Si la selecciona)</h4>
+
+                    @if (!string.IsNullOrWhiteSpace(destinatario.IdDestinatario))
+                    {
+                        <div class="manual-entry-grid">
+                            <div class="manual-field manual-span-12">
+                                <label class="n-label">Dirección entrega</label>
+                                <input type="text" class="n-input" @bind="destinatario.Direccion" placeholder="Dirección de entrega" maxlength="500" />
+                            </div>
+
+                            <div class="manual-field manual-span-12">
+                                <label class="n-label">Motivo traslado</label>
+                                <input type="text" class="n-input" @bind="destinatario.MotivoTraslado" placeholder="Motivo de traslado" maxlength="150" />
+                            </div>
+
+                            @if (facturaReferencia != null)
+                            {
+                                <div class="manual-field manual-span-12">
+                                    <label class="n-label">Número factura</label>
+                                    <input type="text" class="n-input" value="@facturaReferencia.Factura.Numfactura" disabled />
+                                </div>
+
+                                <div class="manual-field manual-span-12">
+                                    <label class="n-label">Fecha emisión factura</label>
+                                    <input type="text" class="n-input" value="@(facturaReferencia.Factura.Fechaentrega?.ToString("yyyy-MM-dd") ?? "-")" disabled />
+                                </div>
+                            }
+                        </div>
+                    }
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <div class="n-card mb-4 compact-card" data-tour="guia.detail">
+        <div class="n-card-header n-header-dark">
+            <h5><i class="bi bi-box-seam me-2"></i> Detalles de traslado</h5>
+            <small class="d-none d-sm-inline-flex">Se cargan automáticamente desde la factura de origen y puedes ajustar sus cantidades.</small>
+        </div>
+
+        <div class="n-card-body">
+            <div class="guia-detail-toolbar">
+                <span>Agrega productos del catálogo o registra un detalle manual.</span>
+                <button type="button"
+                        class="n-btn n-btn-primary"
+                        disabled="@(guardandoGuia || previsualizandoPdf)"
+                        @onclick="AgregarDetalleManual">
+                    <i class="bi bi-plus-circle me-2"></i> Agregar detalle
+                </button>
+            </div>
+
+            <div class="row mt-3">
+                <!-- Tabla de Detalles (Extendida arriba, ancho total) -->
+                <div class="col-12">
+                    <div class="table-responsive n-table-container">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="n-table-header bg-light">
+                                <tr>
+                                    <th style="width: 18%;">Codigo interno</th>
+                                    <th style="width: 18%;">Codigo adicional</th>
+                                    <th style="width: 44%;">Descripcion</th>
+                                    <th class="text-end" style="width: 14%;">Cantidad</th>
+                                    <th class="text-center" style="width: 52px;"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @if (!detallesGuia.Any())
+                                {
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted py-4">
+                                            <i class="bi bi-inboxes fs-3 d-block mb-2 text-primary" style="opacity: 0.6;"></i>
+                                            No hay detalles cargados. Agrega uno y escribe el nombre o código de un producto.
+                                        </td>
+                                    </tr>
+                                }
+                                else
+                                {
+                                    @for (int i = 0; i < detallesGuia.Count; i++)
+                                    {
+                                        var index = i;
+                                        <tr>
+                                            <td>
+                                                <input type="text" class="n-input-sm guia-table-input" @bind="detallesGuia[index].CodInterno" maxlength="50" />
+                                            </td>
+
+                                            <td>
+                                                <input type="text" class="n-input-sm guia-table-input" @bind="detallesGuia[index].CodAdicional" maxlength="50" />
+                                            </td>
+
+                                            <td>
+                                                <input type="text"
+                                                       class="n-input-sm guia-table-input"
+                                                       value="@detallesGuia[index].Descripcion"
+                                                       maxlength="150"
+                                                       placeholder="Escribe el nombre o código del producto"
+                                                       autocomplete="off"
+                                                       @oninput="@(e => BuscarProductoEnDetalleAsync(detallesGuia[index], e.Value?.ToString()))"
+                                                       @onfocus="@(() => MostrarProductosDetalleAsync(detallesGuia[index]))"
+                                                       @onblur="@(() => OcultarProductosDetalleAsync(detallesGuia[index]))"
+                                                       @onkeydown="@(e => SeleccionarProductoConTecladoAsync(detallesGuia[index], e))" />
+                                            </td>
+
+                                            <td>
+                                                <input type="number"
+                                                       class="n-input-sm guia-table-input text-end fw-bold"
+                                                       min="1"
+                                                       step="1"
+                                                       value="@detallesGuia[index].Cantidad"
+                                                       @onchange="@((ChangeEventArgs e) => OnCantidadChanged(index, e.Value))" />
+                                            </td>
+
+                                            <td class="text-center">
+                                                <button type="button"
+                                                        class="guia-detail-delete"
+                                                        title="Eliminar detalle"
+                                                        aria-label="Eliminar detalle"
+                                                        @onclick="@(() => QuitarDetalle(index))">
+                                                    <i class="bi bi-trash3"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+
+                                        @if (ReferenceEquals(detalleProductoActivo, detallesGuia[index]) &&
+                                             sugerenciasProductosDetalle.Any())
+                                        {
+                                            <tr class="guia-product-suggestions-row">
+                                                <td></td>
+                                                <td colspan="4">
+                                                    <ul class="guia-product-suggestions">
+                                                        @foreach (var producto in sugerenciasProductosDetalle)
+                                                        {
+                                                            <li @onmousedown="PrepararSeleccionProductoDetalle"
+                                                                @onclick="@(() => SeleccionarProductoDetalleAsync(detallesGuia[index], producto))">
+                                                                <strong>@producto.Descripcion</strong>
+                                                                <small>
+                                                                    Código: @(producto.Codprincipal ?? producto.Codproducto.ToString(CultureInfo.InvariantCulture))
+                                                                    @if (!string.IsNullOrWhiteSpace(producto.Codauxiliar))
+                                                                    {
+                                                                        <span> | Adicional: @producto.Codauxiliar</span>
+                                                                    }
+                                                                </small>
+                                                            </li>
+                                                        }
+                                                    </ul>
+                                                </td>
+                                            </tr>
+                                        }
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mt-4" data-tour="guia.summary">
+                <div class="col-lg-5 mb-3">
+                </div>
+
+                <div class="col-lg-7">
+                    <div class="n-summary-column nc-summary-column">
+                        <div class="n-summary-top-grid nc-summary-top-grid">
+                            <div class="docs-total-card nc-total-card" data-tour="guia.totals-section">
+                                <div class="docs-total-card-header">
+                                    <span>Resumen</span>
+                                    <h6>Totales del traslado</h6>
+                                </div>
+
+                                <div class="docs-total-fiscal-list nc-total-fiscal-list">
+                                    <div class="docs-total-fiscal-row">
+                                        <span>SUBTOTAL BRUTO</span>
+                                        <strong>$ @subtotalBruto.ToString("N2")</strong>
+                                    </div>
+                                    @if (descuentoTotal > 0)
+                                    {
+                                        <div class="docs-total-fiscal-row docs-total-fiscal-discount">
+                                            <span>DESCUENTO</span>
+                                            <strong>$ @descuentoTotal.ToString("N2")</strong>
+                                        </div>
+                                    }
+                                    <div class="docs-total-fiscal-row">
+                                        <span>SUBTOTAL CON DESCUENTO</span>
+                                        <strong>$ @baseImponible.ToString("N2")</strong>
+                                    </div>
+                                    <div class="docs-total-fiscal-row docs-total-fiscal-tax">
+                                        <span>IVA</span>
+                                        <strong>$ @ivaTotal.ToString("N2")</strong>
+                                    </div>
+                                    <div class="docs-total-fiscal-row docs-total-fiscal-total">
+                                        <span>TOTAL</span>
+                                        <strong>$ @totalGeneral.ToString("N2")</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="nc-detail-actions-row">
+                            <button type="button"
+                                    class="n-btn n-btn-secondary"
+                                    disabled="@(previsualizandoPdf || guardandoGuia || detallesGuia.Count == 0)"
+                                    @onclick="AbrirVistaPreviaPdfTemporalAsync">
+                                <i class="bi bi-file-earmark-pdf me-2"></i> @(previsualizandoPdf ? "Generando PDF..." : "Previsualizar PDF")
+                            </button>
+
+                            <button type="button"
+                                    class="n-btn n-btn-secondary"
+                                    disabled="@(previsualizandoPdf || guardandoGuia)"
+                                    @onclick="LimpiarFormularioAsync">
+                                Cancelar / Limpiar
+                            </button>
+
+                            <button type="button"
+                                    class="n-btn n-btn-primary"
+                                    disabled="@(!PuedeIntentarGuardar || previsualizandoPdf || guardandoGuia || detallesGuia.Count == 0)"
+                                    @onclick="GuardarGuiaAsync">
+                                <i class="bi bi-check2-circle fs-5 me-2"></i> @(guardandoGuia ? "Generando..." : "Generar Guia de Remision")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<DocumentWorkspaceModal Visible="@mostrarHistorialGuias"
+                        Eyebrow="Historial"
+                        Title="Guias de remision generadas"
+                        Description="Consulta tus traslados emitidos, revisa estados y abre XML o PDF sin cambiar de pantalla."
+                        OnClose="CerrarHistorialGuiasAsync">
+    <div class="docs-history-frame">
+        <GuiasRemisionGeneradas />
+    </div>
+</DocumentWorkspaceModal>
+
+@if (mostrarModalTransportista)
+{
+    <div class="n-product-modal-backdrop guia-modal-backdrop" @onclick="CerrarModalNuevoTransportista"></div>
+    <div class="n-product-modal-shell guia-modal-shell" role="dialog" aria-modal="true" @onclick="CerrarModalNuevoTransportista">
+        <div class="n-modal n-product-modal-content guia-transport-modal" @onclick:stopPropagation>
+            <div class="n-modal-header guia-transport-modal-header">
+                <div class="n-modal-header-main">
+                    <span class="n-modal-kicker">TRANSPORTISTA</span>
+                    <h3 class="n-modal-title">Nuevo transportista</h3>
+                </div>
+                <button type="button" class="n-modal-close" @onclick="CerrarModalNuevoTransportista" aria-label="Cerrar modal">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <div class="n-modal-body guia-transport-modal-body">
+                <div class="guia-modal-sections">
+                    <section class="guia-modal-section">
+                        <div class="guia-modal-section-title">
+                            <span>1</span>
+                            <strong>Información básica</strong>
+                        </div>
+                        <div class="manual-entry-grid">
+                            <div class="manual-field manual-span-6">
+                                <label class="n-label">Tipo identificación *</label>
+                                <select class="n-select" @bind="transportistaModal.TipoIdentificacion">
+                                    <option value="">Seleccione</option>
+                                    @foreach (var it in identificaciones)
+                                    {
+                                        <option value="@it.IdeCodigo">@it.IdeDescripcion</option>
+                                    }
+                                </select>
+                            </div>
+
+                            <div class="manual-field manual-span-6">
+                                <label class="n-label">Identificación *</label>
+                                <input type="text" class="n-input" @bind="transportistaModal.NumeroIdentificacion" @bind:event="oninput" maxlength="15" />
+                            </div>
+
+                            <div class="manual-field manual-span-6">
+                                <label class="n-label">Placa *</label>
+                                <input type="text" class="n-input" @bind="transportistaModal.Placa" @bind:event="oninput" maxlength="10" />
+                            </div>
+
+                            <div class="manual-field manual-span-6">
+                                <label class="n-label">Razón social *</label>
+                                <input type="text" class="n-input" @bind="transportistaModal.RazonSocial" @bind:event="oninput" maxlength="150" />
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="guia-modal-section mt-3">
+                        <div class="guia-modal-section-title">
+                            <span>2</span>
+                            <strong>Contacto e Info Adicional</strong>
+                        </div>
+                        <div class="manual-entry-grid">
+                            <div class="manual-field manual-span-6">
+                                <label class="n-label">Correo</label>
+                                <input type="email" class="n-input" @bind="transportistaModal.Correo" @bind:event="oninput" maxlength="200" />
+                            </div>
+
+                            <div class="manual-field manual-span-6">
+                                <label class="n-label">Teléfono</label>
+                                <input type="text" class="n-input" @bind="transportistaModal.Telefono" @bind:event="oninput" maxlength="50" />
+                            </div>
+
+                            <div class="manual-field manual-span-12">
+                                <label class="n-label">Dirección</label>
+                                <input type="text" class="n-input" @bind="transportistaModal.Direccion" @bind:event="oninput" maxlength="350" />
+                            </div>
+
+                            <div class="manual-field manual-span-6">
+                                <label class="n-label">Contribuyente especial</label>
+                                <input type="text" class="n-input" @bind="transportistaModal.ContribuyenteEsp" @bind:event="oninput" maxlength="50" />
+                            </div>
+
+                            <div class="manual-field manual-span-6 d-flex align-items-center">
+                                <label class="guia-transport-toggle-card w-100">
+                                    <input type="checkbox"
+                                           class="guia-blue-switch-input"
+                                           checked="@(transportistaModal.OblCont == "SI")"
+                                           @onchange="OnModalObligadoContabilidadChanged" />
+                                    <span class="guia-blue-switch-slider"></span>
+                                    <span>
+                                        <strong>Lleva contabilidad</strong>
+                                        <small>Obligado a llevar contabilidad</small>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="n-modal-footer guia-transport-modal-footer">
+                <div class="guia-modal-feedback">
+                    @if (!string.IsNullOrWhiteSpace(errorTransportistaModal))
+                    {
+                        <div class="alert alert-danger py-2 px-3 mb-0">
+                            <i class="bi bi-exclamation-triangle me-2"></i>@errorTransportistaModal
+                        </div>
+                    }
+                </div>
+                <div class="n-modal-footer-actions">
+                    <button type="button" class="n-btn n-btn-secondary" @onclick="CerrarModalNuevoTransportista">Cancelar</button>
+                    <button type="button" class="n-btn n-btn-primary" disabled="@guardandoTransportistaModal" @onclick="GuardarTransportistaModalAsync">
+                        <i class="bi bi-save me-2"></i>@(guardandoTransportistaModal ? "Guardando..." : "Guardar transportista")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (mostrarVistaPreviaPdfTemporal)
+{
+    <div class="n-product-modal-backdrop" style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.44); backdrop-filter: blur(4px); z-index: 2990;" @onclick="CerrarVistaPreviaPdfTemporalAsync"></div>
+    <div class="n-product-modal-shell" style="position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 3000; display: flex; align-items: center; justify-content: center; padding: 2vh 2vw;" @onclick="CerrarVistaPreviaPdfTemporalAsync">
+        <div class="n-modal n-product-modal-content n-pdf-preview-modal" style="width: min(96vw, 1280px); height: min(94vh, 920px); display: flex; flex-direction: column; background: #ffffff; border-radius: 18px; box-shadow: 0 20px 50px rgba(15, 23, 42, 0.15); overflow: hidden; border: 1px solid #dceaf5;" @onclick:stopPropagation>
+            
+            <!-- Header -->
+            <div class="n-modal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; background: linear-gradient(180deg, #ffffff, #f7fbff); border-bottom: 1px solid rgba(15, 23, 42, 0.08); flex-shrink: 0;">
+                <div style="display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;">
+                    <h5 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #0f172a;">@(pdfVistaEsTemporal ? "Vista previa PDF temporal" : "Guia de remision autorizada")</h5>
+                    <span style="font-size: 0.72rem; font-weight: 800; color: #006bb5; background: rgba(0, 107, 181, 0.12); padding: 0.25rem 0.75rem; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em;">@(pdfVistaEsTemporal ? "Temporal" : "Definitivo")</span>
+                    <span style="color: #64748b; font-size: 0.82rem; font-weight: 500;">@(pdfVistaEsTemporal ? "El PDF se abre en una ventana temporal y se descarta al cerrar." : "PDF regenerado con la autorizacion del SRI.")</span>
+                </div>
+                <button type="button" @onclick="CerrarVistaPreviaPdfTemporalAsync" style="background: transparent; border: 0; color: #64748b; font-size: 1.34rem; cursor: pointer; transition: color 0.18s; padding: 0.2rem;" aria-label="Cerrar vista previa" onmouseover="this.style.color='#006bb5'" onmouseout="this.style.color='#64748b'">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <!-- Body with PDF iframe -->
+            <div class="n-modal-body" style="flex: 1 1 auto; min-height: 0; padding: 0; background: #f4f8fc; position: relative;">
+                @if (!string.IsNullOrWhiteSpace(urlPdfTemporal))
+                {
+                    <iframe src="@urlPdfTemporal" style="width: 100%; height: 100%; min-height: 0; border: 0; background: #ffffff;" title="Vista previa PDF temporal"></iframe>
+                }
+                else
+                {
+                    <div style="height: 100%; display: grid; place-items: center; gap: 0.75rem; padding: 2rem; color: #143451;">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <strong>Generando PDF...</strong>
+                    </div>
+                }
+            </div>
+
+            <!-- Footer -->
+            <div class="n-modal-footer" style="display: flex; align-items: center; justify-content: flex-end; padding: 0.8rem 1.5rem; background: #ffffff; border-top: 1px solid rgba(15, 23, 42, 0.08); flex-shrink: 0;">
+                <button type="button" class="secondary-btn secondary-btn-quiet" style="border-radius: 999px; font-weight: 700; padding: 0.5rem 1.5rem;" @onclick="CerrarVistaPreviaPdfTemporalAsync">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int? UsuarioId { get; set; }
+    [Parameter] public GuiaRemisionPrefillDto? Prefill { get; set; }
+
+    private int currentUserId;
+    private bool sinCaja;
+    private EmisionEstado? emisionEstado;
+    private bool mostrarListaFacturas;
+    private bool seleccionandoFacturaDesdeLista;
+    private string? errorCarga;
+    private string estadoCarga = "Sin cargar";
+    private string numFacturaBuscar = string.Empty;
+    private string serieGuiaVisual = "001-001";
+    private string serieGuiaRawActual = string.Empty;
+    private string secuencialGuiaVisual = "000000001";
+    private string secuencialGuiaAutomatico = "000000001";
+    private bool mostrarModalSecuenciaInicial;
+    private bool? usuarioYaEmitioAntes;
+    private string secuenciaAnteriorManual = string.Empty;
+    private string? errorSecuenciaInicial;
+    private bool mostrarHistorialGuias;
+    private bool inicializado;
+    private string? prefillAplicadoKey;
+
+    private List<FacturaBusquedaDto> listaFacturas = new();
+    private List<Identificacion> identificaciones = new();
+    private List<CajaSerieResolucion> seriesDocumento = new();
+
+    private FacturaViewDto? facturaReferencia;
+    private Cliente cliente = new();
+    private EmisorModel? emisor;
+    private EmisorModel? emisorPredeterminado;
+    private Transportista transportista = new();
+    private Transportista transportistaModal = new();
+    private bool mostrarModalTransportista;
+    private bool guardandoTransportistaModal;
+    private string? errorTransportistaModal;
+    private string textoBusquedaTransportista = string.Empty;
+    private List<Transportista> sugerenciasTransportista = new();
+    private bool mostrarSugerenciasTransportista;
+    private string textoBusquedaCliente = string.Empty;
+    private List<Cliente> sugerenciasCliente = new();
+    private bool mostrarSugerenciasCliente;
+    private GuiaModel guia = new();
+    private GuiaDestinatario destinatario = new();
+    private List<DetalleGuiaRemision> detallesGuia = new();
+    private DetalleGuiaRemision? detalleProductoActivo;
+    private List<ProductoLookupDetalleDto> sugerenciasProductosDetalle = new();
+    private Dictionary<DetalleGuiaRemision, ProductoLookupDetalleDto> productosCatalogoPorDetalle = new();
+    private bool seleccionandoProductoDetalle;
+    private decimal subtotalBruto;
+    private decimal descuentoTotal;
+    private decimal baseImponible;
+    private decimal ivaTotal;
+    private decimal totalGeneral;
+    private bool previsualizandoPdf;
+    private bool guardandoGuia;
+    private bool mostrarVistaPreviaPdfTemporal;
+    private string? urlPdfTemporal;
+    private bool pdfVistaEsTemporal = true;
+    private string? mensajeRapidoEmision;
+    private bool mensajeRapidoEsError;
+    private string? documentoGeneradoPdfUrl;
+
+    private string FacturaReferenciaVisual =>
+        facturaReferencia?.Factura == null
+            ? "-"
+            : $"{FormatearSerie(facturaReferencia.Factura.Serie)}-{facturaReferencia.Factura.Numfactura}";
+
+    private string LineasCargadasVisual =>
+        detallesGuia.Count == 1
+            ? "1 linea"
+            : $"{detallesGuia.Count} lineas";
+
+    private string EstadoCargaClase =>
+        !string.IsNullOrWhiteSpace(errorCarga)
+            ? "is-error"
+            : facturaReferencia?.Factura != null
+                ? "is-ready"
+                : "is-idle";
+
+    private string EstadoCargaTitulo =>
+        !string.IsNullOrWhiteSpace(errorCarga)
+            ? "Revisar carga"
+            : facturaReferencia?.Factura != null
+                ? "Factura vinculada"
+                : "Pendiente";
+
+    private bool BloqueadoPorSaldoDocumentos => emisionEstado?.RequiereCompraDocumentos == true;
+    private string MensajeBloqueoDocumentos => emisionEstado?.Mensaje ?? EmisionControlService.MensajeSaldoAgotado;
+
+    private bool PuedeGuardar =>
+        !sinCaja &&
+        string.IsNullOrWhiteSpace(ValidarGuia());
+
+    private bool PuedeIntentarGuardar =>
+        !sinCaja &&
+        !BloqueadoPorSaldoDocumentos;
+
+    protected override async Task OnInitializedAsync()
+    {
+        EmisionControlService.Changed += OnEmisionChanged;
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        currentUserId = UsuarioId.GetValueOrDefault() > 0
+            ? UsuarioId!.Value
+            : int.TryParse(userClaim, out var id) ? id : 0;
+        await CargarEstadoEmisionAsync();
+
+        identificaciones = (await IdentificacionService.GetAllActiveAsync())
+            .Where(x =>
+                !string.Equals((x.IdeCodigo ?? string.Empty).Trim(), "07", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals((x.IdeDescripcion ?? string.Empty).Trim(), "CONSUMIDOR FINAL", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        seriesDocumento = await FacturacionService.GetSeriesFacturaHabilitadasAsync(currentUserId);
+
+        var caja = await FacturacionService.GetCajaUsuarioAsync(currentUserId);
+        sinCaja = caja == null || string.IsNullOrWhiteSpace(caja.SerieGuia);
+
+        ReiniciarModelos();
+        emisorPredeterminado = (await FacturacionService.GetEmisoresActivosAsync(currentUserId)).FirstOrDefault();
+        emisor = emisorPredeterminado;
+        if (emisor != null && string.IsNullOrWhiteSpace(guia.DireccionPartida))
+            guia.DireccionPartida = emisor.DirEstablecimiento ?? emisor.DireccionMatriz;
+
+        if (sinCaja)
+        {
+            estadoCarga = "Caja sin serie de guía";
+            return;
+        }
+
+        serieGuiaVisual = await GuiaRemisionService.GetSerieGuiaVisualAsync(currentUserId);
+        serieGuiaRawActual = serieGuiaVisual.Replace("-", string.Empty).Trim();
+
+        await RecargarSecuencialAsync();
+    }
+
+    private Task AbrirHistorialGuiasAsync()
+    {
+        mostrarHistorialGuias = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private Task CerrarHistorialGuiasAsync()
+    {
+        mostrarHistorialGuias = false;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || sinCaja)
+            return;
+
+        inicializado = true;
+        await AplicarPrefillAsync();
+        StateHasChanged();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (UsuarioId.GetValueOrDefault() > 0 && currentUserId != UsuarioId.Value)
+        {
+            currentUserId = UsuarioId.Value;
+            await CargarEstadoEmisionAsync();
+        }
+
+        if (inicializado)
+            await AplicarPrefillAsync();
+    }
+
+    public void Dispose()
+    {
+        EmisionControlService.Changed -= OnEmisionChanged;
+    }
+
+    private void OnEmisionChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await CargarEstadoEmisionAsync();
+            StateHasChanged();
+        });
+    }
+
+    private void ReiniciarModelos()
+    {
+        facturaReferencia = null;
+        cliente = new Cliente();
+        emisor = emisorPredeterminado;
+        transportista = new Transportista();
+        textoBusquedaCliente = string.Empty;
+        textoBusquedaTransportista = string.Empty;
+        guia = new GuiaModel
+        {
+            Fecha = DateTime.Today,
+            FechaIniTransporte = DateTime.Today,
+            FechaFinTransporte = DateTime.Today
+        };
+        destinatario = new GuiaDestinatario
+        {
+            MotivoTraslado = "VENTA",
+            CodDocSustento = "01"
+        };
+        detallesGuia = new();
+        detalleProductoActivo = null;
+        sugerenciasProductosDetalle.Clear();
+        productosCatalogoPorDetalle.Clear();
+        seleccionandoProductoDetalle = false;
+        subtotalBruto = 0m;
+        descuentoTotal = 0m;
+        baseImponible = 0m;
+        ivaTotal = 0m;
+        totalGeneral = 0m;
+    }
+
+    private async Task AplicarPrefillAsync()
+    {
+        if (Prefill == null || sinCaja)
+            return;
+
+        var key = string.Join("|",
+            currentUserId.ToString(CultureInfo.InvariantCulture),
+            Prefill.SerieFactura ?? string.Empty,
+            Prefill.NumeroFactura ?? string.Empty,
+            Prefill.ClienteIdentificacion ?? string.Empty,
+            Prefill.ClienteNombre ?? string.Empty,
+            Prefill.Detalles.Count.ToString(CultureInfo.InvariantCulture),
+            string.Join(";", Prefill.Detalles.Select(x => $"{x.CodigoInterno}:{x.Cantidad}:{x.Descripcion}")));
+
+        if (string.Equals(prefillAplicadoKey, key, StringComparison.Ordinal))
+            return;
+
+        prefillAplicadoKey = key;
+        errorCarga = null;
+        mostrarListaFacturas = false;
+        numFacturaBuscar = Prefill.NumeroFactura ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(numFacturaBuscar) && numFacturaBuscar.Trim().Length >= 3)
+        {
+            try
+            {
+                var dto = await FacturacionService.GetFacturaPorNumeroUsuarioAsync(numFacturaBuscar.Trim(), currentUserId);
+                if (dto?.Factura != null)
+                {
+                    AplicarFacturaReferencia(dto);
+                    estadoCarga = string.IsNullOrWhiteSpace(dto.Factura.Guiaremision)
+                        ? "Factura cargada desde la pantalla de factura."
+                        : $"La factura ya registra la guia {dto.Factura.Guiaremision}.";
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                errorCarga = ex.Message;
+            }
+        }
+
+        facturaReferencia = null;
+        cliente = new Cliente
+        {
+            Numeroidentificacion = Prefill.ClienteIdentificacion,
+            Nombrerazonsocial = Prefill.ClienteNombre,
+            Direccion = Prefill.ClienteDireccion
+        };
+
+        guia.DireccionPartida = Prefill.EmisorDireccion ?? guia.DireccionPartida;
+        destinatario.IdDestinatario = Prefill.ClienteIdentificacion;
+        destinatario.RazonSocial = Prefill.ClienteNombre;
+        destinatario.Direccion = Prefill.ClienteDireccion;
+        destinatario.CodDocSustento = "01";
+        destinatario.CodEstablecimiento = Prefill.EmisorCodEstablecimiento;
+        destinatario.SerieDocSustento = FormatearSerie(Prefill.SerieFactura);
+        destinatario.NumDocSustento = Prefill.NumeroFactura;
+        destinatario.FechaEmiSustento = Prefill.FechaFactura ?? DateTime.Today;
+        destinatario.Ruta = string.Empty;
+
+        detallesGuia = Prefill.Detalles
+            .Select(d => new DetalleGuiaRemision
+            {
+                CodInterno = d.CodigoInterno,
+                CodAdicional = d.CodigoAdicional,
+                Descripcion = d.Descripcion,
+                Cantidad = Math.Max(1, d.Cantidad)
+            })
+            .Where(d => (d.Cantidad ?? 0) > 0)
+            .ToList();
+
+        estadoCarga = "Datos cargados desde la factura en edicion.";
+        if (string.IsNullOrWhiteSpace(errorCarga))
+            errorCarga = "Para guardar la guia, primero genera la factura o selecciona una factura ya guardada.";
+    }
+
+    private void AplicarFacturaReferencia(FacturaViewDto dto)
+    {
+        facturaReferencia = dto;
+        cliente = dto.Cliente ?? new Cliente();
+        emisor = dto.Emisor;
+
+        guia.DireccionPartida = emisor?.DirEstablecimiento ?? emisor?.DireccionMatriz ?? guia.DireccionPartida;
+        destinatario.IdDestinatario = cliente.Numeroidentificacion;
+        destinatario.RazonSocial = ObtenerNombreCliente(cliente);
+        textoBusquedaCliente = $"{destinatario.IdDestinatario} - {destinatario.RazonSocial}";
+        destinatario.Direccion = cliente.Direccion;
+        destinatario.CodDocSustento = "01";
+        destinatario.CodEstablecimiento = emisor?.CodEstablecimiento;
+        destinatario.SerieDocSustento = FormatearSerie(dto.Factura.Serie);
+        destinatario.NumDocSustento = dto.Factura.Numfactura;
+        destinatario.NumAutorizacionSustento = dto.Factura.Numautorizacion;
+        destinatario.FechaEmiSustento = dto.Factura.Fechaentrega ?? DateTime.Today;
+        destinatario.Ruta = string.Empty;
+
+        detallesGuia = (dto.Detalles ?? new List<Detallefactura>())
+            .Select(d => new DetalleGuiaRemision
+            {
+                CodInterno = string.IsNullOrWhiteSpace(d.Codprincipal) ? d.Codproducto.ToString(CultureInfo.InvariantCulture) : d.Codprincipal,
+                CodAdicional = d.Codauxiliar,
+                Descripcion = d.Descripproducto,
+                Cantidad = Convert.ToInt32(decimal.Truncate(d.Cantproducto))
+            })
+            .Where(d => (d.Cantidad ?? 0) > 0)
+            .ToList();
+        productosCatalogoPorDetalle.Clear();
+
+        CalcularTotales();
+    }
+
+    private void LimpiarFacturaReferencia()
+    {
+        facturaReferencia = null;
+        emisor = emisorPredeterminado;
+        destinatario.SerieDocSustento = string.Empty;
+        destinatario.NumDocSustento = string.Empty;
+        destinatario.NumAutorizacionSustento = string.Empty;
+        detallesGuia = new();
+        productosCatalogoPorDetalle.Clear();
+        subtotalBruto = 0m;
+        descuentoTotal = 0m;
+        baseImponible = 0m;
+        ivaTotal = 0m;
+        totalGeneral = 0m;
+    }
+
+    private void AbrirModalNuevoTransportista()
+    {
+        transportistaModal = new Transportista
+        {
+            TipoIdentificacion = string.IsNullOrWhiteSpace(transportista.TipoIdentificacion) ? "05" : transportista.TipoIdentificacion,
+            NumeroIdentificacion = transportista.NumeroIdentificacion,
+            RazonSocial = transportista.RazonSocial,
+            Placa = transportista.Placa,
+            Correo = transportista.Correo,
+            Telefono = transportista.Telefono,
+            Direccion = transportista.Direccion,
+            ContribuyenteEsp = transportista.ContribuyenteEsp,
+            OblCont = string.IsNullOrWhiteSpace(transportista.OblCont) ? "NO" : transportista.OblCont
+        };
+        errorTransportistaModal = null;
+        mostrarModalTransportista = true;
+    }
+
+    private void CerrarModalNuevoTransportista()
+    {
+        if (guardandoTransportistaModal)
+            return;
+
+        mostrarModalTransportista = false;
+        errorTransportistaModal = null;
+    }
+
+    private void OnModalObligadoContabilidadChanged(ChangeEventArgs e)
+    {
+        transportistaModal.OblCont = e.Value is bool value && value ? "SI" : "NO";
+    }
+
+    private async Task GuardarTransportistaModalAsync()
+    {
+        errorTransportistaModal = ValidarTransportistaModal();
+        if (!string.IsNullOrWhiteSpace(errorTransportistaModal))
+            return;
+
+        guardandoTransportistaModal = true;
+        try
+        {
+            transportistaModal.Placa = (transportistaModal.Placa ?? string.Empty).Trim().ToUpperInvariant();
+            var guardado = await GuiaRemisionService.GuardarTransportistaAsync(transportistaModal);
+            SeleccionarTransportista(guardado);
+            mostrarModalTransportista = false;
+            errorTransportistaModal = null;
+        }
+        catch (Exception ex)
+        {
+            errorTransportistaModal = ex.Message;
+        }
+        finally
+        {
+            guardandoTransportistaModal = false;
+        }
+    }
+
+    private string? ValidarTransportistaModal()
+    {
+        transportistaModal.NumeroIdentificacion = (transportistaModal.NumeroIdentificacion ?? string.Empty).Trim();
+        transportistaModal.RazonSocial = (transportistaModal.RazonSocial ?? string.Empty).Trim();
+        transportistaModal.Placa = (transportistaModal.Placa ?? string.Empty).Trim().ToUpperInvariant();
+        transportistaModal.TipoIdentificacion = ResolverTipoIdentificacionTransportista(
+            transportistaModal.TipoIdentificacion,
+            transportistaModal.NumeroIdentificacion);
+
+        if (!EsIdentificacionValidaPorTipo(transportistaModal.TipoIdentificacion, transportistaModal.NumeroIdentificacion))
+            return "La identificación del transportista no tiene un formato válido.";
+
+        if (string.IsNullOrWhiteSpace(transportistaModal.RazonSocial))
+            return "Ingresa la razón social del transportista.";
+
+        if (!EsPlacaValida(transportistaModal.Placa))
+            return "La placa debe tener un formato válido.";
+
+        if (!string.IsNullOrWhiteSpace(transportistaModal.Correo) && !EsCorreoValido(transportistaModal.Correo))
+            return "El correo del transportista no tiene un formato válido.";
+
+        if (!string.IsNullOrWhiteSpace(transportistaModal.Telefono) && !EsTelefonoValido(transportistaModal.Telefono))
+            return "El teléfono del transportista debe tener entre 7 y 15 dígitos.";
+
+        return null;
+    }
+
+    private void CalcularTotales()
+    {
+        subtotalBruto = 0m;
+        descuentoTotal = 0m;
+        baseImponible = 0m;
+        ivaTotal = 0m;
+        totalGeneral = 0m;
+
+        if (!detallesGuia.Any())
+            return;
+
+        foreach (var item in detallesGuia)
+        {
+            var cant = item.Cantidad ?? 0;
+            if (cant <= 0) continue;
+
+            var match = facturaReferencia?.Detalles?.FirstOrDefault(d => 
+                (string.IsNullOrWhiteSpace(d.Codprincipal) ? d.Codproducto.ToString(CultureInfo.InvariantCulture) : d.Codprincipal) == item.CodInterno);
+
+            if (match != null)
+            {
+                decimal precioUnitario = match.Precioproducto;
+                decimal cantFactura = match.Cantproducto > 0 ? match.Cantproducto : 1m;
+                decimal descuentoUnitario = (match.Descuento ?? 0m) / cantFactura;
+
+                decimal subtotalLinea = cant * precioUnitario;
+                decimal descuentoLinea = cant * descuentoUnitario;
+                decimal baseLinea = subtotalLinea - descuentoLinea;
+                decimal ivaLinea = baseLinea * (match.Tarifa / 100m);
+
+                subtotalBruto += subtotalLinea;
+                descuentoTotal += descuentoLinea;
+                baseImponible += baseLinea;
+                ivaTotal += ivaLinea;
+            }
+            else if (productosCatalogoPorDetalle.TryGetValue(item, out var producto))
+            {
+                var subtotalLinea = cant * producto.PrecioUnitario;
+                var ivaLinea = subtotalLinea * (producto.TarifaIva / 100m);
+
+                subtotalBruto += subtotalLinea;
+                baseImponible += subtotalLinea;
+                ivaTotal += ivaLinea;
+            }
+        }
+
+        totalGeneral = baseImponible + ivaTotal;
+        StateHasChanged();
+    }
+
+    private void OnCantidadChanged(int index, object? val)
+    {
+        if (val != null && int.TryParse(val.ToString(), out var cant))
+        {
+            detallesGuia[index].Cantidad = cant;
+        }
+        CalcularTotales();
+    }
+
+    private void AgregarDetalleManual()
+    {
+        var detalle = new DetalleGuiaRemision
+        {
+            Cantidad = 1
+        };
+
+        detallesGuia.Add(detalle);
+        detalleProductoActivo = detalle;
+        sugerenciasProductosDetalle.Clear();
+    }
+
+    private void QuitarDetalle(int index)
+    {
+        if (index < 0 || index >= detallesGuia.Count)
+            return;
+
+        var detalle = detallesGuia[index];
+        detallesGuia.RemoveAt(index);
+        productosCatalogoPorDetalle.Remove(detalle);
+        if (ReferenceEquals(detalleProductoActivo, detalle))
+        {
+            detalleProductoActivo = null;
+            sugerenciasProductosDetalle.Clear();
+        }
+
+        CalcularTotales();
+    }
+
+    private async Task BuscarProductoEnDetalleAsync(DetalleGuiaRemision detalle, string? texto)
+    {
+        detalle.Descripcion = texto ?? string.Empty;
+        detalleProductoActivo = detalle;
+        productosCatalogoPorDetalle.Remove(detalle);
+
+        var filtro = detalle.Descripcion.Trim();
+        sugerenciasProductosDetalle = await FacturacionService.BuscarProductosFiltroAsync(currentUserId, filtro);
+
+        var coincidenciaExacta = sugerenciasProductosDetalle.FirstOrDefault(producto =>
+            string.Equals(producto.Descripcion?.Trim(), filtro, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(producto.Codprincipal?.Trim(), filtro, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(producto.Codauxiliar?.Trim(), filtro, StringComparison.OrdinalIgnoreCase));
+
+        if (coincidenciaExacta != null)
+        {
+            AplicarProductoAlDetalle(detalle, coincidenciaExacta);
+            productosCatalogoPorDetalle[detalle] = coincidenciaExacta;
+            CalcularTotales();
+        }
+        else
+        {
+            CalcularTotales();
+        }
+    }
+
+    private async Task MostrarProductosDetalleAsync(DetalleGuiaRemision detalle)
+    {
+        detalleProductoActivo = detalle;
+        sugerenciasProductosDetalle = await FacturacionService.BuscarProductosFiltroAsync(
+            currentUserId,
+            detalle.Descripcion?.Trim() ?? string.Empty);
+    }
+
+    private async Task OcultarProductosDetalleAsync(DetalleGuiaRemision detalle)
+    {
+        await Task.Delay(180);
+        if (seleccionandoProductoDetalle)
+            return;
+
+        if (ReferenceEquals(detalleProductoActivo, detalle))
+        {
+            detalleProductoActivo = null;
+            sugerenciasProductosDetalle.Clear();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void PrepararSeleccionProductoDetalle()
+    {
+        seleccionandoProductoDetalle = true;
+    }
+
+    private Task SeleccionarProductoDetalleAsync(
+        DetalleGuiaRemision detalle,
+        ProductoLookupDetalleDto producto)
+    {
+        AplicarProductoAlDetalle(detalle, producto);
+        productosCatalogoPorDetalle[detalle] = producto;
+        seleccionandoProductoDetalle = false;
+        detalleProductoActivo = null;
+        sugerenciasProductosDetalle.Clear();
+        CalcularTotales();
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SeleccionarProductoConTecladoAsync(
+        DetalleGuiaRemision detalle,
+        KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            detalleProductoActivo = null;
+            sugerenciasProductosDetalle.Clear();
+            return;
+        }
+
+        if (e.Key == "Enter" && sugerenciasProductosDetalle.Any())
+            await SeleccionarProductoDetalleAsync(detalle, sugerenciasProductosDetalle[0]);
+    }
+
+    private static void AplicarProductoAlDetalle(
+        DetalleGuiaRemision detalle,
+        ProductoLookupDetalleDto producto)
+    {
+        detalle.CodInterno = string.IsNullOrWhiteSpace(producto.Codprincipal)
+            ? producto.Codproducto.ToString(CultureInfo.InvariantCulture)
+            : producto.Codprincipal;
+        detalle.CodAdicional = producto.Codauxiliar;
+        detalle.Descripcion = producto.Descripcion;
+        detalle.Cantidad = detalle.Cantidad.GetValueOrDefault() > 0 ? detalle.Cantidad : 1;
+    }
+
+    private async Task AbrirVistaPreviaPdfTemporalAsync()
+    {
+        if (previsualizandoPdf)
+            return;
+
+        var error = ValidarGuia(esPrevisualizacion: true);
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            await AlertService.ShowWarningAsync(error);
+            return;
+        }
+
+        previsualizandoPdf = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            guia.Fecha = DateTime.Today;
+            var dto = new GuiaRemisionDetalleViewDto
+            {
+                Guia = new GuiaModel
+                {
+                    Serie = serieGuiaVisual.Replace("-", string.Empty).Trim(),
+                    NumGuiaRemision = secuencialGuiaVisual,
+                    Fecha = guia.Fecha,
+                    FechaIniTransporte = guia.FechaIniTransporte,
+                    FechaFinTransporte = guia.FechaFinTransporte,
+                    Placa = string.IsNullOrWhiteSpace(guia.Placa) ? transportista.Placa : guia.Placa,
+                    Mensaje = guia.Mensaje,
+                    EstadoSRI = "PENDIENTE",
+                    Ambiente = 2
+                },
+                Destinatario = destinatario,
+                Transportista = transportista,
+                Emisor = emisor != null ? new EmisorModel
+                {
+                    Ruc = emisor.Ruc,
+                    RazonSocial = emisor.RazonSocial,
+                    NomComercial = emisor.NomComercial,
+                    DireccionMatriz = emisor.DireccionMatriz,
+                    DirEstablecimiento = emisor.DirEstablecimiento,
+                    Telefono = emisor.Telefono,
+                    LogoImagen = emisor.LogoImagen
+                } : null,
+                Factura = facturaReferencia?.Factura,
+                NumeroCompleto = $"{serieGuiaVisual}-{secuencialGuiaVisual}",
+                NumeroDocumentoSustentoVisual =
+                    string.IsNullOrWhiteSpace(destinatario.SerieDocSustento) &&
+                    string.IsNullOrWhiteSpace(destinatario.NumDocSustento)
+                        ? string.Empty
+                        : $"{destinatario.SerieDocSustento}-{destinatario.NumDocSustento}".Trim('-'),
+                Detalles = detallesGuia.Select(d => new GuiaRemisionDetalleLineaDto
+                {
+                    CodigoInterno = d.CodInterno ?? "",
+                    CodigoAdicional = d.CodAdicional ?? "",
+                    Descripcion = d.Descripcion ?? "",
+                    Cantidad = d.Cantidad ?? 0
+                }).ToList()
+            };
+
+            var rutaPdf = await GuiaRemisionPdfService.GenerarPdfGuiaRemisionAsync(dto);
+            
+            var webRoot = string.IsNullOrWhiteSpace(WebHostEnvironment.WebRootPath) 
+                ? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot") 
+                : WebHostEnvironment.WebRootPath;
+            
+            var relativePath = Path.GetRelativePath(webRoot, rutaPdf).Replace(Path.DirectorySeparatorChar, '/');
+            urlPdfTemporal = "/" + relativePath + "?v=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            pdfVistaEsTemporal = true;
+            mostrarVistaPreviaPdfTemporal = true;
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync($"No se pudo generar la vista previa del PDF: {ex.Message}", "Error");
+        }
+        finally
+        {
+            previsualizandoPdf = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CerrarVistaPreviaPdfTemporalAsync()
+    {
+        mostrarVistaPreviaPdfTemporal = false;
+        urlPdfTemporal = null;
+        pdfVistaEsTemporal = true;
+    }
+
+    private Task AbrirDocumentoGeneradoAsync()
+    {
+        if (string.IsNullOrWhiteSpace(documentoGeneradoPdfUrl))
+            return Task.CompletedTask;
+
+        pdfVistaEsTemporal = false;
+        urlPdfTemporal = documentoGeneradoPdfUrl;
+        mostrarVistaPreviaPdfTemporal = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task NuevaGuiaDesdeAvisoAsync()
+    {
+        mensajeRapidoEmision = null;
+        mensajeRapidoEsError = false;
+        documentoGeneradoPdfUrl = null;
+        await LimpiarFormularioAsync();
+    }
+
+    private async Task RecargarSecuencialAsync()
+    {
+        if (sinCaja)
+            return;
+
+        if (currentUserId <= 0)
+        {
+            estadoCarga = "Usuario no identificado";
+            errorCarga = "No se pudo identificar al usuario actual para resolver la serie de guia.";
+            return;
+        }
+
+        try
+        {
+            secuencialGuiaAutomatico = await GuiaRemisionService.GetNextGuiaRemisionNumeroAsync(currentUserId, serieGuiaRawActual);
+            await AplicarConfiguracionSecuenciaInicialAsync();
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync(ex.Message, "No se pudo recalcular el secuencial");
+        }
+    }
+
+    private async Task OnSerieDocumentoChangedAsync(ChangeEventArgs e)
+    {
+        var serieRaw = e.Value?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(serieRaw) ||
+            string.Equals(serieGuiaRawActual, serieRaw, StringComparison.Ordinal))
+            return;
+
+        await FacturacionService.SavePreferredSeriesForAllDocumentsAsync(currentUserId, serieRaw);
+        serieGuiaRawActual = serieRaw;
+        serieGuiaVisual = FormatearSerie(serieRaw);
+        await RecargarSecuencialAsync();
+    }
+
+    private async Task AplicarConfiguracionSecuenciaInicialAsync()
+    {
+        var estado = await InitialSequencePromptService.GetStateAsync(currentUserId, "guia-remision", serieGuiaRawActual);
+
+        if (!estado.Initialized)
+        {
+            mostrarModalSecuenciaInicial = true;
+            secuencialGuiaVisual = string.Empty;
+            return;
+        }
+
+        mostrarModalSecuenciaInicial = false;
+        secuencialGuiaVisual = InitialSequencePromptService.ResolveNextSequence(secuencialGuiaAutomatico, estado);
+    }
+
+    private void OnCambioRespuestaSecuencia(bool? value)
+    {
+        usuarioYaEmitioAntes = value;
+        errorSecuenciaInicial = null;
+
+        if (value != true)
+            secuenciaAnteriorManual = string.Empty;
+    }
+
+    private void OnSecuenciaAnteriorManualChanged(string value)
+    {
+        secuenciaAnteriorManual = value ?? string.Empty;
+        errorSecuenciaInicial = null;
+    }
+
+    private async Task ConfirmarSecuenciaInicialAsync()
+    {
+        errorSecuenciaInicial = null;
+
+        if (usuarioYaEmitioAntes == null)
+        {
+            errorSecuenciaInicial = "Debes indicar si ya habias generado guias antes.";
+            return;
+        }
+
+        var secuenciaNormalizada = string.Empty;
+
+        if (usuarioYaEmitioAntes == true &&
+            !InitialSequencePromptService.TryNormalizeSequence(secuenciaAnteriorManual, out secuenciaNormalizada))
+        {
+            errorSecuenciaInicial = "Ingresa una secuencia valida de hasta 9 digitos.";
+            return;
+        }
+
+        var estado = new InitialSequencePromptState
+        {
+            Initialized = true,
+            HadPreviousDocuments = usuarioYaEmitioAntes.Value,
+            PreviousSequence = usuarioYaEmitioAntes.Value ? secuenciaNormalizada : string.Empty
+        };
+
+        await InitialSequencePromptService.SaveStateAsync(currentUserId, "guia-remision", serieGuiaRawActual, estado);
+
+        secuenciaAnteriorManual = secuenciaNormalizada;
+        mostrarModalSecuenciaInicial = false;
+        secuencialGuiaVisual = usuarioYaEmitioAntes.Value
+            ? InitialSequencePromptService.ResolveNextSequence(secuencialGuiaAutomatico, estado)
+            : secuencialGuiaAutomatico;
+    }
+
+    private async Task BuscarFacturasAutoAsync(ChangeEventArgs e)
+    {
+        var nuevoTexto = e.Value?.ToString()?.Trim() ?? string.Empty;
+        if (!string.Equals(nuevoTexto, numFacturaBuscar, StringComparison.OrdinalIgnoreCase) &&
+            facturaReferencia?.Factura != null &&
+            !string.Equals(nuevoTexto, facturaReferencia.Factura.Numfactura, StringComparison.OrdinalIgnoreCase))
+        {
+            LimpiarFacturaReferencia();
+        }
+
+        numFacturaBuscar = nuevoTexto;
+        errorCarga = null;
+
+        if (string.IsNullOrWhiteSpace(numFacturaBuscar))
+        {
+            listaFacturas.Clear();
+            mostrarListaFacturas = false;
+            estadoCarga = "Sin cargar";
+            LimpiarFacturaReferencia();
+            return;
+        }
+
+        try
+        {
+            listaFacturas = await FacturacionService.BuscarFacturasAutocompleteAsync(numFacturaBuscar, currentUserId);
+            mostrarListaFacturas = listaFacturas.Any();
+            estadoCarga = listaFacturas.Any()
+                ? $"{listaFacturas.Count} coincidencia(s) encontrada(s)"
+                : "No se encontraron coincidencias";
+        }
+        catch (Exception ex)
+        {
+            listaFacturas.Clear();
+            mostrarListaFacturas = false;
+            estadoCarga = "Error";
+            errorCarga = ex.Message;
+        }
+    }
+
+    private void PrepararSeleccionFactura()
+    {
+        seleccionandoFacturaDesdeLista = true;
+    }
+
+    private void ToggleListaFacturas()
+    {
+        mostrarListaFacturas = !mostrarListaFacturas;
+    }
+
+    private async Task SeleccionarFacturaDesdeListaAsync(FacturaBusquedaDto item)
+    {
+        numFacturaBuscar = item.Numfactura;
+        mostrarListaFacturas = false;
+        seleccionandoFacturaDesdeLista = false;
+        await BuscarFacturaAsync();
+    }
+
+    private async Task OcultarListaConDelay(FocusEventArgs _)
+    {
+        await Task.Delay(150);
+        if (seleccionandoFacturaDesdeLista)
+        {
+            seleccionandoFacturaDesdeLista = false;
+            return;
+        }
+
+        mostrarListaFacturas = false;
+    }
+
+    private async Task OnKeyBuscarFactura(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            mostrarListaFacturas = false;
+            await BuscarFacturaAsync();
+        }
+    }
+
+    private async Task BuscarFacturaAsync()
+    {
+        errorCarga = null;
+
+        if (string.IsNullOrWhiteSpace(numFacturaBuscar) || numFacturaBuscar.Trim().Length < 3)
+        {
+            estadoCarga = "Escribe al menos 3 digitos";
+            return;
+        }
+
+        try
+        {
+            estadoCarga = "Buscando factura...";
+            var dto = await FacturacionService.GetFacturaPorNumeroUsuarioAsync(numFacturaBuscar.Trim(), currentUserId);
+
+            if (dto?.Factura == null)
+            {
+                estadoCarga = "No se encontro la factura.";
+                LimpiarFacturaReferencia();
+                return;
+            }
+
+            AplicarFacturaReferencia(dto);
+
+            estadoCarga = string.IsNullOrWhiteSpace(dto.Factura.Guiaremision)
+                ? "Factura cargada correctamente."
+                : $"La factura ya registra la guia {dto.Factura.Guiaremision}.";
+        }
+        catch (Exception ex)
+        {
+            estadoCarga = "Error";
+            errorCarga = ex.Message;
+        }
+    }
+
+    private async Task BuscarTransportistaPorIdentificacionAsync(FocusEventArgs _)
+    {
+        if (string.IsNullOrWhiteSpace(transportista.NumeroIdentificacion))
+            return;
+
+        try
+        {
+            var encontrado = await GuiaRemisionService.GetTransportistaPorIdentificacionAsync(
+                currentUserId,
+                transportista.NumeroIdentificacion);
+            if (encontrado != null)
+            {
+                transportista = encontrado;
+                textoBusquedaTransportista = encontrado.RazonSocial ?? string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync(ex.Message, "No se pudo buscar el transportista");
+        }
+    }
+
+    private async Task OnBusquedaTransportistaInput(ChangeEventArgs e)
+    {
+        textoBusquedaTransportista = e.Value?.ToString() ?? "";
+        if (!string.Equals(textoBusquedaTransportista, transportista.RazonSocial, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(textoBusquedaTransportista, transportista.NumeroIdentificacion, StringComparison.OrdinalIgnoreCase))
+        {
+            transportista = new Transportista();
+        }
+
+        if (string.IsNullOrWhiteSpace(textoBusquedaTransportista) || textoBusquedaTransportista.Trim().Length < 2)
+        {
+            sugerenciasTransportista.Clear();
+            mostrarSugerenciasTransportista = false;
+            return;
+        }
+        try
+        {
+            sugerenciasTransportista = await GuiaRemisionService.BuscarTransportistasAsync(
+                currentUserId,
+                textoBusquedaTransportista.Trim());
+            mostrarSugerenciasTransportista = sugerenciasTransportista.Any();
+        }
+        catch (Exception ex)
+        {
+            sugerenciasTransportista.Clear();
+            mostrarSugerenciasTransportista = false;
+            await AlertService.ShowErrorAsync(ex.Message, "No se pudo buscar transportistas");
+        }
+    }
+
+    private void SeleccionarTransportista(Transportista t)
+    {
+        transportista = new Transportista
+        {
+            Codigo = t.Codigo,
+            RazonSocial = t.RazonSocial,
+            TipoIdentificacion = t.TipoIdentificacion,
+            NumeroIdentificacion = t.NumeroIdentificacion,
+            Correo = t.Correo,
+            Placa = t.Placa,
+            OblCont = t.OblCont,
+            ContribuyenteEsp = t.ContribuyenteEsp,
+            Direccion = t.Direccion,
+            Telefono = t.Telefono
+        };
+        textoBusquedaTransportista = t.RazonSocial ?? "";
+        sugerenciasTransportista.Clear();
+        mostrarSugerenciasTransportista = false;
+    }
+
+    private async Task OcultarSugerenciasTransportistaConDelay()
+    {
+        await Task.Delay(200);
+        mostrarSugerenciasTransportista = false;
+        StateHasChanged();
+    }
+
+    private async Task OnBusquedaClienteInput(ChangeEventArgs e)
+    {
+        textoBusquedaCliente = e.Value?.ToString() ?? "";
+        var textoSeleccionado = $"{destinatario.IdDestinatario} - {destinatario.RazonSocial}";
+        if (!string.IsNullOrWhiteSpace(destinatario.IdDestinatario) &&
+            !string.Equals(textoBusquedaCliente, textoSeleccionado, StringComparison.OrdinalIgnoreCase))
+        {
+            destinatario.IdDestinatario = string.Empty;
+            destinatario.RazonSocial = string.Empty;
+            destinatario.Direccion = string.Empty;
+            cliente = new Cliente();
+        }
+
+        if (string.IsNullOrWhiteSpace(textoBusquedaCliente))
+        {
+            destinatario.IdDestinatario = string.Empty;
+            destinatario.RazonSocial = string.Empty;
+            destinatario.Direccion = string.Empty;
+            sugerenciasCliente.Clear();
+            mostrarSugerenciasCliente = false;
+            return;
+        }
+        if (textoBusquedaCliente.Trim().Length < 2)
+        {
+            sugerenciasCliente.Clear();
+            mostrarSugerenciasCliente = false;
+            return;
+        }
+        sugerenciasCliente = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoBusquedaCliente.Trim());
+        mostrarSugerenciasCliente = sugerenciasCliente.Any();
+    }
+
+    private void SeleccionarCliente(Cliente c)
+    {
+        destinatario.IdDestinatario = c.Numeroidentificacion ?? string.Empty;
+        destinatario.RazonSocial = ObtenerNombreCliente(c);
+        destinatario.Direccion = c.Direccion ?? string.Empty;
+        textoBusquedaCliente = $"{c.Numeroidentificacion} - {ObtenerNombreCliente(c)}";
+        sugerenciasCliente.Clear();
+        mostrarSugerenciasCliente = false;
+    }
+
+    private async Task OcultarSugerenciasClienteConDelay()
+    {
+        await Task.Delay(200);
+        mostrarSugerenciasCliente = false;
+        StateHasChanged();
+    }
+
+    private async Task GuardarGuiaAsync()
+    {
+        if (guardandoGuia)
+            return;
+
+        guardandoGuia = true;
+        try
+        {
+            var error = ValidarGuia();
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                await AlertService.ShowErrorAsync(error);
+                return;
+            }
+
+            mensajeRapidoEmision = null;
+            mensajeRapidoEsError = false;
+            documentoGeneradoPdfUrl = null;
+            await InvokeAsync(StateHasChanged);
+
+            guia.Fecha = DateTime.Today;
+            guia.Serie = serieGuiaVisual.Replace("-", string.Empty).Trim();
+            guia.NumGuiaRemision = secuencialGuiaVisual;
+            guia.Codfactura = facturaReferencia?.Factura?.Codfactura;
+            guia.Placa = string.IsNullOrWhiteSpace(guia.Placa) ? transportista.Placa : guia.Placa;
+            destinatario.CodDocSustento = facturaReferencia?.Factura != null ? "01" : null;
+
+            var resultado = await GuiaRemisionService.GuardarGuiaRemisionCompletaAsync(
+                currentUserId,
+                facturaReferencia?.Factura?.Codfactura,
+                emisor?.Codigo,
+                transportista,
+                guia,
+                destinatario,
+                detallesGuia);
+
+            await InitialSequencePromptService.UpdateLastSequenceAsync(
+                currentUserId,
+                "guia-remision",
+                resultado.Secuencial,
+                serieGuiaRawActual);
+
+            var respuestaSri = await GuiaRemisionService.EmitirGuiaRemisionSriAsync(
+                resultado.SecGuiaRemision,
+                currentUserId);
+            var autorizadaSri = string.Equals(
+                respuestaSri.estado,
+                DocumentoAutorizacionHelper.EstadoAutorizado,
+                StringComparison.OrdinalIgnoreCase) ||
+                !string.IsNullOrWhiteSpace(respuestaSri.autorizacion);
+
+            string? pdfUrl = null;
+            string? pdfError = null;
+
+            try
+            {
+                pdfUrl = await GuiaRemisionService.AsegurarPdfGuiaRemisionUsuarioAsync(resultado.SecGuiaRemision, currentUserId);
+            }
+            catch (Exception ex)
+            {
+                pdfError = ex.Message;
+            }
+
+            var hayObservaciones = !autorizadaSri || !string.IsNullOrWhiteSpace(pdfError);
+            documentoGeneradoPdfUrl = autorizadaSri && !string.IsNullOrWhiteSpace(pdfUrl)
+                ? $"{pdfUrl}?v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
+                : null;
+            mensajeRapidoEmision = autorizadaSri
+                ? $"Guía {resultado.NumeroCompleto} emitida correctamente al SRI."
+                : $"Guía guardada, pero no se pudo emitir al SRI. {respuestaSri.estado}: {respuestaSri.mensaje}";
+
+            if (autorizadaSri && !string.IsNullOrWhiteSpace(pdfError))
+                mensajeRapidoEmision += $" El PDF no se pudo generar: {pdfError}";
+
+            mensajeRapidoEsError = hayObservaciones;
+            await CargarEstadoEmisionAsync();
+            EmisionControlService.NotifyChanged();
+            await LimpiarFormularioAsync();
+        }
+        catch (Exception ex)
+        {
+            var mensaje = ex.GetBaseException().Message;
+            mensajeRapidoEmision = mensaje;
+            mensajeRapidoEsError = true;
+            await AlertService.ShowErrorAsync(mensaje, "No se pudo guardar la guia");
+        }
+        finally
+        {
+            guardandoGuia = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task LimpiarFormularioAsync()
+    {
+        ReiniciarModelos();
+        numFacturaBuscar = string.Empty;
+        listaFacturas.Clear();
+        mostrarListaFacturas = false;
+        seleccionandoFacturaDesdeLista = false;
+        textoBusquedaTransportista = string.Empty;
+        errorCarga = null;
+        estadoCarga = sinCaja ? "Caja sin serie de guia" : "Sin cargar";
+        await RecargarSecuencialAsync();
+    }
+
+    private string? ValidarGuia(bool esPrevisualizacion = false)
+    {
+        if (sinCaja)
+            return "Debes configurar la serie de guia en tu caja antes de emitir este documento.";
+
+        if (BloqueadoPorSaldoDocumentos)
+            return MensajeBloqueoDocumentos;
+
+        if (emisor == null || emisor.Codigo <= 0)
+            return "Debes configurar un emisor activo antes de generar la guia.";
+
+        if (!esPrevisualizacion &&
+            facturaReferencia?.Factura != null &&
+            !string.IsNullOrWhiteSpace(facturaReferencia.Factura.Guiaremision))
+            return $"La factura ya tiene registrada la guia {facturaReferencia.Factura.Guiaremision}.";
+
+        transportista.NumeroIdentificacion = (transportista.NumeroIdentificacion ?? string.Empty).Trim();
+        transportista.TipoIdentificacion = ResolverTipoIdentificacionTransportista(
+            transportista.TipoIdentificacion,
+            transportista.NumeroIdentificacion);
+        if (!EsIdentificacionValidaPorTipo(transportista.TipoIdentificacion, transportista.NumeroIdentificacion))
+            return "La identificacion del transportista no tiene un formato válido para el tipo seleccionado.";
+
+        transportista.RazonSocial = (transportista.RazonSocial ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(transportista.RazonSocial))
+            return "Debes ingresar la razon social del transportista.";
+
+        transportista.Placa = (transportista.Placa ?? string.Empty).Trim().ToUpperInvariant();
+        if (!EsPlacaValida(transportista.Placa))
+            return "Debes ingresar la placa del vehiculo.";
+
+        if (guia.FechaIniTransporte == null || guia.FechaFinTransporte == null || guia.FechaFinTransporte < guia.FechaIniTransporte)
+            return "Debes indicar un rango valido de fechas para el transporte.";
+
+        if (guia.FechaIniTransporte.Value.Date < DateTime.Today)
+            return "La fecha de inicio de traslado no puede ser de días pasados.";
+
+        guia.DireccionPartida = (guia.DireccionPartida ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(guia.DireccionPartida))
+            return "Debes ingresar la direccion de partida.";
+
+        transportista.Correo = (transportista.Correo ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(transportista.Correo) && !EsCorreoValido(transportista.Correo))
+            return "El correo del transportista no tiene un formato válido.";
+
+        transportista.Telefono = (transportista.Telefono ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(transportista.Telefono) && !EsTelefonoValido(transportista.Telefono))
+            return "El teléfono del transportista debe tener entre 7 y 15 dígitos.";
+
+        destinatario.IdDestinatario = (destinatario.IdDestinatario ?? string.Empty).Trim();
+        destinatario.RazonSocial = (destinatario.RazonSocial ?? string.Empty).Trim();
+        destinatario.Direccion = (destinatario.Direccion ?? string.Empty).Trim();
+        destinatario.MotivoTraslado = (destinatario.MotivoTraslado ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(destinatario.IdDestinatario) ||
+            string.IsNullOrWhiteSpace(destinatario.RazonSocial) ||
+            string.IsNullOrWhiteSpace(destinatario.Direccion) ||
+            string.IsNullOrWhiteSpace(destinatario.MotivoTraslado))
+            return "Completa los datos obligatorios del destinatario.";
+
+        if (!EsIdentificacionGenericaValida(destinatario.IdDestinatario))
+            return "La identificación del destinatario no tiene un formato válido.";
+
+        if (!detallesGuia.Any())
+            return "La guia debe tener al menos un detalle.";
+
+        for (int i = 0; i < detallesGuia.Count; i++)
+        {
+            if (string.IsNullOrWhiteSpace(detallesGuia[i].Descripcion))
+                return $"En la linea #{i + 1} la descripcion es obligatoria.";
+
+            if ((detallesGuia[i].Cantidad ?? 0) <= 0)
+                return $"En la linea #{i + 1} la cantidad debe ser mayor a cero.";
+        }
+
+        return null;
+    }
+
+    private async Task CargarEstadoEmisionAsync()
+    {
+        emisionEstado = await EmisionControlService.ObtenerEstadoAsync(currentUserId);
+    }
+
+    private static bool EsCorreoValido(string correo)
+    {
+        try
+        {
+            _ = new System.Net.Mail.MailAddress(correo);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool EsTelefonoValido(string telefono)
+    {
+        var digitos = new string((telefono ?? string.Empty).Where(char.IsDigit).ToArray());
+        return digitos.Length is >= 7 and <= 15;
+    }
+
+    private static bool EsPlacaValida(string placa) =>
+        !string.IsNullOrWhiteSpace(placa) &&
+        placa.Length is >= 5 and <= 10 &&
+        placa.All(ch => char.IsLetterOrDigit(ch) || ch == '-');
+
+    private static bool EsIdentificacionValidaPorTipo(string tipo, string identificacion)
+    {
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return false;
+
+        return tipo switch
+        {
+            "04" => identificacion.Length == 13 && identificacion.All(char.IsDigit),
+            "05" => identificacion.Length == 10 && identificacion.All(char.IsDigit),
+            "06" => identificacion.Length is >= 3 and <= 20 &&
+                    identificacion.All(ch => char.IsLetterOrDigit(ch) || ch == '-'),
+            _ => EsIdentificacionGenericaValida(identificacion)
+        };
+    }
+
+    private static string ResolverTipoIdentificacionTransportista(string? tipo, string? identificacion)
+    {
+        var tipoLimpio = tipo?.Trim();
+        if (tipoLimpio?.Length == 2 && tipoLimpio.All(char.IsDigit))
+            return tipoLimpio;
+
+        var identificacionLimpia = identificacion?.Trim() ?? string.Empty;
+        return identificacionLimpia.All(char.IsDigit) switch
+        {
+            true when identificacionLimpia.Length == 13 => "04",
+            true when identificacionLimpia.Length == 10 => "05",
+            _ => "06"
+        };
+    }
+
+    private static bool EsIdentificacionGenericaValida(string identificacion)
+    {
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return false;
+
+        if (identificacion.All(char.IsDigit))
+            return identificacion.Length is 10 or 13;
+
+        return identificacion.Length is >= 3 and <= 20 &&
+               identificacion.All(ch => char.IsLetterOrDigit(ch) || ch == '-');
+    }
+
+    private static string ObtenerNombreCliente(Cliente? cli)
+    {
+        if (cli == null)
+            return string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(cli.Nombrerazonsocial))
+            return cli.Nombrerazonsocial.Trim();
+
+        return $"{cli.Nombres} {cli.Apellidos}".Trim();
+    }
+
+    private static string FormatearSerie(string? serie)
+    {
+        var limpia = (serie ?? string.Empty).Replace("-", string.Empty).Trim();
+        if (limpia.Length != 6)
+            return limpia;
+
+        return $"{limpia[..3]}-{limpia[3..]}";
+    }
+}

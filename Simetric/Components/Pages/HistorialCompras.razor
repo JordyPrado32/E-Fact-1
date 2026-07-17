@@ -1,0 +1,908 @@
+@page "/historial-compras"
+@layout Simetric.Components.Layout.MainLayout
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using System.Globalization
+@using System.Text.Json
+@using Simetric.Data
+@using Simetric.DTOs
+
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<PageTitle>Historial de compras | Numerica e-fact</PageTitle>
+
+@{
+    var movimientosVisibles = MovimientosPaginaActual;
+}
+
+<div class="purchase-history-shell">
+    @if (cargando)
+    {
+        <section class="purchase-history-state">
+            <div class="purchase-history-loader" aria-hidden="true"></div>
+            <h3>Cargando historial de recargas</h3>
+            <p>Estamos reuniendo tus compras de documentos para mostrarlas en orden.</p>
+        </section>
+    }
+    else if (!string.IsNullOrWhiteSpace(errorCarga))
+    {
+        <section class="purchase-history-state purchase-history-state-error">
+            <div class="purchase-history-state-icon">
+                <i class="bi bi-exclamation-triangle"></i>
+            </div>
+            <h3>No se pudo cargar el historial</h3>
+            <p>@errorCarga</p>
+            <div class="purchase-history-actions">
+                <button type="button" class="purchase-history-btn purchase-history-btn-primary" @onclick="CargarAsync">
+                    Reintentar
+                </button>
+            </div>
+        </section>
+    }
+    else
+    {
+        <section class="purchase-history-hero">
+            <div class="purchase-history-copy">
+                <span class="purchase-history-kicker">Historial de recargas</span>
+                <h1>Compras de documentos</h1>
+                <p>
+                    @(esAdministrador
+                        ? "Consulta las recargas documentales registradas por los usuarios activos de la cuenta, con estado, monto y referencias clave."
+                        : "Consulta tus recargas documentales registradas con estado, monto y referencias clave.")
+                </p>
+
+                <div class="purchase-history-actions">
+                    <a class="purchase-history-btn purchase-history-btn-primary" href="/compra-documentos">
+                        <i class="bi bi-plus-circle"></i>
+                        <span>Comprar documentos</span>
+                    </a>
+                    <button type="button" class="purchase-history-btn purchase-history-btn-secondary" @onclick="CargarAsync">
+                        <i class="bi bi-arrow-clockwise"></i>
+                        <span>Actualizar</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="purchase-history-summary-grid">
+                <article class="purchase-summary-stat">
+                    <div class="purchase-summary-icon is-blue">
+                        <i class="bi bi-graph-up-arrow"></i>
+                    </div>
+                    <div class="purchase-summary-copy">
+                        <span>Movimientos</span>
+                        <strong>@TotalMovimientos</strong>
+                        <small>@ResumenUltimoMovimiento</small>
+                    </div>
+                </article>
+
+                <article class="purchase-summary-stat">
+                    <div class="purchase-summary-icon is-green">
+                        <i class="bi bi-cash-coin"></i>
+                    </div>
+                    <div class="purchase-summary-copy">
+                        <span>Monto aprobado</span>
+                        <strong>@FormatearMoneda(TotalMontoAprobado)</strong>
+                        <small>Recargas con pago confirmado</small>
+                    </div>
+                </article>
+
+                <article class="purchase-summary-stat">
+                    <div class="purchase-summary-icon is-purple">
+                        <i class="bi bi-file-earmark-text"></i>
+                    </div>
+                    <div class="purchase-summary-copy">
+                        <span>Documentos acreditados</span>
+                        <strong>@TotalDocumentosAcreditadosTexto</strong>
+                        <small>Solo saldo ya aplicado</small>
+                    </div>
+                </article>
+
+                <article class="purchase-summary-stat">
+                    <div class="purchase-summary-icon is-amber">
+                        <i class="bi bi-clock-history"></i>
+                    </div>
+                    <div class="purchase-summary-copy">
+                        <span>Recargas pendientes</span>
+                        <strong>@TotalMovimientosPendientes</strong>
+                        <small>@ResumenPendientes</small>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="purchase-history-panel">
+            <div class="purchase-history-toolbar">
+                <div class="purchase-filter-pills">
+                    <button type="button"
+                            class="purchase-filter-pill @(filtroEstado == FiltroTodos ? "is-active" : string.Empty)"
+                            @onclick="() => CambiarFiltro(FiltroTodos)">
+                        Todo
+                    </button>
+                    <button type="button"
+                            class="purchase-filter-pill @(filtroEstado == FiltroAprobadas ? "is-active" : string.Empty)"
+                            @onclick="() => CambiarFiltro(FiltroAprobadas)">
+                        Aprobadas
+                    </button>
+                    <button type="button"
+                            class="purchase-filter-pill @(filtroEstado == FiltroPendientes ? "is-active" : string.Empty)"
+                            @onclick="() => CambiarFiltro(FiltroPendientes)">
+                        Pendientes
+                    </button>
+                </div>
+
+                <label class="purchase-date-field">
+                    <span>Desde</span>
+                    <div class="purchase-input-wrap">
+                        <input type="date" value="@FechaDesdeTexto" @onchange="OnFechaDesdeChanged" />
+                        <i class="bi bi-calendar3"></i>
+                    </div>
+                </label>
+
+                <label class="purchase-date-field">
+                    <span>Hasta</span>
+                    <div class="purchase-input-wrap">
+                        <input type="date" value="@FechaHastaTexto" @onchange="OnFechaHastaChanged" />
+                        <i class="bi bi-calendar3"></i>
+                    </div>
+                </label>
+
+                <label class="purchase-search-field">
+                    <i class="bi bi-search"></i>
+                    <input type="text"
+                           @bind="TextoBusqueda"
+                           @bind:event="oninput"
+                           placeholder="Buscar por referencia o autorización" />
+                </label>
+
+                <span class="purchase-filters-badge">@ResumenResultados</span>
+            </div>
+
+            @if (movimientos.Count == 0)
+            {
+                <section class="purchase-history-empty purchase-history-empty-inline">
+                    <i class="bi bi-bag-x"></i>
+                    <strong>@(esAdministrador ? "Aun no hay recargas registradas en la cuenta." : "Aun no registras compras en tu cuenta.")</strong>
+                    <p>@(esAdministrador ? "Cuando un usuario realice una recarga documental, aparecera aqui con su estado y referencias." : "Cuando completes tu primera recarga documental, aqui veras el monto, la referencia y los documentos acreditados.")</p>
+                    <div class="purchase-history-actions">
+                        <a class="purchase-history-btn purchase-history-btn-primary" href="/compra-documentos">
+                            Comprar documentos
+                        </a>
+                    </div>
+                </section>
+            }
+            else if (movimientosVisibles.Count == 0)
+            {
+                <section class="purchase-history-empty purchase-history-empty-inline">
+                    <i class="bi bi-funnel"></i>
+                    <strong>No hay resultados con los filtros actuales.</strong>
+                    <p>Prueba limpiando la búsqueda, ajustando el rango de fechas o cambiando el estado visible.</p>
+                    <div class="purchase-history-actions">
+                        <button type="button" class="purchase-history-btn purchase-history-btn-primary" @onclick="LimpiarFiltros">
+                            Limpiar filtros
+                        </button>
+                    </div>
+                </section>
+            }
+            else
+            {
+                <div class="purchase-table-card">
+                    <div class="purchase-table-wrap">
+                        <table class="purchase-table">
+                            <thead>
+                                <tr>
+                                    <th class="purchase-col-expander"></th>
+                                    <th class="purchase-col-date">Fecha <i class="bi bi-arrow-down-up"></i></th>
+                                    <th class="purchase-col-description">Descripción</th>
+                                    @if (esAdministrador)
+                                    {
+                                        <th class="purchase-col-user">Usuario</th>
+                                    }
+                                    <th class="purchase-col-docs">Documentos</th>
+                                    <th class="purchase-col-money">Subtotal</th>
+                                    <th class="purchase-col-money">IVA</th>
+                                    <th class="purchase-col-money">Total</th>
+                                    <th class="purchase-col-status">Estado</th>
+                                    <th class="purchase-col-application">Aplicación</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var item in movimientosVisibles)
+                                {
+                                    var expanded = expandedMovimientoId == item.Id;
+                                    <tr class="purchase-table-row @(expanded ? "is-expanded" : string.Empty)">
+                                        <td class="purchase-col-expander">
+                                            <button type="button"
+                                                    class="purchase-expander"
+                                                    @onclick="() => ToggleExpanded(item.Id)"
+                                                    aria-expanded="@expanded"
+                                                    aria-label="Mostrar detalles">
+                                                <i class="bi @(expanded ? "bi-chevron-down" : "bi-chevron-right")"></i>
+                                            </button>
+                                        </td>
+                                        <td class="purchase-col-date">
+                                            <strong>@item.Fecha.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture)</strong>
+                                            <span>@item.Fecha.ToString("HH:mm", CultureInfo.InvariantCulture)</span>
+                                        </td>
+                                        <td class="purchase-col-description">
+                                            <strong>@item.Titulo</strong>
+                                            <span>@item.Subtitulo</span>
+                                        </td>
+                                        @if (esAdministrador)
+                                        {
+                                            <td class="purchase-col-user">
+                                                <strong>@TextoFallback(item.UsuarioCuentaNombre, "Sin usuario")</strong>
+                                                @if (!string.IsNullOrWhiteSpace(item.UsuarioCuentaDetalle))
+                                                {
+                                                    <span>@item.UsuarioCuentaDetalle</span>
+                                                }
+                                            </td>
+                                        }
+                                        <td class="purchase-col-docs">@ObtenerTextoDocumentos(item)</td>
+                                        <td class="purchase-col-money">@FormatearMoneda(CalcularSubtotal(item.MontoTotal))</td>
+                                        <td class="purchase-col-money">@FormatearMoneda(CalcularIva(item.MontoTotal))</td>
+                                        <td class="purchase-col-money purchase-col-money-total">@FormatearMoneda(item.MontoTotal)</td>
+                                        <td class="purchase-col-status">
+                                            <span class="purchase-status-chip @ObtenerClaseEstadoPago(item)">
+                                                <i class="bi bi-circle-fill"></i>
+                                                <span>@ObtenerEstadoVisual(item)</span>
+                                            </span>
+                                        </td>
+                                        <td class="purchase-col-application">@ObtenerAplicacionVisual(item)</td>
+                                    </tr>
+
+                                    @if (expanded)
+                                    {
+                                        <tr class="purchase-table-details-row">
+                                            <td colspan="@ColumnCount">
+                                                <div class="purchase-details-panel">
+                                                    <div class="purchase-detail-item">
+                                                        <div class="purchase-detail-icon">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </div>
+                                                        <div>
+                                                            <span>Referencia</span>
+                                                            <strong>@TextoFallback(item.Referencia, "Sin referencia")</strong>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="purchase-detail-item">
+                                                        <div class="purchase-detail-icon">
+                                                            <i class="bi bi-shield-check"></i>
+                                                        </div>
+                                                        <div>
+                                                            <span>Autorización</span>
+                                                            <strong>@TextoFallback(item.Autorizacion, "Sin autorización")</strong>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="purchase-detail-item">
+                                                        <div class="purchase-detail-icon">
+                                                            <i class="bi bi-grid"></i>
+                                                        </div>
+                                                        <div>
+                                                            <span>Aplicación</span>
+                                                            <strong>@ObtenerAplicacionVisual(item)</strong>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="purchase-detail-item">
+                                                        <div class="purchase-detail-icon">
+                                                            <i class="bi bi-person"></i>
+                                                        </div>
+                                                        <div>
+                                                            <span>Usuario</span>
+                                                            <strong>@TextoFallback(item.UsuarioCuentaNombre, "Sin usuario")</strong>
+                                                            @if (!string.IsNullOrWhiteSpace(item.UsuarioCuentaDetalle))
+                                                            {
+                                                                <small>@item.UsuarioCuentaDetalle</small>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="purchase-table-footer">
+                        <div class="purchase-table-footer-copy">
+                            Mostrando @RangoDesde a @RangoHasta de @TotalMovimientosFiltrados movimiento(s)
+                        </div>
+
+                        <div class="purchase-table-footer-actions">
+                            <div class="purchase-pagination">
+                                <button type="button"
+                                        class="purchase-page-btn is-nav"
+                                        @onclick="PaginaAnterior"
+                                        disabled="@(PaginaActual <= 1)"
+                                        aria-label="Página anterior">
+                                    <i class="bi bi-chevron-left"></i>
+                                </button>
+
+                                @foreach (var token in PaginationTokens)
+                                {
+                                    if (token.EsSeparador)
+                                    {
+                                        <span class="purchase-page-separator">...</span>
+                                    }
+                                    else
+                                    {
+                                        <button type="button"
+                                                class="purchase-page-btn @(token.PageNumber == PaginaActual ? "is-active" : string.Empty)"
+                                                @onclick="() => IrAPagina(token.PageNumber)">
+                                            @token.PageNumber
+                                        </button>
+                                    }
+                                }
+
+                                <button type="button"
+                                        class="purchase-page-btn is-nav"
+                                        @onclick="PaginaSiguiente"
+                                        disabled="@(PaginaActual >= TotalPaginas)"
+                                        aria-label="Página siguiente">
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                            </div>
+
+                            <label class="purchase-page-size">
+                                <select value="@pageSize" @onchange="OnPageSizeChanged">
+                                    <option value="5">5 por página</option>
+                                    <option value="10">10 por página</option>
+                                    <option value="15">15 por página</option>
+                                </select>
+                                <i class="bi bi-chevron-down"></i>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private const decimal IvaRate = 0.15m;
+    private const string FiltroTodos = "todos";
+    private const string FiltroAprobadas = "aprobadas";
+    private const string FiltroPendientes = "pendientes";
+    private const string FiltroDocumentosLegacy = "documentos";
+
+    private static readonly JsonSerializerOptions HistorialJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private bool cargando = true;
+    private bool esAdministrador;
+    private string? errorCarga;
+    private string? expandedMovimientoId;
+    private List<HistorialCompraItem> movimientos = new();
+    private string filtroEstado = FiltroTodos;
+    private string textoBusqueda = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+    private int page = 1;
+    private int pageSize = 5;
+
+    [SupplyParameterFromQuery(Name = "tipo")]
+    public string? TipoConsulta { get; set; }
+
+    private IEnumerable<HistorialCompraItem> MovimientosFiltrados =>
+        movimientos
+            .Where(CoincideFiltroEstado)
+            .Where(CoincideFecha)
+            .Where(CoincideBusqueda)
+            .OrderByDescending(item => item.Fecha);
+
+    private List<HistorialCompraItem> MovimientosFiltradosLista => MovimientosFiltrados.ToList();
+    private int TotalMovimientosFiltrados => MovimientosFiltradosLista.Count;
+    private int TotalPaginas => TotalMovimientosFiltrados == 0 ? 1 : (int)Math.Ceiling(TotalMovimientosFiltrados / (double)pageSize);
+    private int PaginaActual => Math.Min(page, TotalPaginas);
+    private int ColumnCount => esAdministrador ? 10 : 9;
+    private int RangoDesde => TotalMovimientosFiltrados == 0 ? 0 : ((PaginaActual - 1) * pageSize) + 1;
+    private int RangoHasta => TotalMovimientosFiltrados == 0 ? 0 : Math.Min(PaginaActual * pageSize, TotalMovimientosFiltrados);
+    private List<HistorialCompraItem> MovimientosPaginaActual =>
+        MovimientosFiltradosLista
+            .Skip((PaginaActual - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+
+    private int TotalMovimientos => movimientos.Count;
+    private decimal TotalMontoAprobado => movimientos.Where(item => item.PagoAprobado).Sum(item => item.MontoTotal);
+    private int TotalMovimientosPendientes => movimientos.Count(item => !item.PagoAprobado || !item.SaldoAplicado);
+    private string TotalDocumentosAcreditadosTexto =>
+        TienePlanIlimitadoAcreditado
+            ? "Ilimitado"
+            : TotalDocumentosAcreditados.ToString(CultureInfo.InvariantCulture);
+    private int TotalDocumentosAcreditados => movimientos.Where(item => item.PagoAprobado && !item.EsIlimitado).Sum(item => item.Documentos);
+    private bool TienePlanIlimitadoAcreditado => movimientos.Any(item => item.PagoAprobado && item.EsIlimitado);
+
+    private string ResumenUltimoMovimiento =>
+        movimientos.Count == 0
+            ? "Último: sin movimientos"
+            : $"Último: {FormatearFecha(movimientos[0].Fecha)}";
+
+    private string ResumenPendientes =>
+        TotalMovimientosPendientes == 0
+            ? "Sin pendientes"
+            : "En revisión o aplicación";
+
+    private string ResumenResultados =>
+        movimientos.Count == 0
+            ? "Sin movimientos"
+            : $"{TotalMovimientosFiltrados} de {movimientos.Count} movimiento(s) visibles";
+
+    private IReadOnlyList<PaginationToken> PaginationTokens => BuildPaginationTokens(TotalPaginas, PaginaActual);
+
+    private string TextoBusqueda
+    {
+        get => textoBusqueda;
+        set
+        {
+            var nuevoValor = value ?? string.Empty;
+            if (!string.Equals(textoBusqueda, nuevoValor, StringComparison.Ordinal))
+            {
+                textoBusqueda = nuevoValor;
+                page = 1;
+            }
+        }
+    }
+
+    private string? FechaDesdeTexto
+    {
+        get => fechaDesde?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        set
+        {
+            var nuevaFecha = ParseFechaFiltro(value);
+            if (fechaDesde != nuevaFecha)
+            {
+                fechaDesde = nuevaFecha;
+                page = 1;
+            }
+        }
+    }
+
+    private string? FechaHastaTexto
+    {
+        get => fechaHasta?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        set
+        {
+            var nuevaFecha = ParseFechaFiltro(value);
+            if (fechaHasta != nuevaFecha)
+            {
+                fechaHasta = nuevaFecha;
+                page = 1;
+            }
+        }
+    }
+
+    private void OnFechaDesdeChanged(ChangeEventArgs e) => FechaDesdeTexto = e.Value?.ToString();
+
+    private void OnFechaHastaChanged(ChangeEventArgs e) => FechaHastaTexto = e.Value?.ToString();
+
+    protected override async Task OnInitializedAsync()
+    {
+        filtroEstado = NormalizarFiltro(TipoConsulta);
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        errorCarga = null;
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+            var tipoUsuarioClaim = authState.User.FindFirst("IdTipoUsuario")?.Value;
+
+            if (!int.TryParse(idClaim, out var usuarioId) || usuarioId <= 0)
+            {
+                errorCarga = "No fue posible identificar al usuario actual.";
+                return;
+            }
+
+            esAdministrador = tipoUsuarioClaim == "2";
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            var usuarios = await (esAdministrador
+                    ? context.Usuarios
+                        .AsNoTracking()
+                        .Where(item => item.Estado == true)
+                    : context.Usuarios
+                        .AsNoTracking()
+                        .Where(item => item.IdUsuario == usuarioId))
+                .Select(item => new UsuarioHistorialContexto
+                {
+                    IdUsuario = item.IdUsuario,
+                    NombreCompleto = ((item.Nombres ?? string.Empty) + " " + (item.Apellidos ?? string.Empty)).Trim(),
+                    Email = item.Email,
+                    HistorialComprasDocumentosJson = item.HistorialComprasDocumentosJson
+                })
+                .ToListAsync();
+
+            movimientos = usuarios
+                .SelectMany(usuario => LeerHistorialDocumentos(usuario.HistorialComprasDocumentosJson)
+                    .Select(compra => MapearMovimiento(compra, usuario)))
+                .OrderByDescending(item => item.Fecha)
+                .ToList();
+
+            page = 1;
+            expandedMovimientoId = null;
+        }
+        catch (Exception ex)
+        {
+            errorCarga = "Ocurrió un problema al reunir el historial de compras.";
+            Console.WriteLine($"Error al cargar historial de compras: {ex.Message}");
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private void CambiarFiltro(string filtro)
+    {
+        filtroEstado = NormalizarFiltro(filtro);
+        page = 1;
+    }
+
+    private void LimpiarFiltros()
+    {
+        filtroEstado = FiltroTodos;
+        textoBusqueda = string.Empty;
+        fechaDesde = null;
+        fechaHasta = null;
+        page = 1;
+    }
+
+    private void ToggleExpanded(string id)
+    {
+        expandedMovimientoId = expandedMovimientoId == id ? null : id;
+    }
+
+    private void PaginaAnterior()
+    {
+        if (PaginaActual > 1)
+        {
+            page = PaginaActual - 1;
+        }
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (PaginaActual < TotalPaginas)
+        {
+            page = PaginaActual + 1;
+        }
+    }
+
+    private void IrAPagina(int numero)
+    {
+        if (numero >= 1 && numero <= TotalPaginas)
+        {
+            page = numero;
+        }
+    }
+
+    private void OnPageSizeChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var nuevoPageSize) && nuevoPageSize > 0)
+        {
+            pageSize = nuevoPageSize;
+            page = 1;
+        }
+    }
+
+    private bool CoincideFiltroEstado(HistorialCompraItem item)
+    {
+        return filtroEstado switch
+        {
+            FiltroAprobadas => item.PagoAprobado,
+            FiltroPendientes => !item.PagoAprobado || !item.SaldoAplicado,
+            _ => true
+        };
+    }
+
+    private bool CoincideFecha(HistorialCompraItem item)
+    {
+        var fechaMovimiento = item.Fecha.Date;
+
+        if (fechaDesde.HasValue && fechaMovimiento < fechaDesde.Value.Date)
+        {
+            return false;
+        }
+
+        if (fechaHasta.HasValue && fechaMovimiento > fechaHasta.Value.Date)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool CoincideBusqueda(HistorialCompraItem item)
+    {
+        if (string.IsNullOrWhiteSpace(textoBusqueda))
+        {
+            return true;
+        }
+
+        var termino = textoBusqueda.Trim();
+
+        return Contiene(item.Titulo, termino) ||
+               Contiene(item.Subtitulo, termino) ||
+               Contiene(item.Referencia, termino) ||
+               Contiene(item.Autorizacion, termino) ||
+               Contiene(item.UsuarioCuentaNombre, termino) ||
+               Contiene(item.UsuarioCuentaDetalle, termino);
+    }
+
+    private static bool Contiene(string? valor, string termino) =>
+        !string.IsNullOrWhiteSpace(valor) &&
+        valor.Contains(termino, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizarFiltro(string? valor)
+    {
+        var filtro = (valor ?? string.Empty).Trim().ToLowerInvariant();
+
+        return filtro switch
+        {
+            FiltroAprobadas => FiltroAprobadas,
+            FiltroPendientes => FiltroPendientes,
+            FiltroDocumentosLegacy => FiltroTodos,
+            _ => FiltroTodos
+        };
+    }
+
+    private static HistorialCompraItem MapearMovimiento(
+        CompraDocumentosHistorialItem compra,
+        UsuarioHistorialContexto usuario)
+    {
+        var descripcionBase = string.IsNullOrWhiteSpace(compra.Descripcion)
+            ? compra.EsIlimitado
+                ? "Plan ilimitado de documentos"
+                : $"Compra de {compra.Documentos} documento(s)"
+            : compra.Descripcion.Trim();
+
+        var titulo = compra.EsIlimitado
+            ? CombinarTituloConReferencia(descripcionBase, compra.Id)
+            : CombinarTituloConReferencia(descripcionBase, compra.Id);
+
+        var subtitulo = compra.EsIlimitado
+            ? compra.VigenciaHasta.HasValue
+                ? $"Plan activo hasta el {compra.VigenciaHasta.Value:dd/MM/yyyy}."
+                : "Plan sin límite de documentos activo."
+            : "Recarga de saldo para emisión documental.";
+
+        return new HistorialCompraItem
+        {
+            Id = compra.Id,
+            Fecha = compra.Fecha,
+            MontoTotal = Math.Round(compra.MontoTotal, 2, MidpointRounding.AwayFromZero),
+            PagoAprobado = EsCompraDocumentoAprobada(compra),
+            EstadoPago = string.IsNullOrWhiteSpace(compra.Estado)
+                ? (compra.SaldoAplicado ? "Aprobado" : "Pendiente")
+                : compra.Estado.Trim(),
+            Titulo = titulo,
+            Subtitulo = subtitulo,
+            Documentos = compra.Documentos,
+            SaldoAplicado = compra.SaldoAplicado,
+            Referencia = compra.Reference,
+            Autorizacion = compra.AuthorizationCode,
+            UsuarioCuentaNombre = usuario.NombreCompleto,
+            UsuarioCuentaDetalle = usuario.Email,
+            EsIlimitado = compra.EsIlimitado,
+            VigenciaHasta = compra.VigenciaHasta
+        };
+    }
+
+    private static List<CompraDocumentosHistorialItem> LeerHistorialDocumentos(string? historialJson)
+    {
+        if (string.IsNullOrWhiteSpace(historialJson))
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(historialJson, HistorialJsonOptions)
+                ?.OrderByDescending(item => item.Fecha)
+                .ToList()
+                ?? new List<CompraDocumentosHistorialItem>();
+        }
+        catch (JsonException)
+        {
+            return new List<CompraDocumentosHistorialItem>();
+        }
+    }
+
+    private static bool EsCompraDocumentoAprobada(CompraDocumentosHistorialItem item)
+    {
+        if (item.SaldoAplicado)
+        {
+            return true;
+        }
+
+        return (item.Estado ?? string.Empty).Contains("aprob", StringComparison.OrdinalIgnoreCase) ||
+               (item.Estado ?? string.Empty).Contains("autoriz", StringComparison.OrdinalIgnoreCase) ||
+               (item.Estado ?? string.Empty).Contains("pag", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ObtenerClaseEstadoPago(HistorialCompraItem item)
+    {
+        var estado = item.EstadoPago ?? string.Empty;
+
+        if (item.PagoAprobado || estado.Contains("aprob", StringComparison.OrdinalIgnoreCase) || estado.Contains("pag", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-approved";
+        }
+
+        if (estado.Contains("rech", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-rejected";
+        }
+
+        if (estado.Contains("rever", StringComparison.OrdinalIgnoreCase))
+        {
+            return "is-reversed";
+        }
+
+        return "is-pending";
+    }
+
+    private static string ObtenerEstadoVisual(HistorialCompraItem item)
+    {
+        if (item.PagoAprobado)
+        {
+            return "Aprobado";
+        }
+
+        return item.EstadoPago.Contains("rech", StringComparison.OrdinalIgnoreCase)
+            ? "Rechazado"
+            : "Pendiente";
+    }
+
+    private static string ObtenerAplicacionVisual(HistorialCompraItem item)
+    {
+        if (item.EsIlimitado)
+        {
+            return item.SaldoAplicado ? "Plan activo" : "En revisión";
+        }
+
+        return item.SaldoAplicado ? "Acreditado" : "En revisión";
+    }
+
+    private static string ObtenerTextoDocumentos(HistorialCompraItem item) =>
+        item.EsIlimitado ? "Ilimitado" : item.Documentos.ToString(CultureInfo.InvariantCulture);
+
+    private static decimal CalcularSubtotal(decimal total) =>
+        total <= 0m
+            ? 0m
+            : Math.Round(total / (1m + IvaRate), 2, MidpointRounding.AwayFromZero);
+
+    private static decimal CalcularIva(decimal total) =>
+        total <= 0m
+            ? 0m
+            : Math.Round(total - CalcularSubtotal(total), 2, MidpointRounding.AwayFromZero);
+
+    private static string FormatearMoneda(decimal valor) =>
+        $"${valor.ToString("N2", CultureInfo.InvariantCulture)}";
+
+    private static string FormatearFecha(DateTime fecha) =>
+        fecha == default
+            ? "Sin fecha"
+            : fecha.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture);
+
+    private static string TextoFallback(string? valor, string fallback) =>
+        string.IsNullOrWhiteSpace(valor) ? fallback : valor;
+
+    private static string TextoRef(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return "Ref";
+        }
+
+        return $"Ref #{id[..Math.Min(6, id.Length)]}";
+    }
+
+    private static string CombinarTituloConReferencia(string tituloBase, string? id)
+    {
+        if (string.IsNullOrWhiteSpace(tituloBase))
+        {
+            return TextoRef(id);
+        }
+
+        return tituloBase.Contains("ref", StringComparison.OrdinalIgnoreCase)
+            ? tituloBase
+            : $"{tituloBase} ({TextoRef(id)})";
+    }
+
+    private static DateTime? ParseFechaFiltro(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+        {
+            return null;
+        }
+
+        return DateTime.TryParse(valor, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha)
+            ? fecha.Date
+            : null;
+    }
+
+    private static IReadOnlyList<PaginationToken> BuildPaginationTokens(int totalPages, int currentPage)
+    {
+        var tokens = new List<PaginationToken>();
+
+        if (totalPages <= 5)
+        {
+            for (var i = 1; i <= totalPages; i++)
+            {
+                tokens.Add(new PaginationToken(i, false));
+            }
+
+            return tokens;
+        }
+
+        tokens.Add(new PaginationToken(1, false));
+
+        var start = Math.Max(2, currentPage - 1);
+        var end = Math.Min(totalPages - 1, currentPage + 1);
+
+        if (start > 2)
+        {
+            tokens.Add(new PaginationToken(0, true));
+        }
+
+        for (var i = start; i <= end; i++)
+        {
+            tokens.Add(new PaginationToken(i, false));
+        }
+
+        if (end < totalPages - 1)
+        {
+            tokens.Add(new PaginationToken(0, true));
+        }
+
+        tokens.Add(new PaginationToken(totalPages, false));
+        return tokens;
+    }
+
+    private sealed class HistorialCompraItem
+    {
+        public string Id { get; init; } = Guid.NewGuid().ToString("N");
+        public DateTime Fecha { get; init; }
+        public decimal MontoTotal { get; init; }
+        public bool PagoAprobado { get; init; }
+        public string EstadoPago { get; init; } = string.Empty;
+        public string Titulo { get; init; } = string.Empty;
+        public string Subtitulo { get; init; } = string.Empty;
+        public int Documentos { get; init; }
+        public bool SaldoAplicado { get; init; }
+        public string? Referencia { get; init; }
+        public string? Autorizacion { get; init; }
+        public string? UsuarioCuentaNombre { get; init; }
+        public string? UsuarioCuentaDetalle { get; init; }
+        public bool EsIlimitado { get; init; }
+        public DateTime? VigenciaHasta { get; init; }
+    }
+
+    private sealed class UsuarioHistorialContexto
+    {
+        public int IdUsuario { get; init; }
+        public string NombreCompleto { get; init; } = string.Empty;
+        public string? Email { get; init; }
+        public string? HistorialComprasDocumentosJson { get; init; }
+    }
+
+    private sealed record PaginationToken(int PageNumber, bool EsSeparador);
+}

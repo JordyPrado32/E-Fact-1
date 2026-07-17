@@ -1,0 +1,139 @@
+@page "/e-sign/documentos"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using Simetric.Services
+@using Simetric.Services.ESign
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Documentos Firmados | E-Sign</PageTitle>
+
+<div class="esign-page">
+    @if (cargando)
+    {
+        <div class="esign-state">
+            <span class="spinner-border" role="status"></span>
+            <h3>Cargando Documentos</h3>
+        </div>
+    }
+    else
+    {
+        <header class="esign-header-section">
+            <div class="header-content">
+                <span class="header-kicker">Firma Electrónica</span>
+                <h1>Documentos Firmados</h1>
+                <p>Sube archivos PDF para firmarlos digitalmente con validez legal o descarga tus archivos ya procesados.</p>
+            </div>
+            <button class="btn-back" @onclick="IrAlInicio">
+                <i class="bi bi-arrow-left"></i>
+                <span>Volver al inicio</span>
+            </button>
+        </header>
+
+        <section class="esign-upload-container">
+            <div class="upload-box">
+                <div class="upload-icon"><i class="bi bi-cloud-arrow-up-fill"></i></div>
+                <h3>Arrastra y suelta tu archivo PDF aquí</h3>
+                <p>O haz clic para seleccionar un documento desde tu computadora (Max. 10MB)</p>
+                <div class="upload-actions">
+                    <button type="button" class="esign-btn-primary" @onclick="FirmarSimulado">
+                        <i class="bi bi-file-earmark-lock-fill"></i> Seleccionar y Firmar
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        @if (mostrarMensajeExito)
+        {
+            <div class="alert alert-success animate__animated animate__fadeIn" role="alert">
+                <i class="bi bi-check-circle-fill"></i>
+                <div>
+                    <strong>¡Documento firmado con éxito!</strong> El archivo se ha procesado y guardado en tu bandeja.
+                </div>
+            </div>
+        }
+
+
+    }
+</div>
+
+@code {
+    private bool cargando = true;
+    private bool mostrarMensajeExito = false;
+    private string currentUserName = "Usuario";
+
+    private List<DocumentoFirmadoMock> documentos = new()
+    {
+        new("Contrato_Arrendamiento_Oficina_2026.pdf", "1.4 MB", DateTime.Now.AddDays(-1), "Representante Legal"),
+        new("Acta_Constitucion_Simetric_Software.pdf", "4.2 MB", DateTime.Now.AddDays(-5), "Representante Legal"),
+        new("Formulario_104_SRI_Mayo_2026.pdf", "850 KB", DateTime.Now.AddDays(-10), "Contador General"),
+        new("Acuerdo_Confidencialidad_NDA.pdf", "1.1 MB", DateTime.Now.AddDays(-12), "Socio Comercial")
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(userId, ESignRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+
+        var nombres = user.FindFirst(ClaimTypes.Name)?.Value ?? user.Identity?.Name ?? string.Empty;
+        currentUserName = nombres;
+
+        cargando = false;
+    }
+
+    private void IrAlInicio() => NavManager.NavigateTo("/e-sign");
+
+    private async Task FirmarSimulado()
+    {
+        mostrarMensajeExito = false;
+        await Task.Delay(800); // Simular procesamiento
+        documentos.Insert(0, new DocumentoFirmadoMock("Documento_Firmado_Nuevo.pdf", "1.2 MB", DateTime.Now, currentUserName));
+        mostrarMensajeExito = true;
+        StateHasChanged();
+    }
+
+    public class DocumentoFirmadoMock
+    {
+        public string Nombre { get; set; }
+        public string Tamano { get; set; }
+        public DateTime Fecha { get; set; }
+        public string Firmante { get; set; }
+
+        public DocumentoFirmadoMock(string nombre, string tamano, DateTime fecha, string firmante)
+        {
+            Nombre = nombre;
+            Tamano = tamano;
+            Fecha = fecha;
+            Firmante = firmante;
+        }
+    }
+}

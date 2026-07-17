@@ -1,0 +1,133 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@using Simetric.Services.EContax
+@implements IDisposable
+@inject NavigationManager NavManager
+@inject AuthenticationStateProvider AuthStateProvider
+@inject EmisorOnboardingService EmisorOnboardingService
+
+@code {
+    private bool _isEvaluating;
+
+    protected override void OnInitialized()
+    {
+        NavManager.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await EvaluateRequirementAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        NavManager.LocationChanged -= OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(EvaluateRequirementAsync);
+    }
+
+    private async Task EvaluateRequirementAsync()
+    {
+        if (NavManager.Uri.Contains("/demo/", StringComparison.OrdinalIgnoreCase))
+        {
+            EmisorOnboardingService.SetRequiredStep(InitialSetupStep.None);
+            return;
+        }
+
+        var relativePath = NavManager.ToBaseRelativePath(NavManager.Uri);
+        if (EsRutaPortalServicios(relativePath))
+        {
+            EmisorOnboardingService.SetRequiredStep(InitialSetupStep.None);
+            return;
+        }
+
+        if (EsRutaPermitidaDuranteConfiguracion(relativePath))
+        {
+            await RefreshRequirementWithoutRedirectAsync();
+            return;
+        }
+
+        if (IsEContaxPath(NavManager.Uri))
+        {
+            return;
+        }
+
+        if (_isEvaluating)
+        {
+            return;
+        }
+
+        _isEvaluating = true;
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated != true)
+            {
+                EmisorOnboardingService.SetRequiredStep(InitialSetupStep.None);
+                return;
+            }
+
+            var idClaim = user.FindFirst("IdUsuario")?.Value;
+            if (!int.TryParse(idClaim, out var idUsuario) || idUsuario <= 0)
+            {
+                EmisorOnboardingService.SetRequiredStep(InitialSetupStep.None);
+                return;
+            }
+
+            await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+        }
+        finally
+        {
+            _isEvaluating = false;
+        }
+    }
+
+    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);
+
+    private async Task RefreshRequirementWithoutRedirectAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+
+        if (int.TryParse(idClaim, out var idUsuario) && idUsuario > 0)
+        {
+            await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
+        }
+    }
+
+    private static bool EsRutaPermitidaDuranteConfiguracion(string relativePath)
+    {
+        var path = (relativePath ?? string.Empty).Split('?', '#')[0].Trim('/');
+        return string.Equals(path, "dashboard", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "perfil", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "emisor", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "firma", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "mi-caja", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "clientes", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "compra-documentos", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "soporte", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "terminos-condiciones", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "ayuda/tutoriales", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("solicitud/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool EsRutaPortalServicios(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        return relativePath.StartsWith("portal-servicios", StringComparison.OrdinalIgnoreCase) ||
+               relativePath.StartsWith("suscripciones", StringComparison.OrdinalIgnoreCase) ||
+               relativePath.StartsWith("servicios/", StringComparison.OrdinalIgnoreCase) ||
+               relativePath.StartsWith("configuracion/", StringComparison.OrdinalIgnoreCase);
+    }
+}

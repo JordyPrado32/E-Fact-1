@@ -1,0 +1,376 @@
+@page "/backoffice/reportes/ingresos-mensuales"
+@namespace Simetric.Components.Pages.BackOffice
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.DTOs
+@using System.Globalization
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+
+<PageTitle>Ingresos Mensuales - BackOffice</PageTitle>
+
+<link href="css/reportes-compartido.css" rel="stylesheet" />
+
+<div class="reports-container">
+    <div class="report-header-card no-print animate__animated animate__fadeIn">
+        <div class="report-header-top">
+            <h2 class="report-page-title">
+                <i class="bi bi-bank2"></i> Reporte Ingresos Mensuales
+            </h2>
+            <button type="button" class="btn-export" @onclick="DescargarReportePdf">
+                <i class="bi bi-file-earmark-pdf-fill"></i> Descargar PDF Directo
+            </button>
+        </div>
+        <div class="report-header-filters">
+            <div class="filter-group">
+                <span class="filter-label">Desde:</span>
+                <input type="date" @bind="fechaInicio" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Hasta:</span>
+                <input type="date" @bind="fechaFin" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este Mes</button>
+                <button type="button" class="btn-preset @(presetActivo == "trimestre" ? "active" : "")" @onclick='() => AplicarPreset("trimestre")'>Últimos 90 Días</button>
+                <button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este Año</button>
+                <button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sliding Viewport Container -->
+    <div class="reports-viewport printable-report" id="report-view-area">
+        <div class="report-slide report-slide-active">
+            <div class="visual-header">
+                <h3 class="visual-title">Reporte de Ingresos Mensuales</h3>
+                <p class="visual-subtitle">Recaudación y facturación histórica consolidada mes a mes.</p>
+            </div>
+
+            @if (loading)
+            {
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando datos...</span>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpis-grid">
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-blue"><i class="bi bi-bank2"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Recaudado Total</span>
+                            <strong class="kpi-card-value">$ @totalRecaudadoMensual.ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-up">Facturado histórico</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-green"><i class="bi bi-calendar-event"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Mes Récord</span>
+                            <strong class="kpi-card-value">@mesRecord</strong>
+                            <span class="kpi-card-trend trend-up">Mayor facturación</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-graph-up"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Crecimiento mensual</span>
+                            <strong class="kpi-card-value">@crecimientoMensualPct.ToString("N2") %</strong>
+                            <span class="kpi-card-trend trend-neutral">@crecimientoMensualLabel</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-orange"><i class="bi bi-wallet2"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Promedio Mensual</span>
+                            <strong class="kpi-card-value">$ @promedioMensualRecaudado.ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-neutral">Ingresos recurrentes</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-visual-card">
+                    <div class="visual-header">
+                        <h4 class="visual-title">Facturación Mensual Consolidada</h4>
+                        <p class="visual-subtitle">Ingresos históricos facturados y recaudados por el sistema mes a mes.</p>
+                    </div>
+                    <div class="chart-container">
+                        @if (ingresosMensualesChartData.Any())
+                        {
+                            <svg class="svg-chart" viewBox="0 0 800 300" preserveAspectRatio="none">
+                                <defs>
+                                    <linearGradient id="ingresosGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stop-color="#15803d" stop-opacity="0.3"/>
+                                        <stop offset="100%" stop-color="#15803d" stop-opacity="0"/>
+                                    </linearGradient>
+                                </defs>
+                                
+                                <!-- Grid Lines -->
+                                @for (int i = 0; i <= 5; i++)
+                                {
+                                    var y = 30 + i * 44;
+                                    <line class="chart-grid-line" x1="50" y1="@y" x2="750" y2="@y" />
+                                    var val = Math.Round((double)maxIngresosMensualesChart * (5 - i) / 5.0);
+                                    <g><text class="chart-axis-text" x="15" y="@(y + 4)">$@val.ToString("N0")</text></g>
+                                }
+
+                                <!-- X Axis Labels -->
+                                @for (int i = 0; i < ingresosMensualesChartData.Count; i++)
+                                {
+                                    var x = 80 + i * (620.0 / Math.Max(1, ingresosMensualesChartData.Count - 1));
+                                    <g><text class="chart-axis-text" x="@x" y="275" text-anchor="middle">@ingresosMensualesChartData[i].Etiqueta</text></g>
+                                    <line class="chart-axis-line" x1="@x" y1="250" x2="@x" y2="255" />
+                                }
+
+                                <!-- Area Path -->
+                                <path d="@GetIngresosMensualesAreaPath()" fill="url(#ingresosGrad)" />
+                                <!-- Line Path -->
+                                <path d="@GetIngresosMensualesLinePath()" fill="none" stroke="#15803d" stroke-width="3" class="chart-line" />
+
+                                <!-- Points -->
+                                @for (int i = 0; i < ingresosMensualesChartData.Count; i++)
+                                {
+                                    var x = 80 + i * (620.0 / Math.Max(1, ingresosMensualesChartData.Count - 1));
+                                    var y = GetYCoordinate(ingresosMensualesChartData[i].Valor, maxIngresosMensualesChart);
+                                    <circle class="chart-dot" cx="@x" cy="@y" r="5" fill="#ffffff" stroke="#15803d" stroke-width="2.5" />
+                                }
+                            </svg>
+                        }
+                    </div>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row">
+                        <h4 class="table-title">Detalle de Ingresos Mensuales</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead>
+                            <tr>
+                                <th>Mes / Año</th>
+                                <th>Transacciones</th>
+                                <th>Facturación Bruta</th>
+                                <th>Recaudación</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (ingresosMensualesPaginadas.Any())
+                            {
+                                @foreach (var m in ingresosMensualesPaginadas)
+                                {
+                                    <tr>
+                                        <td><strong>@m.MesAnio</strong></td>
+                                        <td>@m.Transacciones</td>
+                                        <td>$ @m.FacturacionBruta.ToString("N2")</td>
+                                        <td><strong class="text-blue">$ @m.Recaudacion.ToString("N2")</strong></td>
+                                        <td>
+                                            <span class="status-pill status-pill-success">Consolidado</span>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted py-4">No hay ingresos registrados en el sistema.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="pagination-controls">
+                        <span class="page-indicator">Página @(pageIngresos + 1) de @MaxPaginaIngresos</span>
+                        <div class="pagination-btn-group">
+                            <button type="button" class="btn-pagination" disabled="@(pageIngresos == 0)" @onclick="() => CambiarPaginaIngresos(-1)">
+                                <i class="bi bi-chevron-left"></i> Ant.
+                            </button>
+                            <button type="button" class="btn-pagination" disabled="@(pageIngresos >= MaxPaginaIngresos - 1)" @onclick="() => CambiarPaginaIngresos(1)">
+                                Sig. <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private DateTime fechaInicio = DateTime.Now.AddMonths(-3);
+    private DateTime fechaFin = DateTime.Now;
+    private string presetActivo = "trimestre";
+    private bool loading = true;
+
+    private decimal totalRecaudadoMensual = 0;
+    private string mesRecord = "Ninguno";
+    private decimal crecimientoMensualPct = 0;
+    private string crecimientoMensualLabel = "Sin base comparativa";
+    private decimal promedioMensualRecaudado = 0;
+
+    private List<IngresosMesDto> ingresosMensualesList = new();
+    private List<ChartItemDto> ingresosMensualesChartData = new();
+    private decimal maxIngresosMensualesChart = 100;
+    private const double ChartTop = 30.0;
+    private const double ChartBottom = 250.0;
+
+    private int pageIngresos = 0;
+    private const int PageSize = 10;
+    private int MaxPaginaIngresos => Math.Max(1, (int)Math.Ceiling(ingresosMensualesList.Count / (double)PageSize));
+    private List<IngresosMesDto> ingresosMensualesPaginadas => ingresosMensualesList.Skip(pageIngresos * PageSize).Take(PageSize).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AplicarPreset("trimestre");
+    }
+
+    private async Task OnDatesChanged()
+    {
+        presetActivo = "";
+        await CargarDatosReportesAsync();
+    }
+
+    private void AplicarPreset(string preset)
+    {
+        presetActivo = preset;
+        var hoy = DateTime.Now;
+        if (preset == "mes")
+        {
+            fechaInicio = new DateTime(hoy.Year, hoy.Month, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "trimestre")
+        {
+            fechaInicio = hoy.AddDays(-90);
+            fechaFin = hoy;
+        }
+        else if (preset == "anio")
+        {
+            fechaInicio = new DateTime(hoy.Year, 1, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "todo")
+        {
+            fechaInicio = new DateTime(2020, 1, 1);
+            fechaFin = hoy;
+        }
+        _ = CargarDatosReportesAsync();
+    }
+
+    private async Task CargarDatosReportesAsync()
+    {
+        loading = true;
+        StateHasChanged();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+
+            var allTimeFacturas = await context.Facturas
+                .AsNoTracking()
+                .ToListAsync();
+
+            var groupedMonths = allTimeFacturas
+                .GroupBy(f => f.Fechaentrega.HasValue ? f.Fechaentrega.Value.ToString("yyyy-MM") : "S/F")
+                .Select(g => new IngresosMesDto
+                {
+                    MesAnio = g.Key,
+                    Transacciones = g.Count(),
+                    FacturacionBruta = g.Sum(f => f.Valortotal ?? 0m),
+                    Recaudacion = g.Sum(f => f.Valortotal ?? 0m)
+                })
+                .OrderByDescending(m => m.MesAnio)
+                .Take(6)
+                .Reverse()
+                .ToList();
+
+            ingresosMensualesList = groupedMonths;
+            totalRecaudadoMensual = ingresosMensualesList.Sum(m => m.Recaudacion);
+            mesRecord = ingresosMensualesList.OrderByDescending(m => m.FacturacionBruta).FirstOrDefault()?.MesAnio ?? "Ninguno";
+            promedioMensualRecaudado = ingresosMensualesList.Any() ? totalRecaudadoMensual / ingresosMensualesList.Count : 0m;
+            crecimientoMensualPct = 0m;
+            crecimientoMensualLabel = "Sin base comparativa";
+
+            if (ingresosMensualesList.Count >= 2)
+            {
+                var actual = ingresosMensualesList[^1].FacturacionBruta;
+                var anterior = ingresosMensualesList[^2].FacturacionBruta;
+                if (anterior > 0)
+                {
+                    crecimientoMensualPct = Math.Round(((actual - anterior) / anterior) * 100m, 2);
+                    crecimientoMensualLabel = actual >= anterior ? "Comparado con el mes anterior" : "Variación frente al mes anterior";
+                }
+                else if (actual > 0)
+                {
+                    crecimientoMensualPct = 100m;
+                    crecimientoMensualLabel = "Primer mes con facturación";
+                }
+            }
+
+            ingresosMensualesChartData = ingresosMensualesList
+                .Select(m => new ChartItemDto { Etiqueta = m.MesAnio, Valor = m.FacturacionBruta })
+                .ToList();
+            maxIngresosMensualesChart = ingresosMensualesChartData.Any() ? ingresosMensualesChartData.Max(x => x.Valor) : 100;
+            if (maxIngresosMensualesChart <= 0) maxIngresosMensualesChart = 100;
+        }
+        catch (Exception)
+        {
+            // Fail silent
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CambiarPaginaIngresos(int step)
+    {
+        pageIngresos += step;
+        if (pageIngresos < 0) pageIngresos = 0;
+        if (pageIngresos >= MaxPaginaIngresos) pageIngresos = MaxPaginaIngresos - 1;
+    }
+
+    private string GetIngresosMensualesLinePath()
+    {
+        if (!ingresosMensualesChartData.Any()) return "";
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < ingresosMensualesChartData.Count; i++)
+        {
+            var x = 80 + i * (620.0 / Math.Max(1, ingresosMensualesChartData.Count - 1));
+            var y = GetYCoordinate(ingresosMensualesChartData[i].Valor, maxIngresosMensualesChart);
+            if (i == 0)
+                sb.Append($"M {x.ToString("F1", CultureInfo.InvariantCulture)} {y.ToString("F1", CultureInfo.InvariantCulture)}");
+            else
+                sb.Append($" L {x.ToString("F1", CultureInfo.InvariantCulture)} {y.ToString("F1", CultureInfo.InvariantCulture)}");
+        }
+        return sb.ToString();
+    }
+
+    private string GetIngresosMensualesAreaPath()
+    {
+        if (!ingresosMensualesChartData.Any()) return "";
+        var linePath = GetIngresosMensualesLinePath();
+        var startX = 80.0;
+        var endX = 80.0 + (ingresosMensualesChartData.Count - 1) * (620.0 / Math.Max(1, ingresosMensualesChartData.Count - 1));
+        return $"{linePath} L {endX.ToString("F1", CultureInfo.InvariantCulture)} {ChartBottom.ToString("F1", CultureInfo.InvariantCulture)} L {startX.ToString("F1", CultureInfo.InvariantCulture)} {ChartBottom.ToString("F1", CultureInfo.InvariantCulture)} Z";
+    }
+
+    private double GetYCoordinate(decimal value, decimal maxValue)
+    {
+        if (maxValue <= 0) return ChartBottom;
+        var safeValue = Math.Max(0m, Math.Min(value, maxValue));
+        var ratio = (double)(safeValue / maxValue);
+        return ChartBottom - (ratio * (ChartBottom - ChartTop));
+    }
+
+    private async Task DescargarReportePdf()
+    {
+        var filename = $"Reporte_Ingresos_Mensuales_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
+        await JS.InvokeVoidAsync("window.downloadPdfReport", "report-view-area", filename);
+    }
+}

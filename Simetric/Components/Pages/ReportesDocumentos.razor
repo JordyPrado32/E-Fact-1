@@ -1,0 +1,1143 @@
+@page "/reportes/documentos"
+@page "/demo/documentos"
+@layout Simetric.Components.Layout.MainLayout
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using System.Globalization
+@using Simetric.DTOs
+@using Simetric.Services
+
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject SweetAlertService AlertService
+@inject ReporteComprobantesService ReporteComprobantesService
+@inject IReporteComprobantesPdfService ReporteComprobantesPdfService
+@inject IReporteComprobantesExcelService ReporteComprobantesExcelService
+@inject DemoCatalogService DemoCatalogService
+@attribute [AllowAnonymous]
+@implements IAsyncDisposable
+
+<PageTitle>Reportes de documentos | Numerica e-fact</PageTitle>
+
+@{
+    var itemsFiltrados = ItemsFiltrados;
+    var itemsPagina = ItemsPagina;
+    var resumenTipos = ResumenTipos;
+    var totalResumenTipos = resumenTipos.Sum(x => x.Count);
+    var tipoPrincipal = resumenTipos
+        .OrderByDescending(x => x.Count)
+        .ThenByDescending(x => x.Total)
+        .FirstOrDefault();
+    var topTerceros = TopTerceros;
+}
+
+<div class="docs-report-shell">
+    @if (cargando)
+    {
+        <section class="docs-report-state">
+            <div class="state-icon">
+                <span class="spinner-border" role="status"></span>
+            </div>
+            <h3>Cargando reporte consolidado</h3>
+            <p>Estamos reuniendo facturas, notas, guias, retenciones y liquidaciones en una sola vista.</p>
+        </section>
+    }
+    else
+    {
+        <section class="docs-report-hero">
+            <div class="hero-copy">
+                <span class="hero-kicker">Analitica documental</span>
+                <h1>Reportes unificados de comprobantes emitidos</h1>
+                <p>
+                    Filtra los 6 tipos de documentos al mismo tiempo, revisa el resumen visual
+                    y abre XML o PDF sin salir del reporte.
+                </p>
+
+                <div class="hero-actions">
+                    <button type="button" class="hero-btn hero-btn-primary" @onclick="ExportarPdfAsync" disabled="@(exportandoPdf || itemsFiltrados.Count == 0)">
+                        @(exportandoPdf ? "Descargando PDF..." : "Descargar PDF")
+                    </button>
+
+                    <button type="button" class="hero-btn hero-btn-success" @onclick="ExportarExcelAsync" disabled="@(exportandoExcel || itemsFiltrados.Count == 0)">
+                        @if (exportandoExcel)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                            <span>Descargando...</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-file-earmark-spreadsheet"></i>
+                            <span>Descargar Excel</span>
+                        }
+                    </button>
+
+                    <button type="button" class="hero-btn hero-btn-secondary" @onclick="RecargarAsync" disabled="@cargando">
+                        Actualizar datos
+                    </button>
+                </div>
+            </div>
+
+            <div class="hero-summary">
+                <article class="summary-card summary-card-primary" style="--stat-accent:#14B8A6; --stat-soft:#CCFBF1;">
+                    <div class="summary-card-head">
+                        <span class="summary-icon"><i class="bi bi-files"></i></span>
+                        <span class="summary-label">Total documentos</span>
+                    </div>
+                    <strong>@itemsFiltrados.Count</strong>
+                    <small>@ResumenFechas</small>
+                    <div class="summary-meter"><span style="width:100%;"></span></div>
+                </article>
+
+                <article class="summary-card" style="--stat-accent:#8B5CF6; --stat-soft:#F3E8FF;">
+                    <div class="summary-card-head">
+                        <span class="summary-icon"><i class="bi bi-receipt"></i></span>
+                        <span class="summary-label">Total sin impuestos</span>
+                    </div>
+                    <strong>@FormatearMoneda(TotalBaseFiltrado)</strong>
+                    <small>Base imponible visible</small>
+                    <div class="summary-meter"><span style="@($"width:{ObtenerAnchoMonto(TotalBaseFiltrado, TotalGeneralFiltrado)}%;")"></span></div>
+                </article>
+
+                <article class="summary-card" style="--stat-accent:#F59E0B; --stat-soft:#FEF3C7;">
+                    <div class="summary-card-head">
+                        <span class="summary-icon"><i class="bi bi-percent"></i></span>
+                        <span class="summary-label">Total IVA</span>
+                    </div>
+                    <strong>@FormatearMoneda(TotalIvaFiltrado)</strong>
+                    <small>Impuesto generado</small>
+                    <div class="summary-meter"><span style="@($"width:{ObtenerAnchoMonto(TotalIvaFiltrado, TotalGeneralFiltrado)}%;")"></span></div>
+                </article>
+
+                <article class="summary-card" style="--stat-accent:#EC4899; --stat-soft:#FCE7F3;">
+                    <div class="summary-card-head">
+                        <span class="summary-icon"><i class="bi bi-cash-stack"></i></span>
+                        <span class="summary-label">Total con impuestos</span>
+                    </div>
+                    <strong>@FormatearMoneda(TotalGeneralFiltrado)</strong>
+                    <small>Monto total facturado</small>
+                    <div class="summary-meter"><span style="width:100%;"></span></div>
+                </article>
+
+                <article class="summary-card summary-card-success" style="--stat-accent:#10B981; --stat-soft:#D1FAE5;">
+                    <div class="summary-card-head">
+                        <span class="summary-icon"><i class="bi bi-check2-circle"></i></span>
+                        <span class="summary-label">Documentos autorizados</span>
+                    </div>
+                    <strong>@TotalAutorizados</strong>
+                    <small>@FormatearPorcentaje(TotalAutorizados, itemsFiltrados.Count) del total</small>
+                    <div class="summary-meter"><span style="@($"width:{ObtenerAnchoPorcentaje(TotalAutorizados, itemsFiltrados.Count)}%;")"></span></div>
+                </article>
+
+                <article class="summary-card summary-card-warning" style="--stat-accent:#F97316; --stat-soft:#FFEDD5;">
+                    <div class="summary-card-head">
+                        <span class="summary-icon"><i class="bi bi-hourglass-split"></i></span>
+                        <span class="summary-label">Documentos pendientes</span>
+                    </div>
+                    <strong>@TotalPendientes</strong>
+                    <small>@FormatearPorcentaje(TotalPendientes, itemsFiltrados.Count) del total</small>
+                    <div class="summary-meter"><span style="@($"width:{ObtenerAnchoPorcentaje(TotalPendientes, itemsFiltrados.Count)}%;")"></span></div>
+                </article>
+            </div>
+        </section>
+
+        <section class="filters-card">
+            <div class="filters-head">
+                <div>
+                    <span class="section-kicker">Filtros combinados</span>
+                    <h2>Refina el reporte por documento, fecha, cliente y detalle</h2>
+                </div>
+
+                <span class="filters-badge">@itemsFiltrados.Count resultado(s)</span>
+            </div>
+
+            <div class="filters-grid">
+                <label class="field-card">
+                    <span class="field-label">Tipo de documento</span>
+                    <select class="field-input" @bind="tipoDocumentoFiltro" @bind:after="OnFiltersChanged">
+                        <option value="@ReporteComprobantesCategoriaDetalle.Todos">Todos</option>
+                        <option value="@ReporteComprobantesTipos.Factura">Facturas</option>
+                        <option value="@ReporteComprobantesTipos.NotaCredito">Notas de crédito</option>
+                        <option value="@ReporteComprobantesTipos.NotaDebito">Notas de débito</option>
+                        <option value="@ReporteComprobantesTipos.GuiaRemision">Guías de remisión</option>
+                        <option value="@ReporteComprobantesTipos.Retencion">Retenciones</option>
+                        <option value="@ReporteComprobantesTipos.LiquidacionCompra">Liquidaciones de compra</option>
+                    </select>
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Desde</span>
+                    <input type="date" class="field-input" value="@FechaDesdeInputValue" @onchange="OnFechaDesdeChanged" />
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Hasta</span>
+                    <input type="date" class="field-input" value="@FechaHastaInputValue" @onchange="OnFechaHastaChanged" />
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Estado</span>
+                    <select class="field-input" @bind="estadoFiltro" @bind:after="OnFiltersChanged">
+                        <option value="@ReporteComprobantesCategoriaDetalle.Todos">Todos</option>
+                        @foreach (var estado in reporte.EstadosDisponibles)
+                        {
+                            <option value="@estado">@estado</option>
+                        }
+                    </select>
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Autorizacion</span>
+                    <select class="field-input" @bind="autorizacionFiltro" @bind:after="OnFiltersChanged">
+                        <option value="@DocumentoAutorizacionHelper.FiltroTodos">Todos</option>
+                        <option value="@DocumentoAutorizacionHelper.FiltroAutorizados">Autorizados</option>
+                        <option value="@DocumentoAutorizacionHelper.FiltroPendientes">Pendientes</option>
+                        <option value="@DocumentoAutorizacionHelper.FiltroNoAutorizados">No autorizados</option>
+                    </select>
+                </label>
+
+                <label class="field-card field-card-wide">
+                    <span class="field-label">Cliente / tercero</span>
+                    <input type="text"
+                           class="field-input"
+                           list="clientesReporteDatalist"
+                           placeholder="Busca por nombre o identificacion"
+                           @bind="clienteFiltro"
+                           @bind:event="oninput"
+                           @bind:after="OnFiltersChanged" />
+                </label>
+
+                <label class="field-card field-card-wide">
+                    <span class="field-label">Producto / servicio</span>
+                    <input type="text"
+                           class="field-input"
+                           list="productosReporteDatalist"
+                           placeholder="Busca por descripcion del detalle"
+                           @bind="productoFiltro"
+                           @bind:event="oninput"
+                           @bind:after="OnFiltersChanged" />
+                </label>
+
+                <label class="field-card">
+                    <span class="field-label">Categoria del detalle</span>
+                    <select class="field-input" @bind="categoriaDetalleFiltro" @bind:after="OnFiltersChanged">
+                        <option value="@ReporteComprobantesCategoriaDetalle.Todos">Todos</option>
+                        <option value="@ReporteComprobantesCategoriaDetalle.Producto">Solo producto</option>
+                        <option value="@ReporteComprobantesCategoriaDetalle.Servicio">Solo servicio</option>
+                    </select>
+                </label>
+
+                 <div class="field-card field-card-actions">
+                     <span class="field-label">Acciones</span>
+                     <div class="actions-stack">
+                        <button type="button" class="hero-btn hero-btn-secondary" @onclick="LimpiarFiltros">
+                            Limpiar
+                        </button>
+                     </div>
+                 </div>
+            </div>
+
+            <datalist id="clientesReporteDatalist">
+                @foreach (var cliente in reporte.ClientesDisponibles.Take(200))
+                {
+                    <option value="@cliente"></option>
+                }
+            </datalist>
+
+            <datalist id="productosReporteDatalist">
+                @foreach (var producto in reporte.ProductosDisponibles.Take(200))
+                {
+                    <option value="@producto"></option>
+                }
+            </datalist>
+        </section>
+
+        <section class="analytics-grid">
+            <article class="analytics-card analytics-card-chart">
+                <div class="section-head">
+                    <div>
+                        <span class="section-kicker">Distribucion</span>
+                        <h2>Distribucion por tipo de documento</h2>
+                    </div>
+                    <span class="section-chip">@resumenTipos.Count tipo(s)</span>
+                </div>
+
+                @if (resumenTipos.Count == 0)
+                {
+                    <div class="empty-panel">
+                        <i class="bi bi-pie-chart"></i>
+                        <p>No hay datos con los filtros actuales para construir el grafico.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="chart-shell">
+                        <div class="chart-stage">
+                            <div class="report-donut-frame">
+                                <canvas id="reportDocumentTypeChart" aria-label="Distribucion por tipo de documento" role="img"></canvas>
+                                <div class="pie-ring-inner">
+                                    <span class="pie-kicker">Total visible</span>
+                                    <strong>@itemsFiltrados.Count</strong>
+                                    <span>documentos</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </article>
+
+            <article class="analytics-card">
+                <div class="section-head">
+                    <div>
+                        <span class="section-kicker">Tendencias</span>
+                        <h2>Clientes o terceros con mas movimiento</h2>
+                    </div>
+                    <span class="section-chip">Top 5</span>
+                </div>
+
+                @if (topTerceros.Count == 0)
+                {
+                    <div class="empty-panel">
+                        <i class="bi bi-bar-chart"></i>
+                        <p>No hay terceros visibles con los filtros actuales.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="report-bars-frame">
+                        <canvas id="reportTopThirdPartiesChart" aria-label="Clientes o terceros con mas movimiento" role="img"></canvas>
+                    </div>
+                }
+            </article>
+        </section>
+
+        <section class="table-card">
+            <div class="table-head">
+                <div>
+                    <span class="section-kicker">Resultados</span>
+                    <h2>Documentos emitidos</h2>
+                </div>
+
+                <div class="table-meta">
+                    <span>Base: @FormatearMoneda(TotalBaseFiltrado)</span>
+                    <span>IVA: @FormatearMoneda(TotalIvaFiltrado)</span>
+                </div>
+            </div>
+
+            @if (itemsFiltrados.Count == 0)
+            {
+                <div class="docs-report-state docs-report-state-inline">
+                    <div class="state-icon">
+                        <i class="bi bi-inbox"></i>
+                    </div>
+                    <h3>No encontramos documentos</h3>
+                    <p>Ajusta los filtros para ampliar el rango o limpia la busqueda actual.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="docs-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Tipo</th>
+                                <th>Numero</th>
+                                <th>Cliente / tercero</th>
+                                <th>Producto / servicio</th>
+                                <th>Estado</th>
+                                <th class="text-end">Total</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in itemsPagina)
+                            {
+                                <tr>
+                                    <td data-label="Fecha">@(item.FechaEmision?.ToString("dd/MM/yyyy") ?? "-")</td>
+                                    <td data-label="Tipo">
+                                        <span class="type-pill" style="@($"--type-accent:{ObtenerColorTipo(item.TipoDocumentoCodigo)}")">
+                                            @item.TipoDocumento
+                                        </span>
+                                    </td>
+                                    <td data-label="Numero">
+                                        <div class="cell-stack">
+                                            <strong>@item.NumeroDocumento</strong>
+                                            <span>@(string.IsNullOrWhiteSpace(item.DocumentoRelacionado) ? item.TerceroRol : item.DocumentoRelacionado)</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Cliente / tercero">
+                                        <div class="cell-stack">
+                                            <strong>@item.TerceroNombre</strong>
+                                            <span>@item.TerceroIdentificacion</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Producto / servicio">
+                                        <div class="cell-stack">
+                                            <strong>@item.ResumenProductos</strong>
+                                            <span>@item.CategoriaDetalle</span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Estado">
+                                        <div class="cell-stack">
+                                            <span class="status-pill @ObtenerClaseEstado(item.EstadoDocumento)">
+                                                @item.EstadoDocumento
+                                            </span>
+                                            <span class="authorization-number" title="@ObtenerNumeroAutorizacionTexto(item)">
+                                                Autorizacion: @ObtenerNumeroAutorizacionTexto(item)
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td data-label="Total" class="text-end text-amount">@FormatearMoneda(item.Total)</td>
+                                    <td data-label="Acciones" class="text-end">
+                                        <div class="action-group">
+                                            <button type="button" class="action-btn" title="Abrir XML" @onclick="() => AbrirXmlAsync(item)">XML</button>
+                                            <button type="button" class="action-btn action-btn-primary" title="Abrir PDF" @onclick="() => AbrirPdfAsync(item)">PDF</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-footer">
+                    <span>Mostrando @itemsPagina.Count de @itemsFiltrados.Count documento(s).</span>
+
+                    <div class="pager-group">
+                        <button type="button" class="pager-btn" @onclick="PaginaAnterior" disabled="@(paginaActual <= 1)">Anterior</button>
+                        <span>Pagina @paginaActual de @TotalPaginas</span>
+                        <button type="button" class="pager-btn" @onclick="PaginaSiguiente" disabled="@(paginaActual >= TotalPaginas)">Siguiente</button>
+                    </div>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private const int PageSize = 12;
+
+    private ReporteComprobantesCargaDto reporte = new();
+    private bool cargando = true;
+    private bool exportandoPdf;
+    private bool exportandoExcel;
+    private bool isDemoMode;
+    private int currentUserId;
+    private int paginaActual = 1;
+    private string reportChartsSignature = string.Empty;
+
+    private string tipoDocumentoFiltro = ReporteComprobantesCategoriaDetalle.Todos;
+    private string clienteFiltro = string.Empty;
+    private string productoFiltro = string.Empty;
+    private string categoriaDetalleFiltro = ReporteComprobantesCategoriaDetalle.Todos;
+    private string estadoFiltro = ReporteComprobantesCategoriaDetalle.Todos;
+    private string autorizacionFiltro = DocumentoAutorizacionHelper.FiltroTodos;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+
+    private string FechaDesdeInputValue
+    {
+        get => fechaDesde?.ToString("yyyy-MM-dd") ?? string.Empty;
+        set => fechaDesde = DateTime.TryParse(value, out var fecha) ? fecha.Date : null;
+    }
+
+    private string FechaHastaInputValue
+    {
+        get => fechaHasta?.ToString("yyyy-MM-dd") ?? string.Empty;
+        set => fechaHasta = DateTime.TryParse(value, out var fecha) ? fecha.Date : null;
+    }
+
+    private List<ReporteComprobanteItemDto> ItemsFiltrados => AplicarFiltros(reporte.Items);
+
+    private List<ReporteComprobanteItemDto> ItemsPagina =>
+        ItemsFiltrados
+            .Skip((paginaActual - 1) * PageSize)
+            .Take(PageSize)
+            .ToList();
+
+    private int TotalPaginas =>
+        Math.Max(1, (int)Math.Ceiling(ItemsFiltrados.Count / (double)PageSize));
+
+    private decimal TotalBaseFiltrado => ItemsFiltrados.Sum(x => x.BaseImponible);
+    private decimal TotalIvaFiltrado => ItemsFiltrados.Sum(x => x.Iva);
+    private decimal TotalGeneralFiltrado => ItemsFiltrados.Sum(x => x.Total);
+    private int TotalAutorizados => ItemsFiltrados.Count(x => x.EstaAutorizado);
+    private int TotalPendientes => Math.Max(ItemsFiltrados.Count - TotalAutorizados, 0);
+    private int TotalTercerosVisibles => ItemsFiltrados
+        .Select(x => x.TerceroNombre)
+        .Where(x => !string.IsNullOrWhiteSpace(x))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Count();
+    private int TotalServiciosVisibles => ItemsFiltrados.Count(x => x.TieneServicio);
+
+    private string ResumenFechas
+    {
+        get
+        {
+            if (fechaDesde.HasValue || fechaHasta.HasValue)
+            {
+                return $"{(fechaDesde?.ToString("dd/MM/yyyy") ?? "inicio")} a {(fechaHasta?.ToString("dd/MM/yyyy") ?? "hoy")}";
+            }
+
+            return "Todos los periodos visibles";
+        }
+    }
+
+    private List<ResumenTipoVista> ResumenTipos
+    {
+        get
+        {
+            var items = ItemsFiltrados;
+            if (items.Count == 0)
+            {
+                return new List<ResumenTipoVista>();
+            }
+
+            return DefinicionesTipo
+                .Select(def =>
+                {
+                    var docs = items.Where(x => x.TipoDocumentoCodigo == def.Codigo).ToList();
+                    return new ResumenTipoVista
+                    {
+                        Codigo = def.Codigo,
+                        Label = def.Label,
+                        Color = def.Color,
+                        Count = docs.Count,
+                        Total = docs.Sum(x => x.Total)
+                    };
+                })
+                .Where(x => x.Count > 0)
+                .ToList();
+        }
+    }
+
+    private List<ResumenTerceroVista> TopTerceros
+    {
+        get
+        {
+            var items = ItemsFiltrados;
+            if (items.Count == 0)
+            {
+                return new List<ResumenTerceroVista>();
+            }
+
+            var maximo = items
+                .GroupBy(x => x.TerceroNombre, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.Count())
+                .DefaultIfEmpty(1)
+                .Max();
+
+            return items
+                .Where(x => !string.IsNullOrWhiteSpace(x.TerceroNombre))
+                .GroupBy(x => x.TerceroNombre.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Select((g, index) => new ResumenTerceroVista
+                {
+                    Label = g.Key,
+                    Count = g.Count(),
+                    Total = g.Sum(x => x.Total),
+                    WidthPercent = maximo <= 0 ? 0 : g.Count() * 100d / maximo,
+                    Color = Palette[index % Palette.Length]
+                })
+                .OrderByDescending(x => x.Count)
+                .ThenByDescending(x => x.Total)
+                .Take(5)
+                .ToList();
+        }
+    }
+
+    private string PieStyle => BuildPieStyle(ResumenTipos);
+
+    private static readonly (string Codigo, string Label, string Color)[] DefinicionesTipo =
+    [
+        (ReporteComprobantesTipos.Factura, "Facturas", "#14B8A6"),
+        (ReporteComprobantesTipos.NotaCredito, "Notas de crédito", "#10B981"),
+        (ReporteComprobantesTipos.NotaDebito, "Notas de débito", "#F59E0B"),
+        (ReporteComprobantesTipos.GuiaRemision, "Guías de remisión", "#8B5CF6"),
+        (ReporteComprobantesTipos.Retencion, "Retenciones", "#F97316"),
+        (ReporteComprobantesTipos.LiquidacionCompra, "Liquidaciones", "#EC4899")
+    ];
+
+    private static readonly string[] Palette = ["#F59E0B", "#10B981", "#8B5CF6", "#F97316", "#EC4899"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RecargarAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!cargando)
+        {
+            await RenderReportDocumentChartsIfNeededAsync();
+        }
+    }
+
+    private async Task RecargarAsync()
+    {
+        cargando = true;
+        isDemoMode = EsRutaDemoDocumentos();
+
+        if (isDemoMode)
+        {
+            reporte = DemoCatalogService.GetReporteComprobantesDemo();
+            paginaActual = 1;
+            reportChartsSignature = string.Empty;
+            cargando = false;
+            return;
+        }
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+        currentUserId = int.TryParse(idClaim, out var id) ? id : 0;
+
+        if (currentUserId <= 0)
+        {
+            Navigation.NavigateTo("/", true);
+            return;
+        }
+
+        reporte = await ReporteComprobantesService.ObtenerReporteUsuarioAsync(currentUserId);
+        paginaActual = 1;
+        reportChartsSignature = string.Empty;
+        cargando = false;
+    }
+
+    private async Task RenderReportDocumentChartsIfNeededAsync()
+    {
+        var resumenTipos = ResumenTipos;
+        var topTerceros = TopTerceros;
+        var signature = BuildReportChartSignature(resumenTipos, topTerceros);
+
+        if (string.Equals(signature, reportChartsSignature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        reportChartsSignature = signature;
+
+        var payload = new
+        {
+            documentTypes = new
+            {
+                labels = resumenTipos.Select(x => x.Label).ToArray(),
+                values = resumenTipos.Select(x => x.Count).ToArray(),
+                colors = resumenTipos.Select(x => x.Color).ToArray()
+            },
+            topThirdParties = new
+            {
+                labels = topTerceros.Select(x => x.Label).ToArray(),
+                values = topTerceros.Select(x => x.Count).ToArray(),
+                totals = topTerceros.Select(x => x.Total).ToArray(),
+                colors = topTerceros.Select(x => x.Color).ToArray()
+            }
+        };
+
+        await JS.InvokeVoidAsync("numericaDashboardCharts.renderReportDocuments", payload);
+    }
+
+    private static string BuildReportChartSignature(
+        IEnumerable<ResumenTipoVista> resumenTipos,
+        IEnumerable<ResumenTerceroVista> topTerceros)
+    {
+        var tipos = string.Join("|", resumenTipos.Select(x => $"{x.Codigo}:{x.Count}:{x.Total:0.##}"));
+        var terceros = string.Join("|", topTerceros.Select(x => $"{x.Label}:{x.Count}:{x.Total:0.##}"));
+        return $"{tipos}::{terceros}";
+    }
+
+    private Task OnFiltersChanged()
+    {
+        paginaActual = 1;
+        return Task.CompletedTask;
+    }
+
+    private Task OnFechaDesdeChanged(ChangeEventArgs args)
+    {
+        FechaDesdeInputValue = Convert.ToString(args.Value) ?? string.Empty;
+        return OnFiltersChanged();
+    }
+
+    private Task OnFechaHastaChanged(ChangeEventArgs args)
+    {
+        FechaHastaInputValue = Convert.ToString(args.Value) ?? string.Empty;
+        return OnFiltersChanged();
+    }
+
+    private void LimpiarFiltros()
+    {
+        tipoDocumentoFiltro = ReporteComprobantesCategoriaDetalle.Todos;
+        clienteFiltro = string.Empty;
+        productoFiltro = string.Empty;
+        categoriaDetalleFiltro = ReporteComprobantesCategoriaDetalle.Todos;
+        estadoFiltro = ReporteComprobantesCategoriaDetalle.Todos;
+        autorizacionFiltro = DocumentoAutorizacionHelper.FiltroTodos;
+        fechaDesde = null;
+        fechaHasta = null;
+        paginaActual = 1;
+    }
+
+    private void PaginaAnterior()
+    {
+        if (paginaActual > 1)
+        {
+            paginaActual--;
+        }
+    }
+
+    private void PaginaSiguiente()
+    {
+        if (paginaActual < TotalPaginas)
+        {
+            paginaActual++;
+        }
+    }
+
+    private async Task AbrirXmlAsync(ReporteComprobanteItemDto item)
+    {
+        if (isDemoMode)
+        {
+            var demoXmlUrl = ObtenerDemoXmlUrl(item);
+            if (string.IsNullOrWhiteSpace(demoXmlUrl))
+            {
+                await AlertService.ShowInfoAsync("No hay un XML demo configurado para este documento.");
+                return;
+            }
+
+            await AlertService.ShowInfoAsync("Abriendo XML demo de muestra.");
+            await JS.InvokeVoidAsync("open", demoXmlUrl, "_blank");
+            return;
+        }
+
+        var url = await ReporteComprobantesService.AsegurarXmlDocumentoUsuarioAsync(item.TipoDocumentoCodigo, item.DocumentoId, currentUserId);
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            await AlertService.ShowWarningAsync("No se pudo ubicar o generar el XML del documento seleccionado.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private async Task AbrirPdfAsync(ReporteComprobanteItemDto item)
+    {
+        if (isDemoMode)
+        {
+            var demoPdfUrl = ObtenerDemoPdfUrl(item);
+            if (string.IsNullOrWhiteSpace(demoPdfUrl))
+            {
+                await AlertService.ShowInfoAsync("No hay un PDF demo configurado para este documento.");
+                return;
+            }
+
+            await AlertService.ShowInfoAsync("Abriendo PDF demo de muestra.");
+            await JS.InvokeVoidAsync("open", demoPdfUrl, "_blank");
+            return;
+        }
+
+        var url = await ReporteComprobantesService.AsegurarPdfDocumentoUsuarioAsync(item.TipoDocumentoCodigo, item.DocumentoId, currentUserId);
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            await AlertService.ShowWarningAsync("No se pudo ubicar o generar el PDF del documento seleccionado.");
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private async Task ExportarPdfAsync()
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync("Abriendo un reporte PDF demo de ejemplo.");
+            await JS.InvokeVoidAsync("open", "/reportes_documentos/reporte_documentos_20260508_164759.pdf", "_blank");
+            return;
+        }
+
+        var items = ItemsFiltrados;
+        if (items.Count == 0)
+        {
+            await AlertService.ShowInfoAsync("No hay datos visibles para exportar con los filtros actuales.");
+            return;
+        }
+
+        exportandoPdf = true;
+
+        try
+        {
+            var itemsExportacion = PrepararItemsExportacion(items);
+
+            var request = new ReporteComprobantesPdfRequest
+            {
+                NombreEmisor = reporte.NombreEmisor,
+                RucEmisor = reporte.RucEmisor,
+                NombreUsuario = reporte.NombreUsuario,
+                GeneradoEn = DateTime.Now,
+                Filtros = new ReporteComprobantesFiltroDto
+                {
+                    TipoDocumento = tipoDocumentoFiltro,
+                    FechaDesde = fechaDesde,
+                    FechaHasta = fechaHasta,
+                    Cliente = clienteFiltro,
+                    Producto = productoFiltro,
+                    CategoriaDetalle = categoriaDetalleFiltro,
+                    EstadoDocumento = estadoFiltro,
+                    Autorizacion = autorizacionFiltro
+                },
+                Items = itemsExportacion
+            };
+
+            var pdfUrl = await ReporteComprobantesPdfService.GenerarPdfAsync(request);
+            await JS.InvokeVoidAsync("open", pdfUrl, "_blank");
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync(ex.Message, "No se pudo generar el reporte PDF");
+        }
+        finally
+        {
+            exportandoPdf = false;
+        }
+    }
+
+    private async Task ExportarExcelAsync()
+    {
+        if (isDemoMode)
+        {
+            await AlertService.ShowInfoAsync("Modo demo: la exportacion Excel esta bloqueada para invitados.");
+            return;
+        }
+
+        var items = ItemsFiltrados;
+        if (items.Count == 0)
+        {
+            await AlertService.ShowInfoAsync("No hay datos visibles para exportar con los filtros actuales.");
+            return;
+        }
+
+        exportandoExcel = true;
+
+        try
+        {
+            var itemsExportacion = PrepararItemsExportacion(items);
+
+            var request = new ReporteComprobantesPdfRequest
+            {
+                NombreEmisor = reporte.NombreEmisor,
+                RucEmisor = reporte.RucEmisor,
+                NombreUsuario = reporte.NombreUsuario,
+                GeneradoEn = DateTime.Now,
+                Filtros = new ReporteComprobantesFiltroDto
+                {
+                    TipoDocumento = tipoDocumentoFiltro,
+                    FechaDesde = fechaDesde,
+                    FechaHasta = fechaHasta,
+                    Cliente = clienteFiltro,
+                    Producto = productoFiltro,
+                    CategoriaDetalle = categoriaDetalleFiltro,
+                    EstadoDocumento = estadoFiltro,
+                    Autorizacion = autorizacionFiltro
+                },
+                Items = itemsExportacion
+            };
+
+            var archivo = await ReporteComprobantesExcelService.GenerarExcelAsync(request);
+
+            using var stream = new MemoryStream(archivo.Content);
+            using var streamRef = new DotNetStreamReference(stream);
+            await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync(ex.Message, "No se pudo generar el archivo Excel");
+        }
+        finally
+        {
+            exportandoExcel = false;
+        }
+    }
+
+    private List<ReporteComprobanteItemDto> PrepararItemsExportacion(IEnumerable<ReporteComprobanteItemDto> items)
+    {
+        var resultado = new List<ReporteComprobanteItemDto>();
+
+        foreach (var item in items)
+        {
+            resultado.Add(new ReporteComprobanteItemDto
+            {
+                DocumentoId = item.DocumentoId,
+                TipoDocumento = item.TipoDocumento,
+                TipoDocumentoCodigo = item.TipoDocumentoCodigo,
+                FechaEmision = item.FechaEmision,
+                NumeroDocumento = item.NumeroDocumento,
+                TerceroNombre = item.TerceroNombre,
+                TerceroIdentificacion = item.TerceroIdentificacion,
+                TerceroRol = item.TerceroRol,
+                EstadoDocumento = item.EstadoDocumento,
+                BaseImponible = item.BaseImponible,
+                Iva = item.Iva,
+                Total = item.Total,
+                DocumentoRelacionado = item.DocumentoRelacionado,
+                ClaveAcceso = item.ClaveAcceso,
+                NumeroAutorizacion = item.NumeroAutorizacion,
+                EstaAutorizado = item.EstaAutorizado,
+                XmlUrl = BuildAbsoluteUrl(item.XmlUrl),
+                PdfUrl = BuildAbsoluteUrl(item.PdfUrl),
+                ProductosRelacionados = item.ProductosRelacionados.ToList(),
+                TieneProducto = item.TieneProducto,
+                TieneServicio = item.TieneServicio
+            });
+        }
+
+        return resultado;
+    }
+
+    private bool EsRutaDemoDocumentos() =>
+        Navigation.ToBaseRelativePath(Navigation.Uri).StartsWith("demo/documentos", StringComparison.OrdinalIgnoreCase);
+
+    private List<ReporteComprobanteItemDto> AplicarFiltros(IEnumerable<ReporteComprobanteItemDto> origen)
+    {
+        var query = origen.AsEnumerable();
+
+        if (!EsFiltroTodos(tipoDocumentoFiltro))
+        {
+            var tipoFiltroNormalizado = NormalizarFiltro(tipoDocumentoFiltro);
+            query = query.Where(x => NormalizarFiltro(x.TipoDocumentoCodigo) == tipoFiltroNormalizado);
+        }
+
+        if (fechaDesde.HasValue)
+        {
+            query = query.Where(x => x.FechaEmision.HasValue && x.FechaEmision.Value.Date >= fechaDesde.Value.Date);
+        }
+
+        if (fechaHasta.HasValue)
+        {
+            query = query.Where(x => x.FechaEmision.HasValue && x.FechaEmision.Value.Date <= fechaHasta.Value.Date);
+        }
+
+        if (!EsFiltroTodos(estadoFiltro))
+        {
+            var estadoFiltroNormalizado = NormalizarFiltro(estadoFiltro);
+            query = query.Where(x => NormalizarFiltro(x.EstadoDocumento) == estadoFiltroNormalizado);
+        }
+
+        if (string.Equals(autorizacionFiltro, DocumentoAutorizacionHelper.FiltroAutorizados, StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(x => x.EstaAutorizado);
+        }
+        else if (string.Equals(autorizacionFiltro, DocumentoAutorizacionHelper.FiltroPendientes, StringComparison.OrdinalIgnoreCase))
+        {
+            var estadoPendiente = NormalizarFiltro(DocumentoAutorizacionHelper.EstadoPendiente);
+            query = query.Where(x => !x.EstaAutorizado && NormalizarFiltro(x.EstadoDocumento) == estadoPendiente);
+        }
+        else if (string.Equals(autorizacionFiltro, DocumentoAutorizacionHelper.FiltroNoAutorizados, StringComparison.OrdinalIgnoreCase))
+        {
+            var estadoNoAutorizado = NormalizarFiltro(DocumentoAutorizacionHelper.EstadoNoAutorizado);
+            query = query.Where(x => !x.EstaAutorizado && NormalizarFiltro(x.EstadoDocumento) == estadoNoAutorizado);
+        }
+
+        if (!string.IsNullOrWhiteSpace(clienteFiltro))
+        {
+            var filtro = clienteFiltro.Trim();
+            query = query.Where(x =>
+                ContieneTexto(x.TerceroNombre, filtro) ||
+                ContieneTexto(x.TerceroIdentificacion, filtro));
+        }
+
+        if (!string.IsNullOrWhiteSpace(productoFiltro))
+        {
+            var filtro = productoFiltro.Trim();
+            query = query.Where(x =>
+                x.ProductosRelacionados.Any(p => ContieneTexto(p, filtro)) ||
+                ContieneTexto(x.ResumenProductos, filtro));
+        }
+
+        if (string.Equals(NormalizarFiltro(categoriaDetalleFiltro), NormalizarFiltro(ReporteComprobantesCategoriaDetalle.Producto), StringComparison.Ordinal))
+        {
+            query = query.Where(x => x.TieneProducto);
+        }
+        else if (string.Equals(NormalizarFiltro(categoriaDetalleFiltro), NormalizarFiltro(ReporteComprobantesCategoriaDetalle.Servicio), StringComparison.Ordinal))
+        {
+            query = query.Where(x => x.TieneServicio);
+        }
+
+        return query
+            .OrderByDescending(x => x.FechaEmision ?? DateTime.MinValue)
+            .ThenByDescending(x => x.DocumentoId)
+            .ToList();
+    }
+
+    private static bool EsFiltroTodos(string? valor)
+        => string.IsNullOrWhiteSpace(valor) ||
+           string.Equals(NormalizarFiltro(valor), NormalizarFiltro(ReporteComprobantesCategoriaDetalle.Todos), StringComparison.Ordinal);
+
+    private static bool ContieneTexto(string? origen, string? filtro)
+    {
+        var origenNormalizado = NormalizarFiltro(origen);
+        var filtroNormalizado = NormalizarFiltro(filtro);
+
+        return filtroNormalizado.Length == 0 || origenNormalizado.Contains(filtroNormalizado, StringComparison.Ordinal);
+    }
+
+    private static string NormalizarFiltro(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+        {
+            return string.Empty;
+        }
+
+        var normalized = valor.Trim().Normalize(System.Text.NormalizationForm.FormD);
+        var builder = new System.Text.StringBuilder(normalized.Length);
+
+        foreach (var character in normalized)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(character) != UnicodeCategory.NonSpacingMark)
+            {
+                builder.Append(char.ToUpperInvariant(character));
+            }
+        }
+
+        return builder.ToString().Normalize(System.Text.NormalizationForm.FormC);
+    }
+
+    private string BuildAbsoluteUrl(string? relativeOrAbsolute)
+    {
+        if (string.IsNullOrWhiteSpace(relativeOrAbsolute))
+        {
+            return string.Empty;
+        }
+
+        if (Uri.TryCreate(relativeOrAbsolute, UriKind.Absolute, out var absoluteUri))
+        {
+            return absoluteUri.ToString();
+        }
+
+        return new Uri(new Uri(Navigation.BaseUri), relativeOrAbsolute.TrimStart('/')).ToString();
+    }
+
+    private static string BuildPieStyle(IEnumerable<ResumenTipoVista> resumen)
+    {
+        var slices = resumen.Where(x => x.Count > 0).ToList();
+        var total = slices.Sum(x => x.Count);
+        if (total <= 0)
+        {
+            return "background: conic-gradient(#dbe7f1 0 100%);";
+        }
+
+        var partes = new List<string>();
+        double inicio = 0;
+
+        foreach (var item in slices)
+        {
+            var porcentaje = item.Count * 100d / total;
+            var fin = inicio + porcentaje;
+            partes.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{item.Color} {inicio:F2}% {fin:F2}%"));
+            inicio = fin;
+        }
+
+        return $"background: conic-gradient({string.Join(", ", partes)});";
+    }
+
+    private static string FormatearMoneda(decimal valor) => $"$ {valor:N2}";
+    private static string FormatearPorcentaje(int valor, int total)
+        => total <= 0 ? "0%" : $"{valor * 100d / total:0.#}%";
+
+    private static string ObtenerAnchoPorcentaje(int valor, int total)
+        => total <= 0 ? "0" : (valor * 100d / total).ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static string ObtenerAnchoMonto(decimal valor, decimal total)
+    {
+        if (valor <= 0 || total <= 0)
+        {
+            return "0";
+        }
+
+        var porcentaje = Math.Clamp((double)(valor / total * 100m), 0d, 100d);
+        return porcentaje.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private static string ObtenerColorTipo(string codigo) =>
+        DefinicionesTipo.FirstOrDefault(x => x.Codigo == codigo).Color ?? "#14B8A6";
+
+    private static string ObtenerClaseEstado(string estado)
+    {
+        if (DocumentoAutorizacionHelper.EsEstadoAutorizado(estado) || estado.Contains("ACTIVA", StringComparison.OrdinalIgnoreCase))
+        {
+            return "status-ok";
+        }
+
+        if (DocumentoAutorizacionHelper.EsNoAutorizado(estado) ||
+            estado.Contains("INACTIVA", StringComparison.OrdinalIgnoreCase) ||
+            estado.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
+            estado.Contains("RECHAZ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "status-danger";
+        }
+
+        return "status-info";
+    }
+
+    private static string ObtenerNumeroAutorizacionTexto(ReporteComprobanteItemDto item) =>
+        DocumentoAutorizacionHelper.ObtenerNumeroAutorizacionVisual(
+            item.EstadoDocumento,
+            item.EstaAutorizado,
+            item.NumeroAutorizacion);
+
+    private static string ObtenerDemoXmlUrl(ReporteComprobanteItemDto item) =>
+        item.TipoDocumentoCodigo switch
+        {
+            ReporteComprobantesTipos.Factura => "/FacturasGeneradas/1724328164001_001001_000000031.xml",
+            ReporteComprobantesTipos.NotaCredito => "/notas_de_credito/1755584451001_04_000000003.xml",
+            ReporteComprobantesTipos.GuiaRemision => "/comprobantes/guias_remision/1724328164001_06_001001000000001.xml",
+            ReporteComprobantesTipos.Retencion => "/comprobantes/generados/RET_0104202607172600000000120010010000000011234567812.xml",
+            ReporteComprobantesTipos.LiquidacionCompra => "/comprobantes/liquidaciones/LIQ_0505202603172432816400120010010000000011234567818.xml",
+            ReporteComprobantesTipos.NotaDebito => "/notas_de_debito/1755584451001_05_000000001.xml",
+            _ => string.Empty
+        };
+
+    private static string ObtenerDemoPdfUrl(ReporteComprobanteItemDto item) =>
+        item.TipoDocumentoCodigo switch
+        {
+            ReporteComprobantesTipos.Factura => "/FacturasGeneradas/1724328164001_001001_000000031.pdf",
+            ReporteComprobantesTipos.NotaCredito => "/notas_de_credito/1755584451001_04_000000003.pdf",
+            ReporteComprobantesTipos.GuiaRemision => "/comprobantes/guias_remision/1724328164001_06_001001000000001.pdf",
+            ReporteComprobantesTipos.Retencion => "/reportes_documentos/reporte_documentos_20260508_164759.pdf",
+            ReporteComprobantesTipos.LiquidacionCompra => "/comprobantes/liquidaciones/LIQ_0505202603172432816400120010010000000011234567818.pdf",
+            ReporteComprobantesTipos.NotaDebito => "/notas_de_debito/1755584451001_05_000000001.pdf",
+            _ => string.Empty
+        };
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("numericaDashboardCharts.destroyReportDocuments");
+        }
+        catch
+        {
+            // El circuito puede cerrarse antes de poder limpiar los canvas.
+        }
+    }
+
+    private sealed class ResumenTipoVista
+    {
+        public string Codigo { get; init; } = string.Empty;
+        public string Label { get; init; } = string.Empty;
+        public string Color { get; init; } = string.Empty;
+        public int Count { get; init; }
+        public decimal Total { get; init; }
+    }
+
+    private sealed class ResumenTerceroVista
+    {
+        public string Label { get; init; } = string.Empty;
+        public int Count { get; init; }
+        public decimal Total { get; init; }
+        public double WidthPercent { get; init; }
+        public string Color { get; init; } = string.Empty;
+    }
+}
