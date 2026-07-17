@@ -16,6 +16,13 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject ILogger<MainLayout> Logger
+
+@if (!ShouldRenderShell)
+{
+    @Body
+}
+else
+{
 <div class="page @(IsEContaxContext ? "econtax-theme" : (IsEDeclaraContext ? "edeclara-theme" : (IsESignContext ? "esign-theme" : string.Empty)))">
     <div class="sidebar">
         <NavMenu />
@@ -808,8 +815,11 @@
         </div>
     }
 }
+}
 
 @code {
+    [CascadingParameter] private Task<AuthenticationState>? LayoutAuthenticationStateTask { get; set; }
+
     private const string WelcomeStoragePrefix = "numerica:welcome-seen:";
     private const string EContaxWelcomeStoragePrefix = "numerica:econtax-welcome-seen:";
     private const string EDeclaraWelcomeStoragePrefix = "numerica:edeclara-welcome-seen:";
@@ -830,6 +840,8 @@
     private bool _ocultarConfirmacionCuentaLista;
     private bool _tieneClientesActivos;
     private bool _tieneProductosActivos;
+    private bool _layoutAuthResolved;
+    private bool _layoutUserAuthenticated;
     private string? _readyConfirmationStorageKey;
     private string? _onboardingBotSessionStorageKey;
     private string? _onboardingBotDismissedStepKey;
@@ -840,6 +852,10 @@
     private bool IsDemoContext => IsDemoPath(NavManager.Uri);
     private string CurrentRoutePath =>
         NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].Trim('/');
+    private bool IsAuthEntryContext =>
+        string.IsNullOrWhiteSpace(CurrentRoutePath) ||
+        string.Equals(CurrentRoutePath, "login", StringComparison.OrdinalIgnoreCase);
+    private bool ShouldRenderShell => IsDemoContext || (!IsAuthEntryContext && _layoutAuthResolved && _layoutUserAuthenticated);
     private bool IsDashboardContext =>
         string.Equals(CurrentRoutePath, "dashboard", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(CurrentRoutePath, "demo/dashboard", StringComparison.OrdinalIgnoreCase);
@@ -907,6 +923,20 @@
         IsEDeclaraContext ? "Numerica E-Declara" :
         IsESignContext ? "Numerica eRúbrica" :
                             "Numerica e-fact IA";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (LayoutAuthenticationStateTask is null)
+        {
+            _layoutAuthResolved = true;
+            _layoutUserAuthenticated = false;
+            return;
+        }
+
+        var authState = await LayoutAuthenticationStateTask;
+        _layoutAuthResolved = true;
+        _layoutUserAuthenticated = authState.User.Identity?.IsAuthenticated == true;
+    }
 
     protected override void OnInitialized()
     {
