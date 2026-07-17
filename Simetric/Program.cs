@@ -341,17 +341,6 @@ app.UseAuthorization();
 
 app.UseAntiforgery();
 
-app.Use(async (context, next) =>
-{
-    if ((context.Request.Path == "/" || context.Request.Path == "/login") &&
-        context.User.Identity?.IsAuthenticated == true)
-    {
-        context.Response.Redirect("/portal-servicios");
-        return;
-    }
-    await next();
-});
-
 app.MapControllers();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
