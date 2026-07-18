@@ -313,6 +313,9 @@ namespace Simetric.Controllers
                     saldoActual = usuario.SaldoDocumentos;
                     historialActualizado = true;
 
+                    var debeIntentarFactura = pagoAprobado &&
+                        (saldoAplicadoAhora || compraHistorial.CodFactura is not > 0);
+
                     // Registrar venta automatica en BackOffice de forma atomica con el saldo
                     if (saldoAplicadoAhora)
                     {
@@ -332,7 +335,10 @@ namespace Simetric.Controllers
                             FormaPago = Truncate("Tarjeta de Crédito", 50),
                             Observacion = Truncate($"Compra de documentos automática en línea (Pagomedios). Ref: {reference} / {authorizationCode}. Compra #{compraId}", 500)
                         });
+                    }
 
+                    if (debeIntentarFactura)
+                    {
                         try
                         {
                             var resultadoFactura = await _compraDocumentosFacturacionService.EmitirFacturaAsync(

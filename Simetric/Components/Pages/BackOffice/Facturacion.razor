@@ -376,12 +376,20 @@
                         <InputText @bind-Value="cajaForm.Establecimiento" class="field-input" maxlength="3" />
                     </div>
                     <div class="field field-sequence">
-                        <label>Punto de emision</label>
+                        <label>Punto de emision factura</label>
                         <InputText @bind-Value="cajaForm.PuntoEmision" class="field-input" maxlength="3" />
+                    </div>
+                    <div class="field field-sequence">
+                        <label>Punto de emision NC</label>
+                        <InputText @bind-Value="cajaForm.PuntoEmisionNotaCredito" class="field-input" maxlength="3" />
                     </div>
                 </div>
 
-                <div class="field-help">Serie vista previa: <strong>@SerieCajaPreview</strong></div>
+                <div class="field-help">
+                    Serie factura: <strong>@SerieCajaPreview</strong>
+                    <span class="mx-2">|</span>
+                    Serie nota de credito: <strong>@SerieNotaCreditoPreview</strong>
+                </div>
 
                 <div class="form-actions">
                     <button type="button" class="primary-btn" @onclick="GuardarCajaSistemaAsync" disabled="@guardandoCaja">
@@ -396,7 +404,8 @@
                             <thead>
                                 <tr>
                                     <th>Caja</th>
-                                    <th>Serie</th>
+                                    <th>Serie factura</th>
+                                    <th>Serie NC</th>
                                     <th>Estado</th>
                                     <th>Acciones</th>
                                 </tr>
@@ -407,6 +416,7 @@
                                     <tr>
                                         <td>@(caja.NumCaja ?? 0)</td>
                                         <td>@FormatearSerie(caja.SerieFactura)</td>
+                                        <td>@FormatearSerie(caja.SerieNotasCred)</td>
                                         <td>@((caja.NumCaja ?? 0) == 1 ? "Principal" : "Activa")</td>
                                         <td>
                                             <div class="table-actions">
@@ -529,6 +539,7 @@
     private Caja? cajaSistemaSeleccionada;
     private CajaSistemaFormModel cajaForm = new();
     private string SerieCajaPreview => $"{NormalizarCodigoPreview(cajaForm.Establecimiento)}-{NormalizarCodigoPreview(cajaForm.PuntoEmision)}";
+    private string SerieNotaCreditoPreview => $"{NormalizarCodigoPreview(cajaForm.Establecimiento)}-{NormalizarCodigoPreview(cajaForm.PuntoEmisionNotaCredito)}";
     private string RucEmisorActual => string.IsNullOrWhiteSpace(formModel.Ruc) ? "--" : formModel.Ruc;
     private string RazonSocialEmisorActual => FirstNonEmpty(formModel.RazonSocial, formModel.NomComercial) ?? "--";
     private string SeriePrincipalSistemaActual => FormatearSerie(cajasSistema.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).FirstOrDefault()?.SerieFactura);
@@ -649,7 +660,10 @@
         formModel.CodEstablecimiento = establecimiento;
         formModel.CodPuntoEmision = punto;
         cajaForm.Establecimiento = establecimiento;
-        cajaForm.PuntoEmision = punto;
+        if (NormalizarCodigo(cajaForm.PuntoEmision) is null)
+            cajaForm.PuntoEmision = punto;
+        if (NormalizarCodigo(cajaForm.PuntoEmisionNotaCredito) is null)
+            cajaForm.PuntoEmisionNotaCredito = punto;
     }
 
     private async Task ConsultarIdentificacionAsync()
@@ -729,10 +743,11 @@
 
         var establecimiento = NormalizarCodigo(cajaForm.Establecimiento);
         var punto = NormalizarCodigo(cajaForm.PuntoEmision);
+        var puntoNc = NormalizarCodigo(cajaForm.PuntoEmisionNotaCredito);
 
-        if (establecimiento is null || punto is null)
+        if (establecimiento is null || punto is null || puntoNc is null)
         {
-            SetFeedback("La caja del sistema requiere establecimiento y punto de emision validos de 3 digitos.", false);
+            SetFeedback("La caja del sistema requiere establecimiento, punto de emision de factura y punto de emision de nota de credito validos de 3 digitos.", false);
             return;
         }
 
@@ -740,6 +755,7 @@
         try
         {
             var serie = $"{establecimiento}-{punto}";
+            var serieNc = $"{establecimiento}-{puntoNc}";
             var modelo = cajaSistemaSeleccionada is null
                 ? CrearNuevaCajaSistemaBase()
                 : ClonarCaja(cajaSistemaSeleccionada);
@@ -747,7 +763,7 @@
             modelo.IdUsuario = ownerUserId;
             modelo.EsCajaSistema = true;
             modelo.SerieFactura = serie;
-            modelo.SerieNotasCred = serie;
+            modelo.SerieNotasCred = serieNc;
             modelo.SerieGuia = serie;
             modelo.SerieCompras = serie;
             modelo.SerieDebitos = serie;
@@ -760,7 +776,11 @@
                 return;
             }
 
-            SetFeedback($"Caja del sistema guardada correctamente con la serie {serie}.", true);
+            SetFeedback(
+                serie == serieNc
+                    ? $"Caja del sistema guardada correctamente con la serie {serie}."
+                    : $"Caja del sistema guardada correctamente. Factura: {serie} | Nota de credito: {serieNc}.",
+                true);
             await RecargarAsync();
         }
         catch (Exception ex)
@@ -1099,14 +1119,19 @@
     {
         public string Establecimiento { get; set; } = "001";
         public string PuntoEmision { get; set; } = "001";
+        public string PuntoEmisionNotaCredito { get; set; } = "001";
 
         public static CajaSistemaFormModel FromCaja(Caja? caja)
         {
             var digits = new string((caja?.SerieFactura ?? string.Empty).Where(char.IsDigit).ToArray()).PadLeft(6, '0');
+            var digitsNc = new string((caja?.SerieNotasCred ?? string.Empty).Where(char.IsDigit).ToArray()).PadLeft(6, '0');
             return new CajaSistemaFormModel
             {
                 Establecimiento = digits[..3],
-                PuntoEmision = digits.Substring(3, 3)
+                PuntoEmision = digits.Substring(3, 3),
+                PuntoEmisionNotaCredito = digitsNc[..3] == digits[..3]
+                    ? digitsNc.Substring(3, 3)
+                    : digits.Substring(3, 3)
             };
         }
     }
