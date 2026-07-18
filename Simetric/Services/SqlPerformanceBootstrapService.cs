@@ -199,6 +199,34 @@ public sealed class SqlPerformanceBootstrapService
             """;
 
         yield return """
+            IF OBJECT_ID('dbo.REPORTEVENTABACKOFFICE', 'U') IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM sys.indexes
+                   WHERE name = 'IX_REPORTEVENTABACKOFFICE_Estado_Fecha'
+                     AND object_id = OBJECT_ID('dbo.REPORTEVENTABACKOFFICE'))
+            BEGIN
+                CREATE NONCLUSTERED INDEX IX_REPORTEVENTABACKOFFICE_Estado_Fecha
+                ON dbo.REPORTEVENTABACKOFFICE (Estado, Fecha DESC)
+                INCLUDE (IdReporte, Cliente, Producto, PlanPaquete, Valor, Canal, Vendedor, FormaPago, Observacion);
+            END
+            """;
+
+        yield return """
+            IF OBJECT_ID('dbo.REPORTEVENTABACKOFFICE', 'U') IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM sys.indexes
+                   WHERE name = 'IX_REPORTEVENTABACKOFFICE_Estado_Producto_Fecha'
+                     AND object_id = OBJECT_ID('dbo.REPORTEVENTABACKOFFICE'))
+            BEGIN
+                CREATE NONCLUSTERED INDEX IX_REPORTEVENTABACKOFFICE_Estado_Producto_Fecha
+                ON dbo.REPORTEVENTABACKOFFICE (Estado, Producto, Fecha DESC)
+                INCLUDE (IdReporte, Cliente, PlanPaquete, Valor, Canal, Vendedor, FormaPago, Observacion);
+            END
+            """;
+
+        yield return """
             IF OBJECT_ID('dbo.NOTASCREDITO', 'U') IS NOT NULL
                AND NOT EXISTS (
                    SELECT 1

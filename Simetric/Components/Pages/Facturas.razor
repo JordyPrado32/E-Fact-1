@@ -49,6 +49,19 @@
         </div>
     }
 
+    @if (procesandoNotaCreditoAutomatica)
+    {
+        <div class="facturas-inline-overlay">
+            <div class="facturas-inline-overlay-card">
+                <span class="spinner-border spinner-border-sm" role="status"></span>
+                <div>
+                    <strong>Generando nota de crédito</strong>
+                    <span>Estamos validando la factura, regenerando el comprobante y consultando el SRI.</span>
+                </div>
+            </div>
+        </div>
+    }
+
     @if (mostrarResultadoOverlay)
     {
         <div class="facturas-inline-overlay" @onclick="CerrarResultadoOverlay">
@@ -958,9 +971,7 @@
         try
         {
             procesandoNotaCreditoAutomatica = true;
-            await MostrarProcesandoNotaCreditoAutomaticaAsync(factura);
             var resultado = await NotaCreditoService.EmitirNotaCreditoAutomaticaDesdeFacturaAsync(currentUserId, factura.Codfactura);
-            await JS.InvokeVoidAsync("Swal.close");
 
             if (!resultado.Success)
             {
@@ -977,7 +988,6 @@
         }
         catch (Exception ex)
         {
-            await JS.InvokeVoidAsync("Swal.close");
             await AlertService.ShowErrorAsync($"Ocurrió un error al generar la nota de crédito automática: {ex.Message}", "Error");
         }
         finally
@@ -1137,58 +1147,30 @@
     }
     private async Task ReenviarAlSriAsync(FacturaListDto factura)
     {
-        string pathCertificado = "";
-        string pass = "";
-        emisores = await FacturacionService.GetEmisoresActivosAsync(currentUserId);
-        var rutaXml = await FacturacionService.AsegurarRutaXmlFacturaUsuarioAsync(factura.Codfactura, currentUserId, true);
-        if (string.IsNullOrWhiteSpace(rutaXml))
+        var resultadoSri = await FacturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
+
+        if (string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
         {
-            await AlertService.ShowErrorAsync("No se pudo regenerar el XML desde los datos guardados de la factura.", "XML no disponible");
-            return;
-        }
-        var correosFactura = ObtenerCorreosOpcionalesFactura();
-
-        mensajeSRI m = new mensajeSRI();
-        var mensajeResultado = "";
-        if (emisores.Any())
-        {
-            var emisorFirma = emisores.First();
-            pathCertificado = $"App_Data/{emisorFirma.PathCertificado}";
-            pass = emisorFirma.ClaveCertificado;
-
-            if (string.IsNullOrWhiteSpace(pass))
-            {
-                throw new InvalidOperationException("La firma electronica configurada no tiene clave registrada.");
-            }
-
-            //EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass).Wait();
-            m = await EnviarXmlAApiFrameworkAsync(rutaXml, pathCertificado, pass);
-        }
-
-        if (m.autorizacion != "")
-        {
-
-            await FacturacionService.ActualizarAutorizacionFacturaAsync(factura.Codfactura, m.autorizacion, m.fecha,"",true);
-            var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, rutaXml, m);
+            var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, forzarReenvio: true);
             if (resultadoCorreo.Enviado || resultadoCorreo.YaEnviado)
             {
-                mensajeResultado = resultadoCorreo.Enviado
-                    ? resultadoCorreo.Mensaje
-                    : "Factura guardada correctamente.";
-                await AlertService.ShowSuccessAsync(mensajeResultado, "Factura guardada");
+                await AlertService.ShowSuccessAsync(resultadoCorreo.Mensaje, "Factura autorizada");
             }
             else
             {
-                await AlertService.ShowErrorAsync(
-                    $"La factura fue autorizada, pero no se pudo enviar el correo al cliente. {resultadoCorreo.Mensaje}",
-                    "Error al enviar correo");
+                await AlertService.ShowWarningAsync(
+                    $"La factura se autorizó, pero el correo no salió todavía. {resultadoCorreo.Mensaje}",
+                    "Correo pendiente");
             }
         }
         else
         {
-            await FacturacionService.ActualizarAutorizacionFacturaAsync(factura.Codfactura, m.autorizacion, m.fecha, m.xml, false);
-            await AlertService.ShowSuccessAsync("Factura guardada no autorizada, por favor revise el error enviado por el SRI: " + m.mensaje + " puede reenviar la factura desde el listado de facturas", "Factura guardada con observaciones");
+            await AlertService.ShowWarningAsync(
+                resultadoSri.mensaje ?? "La factura sigue pendiente o con observaciones del SRI.",
+                "SRI");
         }
+
+        await Recargar();
     }
     public async Task<mensajeSRI> EnviarXmlAApiFrameworkAsync(string rutaArchivoxml, string rutaFirma, string password)
     {

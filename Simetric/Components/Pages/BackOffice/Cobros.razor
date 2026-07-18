@@ -38,7 +38,7 @@
         </div>
     </header>
 
-    @if (isLoading)
+    @if (false && isLoading)
     {
         <div class="text-center my-5 py-5">
             <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
@@ -599,7 +599,11 @@
 
 @code {
     private const string AccionAprobacionTransferencia = "APROBACION_TRANSFERENCIA_FACTURA_BACKOFFICE";
+    private const long MaxUploadBytes = 5 * 1024 * 1024;
+    private const int MaxImageWidth = 1600;
+    private const int MaxImageHeight = 1600;
     private bool isLoading = true;
+    private bool firstLoadCompleted = false;
     private string activeTab = "pendientes";
     private string searchQuery = "";
     private string filterProducto = "ALL";
@@ -607,7 +611,6 @@
     private DateTime? filterFechaFin;
 
     // Data lists
-    private List<ReporteVentaBackOffice> allVentas = new();
     private List<ReporteVentaBackOffice> filteredRows = new();
     private List<ReporteVentaBackOffice> paginatedRows = new();
     private HashSet<int> ventasConComprobanteArchivo = new();
@@ -630,7 +633,9 @@
     private int currentPage = 1;
     private const int pageSize = 5;
     private int totalPages = 0;
-    private int CurrentFilteredCount => activeTab == "auditoria" ? filteredAuditRows.Count : filteredRows.Count;
+    private int totalFilteredVentasCount = 0;
+    private bool hasMoreVentasPages;
+    private int CurrentFilteredCount => activeTab == "auditoria" ? filteredAuditRows.Count : totalFilteredVentasCount;
 
     // Modals control
     private bool showCobroModal = false;
@@ -654,6 +659,7 @@
     private int? currentUserId;
     private int? aprobandoTransferenciaId;
     private string? facturaAutorizadaPdfUrl;
+    private bool kpisLoaded;
 
     // Feedback notifications
     private string? feedbackMessage;
@@ -662,7 +668,8 @@
     protected override async Task OnInitializedAsync()
     {
         await CargarUsuarioActualAsync();
-        await LoadVentasData();
+        await LoadVentasPageAsync();
+        _ = LoadVentasKpisAsync();
     }
 
     private async Task CargarUsuarioActualAsync()
@@ -693,13 +700,26 @@
 
     private async Task LoadVentasData()
     {
-        isLoading = true;
+        await LoadVentasPageAsync();
+        _ = LoadVentasKpisAsync();
+    }
+
+    private async Task LoadVentasPageAsync()
+    {
+        if (!firstLoadCompleted)
+        {
+            isLoading = true;
+        }
         try
         {
             using var context = await DbFactory.CreateDbContextAsync();
-            allVentas = await context.ReporteVentasBackOffice
-                .AsNoTracking()
+            var filteredQuery = BuildVentasQuery(context);
+            if (currentPage < 1) currentPage = 1;
+
+            var pageRows = await filteredQuery
                 .OrderByDescending(v => v.Fecha)
+                .Skip((currentPage - 1) * pageSize)
+                .Take(pageSize + 1)
                 .Select(v => new ReporteVentaBackOffice
                 {
                     IdReporte = v.IdReporte,
@@ -715,36 +735,28 @@
                     Observacion = v.Observacion
                 })
                 .ToListAsync();
-            ventasConComprobanteArchivo = await context.ReporteVentasBackOffice
-                .AsNoTracking()
-                .Where(v => v.ComprobanteArchivo != null)
+
+            hasMoreVentasPages = pageRows.Count > pageSize;
+            paginatedRows = hasMoreVentasPages
+                ? pageRows.Take(pageSize).ToList()
+                : pageRows;
+            filteredRows = paginatedRows.ToList();
+            totalFilteredVentasCount = ((currentPage - 1) * pageSize) + paginatedRows.Count + (hasMoreVentasPages ? 1 : 0);
+            totalPages = hasMoreVentasPages ? currentPage + 1 : currentPage;
+
+            var currentIds = paginatedRows
                 .Select(v => v.IdReporte)
-                .ToHashSetAsync();
+                .ToList();
 
-            // Calculate KPIs
-            var now = DateTime.Now;
+            ventasConComprobanteArchivo = currentIds.Count == 0
+                ? new HashSet<int>()
+                : await context.ReporteVentasBackOffice
+                    .AsNoTracking()
+                    .Where(v => currentIds.Contains(v.IdReporte) && v.ComprobanteArchivo != null)
+                    .Select(v => v.IdReporte)
+                    .ToHashSetAsync();
 
-            montoPendiente = allVentas
-                .Where(v => v.Estado == "pendiente")
-                .Sum(v => v.Valor);
-
-            countPendientes = allVentas
-                .Count(v => v.Estado == "pendiente");
-
-            countSolicitudesDocumentosPendientes = allVentas
-                .Count(v => v.Estado == "pendiente" && EsSolicitudTransferenciaDocumentos(v));
-
-            montoCobradoMes = allVentas
-                .Where(v => v.Estado == "pagada" && v.Fecha.Month == now.Month && v.Fecha.Year == now.Year)
-                .Sum(v => v.Valor);
-
-            countCobradoMes = allVentas
-                .Count(v => v.Estado == "pagada" && v.Fecha.Month == now.Month && v.Fecha.Year == now.Year);
-
-            countTotalCobrados = allVentas
-                .Count(v => v.Estado == "pagada");
-
-            ApplyFilters();
+            firstLoadCompleted = true;
         }
         catch (Exception ex)
         {
@@ -752,8 +764,91 @@
         }
         finally
         {
-            isLoading = false;
+            if (!firstLoadCompleted)
+            {
+                isLoading = false;
+            }
         }
+    }
+
+    private async Task LoadVentasKpisAsync()
+    {
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var now = DateTime.Now;
+            var ventasBaseQuery = context.ReporteVentasBackOffice.AsNoTracking();
+
+            montoPendiente = await ventasBaseQuery
+                .Where(v => v.Estado == "pendiente")
+                .SumAsync(v => (decimal?)v.Valor) ?? 0;
+
+            countPendientes = await ventasBaseQuery
+                .CountAsync(v => v.Estado == "pendiente");
+
+            countSolicitudesDocumentosPendientes = await ventasBaseQuery
+                .CountAsync(v =>
+                    v.Estado == "pendiente" &&
+                    v.Producto == "e-fact" &&
+                    v.Canal.Contains("Transferencia Web") &&
+                    v.Observacion != null &&
+                    v.Observacion.Contains("[CompraDocs:"));
+
+            montoCobradoMes = await ventasBaseQuery
+                .Where(v => v.Estado == "pagada" && v.Fecha.Month == now.Month && v.Fecha.Year == now.Year)
+                .SumAsync(v => (decimal?)v.Valor) ?? 0;
+
+            countCobradoMes = await ventasBaseQuery
+                .CountAsync(v => v.Estado == "pagada" && v.Fecha.Month == now.Month && v.Fecha.Year == now.Year);
+
+            countTotalCobrados = await ventasBaseQuery
+                .CountAsync(v => v.Estado == "pagada");
+
+            kpisLoaded = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            kpisLoaded = false;
+        }
+    }
+
+    private IQueryable<ReporteVentaBackOffice> BuildVentasQuery(AppDbContext context)
+    {
+        var query = context.ReporteVentasBackOffice.AsNoTracking().AsQueryable();
+
+        query = activeTab == "pendientes"
+            ? query.Where(v => v.Estado == "pendiente")
+            : query.Where(v => v.Estado == "pagada");
+
+        if (!string.IsNullOrWhiteSpace(searchQuery))
+        {
+            var cleanSearch = searchQuery.Trim();
+            query = query.Where(v =>
+                v.Cliente.Contains(cleanSearch) ||
+                v.PlanPaquete.Contains(cleanSearch) ||
+                (v.Vendedor != null && v.Vendedor.Contains(cleanSearch)) ||
+                (v.Observacion != null && v.Observacion.Contains(cleanSearch)));
+        }
+
+        if (filterProducto != "ALL")
+        {
+            query = query.Where(v => v.Producto == filterProducto);
+        }
+
+        if (filterFechaInicio.HasValue)
+        {
+            var fechaInicio = filterFechaInicio.Value.Date;
+            query = query.Where(v => v.Fecha >= fechaInicio);
+        }
+
+        if (filterFechaFin.HasValue)
+        {
+            var fechaFinExclusive = filterFechaFin.Value.Date.AddDays(1);
+            query = query.Where(v => v.Fecha < fechaFinExclusive);
+        }
+
+        return query;
     }
 
     private void ApplyFilters()
@@ -797,54 +892,6 @@
             Paginate();
             return;
         }
-
-        // Filter by tab
-        var query = allVentas.AsEnumerable();
-        if (activeTab == "pendientes")
-        {
-            query = query.Where(v => v.Estado == "pendiente");
-        }
-        else
-        {
-            query = query.Where(v => v.Estado == "pagada");
-        }
-
-        // Search text filter
-        if (!string.IsNullOrWhiteSpace(searchQuery))
-        {
-            var cleanSearch = searchQuery.Trim().ToLower();
-            query = query.Where(v =>
-                v.Cliente.ToLower().Contains(cleanSearch) ||
-                v.PlanPaquete.ToLower().Contains(cleanSearch) ||
-                (v.Vendedor != null && v.Vendedor.ToLower().Contains(cleanSearch)) ||
-                (v.Observacion != null && v.Observacion.ToLower().Contains(cleanSearch))
-            );
-        }
-
-        // Product filter
-        if (filterProducto != "ALL")
-        {
-            query = query.Where(v => v.Producto.Equals(filterProducto, StringComparison.OrdinalIgnoreCase));
-        }
-
-        // Date range filter
-        if (filterFechaInicio.HasValue)
-        {
-            query = query.Where(v => v.Fecha.Date >= filterFechaInicio.Value.Date);
-        }
-        if (filterFechaFin.HasValue)
-        {
-            query = query.Where(v => v.Fecha.Date <= filterFechaFin.Value.Date);
-        }
-
-        filteredRows = query.ToList();
-
-        // Calculate paging
-        totalPages = (int)Math.Ceiling(filteredRows.Count / (double)pageSize);
-        if (currentPage < 1) currentPage = 1;
-        if (totalPages > 0 && currentPage > totalPages) currentPage = totalPages;
-
-        Paginate();
     }
 
     private async Task LoadAuditoriasTransferenciasAsync()
@@ -921,13 +968,7 @@
                 .Skip((currentPage - 1) * pageSize)
                 .Take(pageSize)
                 .ToList();
-            return;
         }
-
-        paginatedRows = filteredRows
-            .Skip((currentPage - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
     }
 
     private async Task SetActiveTab(string tab)
@@ -946,25 +987,53 @@
             return;
         }
 
-        ApplyFilters();
+        await LoadVentasData();
     }
 
-    private void SetPage(int pageNum)
+    private async Task SetPage(int pageNum)
     {
+        if (pageNum < 1)
+        {
+            return;
+        }
+
+        if (activeTab != "auditoria" && pageNum > currentPage && !hasMoreVentasPages)
+        {
+            return;
+        }
+
         currentPage = pageNum;
-        Paginate();
+        if (activeTab == "auditoria")
+        {
+            Paginate();
+            return;
+        }
+
+        await LoadVentasData();
     }
 
-    private void OnSearchChanged()
+    private async Task OnSearchChanged()
     {
         currentPage = 1;
-        ApplyFilters();
+        if (activeTab == "auditoria")
+        {
+            ApplyFilters();
+            return;
+        }
+
+        await LoadVentasData();
     }
 
-    private void OnFiltersChanged()
+    private async Task OnFiltersChanged()
     {
         currentPage = 1;
-        ApplyFilters();
+        if (activeTab == "auditoria")
+        {
+            ApplyFilters();
+            return;
+        }
+
+        await LoadVentasData();
     }
 
     private bool HasActiveFilters()
@@ -975,14 +1044,21 @@
                filterFechaFin.HasValue;
     }
 
-    private void ClearFilters()
+    private async Task ClearFilters()
     {
         searchQuery = "";
         filterProducto = "ALL";
         filterFechaInicio = null;
         filterFechaFin = null;
         currentPage = 1;
-        ApplyFilters();
+
+        if (activeTab == "auditoria")
+        {
+            ApplyFilters();
+            return;
+        }
+
+        await LoadVentasData();
     }
 
     // Modal Action triggers
@@ -1025,13 +1101,13 @@
     }
 
     // File input handlers
-    private void HandleFileSelected(InputFileChangeEventArgs e)
+    private async Task HandleFileSelected(InputFileChangeEventArgs e)
     {
         uploadError = null;
         selectedFile = e.File;
         if (selectedFile != null)
         {
-            if (selectedFile.Size > 5 * 1024 * 1024)
+            if (selectedFile.Size > MaxUploadBytes)
             {
                 uploadError = "El archivo supera el límite de 5 MB.";
                 selectedFile = null;
@@ -1042,6 +1118,14 @@
                 uploadError = "Solo se permiten archivos de imagen.";
                 selectedFile = null;
                 return;
+            }
+
+            try
+            {
+                selectedFile = await selectedFile.RequestImageFileAsync("image/jpeg", MaxImageWidth, MaxImageHeight);
+            }
+            catch
+            {
             }
         }
     }
@@ -1070,7 +1154,7 @@
             {
                 try
                 {
-                    using var stream = selectedFile.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+                    using var stream = selectedFile.OpenReadStream(maxAllowedSize: MaxUploadBytes);
                     using var ms = new MemoryStream();
                     await stream.CopyToAsync(ms);
                     fileBytes = ms.ToArray();

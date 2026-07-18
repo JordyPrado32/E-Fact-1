@@ -130,7 +130,7 @@ public sealed class EmisorSistemaService
             existente.TipoEmision = string.IsNullOrWhiteSpace(emisorInput.TipoEmision) ? "1" : emisorInput.TipoEmision;
             existente.TiempoEspera = emisorInput.TiempoEspera;
             existente.ClaveInterna = emisorInput.ClaveInterna;
-            existente.TipoAmbiente = string.IsNullOrWhiteSpace(emisorInput.TipoAmbiente) ? "1" : emisorInput.TipoAmbiente;
+            existente.TipoAmbiente = string.IsNullOrWhiteSpace(emisorInput.TipoAmbiente) ? "2" : emisorInput.TipoAmbiente;
             existente.DireccionMatriz = emisorInput.DireccionMatriz;
             existente.Token = emisorInput.Token;
             existente.Retenciones = emisorInput.Retenciones;

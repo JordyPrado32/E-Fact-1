@@ -11,6 +11,7 @@ using Simetric.DTOs;
 using Simetric.Models;
 using Simetric.Models.Glogales;
 using System;
+using System.Collections.Concurrent;
 // Hola
 using System.Collections.Generic;
 using System.Data;
@@ -30,6 +31,7 @@ namespace Simetric.Services
     public class FacturacionService
     {
         private const string MarcadorCompraDocumentosNotas = "[COMPRA_DOCS:";
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> FacturaSequenceLocks = new(StringComparer.OrdinalIgnoreCase);
         private readonly IDbContextFactory<AppDbContext> _dbFactory;
         private readonly IEmailService _emailService;
         private readonly IFacturaPdfService _facturaPdfService;
@@ -918,16 +920,7 @@ namespace Simetric.Services
                         {
                             usuarioContexto = await GetFacturaUsuarioContextoAsync(context, idUsuario);
                         }
-                        var resolucionFactura = await ResolverSerieFacturaAsync(idUsuario, factura.Serie);
-                        var caja = await context.Caja
-                            .FirstOrDefaultAsync(c =>
-                                c.Estado == true &&
-                                c.Sec == resolucionFactura.CajaSec);
-
                         var idUsuarioEmisor = usuarioContexto.IdUsuarioTitularCuenta;
-
-                        if (caja == null)
-                            throw new Exception("No existe una caja abierta para este usuario. Debe abrir caja antes de facturar.");
 
                         if (detalles == null || !detalles.Any())
                             throw new Exception("La factura debe contener al menos un ítem.");
@@ -939,7 +932,7 @@ namespace Simetric.Services
                             .AsNoTracking()
                             .Where(e =>
                                 e.Codigo == factura.Codemisor &&
-                                e.IdUsuario == idUsuarioEmisor &&
+                                (e.EsEmisorSistema || e.IdUsuario == idUsuarioEmisor) &&
                                 e.Estado)
                             .Select(e => new
                             {
@@ -952,6 +945,18 @@ namespace Simetric.Services
 
                         if (emisor is null)
                             throw new Exception("El emisor seleccionado no pertenece a tu cuenta principal o está inactivo.");
+
+                        var resolucionFactura = emisor.EsEmisorSistema
+                            ? await ResolverSerieFacturaSistemaAsync(context, factura.Serie)
+                            : await ResolverSerieFacturaAsync(idUsuario, factura.Serie);
+
+                        var caja = await context.Caja
+                            .FirstOrDefaultAsync(c =>
+                                c.Estado == true &&
+                                c.Sec == resolucionFactura.CajaSec);
+
+                        if (caja == null)
+                            throw new Exception("No existe una caja activa para la serie seleccionada.");
 
                         var tieneFirmaConfigurada =
                             !string.IsNullOrWhiteSpace(emisor.PathCertificado) &&
@@ -981,9 +986,14 @@ namespace Simetric.Services
                         // El secuencial se recalcula desde esa serie al momento de guardar
                         // para no arrastrar un valor viejo que quedo cargado en pantalla.
                         factura.Serie = resolucionFactura.SerieRaw;
-                        factura.Numfactura = await GetNextFacturaNumeroAsync(idUsuario, factura.Codemisor, resolucionFactura.SerieRaw);
+                        var sequenceLock = ObtenerFacturaSequenceLock(factura.Codemisor, factura.Serie);
+                        await sequenceLock.WaitAsync();
 
-                        await NormalizarCamposClientePorTipoAsync(context, clienteData);
+                        try
+                        {
+                            factura.Numfactura = await GetNextFacturaNumeroAsync(idUsuario, factura.Codemisor, resolucionFactura.SerieRaw);
+
+                            await NormalizarCamposClientePorTipoAsync(context, clienteData);
 
                         var clienteDb = await context.Clientes
                             .FirstOrDefaultAsync(c =>
@@ -1170,27 +1180,42 @@ namespace Simetric.Services
                             factura.Codfactura,
                             stopwatch.ElapsedMilliseconds);
 
-                        QueuePostCommitFacturaWork(
-                            idUsuario,
-                            factura.Codfactura,
-                            factura.Numfactura,
-                            factura.Codclientes,
-                            factura.Subtotal12,
-                            factura.Subtotal0,
-                            factura.Iva,
-                            factura.Valortotal,
-                            detalles.Count,
-                            clienteDb.Numeroidentificacion,
-                            clienteDb.Correo,
-                            correosSincronizadosCliente,
-                            destinatariosFactura,
-                            prevCliente,
-                            newCliente,
-                            facturaNuevoSnapshot,
-                            factura.Serie,
-                            factura.Codemisor);
+                        if (long.TryParse(new string((factura.Numfactura ?? string.Empty).Where(char.IsDigit).ToArray()), out var secActual))
+                        {
+                            await _initialSequencePromptService.UpdateLastSequenceAsync(
+                                idUsuario,
+                                "factura",
+                                secActual.ToString(CultureInfo.InvariantCulture),
+                                factura.Serie,
+                                factura.Codemisor);
+                        }
 
-                        return true;
+                            QueuePostCommitFacturaWork(
+                                idUsuario,
+                                factura.Codfactura,
+                                factura.Numfactura,
+                                factura.Codclientes,
+                                factura.Subtotal12,
+                                factura.Subtotal0,
+                                factura.Iva,
+                                factura.Valortotal,
+                                detalles.Count,
+                                clienteDb.Numeroidentificacion,
+                                clienteDb.Correo,
+                                correosSincronizadosCliente,
+                                destinatariosFactura,
+                                prevCliente,
+                                newCliente,
+                                facturaNuevoSnapshot,
+                                factura.Serie,
+                                factura.Codemisor);
+
+                            return true;
+                        }
+                        finally
+                        {
+                            sequenceLock.Release();
+                        }
                     }
                     catch
                     {
@@ -1477,11 +1502,25 @@ namespace Simetric.Services
                     "ok",
                     true);
 
+                if (!string.IsNullOrWhiteSpace(resultado.xml))
+                {
+                    await GuardarXmlAutorizadoFacturaAsync(factura, resultado.xml);
+                }
+
                 var metadataProcesada = NormalizarControlReintentoSri(LeerFacturaCorreoMetadata(factura.Detalleextra), ahora);
                 metadataProcesada.SriIntentosDia = 0;
                 metadataProcesada.SriMostrarAlertaPendiente = false;
                 factura.Detalleextra = EscribirFacturaCorreoMetadata(metadataProcesada);
                 await context.SaveChangesAsync();
+
+                try
+                {
+                    await AsegurarPdfFacturaAsync(codFactura);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "No se pudo regenerar el PDF autorizado de la factura {FacturaId}.", codFactura);
+                }
             }
             else if (ContieneErrorSecuenciaSri(resultado.mensaje) ||
                      ContieneErrorSecuenciaSri(resultado.xml))
@@ -1964,6 +2003,61 @@ namespace Simetric.Services
 
         private static string ExtractSerieDigits(string? serie)
             => new string((serie ?? string.Empty).Where(char.IsDigit).ToArray());
+
+        private static SemaphoreSlim ObtenerFacturaSequenceLock(int? codEmisor, string? serieRaw)
+        {
+            var lockKey = $"{codEmisor.GetValueOrDefault()}:{ExtractSerieDigits(serieRaw)}";
+            return FacturaSequenceLocks.GetOrAdd(lockKey, _ => new SemaphoreSlim(1, 1));
+        }
+
+        private static async Task<CajaSerieResolucion> ResolverSerieFacturaSistemaAsync(AppDbContext context, string? serieRaw = null)
+        {
+            var seriePreferida = ExtractSerieDigits(serieRaw);
+            if (seriePreferida.Length >= 6)
+                seriePreferida = seriePreferida[..6];
+
+            var query = context.Caja
+                .AsNoTracking()
+                .Where(c => c.Estado == true && c.EsCajaSistema == true);
+
+            Caja? caja = null;
+            if (!string.IsNullOrWhiteSpace(seriePreferida))
+            {
+                var cajasSistema = await query
+                    .OrderBy(c => c.NumCaja)
+                    .ThenBy(c => c.Sec)
+                    .ToListAsync();
+
+                caja = cajasSistema
+                    .FirstOrDefault(c => ExtractSerieDigits(c.SerieFactura) == seriePreferida);
+            }
+
+            caja ??= await query
+                .OrderBy(c => c.NumCaja)
+                .ThenBy(c => c.Sec)
+                .FirstOrDefaultAsync();
+
+            if (caja == null)
+                throw new Exception("No existe una caja maestra activa para el emisor del sistema.");
+
+            var numeroCaja = caja.NumCaja ?? 0;
+            if (numeroCaja <= 0)
+                throw new Exception("La caja maestra del sistema no tiene un numero valido.");
+
+            var establecimiento = ExtractSerieEstablecimiento(caja.SerieFactura);
+            var puntoEmision = ExtractSeriePuntoEmision(caja.SerieFactura, numeroCaja);
+            var serieVisual = $"{establecimiento}-{puntoEmision}";
+
+            return new CajaSerieResolucion(
+                IdUsuario: caja.IdUsuario ?? 0,
+                CajaSec: caja.Sec,
+                IdTitularCuenta: caja.IdUsuario ?? 0,
+                NumeroCaja: numeroCaja,
+                Establecimiento: establecimiento,
+                PuntoEmision: puntoEmision,
+                SerieVisual: serieVisual,
+                SerieRaw: serieVisual.Replace("-", string.Empty));
+        }
 
         private static async Task<int> EjecutarGuardarFacturaStoredProcedureAsync(
             AppDbContext context,
@@ -3055,10 +3149,34 @@ namespace Simetric.Services
             };
         }
 
+        private static string ObtenerCodigoPorcentajeFacturaSri(int tarifa)
+            => tarifa <= 0 ? "0" : "4";
+
+        private static string ResolverAmbienteSriFactura(Factura factura)
+        {
+            if (factura.CodemisorNavigation?.EsEmisorSistema == true)
+                return "2";
+
+            var ambienteEmisor = factura.CodemisorNavigation?.TipoAmbiente?.Trim();
+            if (ambienteEmisor is "1" or "2")
+                return ambienteEmisor;
+
+            if (factura.Ambiente is 1 or 2)
+                return factura.Ambiente.Value.ToString(CultureInfo.InvariantCulture);
+
+            return "2";
+        }
+
+        private static bool ClaveAccesoCoincideAmbiente(string? claveAcceso, string ambiente)
+        {
+            var clave = (claveAcceso ?? string.Empty).Trim();
+            return clave.Length > 23 && string.Equals(clave.Substring(23, 1), ambiente, StringComparison.Ordinal);
+        }
+
         public string GenerarXmlFactura(Factura factura, List<Detallefactura> detalles, string codigoFormaPago)
         {
             var cultura = CultureInfo.InvariantCulture;
-            string ambiente = factura.Ambiente?.ToString() ?? "2";
+            string ambiente = ResolverAmbienteSriFactura(factura);
             string serieLimpia = factura.Serie?.Replace("-", "") ?? "001001";
             string secuencial = factura.Numfactura?.PadLeft(9, '0') ?? "000000001";
             var fechaEmision = (factura.Fechaentrega ?? factura.Fchautorizacion ?? DateTime.Now).Date;
@@ -3079,7 +3197,7 @@ namespace Simetric.Services
 
             ValidarDatosAutorizacionFactura(factura);
 
-            string claveAcceso = string.IsNullOrWhiteSpace(factura.Codclave)
+            string claveAcceso = string.IsNullOrWhiteSpace(factura.Codclave) || !ClaveAccesoCoincideAmbiente(factura.Codclave, ambiente)
                 ? GenerarClaveAcceso(
                     fechaEmision,
                     factura.CodemisorNavigation?.Ruc,
@@ -3088,6 +3206,9 @@ namespace Simetric.Services
                     secuencial,
                     "1")
                 : factura.Codclave.Trim();
+
+            factura.Codclave = claveAcceso;
+            factura.Ambiente = int.TryParse(ambiente, out var ambienteNumerico) ? ambienteNumerico : 2;
 
             XElement xml = new XElement("factura",
                 new XAttribute("id", "comprobante"),
@@ -3127,7 +3248,7 @@ namespace Simetric.Services
                     new XElement("totalConImpuestos",
                         new XElement("totalImpuesto",
                             new XElement("codigo", "2"),
-                            new XElement("codigoPorcentaje", CalcularTarifaPredominante(detalles)),
+                            new XElement("codigoPorcentaje", ObtenerCodigoPorcentajeFacturaSri(detalles.FirstOrDefault(d => d.Tarifa > 0)?.Tarifa ?? 0)),
                             new XElement("baseImponible", (factura.Subtotal ?? 0).ToString("F2", cultura)),
                             new XElement("valor", (factura.Iva ?? 0).ToString("F2", cultura))
                         )
@@ -3189,11 +3310,7 @@ namespace Simetric.Services
                             new XElement("impuestos",
                                 new XElement("impuesto",
                                     new XElement("codigo", "2"),
-                                    new XElement("codigoPorcentaje",
-                                        d.Tarifa == 0 ? "0" :
-                                        d.Tarifa == 5 ? "5" :
-                                        d.Tarifa == 8 ? "8" :
-                                        d.Tarifa == 15 ? "4" : "2"),
+                                    new XElement("codigoPorcentaje", ObtenerCodigoPorcentajeFacturaSri(d.Tarifa)),
                                     new XElement("tarifa", d.Tarifa.ToString("F0", cultura)),
                                     new XElement("baseImponible", baseImponibleXml.ToString("F2", cultura)),
                                     new XElement("valor", d.Valoriva.ToString("F2", cultura))
@@ -3260,7 +3377,6 @@ namespace Simetric.Services
             await using var context = await _dbFactory.CreateDbContextAsync();
 
             var factura = await context.Facturas
-                .AsNoTracking()
                 .AsSplitQuery()
                 .Include(f => f.CodemisorNavigation)
                 .Include(f => f.CodclientesNavigation)
@@ -3288,10 +3404,11 @@ namespace Simetric.Services
                     factura.CodclientesNavigation.Tipoidentificacion = "04";
             }
 
-            ValidarDatosAutorizacionFactura(factura);
-
             string formaPago = !string.IsNullOrWhiteSpace(factura.Tipopago) ? factura.Tipopago : "01";
             string xmlContenido = GenerarXmlFactura(factura, factura.Detallefacturas.ToList(), formaPago);
+
+            if (context.ChangeTracker.HasChanges())
+                await context.SaveChangesAsync();
 
             string carpetaPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "FacturasGeneradas");
             if (!Directory.Exists(carpetaPath))
@@ -3326,6 +3443,32 @@ namespace Simetric.Services
                 {
                 }
             }
+        }
+
+        private static async Task GuardarXmlAutorizadoFacturaAsync(Factura factura, string xmlAutorizado)
+        {
+            if (factura.CodemisorNavigation == null ||
+                string.IsNullOrWhiteSpace(factura.CodemisorNavigation.Ruc) ||
+                string.IsNullOrWhiteSpace(factura.Serie) ||
+                string.IsNullOrWhiteSpace(factura.Numfactura) ||
+                string.IsNullOrWhiteSpace(xmlAutorizado))
+            {
+                return;
+            }
+
+            var carpetaPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "FacturasGeneradas");
+            if (!Directory.Exists(carpetaPath))
+                Directory.CreateDirectory(carpetaPath);
+
+            var rutaCompleta = Path.Combine(
+                carpetaPath,
+                ConstruirNombreArchivoFactura(
+                    factura.CodemisorNavigation.Ruc,
+                    factura.Serie,
+                    factura.Numfactura,
+                    "xml"));
+
+            await File.WriteAllTextAsync(rutaCompleta, xmlAutorizado, Encoding.UTF8);
         }
 
         private static string ConstruirUrlXmlFactura(string? ruc, string? serie, string? numero)
@@ -3488,6 +3631,36 @@ namespace Simetric.Services
             }
 
             var rutaXml = rutaXmlExistente;
+            if (forzarReenvio)
+            {
+                var rutaXmlActual = ConstruirRutaLocalXmlFactura(
+                    factura.CodemisorNavigation?.Ruc,
+                    factura.Serie,
+                    factura.Numfactura);
+
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(rutaXmlActual) && File.Exists(rutaXmlActual))
+                    {
+                        File.Delete(rutaXmlActual);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "No se pudo eliminar el XML previo de la factura {FacturaId} antes del reenvio.", idFactura);
+                }
+
+                rutaXml = await ProcesarXmlFacturaAsync(idFactura);
+            }
+
+            if (string.IsNullOrWhiteSpace(rutaXml))
+            {
+                rutaXml = ConstruirRutaLocalXmlFactura(
+                    factura.CodemisorNavigation?.Ruc,
+                    factura.Serie,
+                    factura.Numfactura);
+            }
+
             if (string.IsNullOrWhiteSpace(rutaXml) || !File.Exists(rutaXml))
                 rutaXml = await ProcesarXmlFacturaAsync(idFactura);
 

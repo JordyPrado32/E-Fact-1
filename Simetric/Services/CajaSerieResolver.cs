@@ -169,14 +169,17 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
                 }
             }
 
-            var cajaSistemaPreferida = await query
+            var cajasSistemaPreferidas = await query
                 .Where(c =>
                     c.Estado == true &&
                     c.EsCajaSistema == true &&
                     c.SerieFactura != null)
                 .OrderBy(c => c.NumCaja)
                 .ThenBy(c => c.Sec)
-                .FirstOrDefaultAsync(c => SoloDigitos(c.SerieFactura) == preferredSeries);
+                .ToListAsync();
+
+            var cajaSistemaPreferida = cajasSistemaPreferidas
+                .FirstOrDefault(c => SoloDigitos(c.SerieFactura) == preferredSeries);
 
             if (cajaSistemaPreferida != null)
             {

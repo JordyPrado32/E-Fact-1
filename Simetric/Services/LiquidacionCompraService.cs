@@ -1357,7 +1357,7 @@ public class LiquidacionCompraService
 
         var fecha = (preview.FechaEmision ?? DateTime.Today).ToString("ddMMyyyy");
         var ruc = (preview.RucEmisor ?? "").Trim().PadLeft(13, '0');
-        var ambiente = Math.Clamp(preview.Ambiente, 1, 2).ToString(CultureInfo.InvariantCulture);
+        var ambiente = "2";
         var estab = (preview.Estab ?? "001").PadLeft(3, '0');
         var ptoEmi = (preview.PtoEmi ?? "001").PadLeft(3, '0');
         var secuencial = NormalizarSecuencial(preview.Secuencial);

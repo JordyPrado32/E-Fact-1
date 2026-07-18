@@ -10,6 +10,7 @@ namespace Simetric.Services;
 public sealed class CompraDocumentosFacturacionService
 {
     private const string MarcadorCompraNotas = "[COMPRA_DOCS:";
+    private const int TarifaIvaRecargaDocumentos = 15;
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly FacturacionService _facturacionService;
@@ -252,9 +253,7 @@ public sealed class CompraDocumentosFacturacionService
     {
         var descripcion = ObtenerDescripcionCompra(compra);
         var producto = await BuscarProductoRelacionadoAsync(context, ownerId, compra);
-        var tarifa = producto != null
-            ? ObtenerTarifaIvaProducto(producto)
-            : await ResolverTarifaPredeterminadaAsync(context, ownerId);
+        var tarifa = TarifaIvaRecargaDocumentos;
 
         var baseImponible = Math.Round(compra.MontoTotal / (1m + (tarifa / 100m)), 2, MidpointRounding.AwayFromZero);
         var valorIva = Math.Round(compra.MontoTotal - baseImponible, 2, MidpointRounding.AwayFromZero);
