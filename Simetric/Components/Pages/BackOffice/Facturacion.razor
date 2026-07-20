@@ -63,13 +63,17 @@
                     <span>Serie principal</span>
                     <strong>@SeriePrincipalSistemaActual</strong>
                 </div>
-                <div class="sequence-chip">
-                    <span>Ultima factura sistema</span>
-                    <strong>@UltimaFacturaSistema</strong>
-                </div>
-                <div class="sequence-chip">
-                    <span>Autorizadas</span>
-                    <strong>@TotalFacturasAutorizadasSistema</strong>
+            <div class="sequence-chip">
+                <span>Ultima factura sistema</span>
+                <strong>@UltimaFacturaSistema</strong>
+            </div>
+            <div class="sequence-chip">
+                <span>Serie NC sistema</span>
+                <strong>@(secuenciaNotaCreditoSistema?.SerieVisual ?? "--")</strong>
+            </div>
+            <div class="sequence-chip">
+                <span>Autorizadas</span>
+                <strong>@TotalFacturasAutorizadasSistema</strong>
                 </div>
                 <div class="sequence-chip">
                     <span>Pendientes</span>
@@ -491,6 +495,61 @@
             }
         </section>
 
+        <section class="panel-card">
+            <div class="panel-head">
+                <div>
+                    <span class="panel-kicker">Control de secuencia</span>
+                    <h3>Secuencia maestra de notas de credito</h3>
+                </div>
+            </div>
+
+            @if (secuenciaNotaCreditoSistema is null)
+            {
+                <div class="state-card compact">
+                    <p>Configura primero la caja maestra del sistema con serie de notas de credito para definir esta secuencia.</p>
+                </div>
+            }
+            else
+            {
+                <div class="sequence-summary">
+                    <div class="sequence-chip">
+                        <span>Serie actual</span>
+                        <strong>@secuenciaNotaCreditoSistema.SerieVisual</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Ultima secuencia registrada</span>
+                        <strong>@(string.IsNullOrWhiteSpace(secuenciaNotaCreditoSistema.UltimaSecuencia) ? "No definida" : secuenciaNotaCreditoSistema.UltimaSecuencia)</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Siguiente NC</span>
+                        <strong>@(string.IsNullOrWhiteSpace(secuenciaNotaCreditoSistema.SiguienteSecuencia) ? "000000001" : secuenciaNotaCreditoSistema.SiguienteSecuencia)</strong>
+                    </div>
+                </div>
+
+                <div class="sequence-form">
+                    <label class="check-row">
+                        <input type="checkbox" @bind="secuenciaNotaCreditoForm.YaFacturoAntes" />
+                        <span>El sistema ya emitio notas de credito antes con esta serie</span>
+                    </label>
+
+                    @if (secuenciaNotaCreditoForm.YaFacturoAntes)
+                    {
+                        <div class="field field-sequence">
+                            <label>Ultima secuencia emitida</label>
+                            <InputText @bind-Value="secuenciaNotaCreditoForm.UltimaSecuencia" class="field-input" placeholder="Ej: 000000025" />
+                            <small class="field-help">Indica la ultima nota de credito ya usada para que el sistema continue con la siguiente.</small>
+                        </div>
+                    }
+
+                    <div class="form-actions">
+                        <button type="button" class="primary-btn" @onclick="GuardarSecuenciaNotaCreditoAsync" disabled="@guardandoSecuenciaNotaCredito">
+                            @(guardandoSecuenciaNotaCredito ? "Guardando..." : "Guardar secuencia de notas de credito")
+                        </button>
+                    </div>
+                </div>
+            }
+        </section>
+
         @if (facturaSeleccionada?.Factura != null)
         {
             <section class="panel-card detail-card">
@@ -527,6 +586,7 @@
     private bool guardandoCaja;
     private bool consultandoIdentificacion;
     private bool mostrarClaveCertificado;
+    private bool guardandoSecuenciaNotaCredito;
     private int currentUserId;
     private int ownerUserId;
     private string? feedbackMessage;
@@ -534,7 +594,9 @@
     private string? nombrePathCertificadoActual;
     private string identificacionBusqueda = string.Empty;
     private EmisorSistemaSecuenciaInfo? secuenciaSistema;
+    private EmisorSistemaSecuenciaInfo? secuenciaNotaCreditoSistema;
     private SecuenciaSistemaFormModel secuenciaForm = new();
+    private SecuenciaSistemaFormModel secuenciaNotaCreditoForm = new();
     private readonly List<Caja> cajasSistema = new();
     private Caja? cajaSistemaSeleccionada;
     private CajaSistemaFormModel cajaForm = new();
@@ -589,6 +651,8 @@
             formModel = EmisorSistemaFormModel.FromEntity(emisor);
             secuenciaSistema = await EmisorSistemaService.GetSecuenciaFacturaSistemaAsync();
             secuenciaForm = SecuenciaSistemaFormModel.FromInfo(secuenciaSistema);
+            secuenciaNotaCreditoSistema = await EmisorSistemaService.GetSecuenciaNotaCreditoSistemaAsync();
+            secuenciaNotaCreditoForm = SecuenciaSistemaFormModel.FromInfo(secuenciaNotaCreditoSistema);
             await RecargarCajasSistemaAsync();
 
             await RecargarFacturasAsync();
@@ -733,6 +797,36 @@
         finally
         {
             guardandoSecuencia = false;
+        }
+    }
+
+    private async Task GuardarSecuenciaNotaCreditoAsync()
+    {
+        if (!tieneAcceso)
+            return;
+
+        guardandoSecuenciaNotaCredito = true;
+        try
+        {
+            var resultado = await EmisorSistemaService.GuardarSecuenciaNotaCreditoSistemaAsync(
+                currentUserId,
+                secuenciaNotaCreditoForm.YaFacturoAntes,
+                secuenciaNotaCreditoForm.UltimaSecuencia);
+
+            SetFeedback(resultado.Message, resultado.Success);
+            if (resultado.Success)
+            {
+                secuenciaNotaCreditoSistema = await EmisorSistemaService.GetSecuenciaNotaCreditoSistemaAsync();
+                secuenciaNotaCreditoForm = SecuenciaSistemaFormModel.FromInfo(secuenciaNotaCreditoSistema);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetFeedback(ex.Message, false);
+        }
+        finally
+        {
+            guardandoSecuenciaNotaCredito = false;
         }
     }
 
