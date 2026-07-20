@@ -35,7 +35,7 @@ public sealed class AuditService
             cancellationToken);
     }
 
-    public async Task<bool> TryRegistrarAuditoriaAsync(
+    public Task<bool> TryRegistrarAuditoriaAsync(
         int? idUsuario,
         string accion,
         object? valoresPreviosObj,
@@ -45,25 +45,30 @@ public sealed class AuditService
     {
         if (!IsEnabled)
         {
-            return false;
+            return Task.FromResult(false);
         }
 
-        try
+        _ = Task.Run(async () =>
         {
-            await RegistrarAuditoriaAsync(
-                idUsuario,
-                accion,
-                valoresPreviosObj,
-                valorNuevoObj,
-                detallesObj,
-                cancellationToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
 
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "AUDITORIA_FALLO_ACCION {Accion}", accion);
-            return false;
-        }
+            try
+            {
+                await RegistrarAuditoriaAsync(
+                    idUsuario,
+                    accion,
+                    valoresPreviosObj,
+                    valorNuevoObj,
+                    detallesObj,
+                    timeoutCts.Token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "AUDITORIA_FALLO_ACCION {Accion}", accion);
+            }
+        }, CancellationToken.None);
+
+        return Task.FromResult(true);
     }
 }

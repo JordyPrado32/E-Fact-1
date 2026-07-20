@@ -21,6 +21,8 @@ public class NotaCreditoService
     private readonly EmisionControlService _emisionControlService;
     private readonly InitialSequencePromptService _initialSequencePromptService;
     private readonly SriXmlProcessorService _sriXmlProcessorService;
+    private readonly EmisorCertificadoProtector _certificadoProtector;
+    private readonly EmisorSistemaService _emisorSistemaService;
 
     public NotaCreditoService(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -30,7 +32,9 @@ public class NotaCreditoService
         ICajaSerieResolver cajaSerieResolver,
         EmisionControlService emisionControlService,
         InitialSequencePromptService initialSequencePromptService,
-        SriXmlProcessorService sriXmlProcessorService)
+        SriXmlProcessorService sriXmlProcessorService,
+        EmisorCertificadoProtector certificadoProtector,
+        EmisorSistemaService emisorSistemaService)
     {
         _dbFactory = dbFactory;
         _env = env;
@@ -40,10 +44,15 @@ public class NotaCreditoService
         _emisionControlService = emisionControlService;
         _initialSequencePromptService = initialSequencePromptService;
         _sriXmlProcessorService = sriXmlProcessorService;
+        _certificadoProtector = certificadoProtector;
+        _emisorSistemaService = emisorSistemaService;
     }
 
-    private async Task<CajaSerieResolucion> ResolverSerieNotaCreditoAsync(int userId)
+    private async Task<CajaSerieResolucion> ResolverSerieNotaCreditoAsync(int userId, string? serieSolicitadaRaw = null)
     {
+        if (!string.IsNullOrWhiteSpace(serieSolicitadaRaw))
+            return await _cajaSerieResolver.ResolverAsync(userId, serieSolicitadaRaw);
+
         var resolucionBase = await _cajaSerieResolver.ResolverAsync(userId);
         var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
             userId,
@@ -438,7 +447,7 @@ public class NotaCreditoService
 
         await _emisionControlService.AsegurarPuedeEmitirAsync(nc.Usuario.Value);
 
-        var resolucion = await ResolverSerieNotaCreditoAsync(nc.Usuario.Value);
+        var resolucion = await ResolverSerieNotaCreditoAsync(nc.Usuario.Value, NormalizarSerieDocumento(nc.Serie));
         nc.Serie = resolucion.SerieRaw;
 
         var cliente = nc.CodClientes.HasValue
@@ -686,7 +695,9 @@ public class NotaCreditoService
             };
         }
 
-        if (string.IsNullOrWhiteSpace(emisor.PathCertificado) || string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
+        var rutaCertificado = ResolverRutaCertificado(emisor);
+        var claveCertificado = ResolverClaveCertificado(emisor);
+        if (string.IsNullOrWhiteSpace(rutaCertificado) || !File.Exists(rutaCertificado) || string.IsNullOrWhiteSpace(claveCertificado))
         {
             return new EmisionNotaCreditoAutomaticaResultado
             {
@@ -694,7 +705,17 @@ public class NotaCreditoService
             };
         }
 
-        var secuenciaState = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-credito", serieNcRaw);
+        var resolucionSecuencia = await ResolverSecuenciaAutomaticaNotaCreditoAsync(idUsuario, emisor);
+        if (!string.IsNullOrWhiteSpace(resolucionSecuencia.Error))
+        {
+            return new EmisionNotaCreditoAutomaticaResultado
+            {
+                Message = resolucionSecuencia.Error
+            };
+        }
+
+        serieNcRaw = resolucionSecuencia.SerieRaw;
+        var secuenciaState = resolucionSecuencia.Estado;
         if (!secuenciaState.Initialized)
         {
             return new EmisionNotaCreditoAutomaticaResultado
@@ -703,7 +724,7 @@ public class NotaCreditoService
             };
         }
 
-        var siguienteAutomatico = await ObtenerSiguienteSecuencialNotaCreditoAsync(db, idUsuario, serieNcRaw);
+        var siguienteAutomatico = await ObtenerSiguienteSecuencialNotaCreditoAsync(db, idUsuario, serieNcRaw, emisor.Codigo);
         var secNcRaw = _initialSequencePromptService.ResolveNextSequence(siguienteAutomatico, secuenciaState);
         if (string.IsNullOrWhiteSpace(secNcRaw))
         {
@@ -773,7 +794,7 @@ public class NotaCreditoService
         try
         {
             secNotaCredito = await CrearAsync(notaCredito, detallesDisponibles);
-            await _initialSequencePromptService.UpdateLastSequenceAsync(idUsuario, "nota-credito", secNcRaw, serieNcRaw);
+            await _initialSequencePromptService.UpdateLastSequenceAsync(idUsuario, "nota-credito", secNcRaw, serieNcRaw, emisor.Codigo);
 
             var resultadoSri = await EmitirNotaCreditoSriAsync(secNotaCredito, idUsuario);
             var pdfUrl = string.Empty;
@@ -1931,7 +1952,9 @@ public class NotaCreditoService
             };
         }
 
-        if (string.IsNullOrWhiteSpace(emisor.PathCertificado) || string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
+        var rutaCertificado = ResolverRutaCertificado(emisor);
+        var claveCertificado = ResolverClaveCertificado(emisor);
+        if (string.IsNullOrWhiteSpace(rutaCertificado) || !File.Exists(rutaCertificado) || string.IsNullOrWhiteSpace(claveCertificado))
         {
             await ActualizarAutorizacionNCAsync(sec, string.Empty, DateTime.Now.ToString("O"), "El emisor no tiene configurada una firma electrónica válida para emitir la nota de crédito.", "ERROR INTERNO");
             return new EmisionSriNotaCreditoResultado
@@ -1959,8 +1982,8 @@ public class NotaCreditoService
 
         var respuestaSri = await EnviarXmlAApiFrameworkConReintentosAsync(
             rutaXml,
-            emisor.PathCertificado,
-            emisor.ClaveCertificado ?? string.Empty);
+            rutaCertificado,
+            claveCertificado);
 
         var fechaRespuesta = string.IsNullOrWhiteSpace(respuestaSri.fecha)
             ? DateTime.Now.ToString("O")
@@ -2175,7 +2198,7 @@ public class NotaCreditoService
         return "No se recibió autorización del SRI.";
     }
 
-    private static async Task<string> ObtenerSiguienteSecuencialNotaCreditoAsync(AppDbContext db, int idUsuario, string serieNcRaw)
+    private static async Task<string> ObtenerSiguienteSecuencialNotaCreditoAsync(AppDbContext db, int idUsuario, string serieNcRaw, int? codEmisor = null)
     {
         var usuario = await db.Usuarios
             .AsNoTracking()
@@ -2201,13 +2224,18 @@ public class NotaCreditoService
         if (usuariosCuenta.Count == 0)
             usuariosCuenta.Add(idUsuario);
 
-        var lista = await db.NotaCreditos
+        var query = db.NotaCreditos
             .AsNoTracking()
             .Where(n =>
                 n.Usuario.HasValue &&
                 usuariosCuenta.Contains(n.Usuario.Value) &&
                 n.Serie != null &&
-                n.Serie.Replace("-", "") == serieNcRaw)
+                n.Serie.Replace("-", "") == serieNcRaw);
+
+        if (codEmisor is > 0)
+            query = query.Where(n => n.CodEmisor == codEmisor.Value);
+
+        var lista = await query
             .Select(n => n.NumNotaCredito)
             .ToListAsync();
 
@@ -2222,5 +2250,75 @@ public class NotaCreditoService
         }
 
         return (maximo + 1).ToString("000000000", CultureInfo.InvariantCulture);
+    }
+
+    private async Task<(string SerieRaw, InitialSequencePromptState Estado, string Error)> ResolverSecuenciaAutomaticaNotaCreditoAsync(int idUsuario, Emisor emisor)
+    {
+        if (emisor.EsEmisorSistema)
+        {
+            var secuenciaSistema = await _emisorSistemaService.GetSecuenciaNotaCreditoSistemaAsync();
+            if (secuenciaSistema == null || string.IsNullOrWhiteSpace(secuenciaSistema.SerieRaw))
+            {
+                return (string.Empty, new InitialSequencePromptState(), "Configura la serie maestra de notas de crédito en el emisor maestro antes de emitir desde backoffice.");
+            }
+
+            var estadoSistema = await _initialSequencePromptService.GetStateAsync(
+                idUsuario,
+                "nota-credito",
+                secuenciaSistema.SerieRaw,
+                emisor.Codigo);
+
+            return (secuenciaSistema.SerieRaw, estadoSistema, string.Empty);
+        }
+
+        var resolucionNc = await ResolverSerieNotaCreditoAsync(idUsuario);
+        var estado = await _initialSequencePromptService.GetStateAsync(
+            idUsuario,
+            "nota-credito",
+            resolucionNc.SerieRaw,
+            emisor.Codigo);
+
+        return (resolucionNc.SerieRaw, estado, string.Empty);
+    }
+
+    private string ResolverClaveCertificado(Emisor? emisor)
+    {
+        var clave = _certificadoProtector.DesprotegerClave(emisor?.ClaveCertificado);
+        return string.IsNullOrWhiteSpace(clave)
+            ? emisor?.ClaveCertificado?.Trim() ?? string.Empty
+            : clave.Trim();
+    }
+
+    private string ResolverRutaCertificado(Emisor? emisor)
+    {
+        var rutaOriginal = emisor?.PathCertificado;
+        if (string.IsNullOrWhiteSpace(rutaOriginal))
+            return string.Empty;
+
+        if (Path.IsPathRooted(rutaOriginal) && File.Exists(rutaOriginal))
+            return rutaOriginal;
+
+        var normalizada = rutaOriginal.Trim().TrimStart('~', '/', '\\').Replace('\\', '/');
+        if (normalizada.StartsWith("App_Data/", StringComparison.OrdinalIgnoreCase))
+            normalizada = normalizada["App_Data/".Length..];
+
+        var relativaSistema = normalizada.Replace('/', Path.DirectorySeparatorChar);
+        var candidatos = new[]
+        {
+            Path.Combine(_env.ContentRootPath, relativaSistema),
+            Path.Combine(_env.ContentRootPath, "App_Data", relativaSistema),
+            Path.Combine(_env.ContentRootPath, "App_Data", "certs", "path", Path.GetFileName(normalizada))
+        };
+
+        return candidatos.FirstOrDefault(File.Exists) ?? rutaOriginal.Trim();
+    }
+
+    private static string? NormalizarSerieDocumento(string? serie)
+    {
+        if (string.IsNullOrWhiteSpace(serie))
+            return null;
+
+        var digitos = new string(serie.Where(char.IsDigit).ToArray());
+        return digitos.Length >= 6 ? digitos[..6] : null;
     }
 }

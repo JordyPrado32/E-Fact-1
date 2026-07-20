@@ -38,19 +38,6 @@
         <div class="row-menu-backdrop" @onclick="CerrarMenus"></div>
     }
 
-    @if (procesandoReenvio)
-    {
-        <div class="facturas-inline-overlay">
-            <div class="facturas-inline-overlay-card">
-                <span class="spinner-border spinner-border-sm" role="status"></span>
-                <div>
-                    <strong>Reenviando factura</strong>
-                    <span>Estamos regenerando los adjuntos y enviando el correo.</span>
-                </div>
-            </div>
-        </div>
-    }
-
     @if (procesandoNotaCreditoAutomatica)
     {
         <div class="facturas-inline-overlay">
@@ -1163,10 +1150,75 @@
     }
     private async Task ReenviarAlSriAsync(FacturaListDto factura)
     {
-        var resultadoSri = await FacturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
-        await Recargar();
+        if (procesandoReenvio)
+            return;
 
-        if (string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
+        try
+        {
+            procesandoReenvio = true;
+            var resultadoSri = await FacturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
+            await Recargar();
+
+            if (string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
+            {
+                var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, forzarReenvio: true);
+                if (resultadoCorreo.Enviado || resultadoCorreo.YaEnviado)
+                {
+                    await AlertService.ShowSuccessAsync(resultadoCorreo.Mensaje, "Factura autorizada");
+                }
+                else
+                {
+                    await AlertService.ShowWarningAsync(
+                        $"La factura se autorizó, pero el correo no salió todavía. {resultadoCorreo.Mensaje}",
+                        "Correo pendiente");
+                }
+
+                return;
+            }
+
+            var detalle = string.IsNullOrWhiteSpace(resultadoSri.mensaje)
+                ? "La factura sigue pendiente o con observaciones del SRI."
+                : resultadoSri.mensaje;
+
+            var titulo = string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoNoAutorizado, StringComparison.OrdinalIgnoreCase)
+                ? "Factura rechazada por el SRI"
+                : string.Equals(resultadoSri.estado, "ERROR", StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(resultadoSri.estado, "ERROR INTERNO", StringComparison.OrdinalIgnoreCase)
+                    ? "Error al reenviar factura"
+                    : "Factura pendiente en el SRI";
+
+            if (string.Equals(resultadoSri.estado, "ERROR", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(resultadoSri.estado, "ERROR INTERNO", StringComparison.OrdinalIgnoreCase))
+            {
+                await AlertService.ShowErrorAsync(detalle, titulo);
+                return;
+            }
+
+            await AlertService.ShowWarningAsync(detalle, titulo);
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowErrorAsync($"Ocurrió un error al reenviar la factura al SRI: {ex.Message}", "Error");
+        }
+        finally
+        {
+            procesandoReenvio = false;
+        }
+    }
+
+    /*
+    private async Task ReenviarAlSriAsyncLegacy(FacturaListDto factura)
+    {
+        if (procesandoReenvio)
+            return;
+
+        try
+        {
+            procesandoReenvio = true;
+            var resultadoSri = await FacturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
+            await Recargar();
+
+            if (string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
         {
             var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, forzarReenvio: true);
             if (resultadoCorreo.Enviado || resultadoCorreo.YaEnviado)
@@ -1187,6 +1239,7 @@
             resultadoSri.mensaje ?? "La factura sigue pendiente o con observaciones del SRI.",
             "SRI");
     }
+    */
     public async Task<mensajeSRI> EnviarXmlAApiFrameworkAsync(string rutaArchivoxml, string rutaFirma, string password)
     {
         try

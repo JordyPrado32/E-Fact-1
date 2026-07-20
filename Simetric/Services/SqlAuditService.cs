@@ -33,6 +33,7 @@ public sealed class SqlAuditService
 
         await using var command = connection.CreateCommand();
         command.CommandType = CommandType.Text;
+        command.CommandTimeout = 3;
         command.CommandText = """
             INSERT INTO [dbo].[Auditoria]
                 ([IdUsuario], [Fecha], [Accion], [ValoresPrevios], [ValorNuevo], [Detalles])

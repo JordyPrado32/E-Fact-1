@@ -46,6 +46,7 @@ namespace Simetric.Services
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly FacturaStoredProcedureBootstrapService _facturaStoredProcedureBootstrapService;
         private readonly IWebHostEnvironment _hostEnvironment;
+        private readonly EmisorCertificadoProtector _certificadoProtector;
         public string? UltimoErrorGuardarFactura { get; private set; }
 
         public FacturacionService(
@@ -62,7 +63,8 @@ namespace Simetric.Services
             ILogger<FacturacionService> logger,
             IHttpContextAccessor httpContextAccessor,
             FacturaStoredProcedureBootstrapService facturaStoredProcedureBootstrapService,
-            IWebHostEnvironment hostEnvironment)
+            IWebHostEnvironment hostEnvironment,
+            EmisorCertificadoProtector certificadoProtector)
         {
             _dbFactory = dbFactory;
             _emailService = emailService;
@@ -78,6 +80,7 @@ namespace Simetric.Services
             _httpContextAccessor = httpContextAccessor;
             _facturaStoredProcedureBootstrapService = facturaStoredProcedureBootstrapService;
             _hostEnvironment = hostEnvironment;
+            _certificadoProtector = certificadoProtector;
         }
 
         private static object SnapshotCliente(Cliente c) => new
@@ -1488,10 +1491,20 @@ namespace Simetric.Services
             EliminarXmlFacturaGenerado(factura.Serie, factura.Numfactura);
             var rutaXml = await ProcesarXmlFacturaAsync(codFactura);
             var rutaCertificado = ResolverRutaFirmaElectronica(emisor.PathCertificado);
+            var claveCertificado = ResolverClaveFirmaElectronica(emisor.ClaveCertificado);
+            if (string.IsNullOrWhiteSpace(claveCertificado))
+            {
+                return new mensajeSRI
+                {
+                    estado = "ERROR",
+                    mensaje = "El emisor configurado para esta factura no tiene una clave de firma electronica valida."
+                };
+            }
+
             var resultado = await _sriXmlProcessorService.ProcessXmlAsync(
                 rutaXml,
                 rutaCertificado,
-                emisor.ClaveCertificado);
+                claveCertificado);
 
             if (string.Equals(resultado.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
             {
@@ -1654,7 +1667,17 @@ namespace Simetric.Services
                 return factura.CodemisorNavigation;
 
             var emisorSistema = await ObtenerEmisorSistemaActivoAsync(context);
-            return emisorSistema ?? factura.CodemisorNavigation;
+            if (emisorSistema == null)
+                return factura.CodemisorNavigation;
+
+            var emisorTrackeado = context.Emisores.Local.FirstOrDefault(e => e.Codigo == emisorSistema.Codigo);
+            if (emisorTrackeado != null)
+                return emisorTrackeado;
+
+            if (factura.CodemisorNavigation?.Codigo == emisorSistema.Codigo)
+                return factura.CodemisorNavigation;
+
+            return emisorSistema;
         }
 
         private static async Task AplicarEmisorSistemaAFacturaViewAsync(AppDbContext context, FacturaViewDto? facturaView)
@@ -1710,6 +1733,14 @@ namespace Simetric.Services
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault(File.Exists)
                 ?? throw new FileNotFoundException($"No se encontro la firma electronica configurada: {rutaNormalizada}");
+        }
+
+        private string ResolverClaveFirmaElectronica(string? claveFirma)
+        {
+            var clave = _certificadoProtector.DesprotegerClave(claveFirma);
+            return string.IsNullOrWhiteSpace(clave)
+                ? (claveFirma ?? string.Empty).Trim()
+                : clave.Trim();
         }
 
         private void QueuePostCommitFacturaWork(
