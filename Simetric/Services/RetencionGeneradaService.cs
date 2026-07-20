@@ -545,7 +545,7 @@ public class RetencionGeneradaService
         return new CompraXmlPreviewDto
         {
             Usuario = retencionInfo.Usuario,
-            Ambiente = retencionInfo.Ambiente ?? compra?.Ambiente ?? 1,
+            Ambiente = retencionInfo.Ambiente ?? compra?.Ambiente ?? 2,
             ClaveAcceso = compra?.CodClave ?? string.Empty,
             ClaveAccesoRetencion = string.Empty,
             NombreArchivoRetencion = string.Empty,

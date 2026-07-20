@@ -1058,6 +1058,95 @@ public class NotaCreditoService
 
         return resultado;
     }
+
+    public async Task<List<NotaCreditoListDto>> ListarNotasCreditoBackOfficeAsync()
+    {
+        using var db = await _dbFactory.CreateDbContextAsync();
+
+        var data = await (
+            from nc in db.NotaCreditos.AsNoTracking()
+            join c in db.Clientes.AsNoTracking()
+                on nc.CodClientes equals c.Codcliente into cliJoin
+            from c in cliJoin.DefaultIfEmpty()
+            join f in db.Facturas.AsNoTracking()
+                on nc.IdDocModificado equals f.Codfactura into facturaJoin
+            from f in facturaJoin.DefaultIfEmpty()
+            join e in db.Emisores.AsNoTracking()
+                on nc.CodEmisor equals e.Codigo into emiJoin
+            from e in emiJoin.DefaultIfEmpty()
+            join ti in db.Identificacion.AsNoTracking()
+                on c.Tipoidentificacion equals ti.IdeCodigo into tipoJoin
+            from ti in tipoJoin.DefaultIfEmpty()
+            where e != null && e.EsEmisorSistema
+            orderby nc.Sec descending
+            select new
+            {
+                Sec = nc.Sec,
+                NumeroNotaCredito = nc.NumNotaCredito ?? "",
+                Serie = nc.Serie ?? "",
+                Cliente = c != null
+                    ? (!string.IsNullOrWhiteSpace(c.Nombrerazonsocial)
+                        ? c.Nombrerazonsocial
+                        : ((c.Nombres ?? "") + " " + (c.Apellidos ?? "")).Trim())
+                    : "",
+                IdentificacionCliente = c != null ? (c.Numeroidentificacion ?? "") : "",
+                TipoIdentificacionCliente = ti != null ? (ti.IdeDescripcion ?? "") : "",
+                NumeroDocModificado = nc.NumDocModificado ?? "",
+                FechaDocumentoModificado = nc.FechaEmiDocModificado,
+                Subtotal = nc.Subtotal ?? 0m,
+                Iva = nc.Iva ?? 0m,
+                Total = nc.ValorTotal ?? 0m,
+                Motivo = nc.Motivo ?? "",
+                Estado = nc.Estado ?? false,
+                Autorizado = nc.Autorizado ?? "",
+                NumeroAutorizacion = nc.NumAutorizacion ?? "",
+                MensajeSri = nc.Observacion ?? "",
+                FechaAutorizacion = nc.FchAutorizacion,
+                ClaveAcceso = nc.CodClave ?? "",
+                RucEmisor = e.Ruc ?? "",
+                FechaVencimientoDocumento = f != null
+                    ? (f.Fechavence
+                        ?? ((f.Fchautorizacion ?? f.Fechaentrega).HasValue
+                            ? (c != null && c.DiasCredito.HasValue
+                                ? (f.Fchautorizacion ?? f.Fechaentrega)!.Value.AddDays(c.DiasCredito.Value)
+                                : (DateTime?)null)
+                            : null))
+                    : null,
+                SaldoPendienteDocumento = f != null
+                    ? ((f.Valortotal ?? 0m) - (db.Abonos
+                        .Where(a => a.codFactura == f.Codfactura && a.estado == true)
+                        .Sum(a => (decimal?)a.abono) ?? 0m))
+                    : 0m
+            })
+            .ToListAsync();
+
+        return data.Select(x => new NotaCreditoListDto
+        {
+            Sec = x.Sec,
+            NumeroNotaCredito = x.NumeroNotaCredito,
+            Serie = x.Serie,
+            Cliente = x.Cliente,
+            IdentificacionCliente = x.IdentificacionCliente,
+            TipoIdentificacionCliente = x.TipoIdentificacionCliente,
+            NumeroDocModificado = x.NumeroDocModificado,
+            FechaDocumentoModificado = x.FechaDocumentoModificado,
+            Subtotal = x.Subtotal,
+            Iva = x.Iva,
+            Total = x.Total,
+            Motivo = x.Motivo,
+            Estado = x.Estado,
+            Autorizado = x.Autorizado,
+            NumeroAutorizacion = x.NumeroAutorizacion,
+            MensajeSri = x.MensajeSri,
+            FechaAutorizacion = x.FechaAutorizacion,
+            ClaveAcceso = x.ClaveAcceso,
+            FechaVencimientoDocumento = x.FechaVencimientoDocumento,
+            SaldoPendienteDocumento = Math.Max(x.SaldoPendienteDocumento, 0m),
+            XmlUrl = !string.IsNullOrWhiteSpace(x.RucEmisor)
+                ? ConstruirXmlUrl(x.NumeroNotaCredito, x.RucEmisor)
+                : ""
+        }).ToList();
+    }
     public string GenerarClaveAcceso(DateTime fecha, string ruc, string ambiente, string serie, string secuencial, string tipoEmi)
     {
         string fechaStr = fecha.ToString("ddMMyyyy");
@@ -1118,6 +1207,28 @@ public class NotaCreditoService
         return ConstruirXmlUrl(detalle.NotaCredito.NumNotaCredito ?? "", detalle.Emisor.Ruc ?? "");
     }
 
+    public async Task<string?> AsegurarXmlNotaCreditoAsync(int sec)
+    {
+        var detalle = await GetNotaCreditoDetalleAsync(sec);
+        if (detalle?.NotaCredito == null || string.IsNullOrWhiteSpace(detalle.Emisor?.Ruc))
+            return null;
+
+        var rutaXml = ConstruirXmlPath(detalle.NotaCredito.NumNotaCredito ?? "", detalle.Emisor.Ruc ?? "");
+        if (!File.Exists(rutaXml))
+        {
+            try
+            {
+                rutaXml = await ProcesarXmlNotaCreditoAsync(sec);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        return ConstruirXmlUrl(detalle.NotaCredito.NumNotaCredito ?? "", detalle.Emisor.Ruc ?? "");
+    }
+
     public async Task<string?> AsegurarXmlNotaCreditoRutaUsuarioAsync(int sec, int idUsuario)
     {
         var detalle = await GetNotaCreditoDetalleUsuarioAsync(sec, idUsuario);
@@ -1160,6 +1271,30 @@ public class NotaCreditoService
 
         if (string.IsNullOrWhiteSpace(rutaPdf) || !File.Exists(rutaPdf))
             return null;
+
+        return ConstruirPdfUrl(detalle.NotaCredito.NumNotaCredito ?? "", detalle.Emisor.Ruc ?? "", formato);
+    }
+
+    public async Task<string?> AsegurarPdfNotaCreditoAsync(int sec, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    {
+        await AsegurarDatosAutorizacionNotaCreditoAsync(sec);
+
+        var detalle = await GetNotaCreditoDetalleAsync(sec);
+        if (detalle?.NotaCredito == null || string.IsNullOrWhiteSpace(detalle.Emisor?.Ruc))
+            return null;
+
+        var rutaPdf = ConstruirPdfPath(detalle.NotaCredito.NumNotaCredito ?? "", detalle.Emisor.Ruc ?? "", formato);
+        if (!File.Exists(rutaPdf))
+        {
+            try
+            {
+                rutaPdf = await _notaCreditoPdfService.GenerarPdfNotaCreditoAsync(detalle, formato);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
 
         return ConstruirPdfUrl(detalle.NotaCredito.NumNotaCredito ?? "", detalle.Emisor.Ruc ?? "", formato);
     }

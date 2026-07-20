@@ -51,6 +51,19 @@
         </div>
     }
 
+    @if (procesandoNotaCreditoAutomatica)
+    {
+        <div class="facturas-inline-overlay">
+            <div class="facturas-inline-overlay-card">
+                <span class="spinner-border spinner-border-sm" role="status"></span>
+                <div>
+                    <strong>Generando nota de crÃ©dito</strong>
+                    <span>Estamos validando la factura, regenerando el comprobante y consultando el SRI.</span>
+                </div>
+            </div>
+        </div>
+    }
+
     @if (mostrarResultadoOverlay)
     {
         <div class="facturas-inline-overlay" @onclick="CerrarResultadoOverlay">
@@ -691,31 +704,47 @@
     private async Task Recargar()
     {
         cargando = true;
-
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
-        var idUsuarioSesion = int.TryParse(userClaim, out var id) ? id : 0;
-
-        if (idUsuarioSesion <= 0)
+        try
         {
-            NavManager.NavigateTo("/", true);
-            return;
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+            var idUsuarioSesion = int.TryParse(userClaim, out var id) ? id : 0;
+
+            if (idUsuarioSesion <= 0)
+            {
+                NavManager.NavigateTo("/", true);
+                return;
+            }
+
+            var tieneAccesoBackOffice = await EmisorSistemaService.TieneAccesoBackOfficeAsync(idUsuarioSesion);
+            if (!tieneAccesoBackOffice)
+            {
+                NavManager.NavigateTo("/", true);
+                return;
+            }
+
+            var emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
+            currentUserId = emisorMaestro?.IdUsuario ?? 0;
+
+            facturas.Clear();
+            if (currentUserId <= 0)
+            {
+                await AlertService.ShowWarningAsync("Primero debes configurar el emisor maestro del BackOffice.");
+                return;
+            }
+
+            facturas.AddRange(await EmisorSistemaService.ListarFacturasRecargasSistemaAsync(0, soloRecargas: false));
+            paginaActual = 1;
         }
-
-        var emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
-        currentUserId = emisorMaestro?.IdUsuario ?? 0;
-
-        facturas.Clear();
-        if (currentUserId <= 0)
+        catch (Exception ex)
+        {
+            facturas.Clear();
+            await AlertService.ShowErrorAsync($"No se pudieron cargar las facturas BackOffice: {ex.Message}");
+        }
+        finally
         {
             cargando = false;
-            await AlertService.ShowWarningAsync("Primero debes configurar el emisor maestro del BackOffice.");
-            return;
         }
-
-        facturas.AddRange(await EmisorSistemaService.ListarFacturasRecargasSistemaAsync(0, soloRecargas: false));
-        paginaActual = 1;
-        cargando = false;
     }
 
     private bool CumpleFiltroFactura(FacturaListDto factura)
@@ -834,7 +863,10 @@
 
     private async Task VerFacturaAsync(int codfactura)
     {
-        facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(codfactura, currentUserId);
+        facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(
+            codfactura,
+            currentUserId,
+            incluirFacturasEmisorSistema: true);
 
         if (facturaSeleccionada != null)
             mostrarModal = true;
@@ -952,9 +984,7 @@
         try
         {
             procesandoNotaCreditoAutomatica = true;
-            await MostrarProcesandoNotaCreditoAutomaticaAsync(factura);
             var resultado = await NotaCreditoService.EmitirNotaCreditoAutomaticaDesdeFacturaAsync(currentUserId, factura.Codfactura);
-            await JS.InvokeVoidAsync("Swal.close");
 
             if (!resultado.Success)
             {
@@ -965,13 +995,15 @@
             await Recargar();
 
             if (mostrarModal && facturaSeleccionada?.Factura?.Codfactura == factura.Codfactura)
-                facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(factura.Codfactura, currentUserId);
+                facturaSeleccionada = await FacturacionService.GetFacturaCompletaUsuarioAsync(
+                    factura.Codfactura,
+                    currentUserId,
+                    incluirFacturasEmisorSistema: true);
 
             await MostrarResultadoNotaCreditoAutomaticaAsync(factura, resultado);
         }
         catch (Exception ex)
         {
-            await JS.InvokeVoidAsync("Swal.close");
             await AlertService.ShowErrorAsync($"Ocurrió un error al generar la nota de crédito automática: {ex.Message}", "Error");
         }
         finally

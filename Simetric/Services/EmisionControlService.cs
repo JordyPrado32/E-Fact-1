@@ -213,13 +213,17 @@ public sealed class EmisionControlService
         var idUsuarioEmisor = usuarioInfo.IdUsuarioTitularCuenta;
         var emisor = await context.Emisores
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.IdUsuario == idUsuarioEmisor && e.Estado == true && !e.EsEmisorSistema);
+            .Where(e => e.IdUsuario == idUsuarioEmisor && e.Estado == true)
+            .OrderBy(e => e.EsEmisorSistema)
+            .ThenByDescending(e => e.Codigo)
+            .FirstOrDefaultAsync();
 
         var tieneEmisor = emisor is not null;
         var validacionFirma = _emisorCertificadoValidator.Validar(emisor);
         var tieneFirma = validacionFirma.IsValid;
         var saldoDisponible = Math.Max(usuarioInfo.SaldoDocumentos ?? 0, 0);
         var planIlimitado = ObtenerPlanIlimitado(usuarioInfo.HistorialComprasDocumentosJson);
+        var usaEmisorSistema = emisor?.EsEmisorSistema == true;
 
         if (!tieneFirma)
         {
@@ -238,6 +242,20 @@ public sealed class EmisionControlService
                     : MensajeFirmaRequerida,
                 RutaAccion = "/firma",
                 TextoAccion = "Configurar firma"
+            };
+        }
+
+        if (usaEmisorSistema)
+        {
+            return new EmisionEstado
+            {
+                TieneEmisorActivo = true,
+                TieneFirmaElectronica = true,
+                PuedeEmitir = true,
+                EmisionPermitidaPorConfiguracion = true,
+                PlanIlimitadoActivo = true,
+                PlanIlimitadoVigenteHasta = null,
+                SaldoDocumentosDisponibles = saldoDisponible
             };
         }
 

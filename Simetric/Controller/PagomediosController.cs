@@ -313,6 +313,9 @@ namespace Simetric.Controllers
                     saldoActual = usuario.SaldoDocumentos;
                     historialActualizado = true;
 
+                    var debeIntentarFactura = pagoAprobado &&
+                        (saldoAplicadoAhora || compraHistorial.CodFactura is not > 0);
+
                     // Registrar venta automatica en BackOffice de forma atomica con el saldo
                     if (saldoAplicadoAhora)
                     {
@@ -332,7 +335,10 @@ namespace Simetric.Controllers
                             FormaPago = Truncate("Tarjeta de Crédito", 50),
                             Observacion = Truncate($"Compra de documentos automática en línea (Pagomedios). Ref: {reference} / {authorizationCode}. Compra #{compraId}", 500)
                         });
+                    }
 
+                    if (debeIntentarFactura)
+                    {
                         try
                         {
                             var resultadoFactura = await _compraDocumentosFacturacionService.EmitirFacturaAsync(
@@ -353,15 +359,28 @@ namespace Simetric.Controllers
                                 ? resultadoFactura.EstadoSri
                                 : compraHistorial.EstadoFactura;
                             compraHistorial.MensajeFactura = resultadoFactura.Mensaje;
+                            await AppendCompraDocumentosLogAsync(
+                                ConstruirLogResultadoFacturaCompraDocumentos(
+                                    compraId,
+                                    usuario.IdUsuario,
+                                    reference,
+                                    authorizationCode,
+                                    resultadoFactura));
                         }
                         catch (Exception ex)
                         {
-                            compraHistorial.MensajeFactura = "La compra fue aprobada, pero la facturación automática falló. Revisa logs.";
+                            var detalleError = string.IsNullOrWhiteSpace(ex.Message)
+                                ? "La compra fue aprobada, pero la facturación automática falló."
+                                : $"La compra fue aprobada, pero la facturación automática falló: {ex.Message}";
+                            compraHistorial.MensajeFactura = detalleError;
+                            compraHistorial.EstadoFactura ??= "ERROR_INTERNO";
                             _logger.LogError(
                                 ex,
                                 "La compra de documentos {CompraId} del usuario {UsuarioId} fue aprobada pero falló la facturación automática.",
                                 compraId,
                                 usuario.IdUsuario);
+                            await AppendCompraDocumentosLogAsync(
+                                $"FACTURA_COMPRA_DOCUMENTOS estado=ERROR_EXCEPCION compra={compraId ?? "(null)"} usuario={usuario.IdUsuario} reference={reference ?? "(null)"} auth={authorizationCode ?? "(null)"} detalle={detalleError}");
                         }
                     }
 
@@ -1027,6 +1046,22 @@ namespace Simetric.Controllers
             catch
             {
             }
+        }
+
+        private static string ConstruirLogResultadoFacturaCompraDocumentos(
+            string? compraId,
+            int usuarioId,
+            string? reference,
+            string? authorizationCode,
+            CompraDocumentosFacturaResultado resultadoFactura)
+        {
+            var estado = resultadoFactura.CodFactura > 0
+                ? resultadoFactura.Autorizada
+                    ? "GUARDADA_Y_AUTORIZADA"
+                    : "GUARDADA_NO_AUTORIZADA"
+                : "NO_GUARDADA";
+
+            return $"FACTURA_COMPRA_DOCUMENTOS estado={estado} compra={compraId ?? "(null)"} usuario={usuarioId} reference={reference ?? "(null)"} auth={authorizationCode ?? "(null)"} codFactura={resultadoFactura.CodFactura} numeroFactura={resultadoFactura.NumeroFactura ?? "(null)"} estadoSri={resultadoFactura.EstadoSri ?? "(null)"} mensaje={resultadoFactura.Mensaje ?? "(null)"}";
         }
 
         private static string Truncate(string? value, int maxLength)

@@ -63,13 +63,17 @@
                     <span>Serie principal</span>
                     <strong>@SeriePrincipalSistemaActual</strong>
                 </div>
-                <div class="sequence-chip">
-                    <span>Ultima factura sistema</span>
-                    <strong>@UltimaFacturaSistema</strong>
-                </div>
-                <div class="sequence-chip">
-                    <span>Autorizadas</span>
-                    <strong>@TotalFacturasAutorizadasSistema</strong>
+            <div class="sequence-chip">
+                <span>Ultima factura sistema</span>
+                <strong>@UltimaFacturaSistema</strong>
+            </div>
+            <div class="sequence-chip">
+                <span>Serie NC sistema</span>
+                <strong>@(secuenciaNotaCreditoSistema?.SerieVisual ?? "--")</strong>
+            </div>
+            <div class="sequence-chip">
+                <span>Autorizadas</span>
+                <strong>@TotalFacturasAutorizadasSistema</strong>
                 </div>
                 <div class="sequence-chip">
                     <span>Pendientes</span>
@@ -376,12 +380,20 @@
                         <InputText @bind-Value="cajaForm.Establecimiento" class="field-input" maxlength="3" />
                     </div>
                     <div class="field field-sequence">
-                        <label>Punto de emision</label>
+                        <label>Punto de emision factura</label>
                         <InputText @bind-Value="cajaForm.PuntoEmision" class="field-input" maxlength="3" />
+                    </div>
+                    <div class="field field-sequence">
+                        <label>Punto de emision NC</label>
+                        <InputText @bind-Value="cajaForm.PuntoEmisionNotaCredito" class="field-input" maxlength="3" />
                     </div>
                 </div>
 
-                <div class="field-help">Serie vista previa: <strong>@SerieCajaPreview</strong></div>
+                <div class="field-help">
+                    Serie factura: <strong>@SerieCajaPreview</strong>
+                    <span class="mx-2">|</span>
+                    Serie nota de credito: <strong>@SerieNotaCreditoPreview</strong>
+                </div>
 
                 <div class="form-actions">
                     <button type="button" class="primary-btn" @onclick="GuardarCajaSistemaAsync" disabled="@guardandoCaja">
@@ -396,7 +408,8 @@
                             <thead>
                                 <tr>
                                     <th>Caja</th>
-                                    <th>Serie</th>
+                                    <th>Serie factura</th>
+                                    <th>Serie NC</th>
                                     <th>Estado</th>
                                     <th>Acciones</th>
                                 </tr>
@@ -407,6 +420,7 @@
                                     <tr>
                                         <td>@(caja.NumCaja ?? 0)</td>
                                         <td>@FormatearSerie(caja.SerieFactura)</td>
+                                        <td>@FormatearSerie(caja.SerieNotasCred)</td>
                                         <td>@((caja.NumCaja ?? 0) == 1 ? "Principal" : "Activa")</td>
                                         <td>
                                             <div class="table-actions">
@@ -481,6 +495,61 @@
             }
         </section>
 
+        <section class="panel-card">
+            <div class="panel-head">
+                <div>
+                    <span class="panel-kicker">Control de secuencia</span>
+                    <h3>Secuencia maestra de notas de credito</h3>
+                </div>
+            </div>
+
+            @if (secuenciaNotaCreditoSistema is null)
+            {
+                <div class="state-card compact">
+                    <p>Configura primero la caja maestra del sistema con serie de notas de credito para definir esta secuencia.</p>
+                </div>
+            }
+            else
+            {
+                <div class="sequence-summary">
+                    <div class="sequence-chip">
+                        <span>Serie actual</span>
+                        <strong>@secuenciaNotaCreditoSistema.SerieVisual</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Ultima secuencia registrada</span>
+                        <strong>@(string.IsNullOrWhiteSpace(secuenciaNotaCreditoSistema.UltimaSecuencia) ? "No definida" : secuenciaNotaCreditoSistema.UltimaSecuencia)</strong>
+                    </div>
+                    <div class="sequence-chip">
+                        <span>Siguiente NC</span>
+                        <strong>@(string.IsNullOrWhiteSpace(secuenciaNotaCreditoSistema.SiguienteSecuencia) ? "000000001" : secuenciaNotaCreditoSistema.SiguienteSecuencia)</strong>
+                    </div>
+                </div>
+
+                <div class="sequence-form">
+                    <label class="check-row">
+                        <input type="checkbox" @bind="secuenciaNotaCreditoForm.YaFacturoAntes" />
+                        <span>El sistema ya emitio notas de credito antes con esta serie</span>
+                    </label>
+
+                    @if (secuenciaNotaCreditoForm.YaFacturoAntes)
+                    {
+                        <div class="field field-sequence">
+                            <label>Ultima secuencia emitida</label>
+                            <InputText @bind-Value="secuenciaNotaCreditoForm.UltimaSecuencia" class="field-input" placeholder="Ej: 000000025" />
+                            <small class="field-help">Indica la ultima nota de credito ya usada para que el sistema continue con la siguiente.</small>
+                        </div>
+                    }
+
+                    <div class="form-actions">
+                        <button type="button" class="primary-btn" @onclick="GuardarSecuenciaNotaCreditoAsync" disabled="@guardandoSecuenciaNotaCredito">
+                            @(guardandoSecuenciaNotaCredito ? "Guardando..." : "Guardar secuencia de notas de credito")
+                        </button>
+                    </div>
+                </div>
+            }
+        </section>
+
         @if (facturaSeleccionada?.Factura != null)
         {
             <section class="panel-card detail-card">
@@ -517,6 +586,7 @@
     private bool guardandoCaja;
     private bool consultandoIdentificacion;
     private bool mostrarClaveCertificado;
+    private bool guardandoSecuenciaNotaCredito;
     private int currentUserId;
     private int ownerUserId;
     private string? feedbackMessage;
@@ -524,11 +594,14 @@
     private string? nombrePathCertificadoActual;
     private string identificacionBusqueda = string.Empty;
     private EmisorSistemaSecuenciaInfo? secuenciaSistema;
+    private EmisorSistemaSecuenciaInfo? secuenciaNotaCreditoSistema;
     private SecuenciaSistemaFormModel secuenciaForm = new();
+    private SecuenciaSistemaFormModel secuenciaNotaCreditoForm = new();
     private readonly List<Caja> cajasSistema = new();
     private Caja? cajaSistemaSeleccionada;
     private CajaSistemaFormModel cajaForm = new();
     private string SerieCajaPreview => $"{NormalizarCodigoPreview(cajaForm.Establecimiento)}-{NormalizarCodigoPreview(cajaForm.PuntoEmision)}";
+    private string SerieNotaCreditoPreview => $"{NormalizarCodigoPreview(cajaForm.Establecimiento)}-{NormalizarCodigoPreview(cajaForm.PuntoEmisionNotaCredito)}";
     private string RucEmisorActual => string.IsNullOrWhiteSpace(formModel.Ruc) ? "--" : formModel.Ruc;
     private string RazonSocialEmisorActual => FirstNonEmpty(formModel.RazonSocial, formModel.NomComercial) ?? "--";
     private string SeriePrincipalSistemaActual => FormatearSerie(cajasSistema.OrderBy(c => c.NumCaja).ThenBy(c => c.Sec).FirstOrDefault()?.SerieFactura);
@@ -578,6 +651,8 @@
             formModel = EmisorSistemaFormModel.FromEntity(emisor);
             secuenciaSistema = await EmisorSistemaService.GetSecuenciaFacturaSistemaAsync();
             secuenciaForm = SecuenciaSistemaFormModel.FromInfo(secuenciaSistema);
+            secuenciaNotaCreditoSistema = await EmisorSistemaService.GetSecuenciaNotaCreditoSistemaAsync();
+            secuenciaNotaCreditoForm = SecuenciaSistemaFormModel.FromInfo(secuenciaNotaCreditoSistema);
             await RecargarCajasSistemaAsync();
 
             await RecargarFacturasAsync();
@@ -649,7 +724,10 @@
         formModel.CodEstablecimiento = establecimiento;
         formModel.CodPuntoEmision = punto;
         cajaForm.Establecimiento = establecimiento;
-        cajaForm.PuntoEmision = punto;
+        if (NormalizarCodigo(cajaForm.PuntoEmision) is null)
+            cajaForm.PuntoEmision = punto;
+        if (NormalizarCodigo(cajaForm.PuntoEmisionNotaCredito) is null)
+            cajaForm.PuntoEmisionNotaCredito = punto;
     }
 
     private async Task ConsultarIdentificacionAsync()
@@ -722,6 +800,36 @@
         }
     }
 
+    private async Task GuardarSecuenciaNotaCreditoAsync()
+    {
+        if (!tieneAcceso)
+            return;
+
+        guardandoSecuenciaNotaCredito = true;
+        try
+        {
+            var resultado = await EmisorSistemaService.GuardarSecuenciaNotaCreditoSistemaAsync(
+                currentUserId,
+                secuenciaNotaCreditoForm.YaFacturoAntes,
+                secuenciaNotaCreditoForm.UltimaSecuencia);
+
+            SetFeedback(resultado.Message, resultado.Success);
+            if (resultado.Success)
+            {
+                secuenciaNotaCreditoSistema = await EmisorSistemaService.GetSecuenciaNotaCreditoSistemaAsync();
+                secuenciaNotaCreditoForm = SecuenciaSistemaFormModel.FromInfo(secuenciaNotaCreditoSistema);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetFeedback(ex.Message, false);
+        }
+        finally
+        {
+            guardandoSecuenciaNotaCredito = false;
+        }
+    }
+
     private async Task GuardarCajaSistemaAsync()
     {
         if (!tieneAcceso || ownerUserId <= 0)
@@ -729,10 +837,11 @@
 
         var establecimiento = NormalizarCodigo(cajaForm.Establecimiento);
         var punto = NormalizarCodigo(cajaForm.PuntoEmision);
+        var puntoNc = NormalizarCodigo(cajaForm.PuntoEmisionNotaCredito);
 
-        if (establecimiento is null || punto is null)
+        if (establecimiento is null || punto is null || puntoNc is null)
         {
-            SetFeedback("La caja del sistema requiere establecimiento y punto de emision validos de 3 digitos.", false);
+            SetFeedback("La caja del sistema requiere establecimiento, punto de emision de factura y punto de emision de nota de credito validos de 3 digitos.", false);
             return;
         }
 
@@ -740,6 +849,7 @@
         try
         {
             var serie = $"{establecimiento}-{punto}";
+            var serieNc = $"{establecimiento}-{puntoNc}";
             var modelo = cajaSistemaSeleccionada is null
                 ? CrearNuevaCajaSistemaBase()
                 : ClonarCaja(cajaSistemaSeleccionada);
@@ -747,7 +857,7 @@
             modelo.IdUsuario = ownerUserId;
             modelo.EsCajaSistema = true;
             modelo.SerieFactura = serie;
-            modelo.SerieNotasCred = serie;
+            modelo.SerieNotasCred = serieNc;
             modelo.SerieGuia = serie;
             modelo.SerieCompras = serie;
             modelo.SerieDebitos = serie;
@@ -760,7 +870,11 @@
                 return;
             }
 
-            SetFeedback($"Caja del sistema guardada correctamente con la serie {serie}.", true);
+            SetFeedback(
+                serie == serieNc
+                    ? $"Caja del sistema guardada correctamente con la serie {serie}."
+                    : $"Caja del sistema guardada correctamente. Factura: {serie} | Nota de credito: {serieNc}.",
+                true);
             await RecargarAsync();
         }
         catch (Exception ex)
@@ -1029,7 +1143,7 @@
         public string Email { get; set; } = string.Empty;
         public string Telefono { get; set; } = string.Empty;
         public string LlevaContabilidad { get; set; } = "SI";
-        public string TipoAmbiente { get; set; } = "1";
+        public string TipoAmbiente { get; set; } = "2";
         public string TipoEmision { get; set; } = "1";
         public string CodEstablecimiento { get; set; } = "001";
         public string CodPuntoEmision { get; set; } = "001";
@@ -1051,7 +1165,7 @@
                 Email = emisor.Email ?? string.Empty,
                 Telefono = emisor.Telefono ?? string.Empty,
                 LlevaContabilidad = string.IsNullOrWhiteSpace(emisor.LlevaContabilidad) ? "SI" : emisor.LlevaContabilidad,
-                TipoAmbiente = string.IsNullOrWhiteSpace(emisor.TipoAmbiente) ? "1" : emisor.TipoAmbiente,
+                TipoAmbiente = string.IsNullOrWhiteSpace(emisor.TipoAmbiente) ? "2" : emisor.TipoAmbiente,
                 TipoEmision = string.IsNullOrWhiteSpace(emisor.TipoEmision) ? "1" : emisor.TipoEmision,
                 CodEstablecimiento = string.IsNullOrWhiteSpace(emisor.CodEstablecimiento) ? "001" : emisor.CodEstablecimiento,
                 CodPuntoEmision = string.IsNullOrWhiteSpace(emisor.CodPuntoEmision) ? "001" : emisor.CodPuntoEmision,
@@ -1099,14 +1213,19 @@
     {
         public string Establecimiento { get; set; } = "001";
         public string PuntoEmision { get; set; } = "001";
+        public string PuntoEmisionNotaCredito { get; set; } = "001";
 
         public static CajaSistemaFormModel FromCaja(Caja? caja)
         {
             var digits = new string((caja?.SerieFactura ?? string.Empty).Where(char.IsDigit).ToArray()).PadLeft(6, '0');
+            var digitsNc = new string((caja?.SerieNotasCred ?? string.Empty).Where(char.IsDigit).ToArray()).PadLeft(6, '0');
             return new CajaSistemaFormModel
             {
                 Establecimiento = digits[..3],
-                PuntoEmision = digits.Substring(3, 3)
+                PuntoEmision = digits.Substring(3, 3),
+                PuntoEmisionNotaCredito = digitsNc[..3] == digits[..3]
+                    ? digitsNc.Substring(3, 3)
+                    : digits.Substring(3, 3)
             };
         }
     }

@@ -549,6 +549,7 @@
     private int currentUserId;
     private bool cargando = true;
     private bool isDemoMode;
+    private bool esVistaBackOfficeNotas;
     private List<NotaCreditoListDto> notas = new();
     private readonly int[] pageSizeOptions = { 5, 10, 20, 50 };
     private int paginaActual = 1;
@@ -690,6 +691,7 @@
     protected override async Task OnInitializedAsync()
     {
         isDemoMode = EsRutaDemoNotasCredito();
+        esVistaBackOfficeNotas = EsRutaBackOfficeNotasCredito();
         await Recargar();
     }
 
@@ -717,7 +719,9 @@
             return;
         }
 
-        notas = await NotaCreditoService.ListarNotasCreditoUsuarioAsync(currentUserId);
+        notas = esVistaBackOfficeNotas
+            ? await NotaCreditoService.ListarNotasCreditoBackOfficeAsync()
+            : await NotaCreditoService.ListarNotasCreditoUsuarioAsync(currentUserId);
         paginaActual = 1;
 
         cargando = false;
@@ -762,8 +766,9 @@
         }
         else
         {
-            notaSeleccionada =
-                await NotaCreditoService.GetNotaCreditoDetalleUsuarioAsync(sec, currentUserId);
+            notaSeleccionada = esVistaBackOfficeNotas
+                ? await NotaCreditoService.GetNotaCreditoDetalleAsync(sec)
+                : await NotaCreditoService.GetNotaCreditoDetalleUsuarioAsync(sec, currentUserId);
         }
 
         if (notaSeleccionada != null)
@@ -779,7 +784,9 @@
             return;
         }
 
-        var xmlUrl = await NotaCreditoService.AsegurarXmlNotaCreditoUsuarioAsync(sec, currentUserId);
+        var xmlUrl = esVistaBackOfficeNotas
+            ? await NotaCreditoService.AsegurarXmlNotaCreditoAsync(sec)
+            : await NotaCreditoService.AsegurarXmlNotaCreditoUsuarioAsync(sec, currentUserId);
         if (string.IsNullOrWhiteSpace(xmlUrl))
         {
             await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la nota de credito.");
@@ -798,7 +805,9 @@
             return;
         }
 
-        var pdfUrl = await NotaCreditoService.AsegurarPdfNotaCreditoUsuarioAsync(sec, currentUserId, formato);
+        var pdfUrl = esVistaBackOfficeNotas
+            ? await NotaCreditoService.AsegurarPdfNotaCreditoAsync(sec, formato)
+            : await NotaCreditoService.AsegurarPdfNotaCreditoUsuarioAsync(sec, currentUserId, formato);
         if (string.IsNullOrWhiteSpace(pdfUrl))
         {
             await AlertService.ShowWarningAsync($"No se pudo generar o ubicar el PDF {formato.ObtenerEtiqueta()} de la nota de credito.");
@@ -825,7 +834,11 @@
             var resultado = await NotaCreditoService.IntentarEnviarNotaCreditoPorCorreoAsync(sec);
 
             if (mostrarModal)
-                notaSeleccionada = await NotaCreditoService.GetNotaCreditoDetalleUsuarioAsync(sec, currentUserId);
+            {
+                notaSeleccionada = esVistaBackOfficeNotas
+                    ? await NotaCreditoService.GetNotaCreditoDetalleAsync(sec)
+                    : await NotaCreditoService.GetNotaCreditoDetalleUsuarioAsync(sec, currentUserId);
+            }
 
             if (resultado.Enviado || resultado.YaEnviado)
                 await AlertService.ShowSuccessAsync(resultado.Mensaje, "Correo");
@@ -997,6 +1010,10 @@
 
     private bool EsRutaDemoNotasCredito() =>
         NavManager.Uri.Contains("/demo/notas-credito-generadas", StringComparison.OrdinalIgnoreCase);
+
+    private bool EsRutaBackOfficeNotasCredito() =>
+        NavManager.Uri.Contains("/backoffice/mis-notas-credito", StringComparison.OrdinalIgnoreCase) ||
+        NavManager.Uri.Contains("/backoffice/mis-notas-credito-backoffice", StringComparison.OrdinalIgnoreCase);
 
     private static List<NotaCreditoListDto> CrearDemoNotasCredito() =>
     [

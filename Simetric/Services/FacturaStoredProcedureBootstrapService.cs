@@ -155,6 +155,18 @@ public sealed class FacturaStoredProcedureBootstrapService
 
             DECLARE @FacturaInsertada TABLE (Codfactura INT NOT NULL);
 
+            IF EXISTS
+            (
+                SELECT 1
+                FROM dbo.FACTURA WITH (UPDLOCK, HOLDLOCK)
+                WHERE CODEMISOR = @Codemisor
+                  AND NUMFACTURA = @Numfactura
+                  AND Serie = @Serie
+            )
+            BEGIN
+                THROW 51004, 'La serie y el secuencial de la factura ya existen para este emisor.', 1;
+            END
+
             INSERT INTO dbo.FACTURA
             (
                 Codclave,

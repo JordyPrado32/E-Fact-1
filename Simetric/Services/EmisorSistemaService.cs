@@ -130,7 +130,7 @@ public sealed class EmisorSistemaService
             existente.TipoEmision = string.IsNullOrWhiteSpace(emisorInput.TipoEmision) ? "1" : emisorInput.TipoEmision;
             existente.TiempoEspera = emisorInput.TiempoEspera;
             existente.ClaveInterna = emisorInput.ClaveInterna;
-            existente.TipoAmbiente = string.IsNullOrWhiteSpace(emisorInput.TipoAmbiente) ? "1" : emisorInput.TipoAmbiente;
+            existente.TipoAmbiente = string.IsNullOrWhiteSpace(emisorInput.TipoAmbiente) ? "2" : emisorInput.TipoAmbiente;
             existente.DireccionMatriz = emisorInput.DireccionMatriz;
             existente.Token = emisorInput.Token;
             existente.Retenciones = emisorInput.Retenciones;
@@ -175,19 +175,26 @@ public sealed class EmisorSistemaService
         await EnsureSchemaAsync();
 
         await using var context = await _dbFactory.CreateDbContextAsync();
+        var codEmisorSistema = await context.Emisores
+            .AsNoTracking()
+            .Where(e => e.Estado && e.EsEmisorSistema)
+            .OrderByDescending(e => e.Codigo)
+            .Select(e => (int?)e.Codigo)
+            .FirstOrDefaultAsync();
+
+        if (!codEmisorSistema.HasValue)
+            return new List<FacturaListDto>();
+
         IQueryable<Factura> query = context.Facturas
             .AsNoTracking()
-            .Include(f => f.CodemisorNavigation)
             .Include(f => f.CodclientesNavigation)
-            .Where(f =>
-                f.CodemisorNavigation != null &&
-                f.CodemisorNavigation.EsEmisorSistema);
+            .Where(f => f.Codemisor == codEmisorSistema.Value);
 
         if (soloRecargas)
         {
             query = query.Where(f =>
                 f.Notas != null &&
-                EF.Functions.Like(f.Notas, $"%{MarcadorCompraNotas}%"));
+                f.Notas.Contains(MarcadorCompraNotas));
         }
 
         query = query.OrderByDescending(f => f.Codfactura);
@@ -238,7 +245,7 @@ public sealed class EmisorSistemaService
                 f.CodemisorNavigation != null &&
                 f.CodemisorNavigation.EsEmisorSistema &&
                 f.Notas != null &&
-                EF.Functions.Like(f.Notas, $"%{MarcadorCompraNotas}%"))
+                f.Notas.Contains(MarcadorCompraNotas))
             .OrderByDescending(f => f.Codfactura);
 
         if (top > 0)
@@ -322,6 +329,39 @@ public sealed class EmisorSistemaService
         };
     }
 
+    public async Task<EmisorSistemaSecuenciaInfo?> GetSecuenciaNotaCreditoSistemaAsync()
+    {
+        await EnsureSchemaAsync();
+
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return null;
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await GetCajaPrincipalSistemaAsync(context);
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieNotasCred);
+        var state = await _initialSequencePromptService.GetStateAsync(
+            emisor.IdUsuario.Value,
+            "nota-credito",
+            serieRaw,
+            emisor.Codigo);
+
+        var siguiente = state.Initialized && state.HadPreviousDocuments
+            ? _initialSequencePromptService.GetNextSequenceFromPrevious(state.PreviousSequence)
+            : string.Empty;
+
+        return new EmisorSistemaSecuenciaInfo
+        {
+            EmisorCodigo = emisor.Codigo,
+            OwnerUserId = emisor.IdUsuario.Value,
+            SerieRaw = serieRaw,
+            SerieVisual = FormatearSerieVisual(cajaSistema?.SerieNotasCred),
+            Inicializada = state.Initialized,
+            UltimaSecuencia = state.PreviousSequence,
+            SiguienteSecuencia = siguiente
+        };
+    }
+
     public async Task<EmisorSistemaGuardadoResultado> GuardarSecuenciaFacturaSistemaAsync(
         int idUsuarioBackOffice,
         bool yaFacturoAntes,
@@ -391,6 +431,68 @@ public sealed class EmisorSistemaService
             Message = yaFacturoAntes
                 ? $"Secuencia del sistema guardada correctamente. La siguiente factura saldra desde { _initialSequencePromptService.GetNextSequenceFromPrevious(secuenciaNormalizada) }."
                 : "Secuencia del sistema inicializada correctamente desde 000000001."
+        };
+    }
+
+    public async Task<EmisorSistemaGuardadoResultado> GuardarSecuenciaNotaCreditoSistemaAsync(
+        int idUsuarioBackOffice,
+        bool yaFacturoAntes,
+        string? ultimaSecuencia)
+    {
+        await EnsureSchemaAsync();
+
+        if (!await TieneAccesoBackOfficeAsync(idUsuarioBackOffice))
+            return EmisorSistemaGuardadoResultado.Error("Solo los usuarios autorizados pueden configurar la secuencia maestra de notas de crédito.");
+
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar el emisor maestro del sistema.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await context.Caja
+            .Where(c => c.Estado == true && c.EsCajaSistema == true)
+            .OrderBy(c => c.NumCaja)
+            .ThenBy(c => c.Sec)
+            .FirstOrDefaultAsync();
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieNotasCred);
+        if (string.IsNullOrWhiteSpace(serieRaw))
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar la caja maestra del sistema para definir la serie de notas de crédito.");
+
+        string secuenciaNormalizada = string.Empty;
+        if (yaFacturoAntes && !_initialSequencePromptService.TryNormalizeSequence(ultimaSecuencia, out secuenciaNormalizada))
+            return EmisorSistemaGuardadoResultado.Error("La secuencia indicada no es valida. Debe estar entre 000000001 y 999999999.");
+
+        await _initialSequencePromptService.SaveStateAsync(
+            emisor.IdUsuario.Value,
+            "nota-credito",
+            serieRaw,
+            new InitialSequencePromptState
+            {
+                Initialized = true,
+                HadPreviousDocuments = yaFacturoAntes,
+                PreviousSequence = secuenciaNormalizada
+            },
+            emisor.Codigo);
+
+        var estadoGuardado = await _initialSequencePromptService.GetStateAsync(
+            emisor.IdUsuario.Value,
+            "nota-credito",
+            serieRaw,
+            emisor.Codigo);
+        var secuenciaEsperada = yaFacturoAntes ? secuenciaNormalizada : string.Empty;
+        if (estadoGuardado.Initialized != true ||
+            estadoGuardado.HadPreviousDocuments != yaFacturoAntes ||
+            !string.Equals(estadoGuardado.PreviousSequence, secuenciaEsperada, StringComparison.Ordinal))
+        {
+            return EmisorSistemaGuardadoResultado.Error(
+                "No se pudo confirmar el guardado de la secuencia maestra de notas de crédito. Verifica la serie configurada e intenta nuevamente.");
+        }
+
+        return EmisorSistemaGuardadoResultado.Ok(emisor) with
+        {
+            Message = yaFacturoAntes
+                ? $"Secuencia maestra de notas de crédito guardada correctamente. La siguiente saldra desde {_initialSequencePromptService.GetNextSequenceFromPrevious(secuenciaNormalizada)}."
+                : "Secuencia maestra de notas de crédito inicializada correctamente desde 000000001."
         };
     }
 

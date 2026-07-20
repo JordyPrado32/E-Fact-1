@@ -10,6 +10,7 @@ namespace Simetric.Services;
 public sealed class CompraDocumentosFacturacionService
 {
     private const string MarcadorCompraNotas = "[COMPRA_DOCS:";
+    private const int TarifaIvaRecargaDocumentos = 15;
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly FacturacionService _facturacionService;
@@ -63,7 +64,7 @@ public sealed class CompraDocumentosFacturacionService
                 "Debes configurar primero la secuencia inicial del facturador del sistema en BackOffice > Emisor Maestro para evitar duplicidad de facturas.");
         }
 
-        var marker = ConstruirMarcadorCompra(compra.Id);
+        var marker = ConstruirMarcadorCompra(compra.Id, reference);
 
         Factura? facturaExistente = null;
         if (compra.CodFactura is > 0)
@@ -74,7 +75,8 @@ public sealed class CompraDocumentosFacturacionService
                 .FirstOrDefaultAsync(f => f.Codfactura == compra.CodFactura.Value);
 
             if (facturaExistente?.Codemisor != secuenciaSistema.EmisorCodigo ||
-                facturaExistente.CodemisorNavigation?.EsEmisorSistema != true)
+                facturaExistente.CodemisorNavigation?.EsEmisorSistema != true ||
+                !PerteneceMismaSolicitud(facturaExistente.Notas, marker, reference))
             {
                 facturaExistente = null;
             }
@@ -89,7 +91,7 @@ public sealed class CompraDocumentosFacturacionService
                 f.CodemisorNavigation != null &&
                 f.CodemisorNavigation.EsEmisorSistema &&
                 f.Notas != null &&
-                EF.Functions.Like(f.Notas, $"%{marker}%"))
+                f.Notas.Contains(marker))
             .OrderByDescending(f => f.Codfactura)
             .FirstOrDefaultAsync();
 
@@ -127,6 +129,26 @@ public sealed class CompraDocumentosFacturacionService
             {
                 return CompraDocumentosFacturaResultado.Error("La factura se guardó pero no se pudo recuperar su registro.");
             }
+        }
+
+        try
+        {
+            var xmlUrl = await _facturacionService.AsegurarXmlFacturaAsync(facturaExistente.Codfactura, true);
+            if (string.IsNullOrWhiteSpace(xmlUrl))
+            {
+                _logger.LogWarning(
+                    "La factura {CodFactura} de la compra {CompraId} se guardo, pero no se pudo confirmar la generacion del XML.",
+                    facturaExistente.Codfactura,
+                    compra.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "La factura {CodFactura} de la compra {CompraId} se guardo, pero fallo la generacion previa del XML.",
+                facturaExistente.Codfactura,
+                compra.Id);
         }
 
         mensajeSRI resultadoSri;
@@ -231,9 +253,7 @@ public sealed class CompraDocumentosFacturacionService
     {
         var descripcion = ObtenerDescripcionCompra(compra);
         var producto = await BuscarProductoRelacionadoAsync(context, ownerId, compra);
-        var tarifa = producto != null
-            ? ObtenerTarifaIvaProducto(producto)
-            : await ResolverTarifaPredeterminadaAsync(context, ownerId);
+        var tarifa = TarifaIvaRecargaDocumentos;
 
         var baseImponible = Math.Round(compra.MontoTotal / (1m + (tarifa / 100m)), 2, MidpointRounding.AwayFromZero);
         var valorIva = Math.Round(compra.MontoTotal - baseImponible, 2, MidpointRounding.AwayFromZero);
@@ -362,7 +382,29 @@ public sealed class CompraDocumentosFacturacionService
             ?? tipos.FirstOrDefault()?.TclCodigo;
     }
 
-    private static string ConstruirMarcadorCompra(string compraId) => $"{MarcadorCompraNotas}{compraId}]";
+    private static string ConstruirMarcadorCompra(string compraId, string? reference)
+    {
+        var claveSolicitud = string.IsNullOrWhiteSpace(reference)
+            ? compraId.Trim()
+            : $"REF:{reference.Trim()}";
+
+        return $"{MarcadorCompraNotas}{claveSolicitud}]";
+    }
+
+    private static bool PerteneceMismaSolicitud(string? notas, string marker, string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(notas))
+            return false;
+
+        if (notas.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(reference))
+            return false;
+
+        var referenciaPago = $"Ref/Auth: {reference.Trim()}";
+        return notas.Contains(referenciaPago, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string ConstruirCodigoPrincipalRecarga(CompraDocumentosHistorialItem compra)
         => compra.EsIlimitado
