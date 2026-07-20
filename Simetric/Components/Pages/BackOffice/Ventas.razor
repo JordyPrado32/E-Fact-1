@@ -42,7 +42,7 @@
         </div>
     }
 
-    @if (false && isLoading)
+    @if (isLoading)
     {
         <div class="text-center my-5 py-5">
             <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
@@ -1173,13 +1173,23 @@
 
                 ventasList = await LoadVentasParaCorreosAsync(context, correosClientes);
 
+                var ventasPorCorreo = ventasList
+                    .Select(v => new { Venta = v, Email = ExtraerEmailClienteReporte(v.Cliente) })
+                    .Where(x => !string.IsNullOrWhiteSpace(x.Email))
+                    .GroupBy(x => x.Email!, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.Select(x => x.Venta).OrderByDescending(v => v.Fecha).ToList(),
+                        StringComparer.OrdinalIgnoreCase);
+
                 // Build client DTO list
                 clientesAfiliadosList = rawClients.Select(u =>
                 {
-                    // Find all transactions of this user in ReporteVentasBackOffice
-                    var ventasUsuario = ventasList
-                        .Where(v => CoincideClienteReporte(u, v.Cliente))
-                        .ToList();
+                    var emailUsuario = u.Email?.Trim() ?? string.Empty;
+                    var ventasUsuario = !string.IsNullOrWhiteSpace(emailUsuario) &&
+                                       ventasPorCorreo.TryGetValue(emailUsuario, out var ventasEncontradas)
+                        ? ventasEncontradas
+                        : ventasList.Where(v => CoincideClienteReporte(u, v.Cliente)).ToList();
 
                     var nombreStr = $"{u.Nombres} {u.Apellidos}".Trim();
                     if (string.IsNullOrWhiteSpace(nombreStr))
@@ -1209,16 +1219,24 @@
             }
             else
             {
-                ventasList = await context.ReporteVentasBackOffice
+                await using var ventasContext = await DbFactory.CreateDbContextAsync();
+                await using var vendedoresContext = await DbFactory.CreateDbContextAsync();
+
+                var ventasTask = ventasContext.ReporteVentasBackOffice
                     .AsNoTracking()
                     .OrderByDescending(v => v.Fecha)
                     .ToListAsync();
 
-                vendedoresList = await context.Usuarios
+                var vendedoresTask = vendedoresContext.Usuarios
                     .AsNoTracking()
                     .Where(u => u.IdTipoUsuario == 7 && u.Estado == true)
                     .OrderBy(u => u.Nombres)
                     .ToListAsync();
+
+                await Task.WhenAll(ventasTask, vendedoresTask);
+
+                ventasList = ventasTask.Result;
+                vendedoresList = vendedoresTask.Result;
             }
 
             ComputeMetrics();
@@ -2141,6 +2159,22 @@
         }
 
         return false;
+    }
+
+    private static string ExtraerEmailClienteReporte(string? cliente)
+    {
+        if (string.IsNullOrWhiteSpace(cliente))
+        {
+            return string.Empty;
+        }
+
+        var parts = cliente.Split('|');
+        if (parts.Length <= 1)
+        {
+            return string.Empty;
+        }
+
+        return parts[1].Trim();
     }
 
     public class VendedorClienteDto
