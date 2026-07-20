@@ -136,7 +136,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
     private static void ComponerEncabezado(IContainer container, GuiaRemisionDetalleViewDto view, byte[]? logo)
     {
         var guia = view.Guia;
-        var emisor = view.Emisor;
+        var transportista = view.Transportista;
         var esAutorizada = DocumentoAutorizacionHelper.EsEstadoAutorizado(guia.EstadoSRI);
         var estadoDocumento = esAutorizada ? "Autorizada" : "Emitida";
         var ambiente = (guia.Ambiente ?? 1) == 1 ? "Pruebas" : "Producción";
@@ -189,19 +189,22 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
                             .SemiBold()
                             .FontColor(Colors.Blue.Darken3);
 
-                        info.Item().Text(FormatearTextoCasing(emisor?.RazonSocial ?? "Emisor"))
+                        info.Item().Text(FormatearTextoCasing(transportista?.RazonSocial ?? "Transportista"))
                             .FontSize(13f)
                             .SemiBold()
                             .FontColor(Colors.Blue.Darken3);
 
-                        if (!string.IsNullOrWhiteSpace(emisor?.Ruc))
-                            info.Item().Element(item => ComponerLineaEncabezado(item, "RUC:", emisor.Ruc));
+                        if (!string.IsNullOrWhiteSpace(transportista?.NumeroIdentificacion))
+                            info.Item().Element(item => ComponerLineaEncabezado(item, "Identificacion:", transportista.NumeroIdentificacion));
 
-                        if (!string.IsNullOrWhiteSpace(emisor?.DireccionMatriz))
-                            info.Item().Element(item => ComponerLineaEncabezado(item, "Direccion matriz:", FormatearTextoCasing(emisor.DireccionMatriz)));
+                        if (!string.IsNullOrWhiteSpace(transportista?.Direccion))
+                            info.Item().Element(item => ComponerLineaEncabezado(item, "Direccion:", FormatearTextoCasing(transportista.Direccion)));
 
-                        if (!string.IsNullOrWhiteSpace(emisor?.Telefono))
-                            info.Item().Element(item => ComponerLineaEncabezado(item, "Telefono:", emisor.Telefono));
+                        if (!string.IsNullOrWhiteSpace(transportista?.Telefono))
+                            info.Item().Element(item => ComponerLineaEncabezado(item, "Telefono:", transportista.Telefono));
+
+                        if (!string.IsNullOrWhiteSpace(view.Guia.Placa ?? transportista?.Placa))
+                            info.Item().Element(item => ComponerLineaEncabezado(item, "Placa:", view.Guia.Placa ?? transportista?.Placa));
 
                         info.Item().Element(item => ComponerLineaEncabezado(item, "Fecha emision:", (guia.Fecha ?? DateTime.Now).ToString("dd/MM/yyyy")));
                     });
@@ -259,8 +262,12 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
         {
             column.Spacing(4);
 
-            column.Item().Element(card => ComponerBloqueTransportista(card, view));
-            column.Item().Element(card => ComponerBloqueDestinatario(card, view));
+            column.Item().Row(row =>
+            {
+                row.Spacing(6);
+                row.RelativeItem().Element(card => ComponerBloqueRemitente(card, view));
+                row.RelativeItem().Element(card => ComponerBloqueDestinatario(card, view));
+            });
             column.Item().Element(table => ComponerDetalle(table, view.Detalles));
 
             if (!string.IsNullOrWhiteSpace(view.Guia.Mensaje))
@@ -272,9 +279,9 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
         });
     }
 
-    // ── Bloque Transportista ───────────────────────────────────────────────────
+    // ── Bloque Remitente ───────────────────────────────────────────────────────
 
-    private static void ComponerBloqueTransportista(IContainer container, GuiaRemisionDetalleViewDto view)
+    private static void ComponerBloqueRemitente(IContainer container, GuiaRemisionDetalleViewDto view)
     {
         container.Border(1)
             .BorderColor(Colors.Blue.Lighten4)
@@ -283,22 +290,21 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
             .Column(column =>
             {
                 column.Spacing(2);
-                column.Item().Text("Datos del transportista")
+                column.Item().Text("Datos del remitente")
                     .FontSize(FuenteTituloSeccion)
                     .SemiBold()
                     .FontColor(Colors.Blue.Darken3);
 
-                column.Item().Text(FormatearTextoCasing(view.Transportista?.RazonSocial ?? "Transportista"))
+                column.Item().Text(FormatearTextoCasing(view.Emisor?.RazonSocial ?? "Remitente"))
                     .FontSize(10.8f)
                     .SemiBold();
 
-                column.Item().Element(item => ComponerParDato(item, "Identificacion", view.Transportista?.NumeroIdentificacion));
-                column.Item().Element(item => ComponerParDato(item, "Tipo identificacion", view.Transportista?.TipoIdentificacion));
-                column.Item().Element(item => ComponerParDato(item, "Placa", view.Guia.Placa ?? view.Transportista?.Placa));
+                column.Item().Element(item => ComponerParDato(item, "RUC", view.Emisor?.Ruc));
+                column.Item().Element(item => ComponerParDato(item, "Direccion matriz", FormatearTextoCasing(view.Emisor?.DireccionMatriz)));
                 column.Item().Element(item => ComponerParDato(item, "Fecha inicio transporte", (view.Guia.FechaIniTransporte ?? DateTime.Today).ToString("dd/MM/yyyy")));
                 column.Item().Element(item => ComponerParDato(item, "Fecha fin transporte", (view.Guia.FechaFinTransporte ?? view.Guia.FechaIniTransporte ?? DateTime.Today).ToString("dd/MM/yyyy")));
-                if (!string.IsNullOrWhiteSpace(view.Transportista?.Telefono))
-                    column.Item().Element(item => ComponerParDato(item, "Telefono", view.Transportista.Telefono));
+                if (!string.IsNullOrWhiteSpace(view.Emisor?.Telefono))
+                    column.Item().Element(item => ComponerParDato(item, "Telefono", view.Emisor.Telefono));
                 if (!string.IsNullOrWhiteSpace(view.Guia.DireccionPartida))
                     column.Item().Element(item => ComponerParDato(item, "Direccion de partida", FormatearTextoCasing(view.Guia.DireccionPartida)));
             });
