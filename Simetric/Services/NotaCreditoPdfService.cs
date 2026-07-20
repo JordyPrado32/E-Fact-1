@@ -30,6 +30,7 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
     private const float FuenteTituloSeccionPdf = 10.6f;
     private const float PaddingBloquePdf = 7f;
     private const float SpacingBloquePdf = 3f;
+    private const float AlturaMinimaInfoEmisorPdf = 180f;
     private readonly IWebHostEnvironment _environment;
 
     public NotaCreditoPdfService(IWebHostEnvironment environment)
@@ -242,6 +243,7 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
                     .Border(1)
                     .BorderColor(Colors.Blue.Lighten4)
                     .Background(Colors.White)
+                    .MinHeight(AlturaMinimaInfoEmisorPdf)
                     .Padding(PaddingBloquePdf)
                     .Column(info =>
                     {

@@ -23,6 +23,7 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
     private const float FuenteTituloSeccionPdf = 10.6f;
     private const float PaddingBloquePdf = 7f;
     private const float SpacingBloquePdf = 3f;
+    private const float AlturaMinimaInfoEmisorPdf = 180f;
 
     private static TextStyle EstiloBasePdf(TextStyle style)
         => style
@@ -181,6 +182,7 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
                     .Border(1)
                     .BorderColor(Colors.Blue.Lighten4)
                     .Background(Colors.White)
+                    .MinHeight(AlturaMinimaInfoEmisorPdf)
                     .Padding(PaddingBloquePdf)
                     .Column(emisorCol =>
                     {
