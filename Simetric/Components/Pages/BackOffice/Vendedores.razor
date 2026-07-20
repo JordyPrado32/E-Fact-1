@@ -1261,7 +1261,28 @@
         }
         else
         {
-            vendors = allVendors;
+            await using var filterContext = await DbFactory.CreateDbContextAsync();
+            var linkedUserIds = allVendors
+                .Where(v => v.CodigoReferencia?.StartsWith("usr_", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(v => int.TryParse(v.CodigoReferencia![4..], out var uid) ? uid : 0)
+                .Where(uid => uid > 0)
+                .Distinct()
+                .ToList();
+
+            var sellerUserIds = linkedUserIds.Count == 0
+                ? new HashSet<int>()
+                : await filterContext.Usuarios
+                    .AsNoTracking()
+                    .Where(u => linkedUserIds.Contains(u.IdUsuario) && u.IdTipoUsuario == 7 && u.TipoCliente == 2)
+                    .Select(u => u.IdUsuario)
+                    .ToHashSetAsync();
+
+            vendors = allVendors
+                .Where(v =>
+                    v.EsSistema ||
+                    v.CodigoReferencia?.StartsWith("usr_", StringComparison.OrdinalIgnoreCase) != true ||
+                    (int.TryParse(v.CodigoReferencia[4..], out var uid) && sellerUserIds.Contains(uid)))
+                .ToList();
         }
 
         isLoading = false;
