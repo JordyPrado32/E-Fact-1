@@ -140,16 +140,10 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
         return Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
     }
 
-    private byte[]? CargarLogoSistema()
-    {
-        var rutaLogo = Path.Combine(ObtenerWebRootPath(), "images", "logo.png");
-        return File.Exists(rutaLogo) ? File.ReadAllBytes(rutaLogo) : null;
-    }
-
     private byte[]? CargarLogoDocumento(Emisor? emisor)
     {
         if (string.IsNullOrWhiteSpace(emisor?.LogoImagen))
-            return CargarLogoSistema();
+            return null;
 
         var logo = emisor.LogoImagen.Trim();
         var prefijosBase64 = new[]
@@ -171,7 +165,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
                 }
                 catch
                 {
-                    return CargarLogoSistema();
+                    return null;
                 }
             }
         }
@@ -187,7 +181,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
         foreach (var ruta in rutas.Where(File.Exists))
             return File.ReadAllBytes(ruta);
 
-        return CargarLogoSistema();
+        return null;
     }
 
     private static void ComponerEncabezadoA4(IContainer container, NotaDebitoDetalleViewDto view, byte[]? logoSistema)
@@ -222,10 +216,10 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
                     column.Item()
                         .AlignCenter()
                         .PaddingBottom(8)
-                        .Text(emisor?.NomComercial ?? emisor?.RazonSocial ?? "NUMERICA")
-                        .FontSize(22)
+                        .Text("NO TIENE LOGO")
+                        .FontSize(28f)
                         .Bold()
-                        .FontColor(Colors.Blue.Darken3);
+                        .FontColor(Colors.Red.Medium);
                 }
 
                 column.Item().Element(card => ComponerPanelEmisorA4(card, emisor));

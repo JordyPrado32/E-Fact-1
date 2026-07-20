@@ -193,8 +193,7 @@ public sealed class RetencionPdfService : IRetencionPdfService
                 return File.ReadAllBytes(ruta);
         }
 
-        var rutaLogo = Path.Combine(ObtenerWebRootPath(), "images", "logo.png");
-        return File.Exists(rutaLogo) ? File.ReadAllBytes(rutaLogo) : null;
+        return null;
     }
 
     private static void ComponerEncabezadoA4(IContainer container, RetencionGeneradaDetalleViewDto view, byte[]? logoSistema)
@@ -227,10 +226,10 @@ public sealed class RetencionPdfService : IRetencionPdfService
                     column.Item()
                         .AlignCenter()
                         .PaddingBottom(8)
-                        .Text(emisor?.NomComercial ?? emisor?.RazonSocial ?? "NUMERICA")
-                        .FontSize(22)
+                        .Text("NO TIENE LOGO")
+                        .FontSize(28f)
                         .Bold()
-                        .FontColor(Colors.Blue.Darken3);
+                        .FontColor(Colors.Red.Medium);
                 }
 
                 column.Item().Element(card => ComponerPanelEmisorA4(card, emisor));

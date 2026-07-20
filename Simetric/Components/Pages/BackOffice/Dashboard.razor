@@ -642,7 +642,7 @@
 
             try
             {
-                // Facturas
+                // Facturas (Ventas)
                 try
                 {
                     var dbInvoices = await context.Facturas
@@ -650,7 +650,7 @@
                         .Include(f => f.CodclientesNavigation)
                         .Where(f => f.Fechaentrega != null || f.Fchautorizacion != null)
                         .OrderByDescending(f => f.Codfactura)
-                        .Take(3)
+                        .Take(5)
                         .ToListAsync();
 
                     foreach (var f in dbInvoices)
@@ -677,7 +677,7 @@
                     var dbClients = await context.Clientes
                         .AsNoTracking()
                         .OrderByDescending(c => c.Codcliente)
-                        .Take(2)
+                        .Take(3)
                         .ToListAsync();
 
                     foreach (var c in dbClients)
@@ -724,7 +724,7 @@
                     var dbPayments = await context.Abonos
                         .AsNoTracking()
                         .OrderByDescending(a => a.sec)
-                        .Take(2)
+                        .Take(5)
                         .ToListAsync();
                     var clientsMap = await CargarNombresClientesAsync(
                         context,
@@ -755,7 +755,7 @@
                         .AsNoTracking()
                         .Where(n => n.FchAutorizacion != null)
                         .OrderByDescending(n => n.Sec)
-                        .Take(2)
+                        .Take(3)
                         .ToListAsync();
                     var clientsMap = await CargarNombresClientesAsync(
                         context,
@@ -782,40 +782,108 @@
                     Console.WriteLine($"Error al cargar notas de crédito para actividad reciente: {exNCs.Message}");
                 }
 
-                // Auditoría
+                // Compras (Purchases)
                 try
                 {
-                    var dbAudits = await context.Auditorias
+                    var dbPurchases = await context.ComprasFacturas
                         .AsNoTracking()
-                        .Include(a => a.Usuario)
-                        .OrderByDescending(a => a.IdAuditoria)
-                        .Take(2)
+                        .OrderByDescending(cf => cf.CodFactura)
+                        .Take(5)
                         .ToListAsync();
-
-                    foreach (var a in dbAudits)
+                    var clientIds = dbPurchases.Where(cf => cf.CodClientes.HasValue).Select(cf => cf.CodClientes!.Value).Distinct().ToList();
+                    var clientsMap = new Dictionary<int, string>();
+                    if (clientIds.Any())
                     {
-                        var uName = a.Usuario?.NombreCompleto ?? "Usuario del sistema";
-                        var detailDesc = "";
-                        if (!string.IsNullOrEmpty(a.Detalles))
-                        {
-                            detailDesc = a.Detalles;
-                        }
-                        else if (!string.IsNullOrEmpty(a.Accion))
-                        {
-                            detailDesc = a.Accion == "CREAR" ? "registro nuevo elemento" : "modificó registros del sistema";
-                        }
+                        clientsMap = await CargarNombresClientesAsync(context, clientIds.Select(id => (int?)id));
+                    }
+
+                    foreach (var cf in dbPurchases)
+                    {
+                        var provName = cf.CodClientes.HasValue && clientsMap.TryGetValue(cf.CodClientes.Value, out var pName) ? pName : "Proveedor general";
+                        var date = cf.FchAutorizacion ?? cf.FechaRegistro ?? DateTime.Now;
+                        var total = cf.ValorTotal ?? 0m;
                         activities.Add(new ActivityDto(
-                            "ri-settings-5-line",
+                            "ri-shopping-cart-2-line",
                             "purple",
-                            $"Acción por {uName}: {detailDesc}",
-                            FormatRelativeTime(a.Fecha),
-                            a.Fecha
+                            $"Compra registrada de {provName}: {Money(total)}",
+                            FormatRelativeTime(date),
+                            date
                         ));
                     }
                 }
-                catch (Exception exAudits)
+                catch (Exception exPurchases)
                 {
-                    Console.WriteLine($"Error al cargar auditorías para actividad reciente: {exAudits.Message}");
+                    Console.WriteLine($"Error al cargar compras para actividad reciente: {exPurchases.Message}");
+                }
+
+                // Retenciones (Withholdings)
+                try
+                {
+                    var dbRetenciones = await context.RetencionInfo
+                        .AsNoTracking()
+                        .OrderByDescending(r => r.Sec)
+                        .Take(3)
+                        .ToListAsync();
+                    
+                    var rucs = dbRetenciones.Select(r => r.IdCliente).Where(ruc => !string.IsNullOrEmpty(ruc)).Distinct().ToList();
+                    var providersMap = new Dictionary<string, string>();
+                    if (rucs.Any())
+                    {
+                        providersMap = await context.Proveedores
+                            .AsNoTracking()
+                            .Where(p => rucs.Contains(p.ruc))
+                            .ToDictionaryAsync(
+                                p => p.ruc!,
+                                p => !string.IsNullOrWhiteSpace(p.nombre)
+                                    ? p.nombre
+                                    : ((p.primerNombre ?? "") + " " + (p.segundoNombre ?? "") + " " + (p.primerApellido ?? "") + " " + (p.segundoApellido ?? "")).Trim()
+                            );
+                    }
+
+                    foreach (var r in dbRetenciones)
+                    {
+                        var pName = !string.IsNullOrEmpty(r.IdCliente) && providersMap.TryGetValue(r.IdCliente, out var name) ? name : (r.IdCliente ?? "Proveedor general");
+                        var date = r.Fecha ?? DateTime.Now;
+                        var numRet = string.IsNullOrEmpty(r.NumRetencion) ? r.Sec.ToString() : r.NumRetencion;
+                        activities.Add(new ActivityDto(
+                            "ri-file-shield-2-line",
+                            "yellow",
+                            $"Retención emitida: {r.Serie}-{numRet} a {pName}",
+                            FormatRelativeTime(date),
+                            date
+                        ));
+                    }
+                }
+                catch (Exception exRetenciones)
+                {
+                    Console.WriteLine($"Error al cargar retenciones para actividad reciente: {exRetenciones.Message}");
+                }
+
+                // Guías de Remisión
+                try
+                {
+                    var dbGuias = await context.GuiasRemision
+                        .AsNoTracking()
+                        .OrderByDescending(g => g.Sec)
+                        .Take(3)
+                        .ToListAsync();
+                    
+                    foreach (var g in dbGuias)
+                    {
+                        var date = g.Fecha ?? DateTime.Now;
+                        var numGuia = string.IsNullOrEmpty(g.NumGuiaRemision) ? g.Sec.ToString() : g.NumGuiaRemision;
+                        activities.Add(new ActivityDto(
+                            "ri-truck-line",
+                            "cyan",
+                            $"Guía de remisión emitida: GR {g.Serie}-{numGuia}",
+                            FormatRelativeTime(date),
+                            date
+                        ));
+                    }
+                }
+                catch (Exception exGuias)
+                {
+                    Console.WriteLine($"Error al cargar guías de remisión para actividad reciente: {exGuias.Message}");
                 }
             }
             catch (Exception exOverall)
@@ -823,27 +891,32 @@
                 Console.WriteLine($"Error general en el feed de actividad: {exOverall.Message}");
             }
 
-            // Si hay menos de 5 actividades totales, añadimos fallbacks realistas
-            if (activities.Count < 5)
+            // Si hay menos de 8 actividades totales, añadimos fallbacks realistas
+            if (activities.Count < 8)
             {
                 var now = DateTime.Now;
                 var fallbacks = new List<ActivityDto>
                 {
                     new("ri-refresh-line", "purple", "Suscripción renovada: Distribuidora Nova (e-fact)", "Hace 1 hora", now.AddHours(-1)),
                     new("ri-hand-coin-line", "orange", "Pago recibido de Comercial Andina S.A. $450.00", "Hace 2 horas", now.AddHours(-2)),
-                    new("ri-file-warning-line", "red", "Nota de crédito emitida: NC 001-001-000000123", "Hace 3 horas", now.AddHours(-3))
+                    new("ri-file-warning-line", "red", "Nota de crédito emitida: NC 001-001-000000123", "Hace 3 horas", now.AddHours(-3)),
+                    new("ri-file-list-3-line", "blue", "Factura 001-001-000004567 emitida a Importadora del Pacífico", "Hace 4 horas", now.AddHours(-4)),
+                    new("ri-shopping-cart-2-line", "purple", "Compra registrada de Proveedora del Austro $1,200.00", "Hace 5 horas", now.AddHours(-5)),
+                    new("ri-file-shield-2-line", "yellow", "Retención emitida: RET 001-002-000008899 a TechSolutions", "Hace 6 horas", now.AddHours(-6)),
+                    new("ri-truck-line", "cyan", "Guía de remisión emitida: GR 001-010-000000222", "Hace 7 horas", now.AddHours(-7)),
+                    new("ri-hand-coin-line", "orange", "Pago recibido de Inmobiliaria del Sol $350.00", "Hace 8 horas", now.AddHours(-8))
                 };
 
                 foreach (var fb in fallbacks)
                 {
-                    if (activities.Count >= 5) break;
+                    if (activities.Count >= 8) break;
                     activities.Add(fb);
                 }
             }
 
             recentActivities = activities
                 .OrderByDescending(a => a.DateVal)
-                .Take(5)
+                .Take(8)
                 .ToList();
 
             // 9. Distribución por provincia
