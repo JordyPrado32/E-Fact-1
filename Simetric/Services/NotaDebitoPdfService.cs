@@ -24,6 +24,8 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
     private const float FuenteEtiquetaPdf = 7.2f;
     private const float FuenteTituloPdf = 11f;
     private const float PaddingPanelPdf = 7f;
+    private const float AlturaMinimaEncabezadoA4 = 230f;
+    private const float AlturaMinimaPanelEmisorA4 = 150f;
 
     public NotaDebitoPdfService(IWebHostEnvironment environment)
     {
@@ -199,7 +201,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
         {
             row.Spacing(12);
 
-            row.RelativeItem().MinHeight(208).Column(column =>
+            row.RelativeItem().MinHeight(AlturaMinimaEncabezadoA4).Column(column =>
             {
                 if (logoSistema != null)
                 {
@@ -225,7 +227,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
                 column.Item().Element(card => ComponerPanelEmisorA4(card, emisor));
             });
 
-            row.ConstantItem(285).MinHeight(208).Column(column =>
+            row.ConstantItem(285).MinHeight(AlturaMinimaEncabezadoA4).Column(column =>
             {
                 column.Spacing(5);
                 column.Item()
@@ -296,6 +298,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
         container.Border(1)
             .BorderColor(Colors.Blue.Lighten4)
             .Background(Colors.Blue.Lighten5)
+            .MinHeight(AlturaMinimaPanelEmisorA4)
             .Padding(PaddingPanelPdf)
             .Column(column =>
             {

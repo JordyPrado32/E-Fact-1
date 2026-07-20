@@ -20,6 +20,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
     private const float FuenteEtiqueta = 7.2f;
     private const float FuenteTituloSeccion = 10.6f;
     private const float PaddingBloque = 7f;
+    private const float AlturaMinimaInfoEmisor = 180f;
     private readonly IWebHostEnvironment _environment;
 
     public GuiaRemisionPdfService(IWebHostEnvironment environment)
@@ -175,6 +176,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
                     .Border(1)
                     .BorderColor(Colors.Blue.Lighten4)
                     .Background(Colors.White)
+                    .MinHeight(AlturaMinimaInfoEmisor)
                     .Padding(PaddingBloque)
                     .Column(info =>
                     {
