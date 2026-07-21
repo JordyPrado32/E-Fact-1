@@ -27,6 +27,9 @@ namespace Simetric.Models
         public const decimal PrecioPlan600 = 69.00m;
         public const decimal PrecioPlanIlimitado = 90.00m;
 
+        public static readonly int DocumentosMinimosPersonalizados =
+            CalcularDocumentosPorMonto(MontoMinimoPersonalizado, PrecioTierHasta25);
+
         public static decimal CalcularTotalPorCantidad(int documentos)
         {
             if (documentos <= 0)

@@ -494,49 +494,81 @@ namespace Simetric.Services
                 from e in emiJoin.DefaultIfEmpty()
 
                 where g.IdUsuario == idUsuario &&
+                      (e == null || e.EsEmisorSistema != true) &&
                       (g.EstadoSRI == null || g.EstadoSRI != "ANULADA")
                 orderby g.Sec descending
                 select new
                 {
-                    Guia = g,
-                    Destinatario = gd,
-                    Transportista = t,
-                    Emisor = e
+                    g.Sec,
+                    g.NumGuiaRemision,
+                    g.Serie,
+                    g.Fecha,
+                    g.FechaIniTransporte,
+                    g.FechaFinTransporte,
+                    g.EstadoSRI,
+                    g.NumAutorizacion,
+                    g.FechaAutorizacion,
+                    g.CodClave,
+                    g.IdEmpresa,
+                    g.IdSucursal,
+                    g.IdUsuario,
+                    Destinatario = gd != null ? gd.RazonSocial : null,
+                    IdentificacionDestinatario = gd != null ? gd.IdDestinatario : null,
+                    SerieDocSustento = gd != null ? gd.SerieDocSustento : null,
+                    NumDocSustento = gd != null ? gd.NumDocSustento : null,
+                    MotivoTraslado = gd != null ? gd.MotivoTraslado : null,
+                    Transportista = t != null ? t.RazonSocial : null,
+                    EmisorRuc = e != null ? e.Ruc : null
                 })
                 .ToListAsync();
 
             var empresas = data
-                .Where(x => x.Guia.IdEmpresa.HasValue)
-                .Select(x => x.Guia.IdEmpresa!.Value)
+                .Where(x => x.IdEmpresa.HasValue)
+                .Select(x => x.IdEmpresa!.Value)
                 .Distinct()
                 .ToList();
             var emisoresSede = await db.Emisores.AsNoTracking()
                 .Where(e => e.Estado && e.IdEmpresa.HasValue && empresas.Contains(e.IdEmpresa.Value))
+                .Select(e => new { e.IdEmpresa, e.IdSucursal, e.IdUsuario, e.EsEmisorSistema, e.Ruc })
                 .ToListAsync();
 
-            return data.Select(x => new GuiaRemisionListDto
+            return data.Select(x =>
             {
-                Sec = x.Guia.Sec,
-                NumeroGuiaRemision = x.Guia.NumGuiaRemision ?? "",
-                Serie = x.Guia.Serie ?? "",
-                FechaEmision = x.Guia.Fecha,
-                FechaInicioTransporte = x.Guia.FechaIniTransporte,
-                FechaFinTransporte = x.Guia.FechaFinTransporte,
-                Destinatario = x.Destinatario?.RazonSocial ?? "",
-                IdentificacionDestinatario = x.Destinatario?.IdDestinatario ?? "",
-                Transportista = x.Transportista?.RazonSocial ?? "",
-                FacturaSustento = FormatearNumeroDocumento(x.Destinatario?.SerieDocSustento, x.Destinatario?.NumDocSustento),
-                MotivoTraslado = x.Destinatario?.MotivoTraslado ?? "",
-                EstadoSri = x.Guia.EstadoSRI ?? "",
-                NumeroAutorizacion = x.Guia.NumAutorizacion ?? "",
-                FechaAutorizacion = x.Guia.FechaAutorizacion ?? "",
-                ClaveAcceso = x.Guia.CodClave ?? "",
-                XmlUrl = !string.IsNullOrWhiteSpace(x.Emisor?.Ruc ?? ResolverEmisorSede(x.Guia, emisoresSede)?.Ruc)
-                    ? ConstruirXmlUrl(x.Emisor?.Ruc ?? ResolverEmisorSede(x.Guia, emisoresSede)!.Ruc!, x.Guia.Serie, x.Guia.NumGuiaRemision)
-                    : "",
-                PdfUrl = !string.IsNullOrWhiteSpace(x.Emisor?.Ruc ?? ResolverEmisorSede(x.Guia, emisoresSede)?.Ruc)
-                    ? ConstruirPdfUrl(x.Emisor?.Ruc ?? ResolverEmisorSede(x.Guia, emisoresSede)!.Ruc!, x.Guia.Serie, x.Guia.NumGuiaRemision)
-                    : ""
+                var ruc = x.EmisorRuc;
+                if (string.IsNullOrWhiteSpace(ruc))
+                {
+                    ruc = emisoresSede
+                        .Where(e => e.IdEmpresa == x.IdEmpresa && e.IdSucursal == x.IdSucursal)
+                        .OrderByDescending(e => e.IdUsuario == x.IdUsuario)
+                        .ThenByDescending(e => e.EsEmisorSistema)
+                        .Select(e => e.Ruc)
+                        .FirstOrDefault();
+                }
+
+                return new GuiaRemisionListDto
+                {
+                    Sec = x.Sec,
+                    NumeroGuiaRemision = x.NumGuiaRemision ?? "",
+                    Serie = x.Serie ?? "",
+                    FechaEmision = x.Fecha,
+                    FechaInicioTransporte = x.FechaIniTransporte,
+                    FechaFinTransporte = x.FechaFinTransporte,
+                    Destinatario = x.Destinatario ?? "",
+                    IdentificacionDestinatario = x.IdentificacionDestinatario ?? "",
+                    Transportista = x.Transportista ?? "",
+                    FacturaSustento = FormatearNumeroDocumento(x.SerieDocSustento, x.NumDocSustento),
+                    MotivoTraslado = x.MotivoTraslado ?? "",
+                    EstadoSri = x.EstadoSRI ?? "",
+                    NumeroAutorizacion = x.NumAutorizacion ?? "",
+                    FechaAutorizacion = x.FechaAutorizacion ?? "",
+                    ClaveAcceso = x.CodClave ?? "",
+                    XmlUrl = !string.IsNullOrWhiteSpace(ruc)
+                        ? ConstruirXmlUrl(ruc, x.Serie, x.NumGuiaRemision)
+                        : "",
+                    PdfUrl = !string.IsNullOrWhiteSpace(ruc)
+                        ? ConstruirPdfUrl(ruc, x.Serie, x.NumGuiaRemision)
+                        : ""
+                };
             }).ToList();
         }
 
