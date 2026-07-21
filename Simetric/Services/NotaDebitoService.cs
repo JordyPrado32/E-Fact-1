@@ -427,6 +427,7 @@ public class NotaDebitoService
             from ti in tipoJoin.DefaultIfEmpty()
 
             where nd.Usuario == idUsuario &&
+                  (e == null || e.EsEmisorSistema != true) &&
                   (nd.Estado == null || nd.Estado != "I")
             orderby nd.Sec descending
             select new

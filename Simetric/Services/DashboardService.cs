@@ -25,6 +25,7 @@ public sealed class DashboardService
             .AsNoTracking()
             .Where(f => f.Idusuario.HasValue
                         && usuariosCuentaIds.Contains(f.Idusuario.Value)
+                        && (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true)
                         && (f.Estado == null || f.Estado == true))
             .Select(f => new InvoiceSource
             {
@@ -77,7 +78,13 @@ public sealed class DashboardService
                 .Where(c => c.Usuario.HasValue
                             && usuariosCuentaIds.Contains(c.Usuario.Value)
                             && (c.Estado == null || c.Estado == true)
-                            && c.Numeroidentificacion != ConsumidorFinalIdentificacion)
+                            && c.Numeroidentificacion != ConsumidorFinalIdentificacion
+                            && (!db.Facturas.Any(f => f.Codclientes == c.Codcliente
+                                                      && f.CodemisorNavigation != null
+                                                      && f.CodemisorNavigation.EsEmisorSistema)
+                                || db.Facturas.Any(f => f.Codclientes == c.Codcliente
+                                                        && (f.CodemisorNavigation == null
+                                                            || f.CodemisorNavigation.EsEmisorSistema != true))))
                 .Select(c => new ClienteDashboardInfo
                 {
                     FechaIngreso = c.Fechaingreso
@@ -105,6 +112,7 @@ public sealed class DashboardService
                 .AsNoTracking()
                 .Where(n => n.Usuario.HasValue
                             && usuariosCuentaIds.Contains(n.Usuario.Value)
+                            && !db.Emisores.Any(e => e.Codigo == n.CodEmisor && e.EsEmisorSistema)
                             && (n.Estado == null || n.Estado == true))
                 .Select(n => n.Autorizado)
                 .ToListAsync(),
@@ -115,6 +123,7 @@ public sealed class DashboardService
                 .AsNoTracking()
                 .Where(n => n.Usuario.HasValue
                             && usuariosCuentaIds.Contains(n.Usuario.Value)
+                            && !db.Emisores.Any(e => e.Codigo == n.CodEmisor && e.EsEmisorSistema)
                             && !string.Equals((n.Estado ?? string.Empty).Trim(), "I", StringComparison.OrdinalIgnoreCase))
                 .Select(n => n.Autorizado)
                 .ToListAsync(),
@@ -124,6 +133,9 @@ public sealed class DashboardService
             async () => await db.GuiasRemision
                 .AsNoTracking()
                 .Where(g => g.IdUsuario.HasValue && usuariosCuentaIds.Contains(g.IdUsuario.Value))
+                .Where(g => !db.Facturas.Any(f => f.Codfactura == g.Codfactura
+                                                 && f.CodemisorNavigation != null
+                                                 && f.CodemisorNavigation.EsEmisorSistema))
                 .Select(g => g.EstadoSRI)
                 .ToListAsync(),
             new List<string?>());
@@ -265,6 +277,7 @@ public sealed class DashboardService
                 .AsNoTracking()
                 .Where(f => f.Idusuario.HasValue
                             && usuariosCuentaIds.Contains(f.Idusuario.Value)
+                            && (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true)
                             && (f.Estado == null || f.Estado == true))
                 .Select(f => new InvoiceAuthorizationInfo
                 {
@@ -279,6 +292,7 @@ public sealed class DashboardService
                 .AsNoTracking()
                 .Where(n => n.Usuario.HasValue
                             && usuariosCuentaIds.Contains(n.Usuario.Value)
+                            && !db.Emisores.Any(e => e.Codigo == n.CodEmisor && e.EsEmisorSistema)
                             && (n.Estado == null || n.Estado == true))
                 .Select(n => n.Autorizado)
                 .ToListAsync(),
@@ -288,7 +302,8 @@ public sealed class DashboardService
             async () => await db.NotaDebitos
                 .AsNoTracking()
                 .Where(n => n.Usuario.HasValue
-                            && usuariosCuentaIds.Contains(n.Usuario.Value))
+                            && usuariosCuentaIds.Contains(n.Usuario.Value)
+                            && !db.Emisores.Any(e => e.Codigo == n.CodEmisor && e.EsEmisorSistema))
                 .Select(n => n.Autorizado)
                 .ToListAsync(),
             new List<string?>());
@@ -297,6 +312,9 @@ public sealed class DashboardService
             async () => await db.GuiasRemision
                 .AsNoTracking()
                 .Where(g => g.IdUsuario.HasValue && usuariosCuentaIds.Contains(g.IdUsuario.Value))
+                .Where(g => !db.Facturas.Any(f => f.Codfactura == g.Codfactura
+                                                 && f.CodemisorNavigation != null
+                                                 && f.CodemisorNavigation.EsEmisorSistema))
                 .Select(g => g.EstadoSRI)
                 .ToListAsync(),
             new List<string?>());
@@ -348,6 +366,7 @@ public sealed class DashboardService
                 .AsNoTracking()
                 .Where(f => f.Idusuario.HasValue
                             && usuariosCuentaIds.Contains(f.Idusuario.Value)
+                            && (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true)
                             && (f.Estado == null || f.Estado == true))
                 .Select(f => new AuthorizedDocumentCandidate
                 {
@@ -371,6 +390,7 @@ public sealed class DashboardService
                 .AsNoTracking()
                 .Where(n => n.Usuario.HasValue
                             && usuariosCuentaIds.Contains(n.Usuario.Value)
+                            && !db.Emisores.Any(e => e.Codigo == n.CodEmisor && e.EsEmisorSistema)
                             && (n.Estado == null || n.Estado == true))
                 .Select(n => new AuthorizedDocumentCandidate
                 {
@@ -390,7 +410,8 @@ public sealed class DashboardService
             async () => await db.NotaDebitos
                 .AsNoTracking()
                 .Where(n => n.Usuario.HasValue
-                            && usuariosCuentaIds.Contains(n.Usuario.Value))
+                            && usuariosCuentaIds.Contains(n.Usuario.Value)
+                            && !db.Emisores.Any(e => e.Codigo == n.CodEmisor && e.EsEmisorSistema))
                 .Select(n => new AuthorizedDocumentCandidate
                 {
                     DocumentoId = n.Sec,
@@ -409,6 +430,9 @@ public sealed class DashboardService
             async () => await db.GuiasRemision
                 .AsNoTracking()
                 .Where(g => g.IdUsuario.HasValue && usuariosCuentaIds.Contains(g.IdUsuario.Value))
+                .Where(g => !db.Facturas.Any(f => f.Codfactura == g.Codfactura
+                                                 && f.CodemisorNavigation != null
+                                                 && f.CodemisorNavigation.EsEmisorSistema))
                 .Select(g => new AuthorizedDocumentCandidate
                 {
                     DocumentoId = g.Sec,

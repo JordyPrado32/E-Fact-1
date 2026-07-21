@@ -108,7 +108,7 @@
                 <span>Descargar Excel</span>
             </button>
 
-            <button class="refresh-btn" type="button" @onclick="Recargar">
+            <button class="refresh-btn" type="button" disabled="@cargando" @onclick="Recargar">
                 <i class="bi bi-arrow-clockwise"></i>
                 <span>Refrescar</span>
             </button>
@@ -131,6 +131,20 @@
             </div>
             <h3>Cargando guias de remision</h3>
             <p>Estamos organizando tu historial de traslados para mostrarlo completo.</p>
+        </section>
+    }
+    else if (!string.IsNullOrWhiteSpace(errorCarga))
+    {
+        <section class="state-card state-card-empty" role="alert">
+            <div class="state-icon">
+                <i class="bi bi-exclamation-triangle"></i>
+            </div>
+            <h3>No pudimos cargar las guías</h3>
+            <p>@errorCarga</p>
+            <button class="refresh-btn" type="button" @onclick="Recargar">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>Intentar nuevamente</span>
+            </button>
         </section>
     }
     else if (guiasFiltradas.Count == 0)
@@ -599,6 +613,8 @@
     }
     private int currentUserId;
     private bool cargando = true;
+    private bool recargando;
+    private string? errorCarga;
     private int? guiaEmitiendoSri;
     private bool procesandoCorreo;
     private bool procesandoAnulacion;
@@ -723,29 +739,45 @@
 
     private async Task Recargar()
     {
+        if (recargando)
+            return;
+
+        recargando = true;
         cargando = true;
+        errorCarga = null;
 
-        if (isDemoMode)
+        try
         {
-            guias = CrearDemoGuias();
+            if (isDemoMode)
+            {
+                guias = CrearDemoGuias();
+                paginaActual = 1;
+                return;
+            }
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
+            currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+
+            if (currentUserId <= 0)
+            {
+                NavManager.NavigateTo("/", true);
+                return;
+            }
+
+            guias = await GuiaRemisionService.ListarGuiasRemisionUsuarioAsync(currentUserId);
             paginaActual = 1;
-            cargando = false;
-            return;
         }
-
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
-        currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
-
-        if (currentUserId <= 0)
+        catch
         {
-            NavManager.NavigateTo("/", true);
-            return;
+            guias = new List<GuiaRemisionListDto>();
+            errorCarga = "La consulta tardó demasiado o se perdió la conexión. Intenta nuevamente en unos segundos.";
         }
-
-        guias = await GuiaRemisionService.ListarGuiasRemisionUsuarioAsync(currentUserId);
-        paginaActual = 1;
-        cargando = false;
+        finally
+        {
+            cargando = false;
+            recargando = false;
+        }
     }
 
     private bool CumpleFiltroGuia(GuiaRemisionListDto guia)

@@ -272,9 +272,7 @@ namespace Simetric.Controllers
                         return ConstruirRedirectCompraDocumentos("pendiente", compraId, reference, authorizationCode, saldoActual, false);
                     }
 
-                    pagoAprobado = compraHistorial.SaldoAplicado ||
-                        EsPagoAprobado(status) ||
-                        EsRetornoGetDeCompraPendiente(compraHistorial, compraId, status);
+                    pagoAprobado = compraHistorial.SaldoAplicado || EsPagoAprobado(status);
 
                     compraHistorial.Reference = FirstNonEmpty(reference, compraHistorial.Reference);
                     compraHistorial.AuthorizationCode = FirstNonEmpty(authorizationCode, compraHistorial.AuthorizationCode);
@@ -309,12 +307,11 @@ namespace Simetric.Controllers
                         ? DateTime.Now
                         : compraHistorial.Fecha;
 
-                    usuario.HistorialComprasDocumentosJson = SerializarHistorial(historial);
                     saldoActual = usuario.SaldoDocumentos;
                     historialActualizado = true;
 
                     var debeIntentarFactura = pagoAprobado &&
-                        (saldoAplicadoAhora || compraHistorial.CodFactura is not > 0);
+                        compraHistorial.FacturaAutorizada != true;
 
                     // Registrar venta automatica en BackOffice de forma atomica con el saldo
                     if (saldoAplicadoAhora)
@@ -332,8 +329,8 @@ namespace Simetric.Controllers
                             Canal = "Web",
                             Vendedor = vendedorNombre,
                             Estado = "pagada",
-                            FormaPago = Truncate("Tarjeta de Crédito", 50),
-                            Observacion = Truncate($"Compra de documentos automática en línea (Pagomedios). Ref: {reference} / {authorizationCode}. Compra #{compraId}", 500)
+                            FormaPago = Truncate("DeUna", 50),
+                            Observacion = Truncate($"Compra de documentos automática en línea (DeUna / Pagomedios). Ref: {reference} / {authorizationCode}. Compra #{compraId}", 500)
                         });
                     }
 
@@ -384,6 +381,7 @@ namespace Simetric.Controllers
                         }
                     }
 
+                    usuario.HistorialComprasDocumentosJson = SerializarHistorial(historial);
                     await context.SaveChangesAsync();
 
                     if (saldoAplicadoAhora && !compraHistorial.EsIlimitado && !string.IsNullOrWhiteSpace(usuario.Email))
@@ -924,15 +922,6 @@ namespace Simetric.Controllers
                 (!string.IsNullOrWhiteSpace(customValue) &&
                  string.Equals(item.CustomValue, customValue, StringComparison.OrdinalIgnoreCase)));
         }
-
-        private bool EsRetornoGetDeCompraPendiente(
-            CompraDocumentosHistorialItem compra,
-            string? compraId,
-            string? status) =>
-            HttpMethods.IsGet(Request.Method) &&
-            !compra.SaldoAplicado &&
-            string.IsNullOrWhiteSpace(status) &&
-            CoincideCompraId(compra, compraId);
 
         private static bool CoincideCompraId(CompraDocumentosHistorialItem compra, string? compraId) =>
             !string.IsNullOrWhiteSpace(compraId) &&
