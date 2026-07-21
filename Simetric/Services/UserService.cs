@@ -13,10 +13,10 @@ namespace Simetric.Services
             _dbFactory = dbFactory;
         }
 
-        // --- MÉTODOS DE LECTURA ---
+        // --- METODOS DE LECTURA ---
 
         /// <summary>
-        /// Obtiene la lista de todos los usuarios incluyendo sus relaciones de navegación.
+        /// Obtiene la lista de todos los usuarios incluyendo sus relaciones de navegacion.
         /// </summary>
         public async Task<List<Usuario>> GetUsuariosAsync(int currentUserId, int currentTipoUsuario)
         {
@@ -29,21 +29,21 @@ namespace Simetric.Services
                 .Where(u => u.Estado == true)
                 .AsQueryable();
 
-            // 1. Si es Administrador (ID 2 según tu tabla), no filtramos nada (ve todos)
+            // 1. Si es Administrador (ID 2 segun tu tabla), no filtramos nada (ve todos)
             if (currentTipoUsuario == 2)
             {
                 // No aplicamos filtros adicionales
             }
-            // 2. Si es Usuario (ID 1), aplicamos el filtro de jerarquía
+            // 2. Si es Usuario (ID 1), aplicamos el filtro de jerarquia
             else if (currentTipoUsuario == 1)
             {
-                // El usuario ve su propio registro O registros donde él sea el jefe (asociados)
+                // El usuario ve su propio registro O registros donde el sea el jefe (asociados)
                 query = query.Where(u => u.IdUsuario == currentUserId || u.idJefe == currentUserId);
             }
             else
             {
-                // Opcional: Para otros roles (Soporte, Firma, etc.), podrías definir 
-                // que solo vean su propio perfil para evitar fugas de información
+                // Opcional: Para otros roles (Soporte, Firma, etc.), podrias definir
+                // que solo vean su propio perfil para evitar fugas de informacion
                 query = query.Where(u => u.IdUsuario == currentUserId);
             }
 
@@ -64,7 +64,7 @@ namespace Simetric.Services
         }
 
         /// <summary>
-        /// Obtiene los tipos de identificación activos.
+        /// Obtiene los tipos de identificacion activos.
         /// </summary>
         public async Task<List<TipoIdentificacion>> GetTiposIdentificacionAsync()
         {
@@ -75,7 +75,7 @@ namespace Simetric.Services
         }
 
         /// <summary>
-        /// Obtiene un usuario puntual sin cargar navegaciones para refrescar la sesión actual.
+        /// Obtiene un usuario puntual sin cargar navegaciones para refrescar la sesion actual.
         /// </summary>
         public async Task<Usuario?> GetUsuarioByIdAsync(int id)
         {
@@ -119,10 +119,10 @@ namespace Simetric.Services
                 throw new Exception("El formato de la serie debe ser 000-000");
             }
 
-            // 2. BLOQUEO NUEVO: No permitir 000 en establecimiento o punto de emisión
+            // 2. BLOQUEO NUEVO: No permitir 000 en establecimiento o punto de emision
             if (serie == "000-000" || serie.StartsWith("000-") || serie.EndsWith("-000"))
             {
-                throw new Exception("La serie 000-000 no es válida para el SRI. Use valores desde 001.");
+                throw new Exception("La serie 000-000 no es valida para el SRI. Use valores desde 001.");
             }
             if (idUsuario <= 0)
                 return;
@@ -165,63 +165,75 @@ namespace Simetric.Services
         {
             using var context = await _dbFactory.CreateDbContextAsync();
 
-            if (usuario.IdUsuario == 0)
-            {
-                // Configuración para nuevo usuario
-                usuario.FechaCreacion = DateTime.Now;
-                usuario.Estado = true;
-                usuario.IntentosFallidos = 0;
-                usuario.CuentaBloqueada = false;
-                usuario.SaldoDocumentos = usuario.SaldoDocumentos > 0 ? usuario.SaldoDocumentos : 5;
+            usuario.Email = (usuario.Email ?? string.Empty).Trim();
+            await ValidarCorreoUnicoAsync(context, usuario.Email, usuario.IdUsuario);
 
-                // Nota: La ClaveTemporal y PasswordHash ya deben venir asignados desde la UI/Controlador
-                context.Usuarios.Add(usuario);
-            }
-            else
+            try
             {
-                // Buscamos el usuario existente para actualizar solo los campos permitidos
-                var existingUser = await context.Usuarios.FindAsync(usuario.IdUsuario);
-                if (existingUser != null)
+                if (usuario.IdUsuario == 0)
                 {
-                    // Actualización de datos personales y de contacto
-                    existingUser.Nombres = usuario.Nombres;
-                    existingUser.Apellidos = usuario.Apellidos;
-                    existingUser.Email = usuario.Email;
-                    existingUser.Celular = usuario.Celular;
-                    existingUser.FechaNacimiento = usuario.FechaNacimiento;
-                    existingUser.DireccionEmpresa = usuario.DireccionEmpresa;
+                    // Configuracion para nuevo usuario
+                    usuario.FechaCreacion = DateTime.Now;
+                    usuario.Estado = true;
+                    usuario.IntentosFallidos = 0;
+                    usuario.CuentaBloqueada = false;
+                    usuario.SaldoDocumentos = usuario.SaldoDocumentos > 0 ? usuario.SaldoDocumentos : 5;
 
-                    // Actualización de campos de identidad
-                    existingUser.Identificacion = usuario.Identificacion;
-                    existingUser.IdTipoIdentificacion = usuario.IdTipoIdentificacion;
-                    existingUser.TipoCliente = usuario.TipoCliente;
-
-                    // Personalización
-                    existingUser.AvatarUrl = usuario.AvatarUrl; // Campo añadido
-
-                    // Roles y Seguridad
-                    existingUser.IdTipoUsuario = usuario.IdTipoUsuario;
-                    existingUser.Estado = usuario.Estado;
-                    existingUser.CuentaBloqueada = usuario.CuentaBloqueada;
-
-                    // Gestión de Seguridad: Solo actualizamos el Hash si cambió (ej. reset de clave o desbloqueo)
-                    if (usuario.PasswordHash != null && existingUser.PasswordHash != usuario.PasswordHash)
-                    {
-                        existingUser.PasswordHash = usuario.PasswordHash;
-                        existingUser.ClaveTemporal = usuario.ClaveTemporal;
-                    }
-
-                    context.Usuarios.Update(existingUser);
+                    // Nota: La ClaveTemporal y PasswordHash ya deben venir asignados desde la UI/Controlador
+                    context.Usuarios.Add(usuario);
                 }
-            }
+                else
+                {
+                    // Buscamos el usuario existente para actualizar solo los campos permitidos
+                    var existingUser = await context.Usuarios.FindAsync(usuario.IdUsuario);
+                    if (existingUser != null)
+                    {
+                        // Actualizacion de datos personales y de contacto
+                        existingUser.Nombres = usuario.Nombres;
+                        existingUser.Apellidos = usuario.Apellidos;
+                        existingUser.Email = usuario.Email;
+                        existingUser.Celular = usuario.Celular;
+                        existingUser.FechaNacimiento = usuario.FechaNacimiento;
+                        existingUser.DireccionEmpresa = usuario.DireccionEmpresa;
 
-            await context.SaveChangesAsync();
+                        // Actualizacion de campos de identidad
+                        existingUser.Identificacion = usuario.Identificacion;
+                        existingUser.IdTipoIdentificacion = usuario.IdTipoIdentificacion;
+                        existingUser.TipoCliente = usuario.TipoCliente;
+
+                        // Personalizacion
+                        existingUser.AvatarUrl = usuario.AvatarUrl;
+
+                        // Roles y Seguridad
+                        existingUser.IdTipoUsuario = usuario.IdTipoUsuario;
+                        existingUser.Estado = usuario.Estado;
+                        existingUser.CuentaBloqueada = usuario.CuentaBloqueada;
+
+                        // Gestion de Seguridad: Solo actualizamos el Hash si cambio
+                        if (usuario.PasswordHash != null && existingUser.PasswordHash != usuario.PasswordHash)
+                        {
+                            existingUser.PasswordHash = usuario.PasswordHash;
+                            existingUser.ClaveTemporal = usuario.ClaveTemporal;
+                        }
+
+                        context.Usuarios.Update(existingUser);
+                    }
+                }
+
+                await context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex) when (EsViolacionCorreoDuplicado(ex))
+            {
+                throw new InvalidOperationException(
+                    $"Ya existe otro usuario registrado con el correo '{usuario.Email}'. Si la cuenta anterior aparece como 'Sin correo disponible', revisa que ese correo no siga asignado a otro usuario activo o historico.",
+                    ex);
+            }
         }
 
         // --- OPERACIONES DE SOPORTE ---
 
         /// <summary>
-        /// Realiza un borrado lógico (cambio de estado) del usuario.
+        /// Realiza un borrado logico (cambio de estado) del usuario.
         /// </summary>
         public async Task<bool> SoftDeleteAsync(int id)
         {
@@ -260,10 +272,63 @@ namespace Simetric.Services
                 user.IntentosFallidos = 0;
                 user.FechaDesbloqueo = null;
 
-                // La actualización de la clave debe realizarse mediante SaveUsuarioAsync
-                // después de generar el nuevo hash en el componente.
+                // La actualizacion de la clave debe realizarse mediante SaveUsuarioAsync
+                // despues de generar el nuevo hash en el componente.
                 await context.SaveChangesAsync();
             }
+        }
+
+        private static async Task ValidarCorreoUnicoAsync(AppDbContext context, string? email, int idUsuarioActual)
+        {
+            var emailNormalizado = (email ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(emailNormalizado))
+            {
+                return;
+            }
+
+            var emailNormalizadoLower = emailNormalizado.ToLowerInvariant();
+
+            var existente = await context.Usuarios
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u =>
+                    u.IdUsuario != idUsuarioActual &&
+                    u.Email != null &&
+                    u.Email.Trim().ToLower() == emailNormalizadoLower);
+
+            if (existente is null)
+            {
+                return;
+            }
+
+            var estadoDescripcion = existente.Estado == true ? "activo" : "inactivo";
+            throw new InvalidOperationException(
+                $"Ya existe otro usuario {estadoDescripcion} registrado con el correo '{emailNormalizado}'.");
+        }
+
+        private static bool EsViolacionCorreoDuplicado(DbUpdateException ex)
+        {
+            var mensaje = ObtenerMensajeCompleto(ex);
+            return mensaje.Contains("Usuarios", StringComparison.OrdinalIgnoreCase) &&
+                   (mensaje.Contains("duplicate key", StringComparison.OrdinalIgnoreCase) ||
+                    mensaje.Contains("UNIQUE KEY", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string ObtenerMensajeCompleto(Exception ex)
+        {
+            var mensajes = new List<string>();
+            Exception? actual = ex;
+
+            while (actual != null)
+            {
+                if (!string.IsNullOrWhiteSpace(actual.Message))
+                {
+                    mensajes.Add(actual.Message);
+                }
+
+                actual = actual.InnerException;
+            }
+
+            return string.Join(" | ", mensajes);
         }
 
         private static string NormalizarSerie(string? serie, int numeroCaja)
