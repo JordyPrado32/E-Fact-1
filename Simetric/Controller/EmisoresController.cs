@@ -79,7 +79,8 @@ namespace Simetric.Controllers
                 return BadRequest("Usuario no encontrado.");
 
             NormalizarEmisor(model);
-            model.CodEstablecimiento = NormalizarSerie(model.CodEstablecimiento, "001");
+            model.CodEstablecimiento = ObtenerEstablecimientoDesdeRuc(model.Ruc)
+                ?? NormalizarSerie(model.CodEstablecimiento, "001");
             model.CodPuntoEmision = NormalizarSerie(model.CodPuntoEmision, "001");
             model.Retenciones = NormalizarRespuesta(model.Retenciones, "NO");
 
@@ -138,7 +139,8 @@ namespace Simetric.Controllers
                 return NotFound();
 
             NormalizarEmisor(model);
-            model.CodEstablecimiento = NormalizarSerie(model.CodEstablecimiento, "001");
+            model.CodEstablecimiento = ObtenerEstablecimientoDesdeRuc(model.Ruc)
+                ?? NormalizarSerie(model.CodEstablecimiento, "001");
             model.CodPuntoEmision = NormalizarSerie(model.CodPuntoEmision, "001");
             model.Retenciones = NormalizarRespuesta(model.Retenciones, "NO");
 
@@ -150,7 +152,8 @@ namespace Simetric.Controllers
             emisorDb.Ruc = model.Ruc;
             emisorDb.NomComercial = model.NomComercial;
             emisorDb.DirEstablecimiento = model.DirEstablecimiento;
-            emisorDb.CodEstablecimiento = NormalizarSerie(model.CodEstablecimiento, "001");
+            emisorDb.CodEstablecimiento = ObtenerEstablecimientoDesdeRuc(model.Ruc)
+                ?? NormalizarSerie(model.CodEstablecimiento, "001");
             emisorDb.CodPuntoEmision = NormalizarSerie(model.CodPuntoEmision, "001");
             emisorDb.TipoEmision = model.TipoEmision;
             emisorDb.Resolusion = model.Resolusion;
@@ -255,6 +258,18 @@ namespace Simetric.Controllers
             return limpio.Length >= 3
                 ? limpio[^3..]
                 : limpio.PadLeft(3, '0');
+        }
+
+        private static string? ObtenerEstablecimientoDesdeRuc(string? ruc)
+        {
+            var digitos = new string((ruc ?? string.Empty).Where(char.IsDigit).ToArray());
+            if (digitos.Length != 13)
+            {
+                return null;
+            }
+
+            var establecimiento = digitos[^3..];
+            return establecimiento == "000" ? null : establecimiento;
         }
 
         private static string NormalizarRespuesta(string? valor, string valorPorDefecto)

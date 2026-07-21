@@ -65,7 +65,21 @@ public sealed class DemoCatalogService
             "Guias de remision",
             "Traslados emitidos con destinatario, transportista y soporte visual demostrativo.",
             "/demo/guias-remision-generadas",
-            "ri-truck-line")
+            "ri-truck-line"),
+        new(
+            "recargas",
+            "Recargas y planes",
+            "Compara planes y calcula en tiempo real el costo de cualquier cantidad de documentos.",
+            "/demo/recargas",
+            "ri-coins-line",
+            "Interactivo"),
+        new(
+            "soporte",
+            "Centro de soporte",
+            "Consulta respuestas frecuentes y conoce los canales de ayuda disponibles para usuarios de e-fact.",
+            "/demo/soporte",
+            "ri-customer-service-2-line",
+            "Interactivo")
     ];
 
     public IReadOnlyList<DemoKpiCard> GetDashboardKpis() =>
@@ -421,7 +435,8 @@ public sealed record DemoServiceCard(
     string Title,
     string Description,
     string Route,
-    string Icon);
+    string Icon,
+    string Badge = "Solo lectura");
 
 public sealed record DemoKpiCard(
     string Title,
