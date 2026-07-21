@@ -326,6 +326,7 @@ public class ConfiguracionService
 
                 var regexSerie = new System.Text.RegularExpressions.Regex(@"^\d{3}-\d{3}$");
                 var esCajaSistema = modelo.EsCajaSistema == true;
+                modelo.EsCajaSistema = esCajaSistema;
 
                 // 3. Validación de Formato de Series
                 if (string.IsNullOrWhiteSpace(modelo.SerieFactura) || !regexSerie.IsMatch(modelo.SerieFactura)) return false;
