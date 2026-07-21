@@ -5,6 +5,7 @@ namespace Simetric.Models
         public const decimal IvaRate = 0.15m;
         public const decimal MontoMinimoPersonalizado = 5.00m;
         public const decimal MontoMaximoPersonalizado = 1000m;
+        public const decimal ToleranciaRedondeoMontoEntero = 0.10m;
         public const int MaxDocumentosCalculados = int.MaxValue;
 
         public const decimal PrecioTierHasta25 = 0.46m;
@@ -35,7 +36,15 @@ namespace Simetric.Models
             if (documentos <= 0)
                 return 0m;
 
-            return decimal.Round(documentos * ObtenerPrecioPorDocumentoSegunCantidad(documentos), 2, MidpointRounding.AwayFromZero);
+            var total = decimal.Round(
+                documentos * ObtenerPrecioPorDocumentoSegunCantidad(documentos),
+                2,
+                MidpointRounding.AwayFromZero);
+            var totalEntero = decimal.Round(total, 0, MidpointRounding.AwayFromZero);
+
+            return Math.Abs(total - totalEntero) <= ToleranciaRedondeoMontoEntero
+                ? totalEntero
+                : total;
         }
 
         public static decimal ObtenerPrecioPorDocumentoSegunCantidad(int documentos)
