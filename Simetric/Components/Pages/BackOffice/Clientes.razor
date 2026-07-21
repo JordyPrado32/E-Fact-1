@@ -207,15 +207,6 @@
                                                 @onclick="() => VerEstadisticas(u)">
                                             <i class="bi bi-bar-chart-line-fill"></i>
                                         </button>
-                                        @if (u.CuentaBloqueada == true || u.Estado == false)
-                                        {
-                                            <button type="button"
-                                                    class="action-btn action-unlock"
-                                                    title="@(u.CuentaBloqueada == true ? "Desbloquear usuario" : "Reactivar usuario")"
-                                                    @onclick="() => ReactivarODesbloquearUsuario(u)">
-                                                <i class="bi bi-unlock"></i>
-                                            </button>
-                                        }
                                         @if (u.Estado == true)
                                         {
                                             <button type="button"
@@ -354,6 +345,7 @@
                                 <label class="field-label">Perfil BackOffice</label>
                                 <select @bind="tempUser.TipoCliente" class="form-select field-input">
                                     <option value="1">Administrador BackOffice</option>
+                                    <option value="2">Vendedor</option>
                                     <option value="3">Cobranzas</option>
                                 </select>
                             </div>
@@ -1038,7 +1030,7 @@
                 .Include(u => u.IdTipoUsuarioNavigation)
                 .Include(u => u.IdTipoIdentificacionNavigation)
                 .Where(u => isInternal
-                    ? u.IdTipoUsuario == 7 && (u.TipoCliente == null || u.TipoCliente != 2)
+                    ? u.IdTipoUsuario == 7
                     : u.IdTipoUsuario == targetRole)
                 .OrderByDescending(u => u.FechaCreacion)
                 .ToListAsync();
@@ -1122,6 +1114,51 @@
     {
         var nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim();
         return string.IsNullOrWhiteSpace(nombre) ? usuario.Email : nombre;
+    }
+
+    private async Task SincronizarPerfilVendedorBackOfficeAsync(Usuario usuario, bool esNuevoUsuario)
+    {
+        if (usuario.IdUsuario <= 0)
+        {
+            return;
+        }
+
+        var nombreCompleto = ObtenerNombreCompleto(usuario);
+        var esVendedorBackOffice = usuario.IdTipoUsuario == 7 && usuario.TipoCliente == 2;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var vendedor = await context.VendedoresBackOffice
+            .FirstOrDefaultAsync(v => v.CodigoReferencia == $"usr_{usuario.IdUsuario}");
+
+        if (esVendedorBackOffice)
+        {
+            var currentAuth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var creadorId = int.TryParse(currentAuth.User.FindFirst("IdUsuario")?.Value, out var actorId) ? actorId : 0;
+
+            if (vendedor is null)
+            {
+                context.VendedoresBackOffice.Add(new VendedorBackOffice
+                {
+                    Nombre = nombreCompleto,
+                    CodigoReferencia = $"usr_{usuario.IdUsuario}",
+                    Activo = usuario.Estado == true,
+                    EsSistema = false,
+                    IdUsuarioCreacion = creadorId > 0 ? creadorId : null,
+                    FechaCreacion = DateTime.Now
+                });
+            }
+            else
+            {
+                vendedor.Nombre = nombreCompleto;
+                vendedor.Activo = usuario.Estado == true;
+            }
+        }
+        else if (vendedor is not null)
+        {
+            vendedor.Activo = false;
+        }
+
+        await context.SaveChangesAsync();
     }
 
     private List<CompraDocumentosHistorialItem> LeerHistorial(string? historialJson)
@@ -1283,6 +1320,7 @@
             }
 
             await UserService.SaveUsuarioAsync(tempUser);
+            await SincronizarPerfilVendedorBackOfficeAsync(tempUser, esNuevoUsuario);
 
             string? advertenciaCorreo = null;
             if (esNuevoUsuario && !string.IsNullOrWhiteSpace(tempUser.Email) && !string.IsNullOrWhiteSpace(claveInicial))
@@ -1520,7 +1558,7 @@
     {
         bool isInternal = string.Equals(ClientType, "internal", StringComparison.OrdinalIgnoreCase) || string.Equals(ClientType, "backoffice", StringComparison.OrdinalIgnoreCase);
         tempUser.IdTipoUsuario = isInternal ? 7 : 1;
-        if (isInternal && tempUser.TipoCliente is null or 0 or 2)
+        if (isInternal && tempUser.TipoCliente is null or 0)
         {
             tempUser.TipoCliente = 1;
         }
@@ -1581,7 +1619,7 @@
         if (tempUser.IdTipoUsuario is null or 0)
             return "Debes seleccionar un rol para el usuario.";
 
-        if (isInternal && tempUser.TipoCliente != 1 && tempUser.TipoCliente != 3)
+        if (isInternal && tempUser.TipoCliente != 1 && tempUser.TipoCliente != 2 && tempUser.TipoCliente != 3)
             return "Selecciona un perfil BackOffice valido.";
 
         if (tempUser.IdTipoUsuario != 1 && tempUser.IdTipoUsuario != 7)
@@ -1647,7 +1685,7 @@
             return;
         }
 
-        tempUser.TipoCliente = tempUser.TipoCliente == 3 ? 3 : 1;
+        tempUser.TipoCliente = tempUser.TipoCliente == 2 ? 2 : tempUser.TipoCliente == 3 ? 3 : 1;
 
         tempUser.NombreEmpresa = string.IsNullOrWhiteSpace(tempUser.NombreEmpresa)
             ? "Backoffice"
@@ -1674,6 +1712,7 @@
             .AsNoTracking()
             .AnyAsync(u =>
                 u.IdUsuario != idUsuarioActual &&
+                u.Estado == true &&
                 u.Email != null &&
                 u.Email.Trim().ToLower() == emailNormalizado);
     }

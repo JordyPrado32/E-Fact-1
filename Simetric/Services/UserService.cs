@@ -235,6 +235,7 @@ namespace Simetric.Services
 
             user.Estado = false;
             user.estadoAsociado = false;
+            user.Email = string.Empty;
             user.CuentaBloqueada = false;
             user.IntentosFallidos = 0;
             user.FechaDesbloqueo = null;
