@@ -1,0 +1,253 @@
+@page "/backoffice/precios-recargas"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@using System.Globalization
+@using System.Security.Claims
+@attribute [Authorize]
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject SweetAlertService AlertService
+
+<PageTitle>Precios y planes | BackOffice</PageTitle>
+
+<div class="seller-pricing-page animate__animated animate__fadeIn">
+    @if (cargando)
+    {
+        <section class="pricing-state">
+            <div class="spinner-border text-primary" role="status"></div>
+            <p>Cargando precios vigentes...</p>
+        </section>
+    }
+    else if (!tieneAcceso)
+    {
+        <section class="pricing-state">
+            <i class="ri-lock-2-line"></i>
+            <h2>Acceso exclusivo para vendedores</h2>
+            <p>Esta página está disponible para los perfiles comerciales de BackOffice.</p>
+        </section>
+    }
+    else
+    {
+        <header class="pricing-hero">
+            <div>
+                <span class="pricing-kicker">Guía comercial e-fact</span>
+                <h1>Precios y planes de recarga</h1>
+                <p>Consulta los valores vigentes y prepara una cotización rápida para cada comprador.</p>
+            </div>
+            <div class="pricing-minimum">
+                <span>Recarga mínima</span>
+                <strong>$@EFactDocumentPricing.MontoMinimoPersonalizado.ToString("N2", Cultura)</strong>
+                <small>@EFactDocumentPricing.DocumentosMinimosPersonalizados documentos</small>
+            </div>
+        </header>
+
+        <section class="pricing-section">
+            <div class="section-heading">
+                <div>
+                    <span class="pricing-kicker">Planes disponibles</span>
+                    <h2>Opciones para ofrecer</h2>
+                </div>
+                <span class="current-chip">Precios vigentes</span>
+            </div>
+
+            <div class="plans-grid">
+                @foreach (var plan in PlanesVisibles)
+                {
+                    <article class="plan-card @(plan.EsRecomendado ? "is-featured" : string.Empty)">
+                        @if (plan.EsRecomendado)
+                        {
+                            <span class="recommended-badge">Recomendado</span>
+                        }
+                        <div class="plan-icon"><i class="bi @plan.Icono"></i></div>
+                        <h3>@plan.Nombre</h3>
+                        <strong class="plan-price">$@plan.Precio.ToString("N2", Cultura)</strong>
+                        <p>@plan.Descripcion</p>
+                        <small>@ObtenerDetallePlan(plan)</small>
+                    </article>
+                }
+            </div>
+        </section>
+
+        <div class="pricing-workspace">
+            <section class="pricing-section calculator-card">
+                <div class="section-heading compact">
+                    <div>
+                        <span class="pricing-kicker">Cotizador</span>
+                        <h2>Calcula una recarga</h2>
+                    </div>
+                </div>
+
+                <label class="quantity-field">
+                    <span>Cantidad de documentos</span>
+                    <input type="number"
+                           min="@EFactDocumentPricing.DocumentosMinimosPersonalizados"
+                           max="@MaxDocumentosRecarga"
+                           @bind="cantidadDocumentos"
+                           @bind:event="oninput" />
+                    <small>Entre @EFactDocumentPricing.DocumentosMinimosPersonalizados y @MaxDocumentosRecarga documentos.</small>
+                </label>
+
+                @if (CantidadValida)
+                {
+                    <div class="quote-result">
+                        <div>
+                            <span>Documentos</span>
+                            <strong>@cantidadDocumentos.ToString("N0", Cultura)</strong>
+                        </div>
+                        <div>
+                            <span>Precio referencial por documento</span>
+                            <strong>$@PrecioUnitario.ToString("N4", Cultura)</strong>
+                        </div>
+                        <div>
+                            <span>Subtotal</span>
+                            <strong>$@Subtotal.ToString("N2", Cultura)</strong>
+                        </div>
+                        <div>
+                            <span>IVA</span>
+                            <strong>$@Iva.ToString("N2", Cultura)</strong>
+                        </div>
+                        <div class="quote-total">
+                            <span>Total a pagar</span>
+                            <strong>$@TotalCotizacion.ToString("N2", Cultura)</strong>
+                        </div>
+                    </div>
+
+                    <button type="button" class="copy-quote-btn" @onclick="CopiarCotizacionAsync">
+                        <i class="ri-file-copy-line"></i>
+                        Copiar cotización
+                    </button>
+                }
+                else
+                {
+                    <div class="quote-warning">
+                        Ingresa una cantidad válida dentro del rango permitido.
+                    </div>
+                }
+            </section>
+
+            <section class="pricing-section tiers-card">
+                <div class="section-heading compact">
+                    <div>
+                        <span class="pricing-kicker">Recarga personalizada</span>
+                        <h2>Tarifa según cantidad</h2>
+                    </div>
+                </div>
+
+                <div class="tiers-list">
+                    @foreach (var tier in Tarifas)
+                    {
+                        <div class="tier-row">
+                            <div>
+                                <strong>@tier.Rango</strong>
+                                <span>@tier.Detalle</span>
+                            </div>
+                            <strong>$@tier.Precio.ToString("N4", Cultura)<small> / doc.</small></strong>
+                        </div>
+                    }
+                </div>
+
+                <div class="pricing-note">
+                    <i class="ri-information-line"></i>
+                    <span>Los totales cercanos hasta 10 centavos a un dólar entero se muestran redondeados, sin cambiar la tarifa base.</span>
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly CultureInfo Cultura = CultureInfo.GetCultureInfo("es-EC");
+    private static readonly IReadOnlyList<EFactPlanDto> PlanesVisibles = EFactBillingConfig.EFactPlans
+        .Where(plan => plan.CantidadDocs != 0)
+        .ToList();
+    private static readonly IReadOnlyList<TarifaComercial> Tarifas =
+    [
+        new("De 1 a 25 documentos", "Tarifa inicial", EFactDocumentPricing.PrecioTierHasta25),
+        new("De 26 a 48 documentos", "Segundo tramo", EFactDocumentPricing.PrecioTierHasta48),
+        new("De 49 a 120 documentos", "Tercer tramo", EFactDocumentPricing.PrecioTierHasta120),
+        new("De 121 a 240 documentos", "Cuarto tramo", EFactDocumentPricing.PrecioTierHasta240),
+        new("De 241 a 600 documentos", "Quinto tramo", EFactDocumentPricing.PrecioTierHasta600),
+        new("Más de 600 documentos", "Recarga de alto volumen", EFactDocumentPricing.PrecioRecargaAlta)
+    ];
+
+    private bool cargando = true;
+    private bool tieneAcceso;
+    private int cantidadDocumentos = EFactDocumentPricing.DocumentosMinimosPersonalizados;
+    private static int MaxDocumentosRecarga => decimal.ToInt32(decimal.Floor(
+        EFactDocumentPricing.MontoMaximoPersonalizado / EFactDocumentPricing.PrecioRecargaAlta));
+    private bool CantidadValida => cantidadDocumentos >= EFactDocumentPricing.DocumentosMinimosPersonalizados &&
+                                   cantidadDocumentos <= MaxDocumentosRecarga;
+    private decimal TotalCotizacion => CantidadValida
+        ? EFactDocumentPricing.CalcularTotalPorCantidad(cantidadDocumentos)
+        : 0m;
+    private decimal PrecioUnitario => CantidadValida
+        ? EFactDocumentPricing.ObtenerPrecioPorDocumentoSegunCantidad(cantidadDocumentos)
+        : 0m;
+    private decimal Subtotal => EFactDocumentPricing.CalcularSubtotalDesdeTotal(TotalCotizacion);
+    private decimal Iva => EFactDocumentPricing.CalcularIvaDesdeTotal(TotalCotizacion);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            if (user.Identity?.IsAuthenticated != true)
+                return;
+
+            var idUsuario = int.TryParse(
+                user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? user.FindFirst("IdUsuario")?.Value,
+                out var parsedId)
+                ? parsedId
+                : 0;
+
+            var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(ClaimTypes.Role)?.Value;
+            var tipoCliente = user.FindFirst("TipoCliente")?.Value;
+
+            if (idUsuario > 0 && (string.IsNullOrWhiteSpace(role) || string.IsNullOrWhiteSpace(tipoCliente)))
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                var usuario = await db.Usuarios
+                    .AsNoTracking()
+                    .Where(item => item.IdUsuario == idUsuario)
+                    .Select(item => new { item.IdTipoUsuario, item.TipoCliente })
+                    .FirstOrDefaultAsync();
+                role = usuario?.IdTipoUsuario?.ToString() ?? role;
+                tipoCliente = usuario?.TipoCliente?.ToString() ?? tipoCliente;
+            }
+
+            tieneAcceso = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
+                          string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private static string ObtenerDetallePlan(EFactPlanDto plan)
+    {
+        if (plan.CantidadDocs < 0)
+            return "Vigencia de 12 meses";
+
+        var precioUnitario = plan.CantidadDocs > 0 ? plan.Precio / plan.CantidadDocs : 0m;
+        return $"Aprox. ${precioUnitario.ToString("N4", Cultura)} por documento";
+    }
+
+    private async Task CopiarCotizacionAsync()
+    {
+        if (!CantidadValida)
+            return;
+
+        var texto = $"Cotización Numerica e-fact: {cantidadDocumentos:N0} documentos por ${TotalCotizacion:N2} (IVA incluido).";
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", texto);
+        await AlertService.ShowSuccessAsync("La cotización quedó lista para compartir.", "Cotización copiada");
+    }
+
+    private sealed record TarifaComercial(string Rango, string Detalle, decimal Precio);
+}
