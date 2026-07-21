@@ -3,6 +3,7 @@ namespace Simetric.Models
     public static class EFactDocumentPricing
     {
         public const decimal IvaRate = 0.15m;
+        public const decimal MontoMinimoPersonalizado = 5.00m;
         public const decimal MontoMaximoPersonalizado = 1000m;
         public const int MaxDocumentosCalculados = int.MaxValue;
 
