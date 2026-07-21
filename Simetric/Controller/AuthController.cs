@@ -123,20 +123,13 @@ namespace Simetric.Controllers
                     });
                 }
 
-                if (!esEmpleadoBackOffice && userInDb.ClaveTemporal == true)
+                if (userInDb.ClaveTemporal == true)
                 {
                     return Ok(new
                     {
                         requiereCambioClave = true,
                         idUsuario = userInDb.IdUsuario
                     });
-                }
-
-                if (esEmpleadoBackOffice && userInDb.ClaveTemporal == true)
-                {
-                    userInDb.ClaveTemporal = false;
-                    userInDb.TokenRecuperacion = null;
-                    userInDb.FechaExpiracionToken = null;
                 }
 
                 userInDb.IntentosFallidos = 0;
