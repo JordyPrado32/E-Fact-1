@@ -204,7 +204,7 @@
                 </div>
                 <div class="table-head-actions">
                     <span class="table-badge">@filteredClientes.Count registros</span>
-                    <button type="button" class="primary-btn" @onclick="AbrirNuevoClienteModal">
+                <button type="button" class="primary-btn" data-no-auto-loading="true" @onclick="AbrirNuevoClienteModal">
                         <i class="bi bi-plus-lg"></i>
                         <span>Nuevo cliente / proveedor</span>
                     </button>
@@ -885,8 +885,12 @@
                             </details>
 
                         <div class="form-actions entity-form-actions">
-                            <button class="primary-btn" type="submit" disabled="@isDemoMode">
-                                <i class="bi bi-save me-1"></i> @(isDemoMode ? "Guardar bloqueado" : (editando ? "Guardar cambios" : "Crear cliente / proveedor"))
+                            <button class="primary-btn @(guardandoCliente ? "n-auto-loading" : null)" type="submit" disabled="@(!PuedeGuardarCliente || guardandoCliente)">
+                                @if (!guardandoCliente)
+                                {
+                                    <i class="bi bi-save me-1"></i>
+                                }
+                                @(isDemoMode ? "Guardar bloqueado" : (guardandoCliente ? "Guardando..." : (editando ? "Guardar cambios" : "Crear cliente / proveedor")))
                             </button>
                             <button type="button" class="secondary-btn clear-action-btn" @onclick="Nuevo">
                                 <i class="bi bi-eraser"></i>
@@ -1310,8 +1314,12 @@
                                         </div>
 
                                         <div class="form-actions entity-form-actions">
-                                            <button class="primary-btn" type="submit" disabled="@isDemoMode">
-                                                <i class="bi bi-save me-1"></i> @(isDemoMode ? "Guardar bloqueado" : (editando ? "Guardar cambios" : "Crear cliente / proveedor"))
+                                            <button class="primary-btn @(guardandoCliente ? "n-auto-loading" : null)" type="submit" disabled="@(!PuedeGuardarCliente || guardandoCliente)">
+                                                @if (!guardandoCliente)
+                                                {
+                                                    <i class="bi bi-save me-1"></i>
+                                                }
+                                                @(isDemoMode ? "Guardar bloqueado" : (guardandoCliente ? "Guardando..." : (editando ? "Guardar cambios" : "Crear cliente / proveedor")))
                                             </button>
                                             <button type="button" class="secondary-btn clear-action-btn" @onclick="Nuevo">
                                                 <i class="bi bi-eraser"></i>
@@ -1957,6 +1965,7 @@
     private ClienteUpsertDto model = new();
     private bool editando = false;
     private bool estadoAux = true;
+    private bool guardandoCliente;
     private bool prefillFacturaAplicado;
     private bool consultandoCedula;
     private bool consultaCedulaEsError;
@@ -1964,6 +1973,17 @@
     private CancellationTokenSource? consultaCedulaCts;
     private List<TipoClienteDto> tiposCliente = new();
     private bool EsModoCrudEmbebido => OnClienteGuardado.HasDelegate;
+    private bool PuedeGuardarCliente =>
+        !isDemoMode &&
+        model.TipoCliente > 0 &&
+        model.Tipoidentificacion.HasValue &&
+        model.Tipoidentificacion.Value > 0 &&
+        !string.IsNullOrWhiteSpace(model.Numeroidentificacion) &&
+        !string.IsNullOrWhiteSpace(model.Correo) &&
+        (!DebeMostrarObligadoContabilidad || !string.IsNullOrWhiteSpace(model.Oblgconta)) &&
+        (EsEmpresaSeleccionada
+            ? !string.IsNullOrWhiteSpace(model.Nombrecomercial) && !string.IsNullOrWhiteSpace(model.Nombrerazonsocial)
+            : !string.IsNullOrWhiteSpace(model.Apellidos) && !string.IsNullOrWhiteSpace(model.Nombres));
     private bool MostrarVolverInicioOnboarding =>
         !isDemoMode &&
         (EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false);
@@ -3814,12 +3834,16 @@
 
     private async Task Guardar()
     {
+        if (guardandoCliente)
+            return;
+
         if (isDemoMode)
         {
             SetMensajeFormularioOListado("Modo demo: guardar clientes esta bloqueado.", esError: true);
             return;
         }
 
+        guardandoCliente = true;
         SetMensajeFormularioOListado("Guardando...");
         model.Estado = estadoAux;
         ActualizarTipoClienteForm();
@@ -3896,6 +3920,10 @@
         catch (Exception ex)
         {
             SetMensajeFormularioOListado("Error al guardar cliente.", $"{ex.Message} | INNER: {ex.InnerException?.Message}", esError: true);
+        }
+        finally
+        {
+            guardandoCliente = false;
         }
     }
 
