@@ -280,8 +280,11 @@ namespace Simetric.Controllers
 
         private static string? ValidarEmisor(Emisor e)
         {
-            if (string.IsNullOrWhiteSpace(e.RazonSocial) && string.IsNullOrWhiteSpace(e.NomComercial))
-                return "Debes ingresar la razón social o el nombre comercial.";
+            if (string.IsNullOrWhiteSpace(e.RazonSocial))
+                return "La razón social es obligatoria.";
+
+            if (string.IsNullOrWhiteSpace(e.NomComercial))
+                return "El nombre comercial es obligatorio.";
 
             if (!string.IsNullOrWhiteSpace(e.RazonSocial) && e.RazonSocial.Length > 70)
                 return "La razón social no puede exceder 70 caracteres.";
