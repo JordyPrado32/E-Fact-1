@@ -51,7 +51,10 @@ public sealed class ReporteComprobanteItemDto
     public bool EstaAutorizado { get; set; }
     public string XmlUrl { get; set; } = string.Empty;
     public string PdfUrl { get; set; } = string.Empty;
+    public List<string> CodigosRelacionados { get; set; } = new();
     public List<string> ProductosRelacionados { get; set; } = new();
+    public decimal BaseSinIva { get; set; }
+    public decimal BaseConIva { get; set; }
     public bool TieneProducto { get; set; }
     public bool TieneServicio { get; set; }
 
@@ -93,6 +96,24 @@ public sealed class ReporteComprobanteItemDto
             }
 
             return "Sin clasificar";
+        }
+    }
+
+    public string ResumenCodigos
+    {
+        get
+        {
+            if (CodigosRelacionados.Count == 0)
+            {
+                return "Sin codigo";
+            }
+
+            var visibles = CodigosRelacionados.Take(3).ToList();
+            var resumen = string.Join(", ", visibles);
+
+            return CodigosRelacionados.Count > visibles.Count
+                ? $"{resumen} y {CodigosRelacionados.Count - visibles.Count} mas"
+                : resumen;
         }
     }
 }

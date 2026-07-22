@@ -127,7 +127,10 @@ public sealed class ReporteComprobantesService
                 EstaAutorizado = estaAutorizado,
                 XmlUrl = header?.XmlUrl ?? string.Empty,
                 PdfUrl = header?.PdfUrl ?? string.Empty,
+                CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                 ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
+                BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(header?.Subtotal ?? 0m, header?.Iva ?? 0m),
+                BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(header?.Subtotal ?? 0m, header?.Iva ?? 0m),
                 TieneProducto = detalle?.TieneProducto == true,
                 TieneServicio = detalle?.TieneServicio == true
             };
@@ -159,7 +162,10 @@ public sealed class ReporteComprobantesService
                 EstaAutorizado = estaAutorizado,
                 XmlUrl = item.XmlUrl,
                 PdfUrl = header?.PdfUrl ?? string.Empty,
+                CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                 ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
+                BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(item.Subtotal, item.Iva),
+                BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(item.Subtotal, item.Iva),
                 TieneProducto = detalle?.TieneProducto == true,
                 TieneServicio = detalle?.TieneServicio == true
             };
@@ -191,7 +197,10 @@ public sealed class ReporteComprobantesService
                 EstaAutorizado = estaAutorizado,
                 XmlUrl = item.XmlUrl,
                 PdfUrl = header?.PdfUrl ?? string.Empty,
+                CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                 ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
+                BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(item.Subtotal, item.Iva),
+                BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(item.Subtotal, item.Iva),
                 TieneProducto = detalle?.TieneProducto == true,
                 TieneServicio = detalle?.TieneServicio == true
             };
@@ -223,7 +232,10 @@ public sealed class ReporteComprobantesService
                 EstaAutorizado = estaAutorizado,
                 XmlUrl = item.XmlUrl,
                 PdfUrl = item.PdfUrl,
+                CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                 ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
+                BaseSinIva = 0m,
+                BaseConIva = 0m,
                 TieneProducto = detalle?.TieneProducto == true,
                 TieneServicio = detalle?.TieneServicio == true
             };
@@ -257,7 +269,10 @@ public sealed class ReporteComprobantesService
                     EstaAutorizado = estaAutorizado,
                     XmlUrl = item.XmlUrl,
                     PdfUrl = header.PdfUrl,
+                    CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                     ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
+                    BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(item.BaseTotal, 0m),
+                    BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(item.BaseTotal, 0m),
                     TieneProducto = detalle?.TieneProducto == true,
                     TieneServicio = detalle?.TieneServicio == true
                 };
@@ -282,7 +297,9 @@ public sealed class ReporteComprobantesService
                 NumeroAutorizacion = item.NumeroAutorizacion,
                 EstaAutorizado = estaAutorizado,
                 XmlUrl = item.XmlUrl,
-                PdfUrl = header?.PdfUrl ?? string.Empty
+                PdfUrl = header?.PdfUrl ?? string.Empty,
+                BaseSinIva = ObtenerBaseSinIvaFallback(item.BaseTotal, 0m),
+                BaseConIva = ObtenerBaseConIvaFallback(item.BaseTotal, 0m)
             };
         }));
 
@@ -311,7 +328,10 @@ public sealed class ReporteComprobantesService
                 EstaAutorizado = estaAutorizado,
                 XmlUrl = item.XmlUrl,
                 PdfUrl = item.PdfUrl,
+                CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                 ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
+                BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(item.TotalSinImpuestos, item.IvaTotal),
+                BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(item.TotalSinImpuestos, item.IvaTotal),
                 TieneProducto = detalle?.TieneProducto == true,
                 TieneServicio = detalle?.TieneServicio == true
             };
@@ -566,10 +586,15 @@ public sealed class ReporteComprobantesService
             select new DetalleFlat
             {
                 DocumentoId = d.Codfactura,
+                Codigo = !string.IsNullOrWhiteSpace(d.Codprincipal)
+                    ? d.Codprincipal
+                    : (!string.IsNullOrWhiteSpace(d.Codauxiliar) ? d.Codauxiliar : d.Codproducto.ToString()),
                 Descripcion = !string.IsNullOrWhiteSpace(d.Descripproducto)
                     ? d.Descripproducto
                     : (p != null ? (p.Nombre ?? string.Empty) : string.Empty),
                 TipoCompravena = p != null ? p.Tipocompravena : null,
+                BaseSinIva = d.Tarifa == 0 ? d.Valortproducto : 0m,
+                BaseConIva = d.Tarifa > 0 || d.Valoriva > 0 ? d.Valortproducto : 0m,
                 ForzarProducto = true
             })
             .ToListAsync();
@@ -593,10 +618,15 @@ public sealed class ReporteComprobantesService
             select new DetalleFlat
             {
                 DocumentoId = d.CodNotaCredito,
+                Codigo = !string.IsNullOrWhiteSpace(d.CodPrincipal)
+                    ? d.CodPrincipal
+                    : (!string.IsNullOrWhiteSpace(d.CodAuxiliar) ? d.CodAuxiliar : d.CodProducto.ToString()),
                 Descripcion = !string.IsNullOrWhiteSpace(d.DescripProducto)
                     ? d.DescripProducto
                     : (p != null ? (p.Nombre ?? string.Empty) : string.Empty),
                 TipoCompravena = p != null ? p.Tipocompravena : null,
+                BaseSinIva = (d.Tarifa ?? 0) == 0 ? d.ValorTProducto ?? 0m : 0m,
+                BaseConIva = (d.Tarifa ?? 0) > 0 || (d.ValorIVA ?? 0m) > 0m ? d.ValorTProducto ?? 0m : 0m,
                 ForzarProducto = true
             })
             .ToListAsync();
@@ -620,10 +650,15 @@ public sealed class ReporteComprobantesService
             select new DetalleFlat
             {
                 DocumentoId = d.CodNotaDebito,
+                Codigo = !string.IsNullOrWhiteSpace(d.CodPrincipal)
+                    ? d.CodPrincipal
+                    : (!string.IsNullOrWhiteSpace(d.CodAuxiliar) ? d.CodAuxiliar : d.CodProducto.ToString()),
                 Descripcion = !string.IsNullOrWhiteSpace(d.DescripProducto)
                     ? d.DescripProducto
                     : (p != null ? (p.Nombre ?? string.Empty) : string.Empty),
                 TipoCompravena = p != null ? p.Tipocompravena : null,
+                BaseSinIva = (d.PorcentajeIva ?? 0m) == 0m ? d.ValorTProducto ?? 0m : 0m,
+                BaseConIva = (d.PorcentajeIva ?? 0m) > 0m || (d.ValorIva ?? 0m) > 0m ? d.ValorTProducto ?? 0m : 0m,
                 ForzarProducto = true
             })
             .ToListAsync();
@@ -644,6 +679,7 @@ public sealed class ReporteComprobantesService
             .Select(x => new DetalleFlat
             {
                 DocumentoId = x.IdGuiaRemision ?? 0,
+                Codigo = !string.IsNullOrWhiteSpace(x.CodInterno) ? x.CodInterno : x.CodAdicional ?? string.Empty,
                 Descripcion = x.Descripcion ?? string.Empty,
                 TipoCompravena = "PRODUCTO",
                 ForzarProducto = true
@@ -669,10 +705,15 @@ public sealed class ReporteComprobantesService
             select new DetalleFlat
             {
                 DocumentoId = d.CodFactura,
+                Codigo = !string.IsNullOrWhiteSpace(d.CodPrincipal)
+                    ? d.CodPrincipal
+                    : (!string.IsNullOrWhiteSpace(d.CodAuxiliar) ? d.CodAuxiliar : d.CodProducto.ToString()),
                 Descripcion = !string.IsNullOrWhiteSpace(d.DescripProducto)
                     ? d.DescripProducto
                     : (p != null ? (p.Nombre ?? string.Empty) : string.Empty),
                 TipoCompravena = p != null ? p.Tipocompravena : null,
+                BaseSinIva = (d.Tarifa ?? 0) == 0 ? d.ValorTProducto ?? 0m : 0m,
+                BaseConIva = (d.Tarifa ?? 0) > 0 || (d.ValorIVA ?? 0m) > 0m ? d.ValorTProducto ?? 0m : 0m,
                 ForzarProducto = true
             })
             .ToListAsync();
@@ -699,7 +740,15 @@ public sealed class ReporteComprobantesService
                             lookup.Descripciones.Add(descripcion);
                         }
 
+                        var codigo = (item.Codigo ?? string.Empty).Trim();
+                        if (!string.IsNullOrWhiteSpace(codigo))
+                        {
+                            lookup.Codigos.Add(codigo);
+                        }
+
                         var tipo = (item.TipoCompravena ?? string.Empty).Trim().ToUpperInvariant();
+                        lookup.BaseSinIva += item.BaseSinIva;
+                        lookup.BaseConIva += item.BaseConIva;
 
                         if (tipo == "SERVICIO")
                         {
@@ -716,9 +765,20 @@ public sealed class ReporteComprobantesService
                         .OrderBy(x => x)
                         .ToList();
 
+                    lookup.Codigos = lookup.Codigos
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(x => x)
+                        .ToList();
+
                     return lookup;
                 });
     }
+
+    private static decimal ObtenerBaseSinIvaFallback(decimal baseImponible, decimal iva)
+        => iva > 0m ? 0m : baseImponible;
+
+    private static decimal ObtenerBaseConIvaFallback(decimal baseImponible, decimal iva)
+        => iva > 0m ? baseImponible : 0m;
 
     private static string ConstruirUrlFactura(string? ruc, string? serie, string? numero, string extension)
     {
@@ -812,14 +872,20 @@ public sealed class ReporteComprobantesService
     private sealed class DetalleFlat
     {
         public int DocumentoId { get; init; }
+        public string Codigo { get; init; } = string.Empty;
         public string Descripcion { get; init; } = string.Empty;
         public string? TipoCompravena { get; init; }
+        public decimal BaseSinIva { get; init; }
+        public decimal BaseConIva { get; init; }
         public bool ForzarProducto { get; init; }
     }
 
     private sealed class ReporteDetalleLookup
     {
+        public List<string> Codigos { get; set; } = new();
         public List<string> Descripciones { get; set; } = new();
+        public decimal BaseSinIva { get; set; }
+        public decimal BaseConIva { get; set; }
         public bool TieneProducto { get; set; }
         public bool TieneServicio { get; set; }
     }
