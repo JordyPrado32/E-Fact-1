@@ -135,6 +135,16 @@
                 }
             </div>
 
+            <label class="date-filter-box">
+                <span>Estado SRI</span>
+                <select class="date-filter-input" @bind="estadoFiltro">
+                    <option value="@DocumentoEstadoFiltroHelper.Todos">Todos</option>
+                    <option value="@DocumentoEstadoFiltroHelper.Pendientes">Pendientes</option>
+                    <option value="@DocumentoEstadoFiltroHelper.Autorizados">Autorizados</option>
+                    <option value="@DocumentoEstadoFiltroHelper.NoAutorizados">No autorizados</option>
+                </select>
+            </label>
+
             <div class="date-filter-group">
                 <label class="date-filter-box">
                     <span>Desde</span>
@@ -355,6 +365,16 @@
                                              </button>
                                          }
 
+                                         @if (TieneCorreccionConfiguracion(f))
+                                         {
+                                             <button class="row-action-btn row-action-view"
+                                                     type="button"
+                                                     title="@ObtenerEtiquetaCorreccion(f)"
+                                                     @onclick="() => IrACorreccionFactura(f)">
+                                                 <i class="bi bi-wrench-adjustable"></i>
+                                             </button>
+                                         }
+
                                          <button class="row-action-btn row-action-mail"
                                                  type="button"
                                                  title="Enviar Correo"
@@ -417,6 +437,15 @@
                                                          @onclick="async () => { CerrarMenus(); await ReenviarAlSriAsync(f); }">
                                                      <i class="bi bi-send-check"></i>
                                                      <span>Reenviar al SRI</span>
+                                                 </button>
+                                             }
+
+                                             @if (TieneCorreccionConfiguracion(f))
+                                             {
+                                                 <button class="actions-dropdown-item item-view" type="button"
+                                                         @onclick="() => IrACorreccionFactura(f)">
+                                                     <i class="bi bi-wrench-adjustable"></i>
+                                                     <span>@ObtenerEtiquetaCorreccion(f)</span>
                                                  </button>
                                              }
 
@@ -581,6 +610,7 @@
     private bool mostrarModal;
     private FacturaViewDto? facturaSeleccionada;
     private string filtro = "";
+    private string estadoFiltro = DocumentoEstadoFiltroHelper.Todos;
     private DateTime? fechaDesde;
     private DateTime? fechaHasta;
     private int paginaActual = 1;
@@ -642,7 +672,7 @@
     }
 
     private bool HayFiltrosActivos =>
-        !string.IsNullOrWhiteSpace(Filtro) || FechaDesde.HasValue || FechaHasta.HasValue;
+        !string.IsNullOrWhiteSpace(Filtro) || estadoFiltro != DocumentoEstadoFiltroHelper.Todos || FechaDesde.HasValue || FechaHasta.HasValue;
 
     private string ResumenRangoFechas
     {
@@ -739,6 +769,9 @@
         if (factura == null)
             return false;
 
+        if (!DocumentoEstadoFiltroHelper.Cumple(estadoFiltro, ObtenerEstadoSriTexto(factura.EstadoSri)))
+            return false;
+
         if (!string.IsNullOrWhiteSpace(Filtro))
         {
             var filtroActual = Filtro.Trim();
@@ -781,6 +814,25 @@
     private static bool PuedeReenviarSri(FacturaListDto factura) =>
         factura.Estado != false &&
         !DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.EstadoSri);
+
+    private static FacturaCorreccionDestino ObtenerDestinoCorreccion(FacturaListDto factura) =>
+        FacturaErrorCorreccionHelper.Clasificar(
+            string.Join(" ", factura.EstadoSri, factura.MensajeSri));
+
+    private static bool TieneCorreccionConfiguracion(FacturaListDto factura) =>
+        PuedeReenviarSri(factura) &&
+        !string.IsNullOrWhiteSpace(
+            FacturaErrorCorreccionHelper.ObtenerRuta(ObtenerDestinoCorreccion(factura)));
+
+    private static string ObtenerEtiquetaCorreccion(FacturaListDto factura) =>
+        FacturaErrorCorreccionHelper.ObtenerEtiqueta(ObtenerDestinoCorreccion(factura));
+
+    private void IrACorreccionFactura(FacturaListDto factura)
+    {
+        var ruta = FacturaErrorCorreccionHelper.ObtenerRuta(ObtenerDestinoCorreccion(factura));
+        if (!string.IsNullOrWhiteSpace(ruta))
+            NavManager.NavigateTo(ruta);
+    }
 
     private static string ObtenerErrorSriTexto(FacturaListDto factura)
     {
@@ -831,6 +883,7 @@
     private void LimpiarFiltros()
     {
         Filtro = string.Empty;
+        estadoFiltro = DocumentoEstadoFiltroHelper.Todos;
         FechaDesde = null;
         FechaHasta = null;
     }
@@ -1263,6 +1316,7 @@
                     </div>
                     <div style='margin-top:10px;padding:10px 12px;border-radius:10px;background:#fff4e5;color:#9a3412;font-size:0.92rem;line-height:1.45;'>
                         Recuerda anular también esta factura en el <strong>SRI</strong> si el comprobante ya fue emitido o autorizado.
+                        Si nunca llegó al SRI, su secuencial permanecerá reservado a esta factura y no se entregará a otra.
                     </div>
                 </div>",
             showCancelButton = true,

@@ -69,6 +69,24 @@
                 <strong>Modo demo.</strong> Esta factura usa datos de ejemplo y la emision esta bloqueada para invitados.
             </div>
         }
+        else if (facturaSecuenciaPendiente != null)
+        {
+            <div class="alert alert-warning border-0 rounded-3 mb-3" style="position: sticky; top: 12px; z-index: 1050;">
+                <strong>Secuencia pendiente: @facturaSecuenciaPendiente.NumeroCompleto.</strong>
+                Debes corregirla o reenviarla antes de generar la siguiente factura de esta serie.
+                <div class="d-flex flex-wrap gap-2 mt-2">
+                    <button type="button" class="btn btn-sm btn-outline-dark" @onclick="IrAFacturaPendienteAsync">
+                        Ver y reenviar
+                    </button>
+                    @if (!string.IsNullOrWhiteSpace(facturaSecuenciaPendiente.RutaCorreccion))
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="IrACorreccionFacturaPendienteAsync">
+                            @facturaSecuenciaPendiente.EtiquetaCorreccion
+                        </button>
+                    }
+                </div>
+            </div>
+        }
 
         <section class="docs-form-hero" data-tour="invoice.hero">
             <div class="docs-form-hero-body">
@@ -1016,8 +1034,8 @@
                                 var totalBaseImponible = gruposPorTarifa.Sum(x => x.Base);
                                 var totalIvaGlobal = gruposPorTarifa.Sum(x => x.Iva);
                                 var granTotal = totalBaseImponible + totalIvaGlobal;
-                                var subtotalBaseGravada = gruposPorTarifa.Where(x => x.Tarifa > 0).Sum(x => x.Base);
-                                var subtotalBaseCero = gruposPorTarifa.Where(x => x.Tarifa == 0).Sum(x => x.Base);
+                                var subtotalBaseGravada = gruposPorTarifa.Where(x => x.Tarifa > 0).Sum(x => x.Bruto);
+                                var subtotalBaseCero = gruposPorTarifa.Where(x => x.Tarifa == 0).Sum(x => x.Bruto);
                                 var subtotalNoObjetoIva = 0m;
                                 var subtotalExentoIva = 0m;
                                 var valorIce = 0m;
@@ -1093,7 +1111,7 @@
                                 Cancelar / Limpiar
                             </button>
 
-                            <button type="submit" class="n-btn-primary" disabled="@(sinCaja || BloqueadoPorSaldoDocumentos || isDemoMode)">
+                            <button type="submit" class="n-btn-primary" disabled="@(sinCaja || BloqueadoPorSaldoDocumentos || isDemoMode || facturaSecuenciaPendiente != null)">
                                 <i class="bi bi-check2-circle fs-5 me-2"></i> @(isDemoMode ? "Generar Factura (bloqueado)" : "Generar Factura")
                             </button>
                         </div>
@@ -1855,6 +1873,7 @@
     private string formaPagoSeleccionada = "";
     private bool facturaEsCredito;
     private int currentUserId;
+    private FacturaSecuenciaPendienteDto? facturaSecuenciaPendiente;
     private bool modoDescuentoGlobal = false;
     private bool sinCaja = false;
     private EmisionEstado? emisionEstado;
@@ -4444,7 +4463,7 @@
             serieConfirmadaRaw = factura.Serie;
             seriePendienteModalRaw = null;
             await FacturacionService.SavePreferredSeriesForAllDocumentsAsync(currentUserId, factura.Serie);
-            factura.Numfactura = await FacturacionService.GetNextFacturaNumeroAsync(currentUserId, factura.Codemisor, factura.Serie);
+            await ActualizarNumeroFacturaParaSerieAsync();
             mostrarModalSecuenciaInicial = false;
         }
         catch (Exception ex)
@@ -4605,6 +4624,17 @@
             return;
         }
 
+        facturaSecuenciaPendiente = await FacturacionService.ObtenerFacturaPendienteSecuenciaAsync(
+            currentUserId,
+            factura.Codemisor,
+            factura.Serie);
+        if (facturaSecuenciaPendiente != null)
+        {
+            factura.Numfactura = string.Empty;
+            mostrarModalSecuenciaInicial = false;
+            return;
+        }
+
         var debePreguntar = await FacturacionService.DebePreguntarSecuenciaInicialAsync(currentUserId, factura.Codemisor, factura.Serie);
         if (debePreguntar)
         {
@@ -4622,6 +4652,15 @@
         mostrarModalSecuenciaInicial = false;
         await FacturacionService.SavePreferredSeriesForAllDocumentsAsync(currentUserId, factura.Serie);
         factura.Numfactura = await FacturacionService.GetNextFacturaNumeroAsync(currentUserId, factura.Codemisor, factura.Serie);
+    }
+
+    private void IrAFacturaPendienteAsync() =>
+        NavigationManager.NavigateTo("/facturas");
+
+    private void IrACorreccionFacturaPendienteAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(facturaSecuenciaPendiente?.RutaCorreccion))
+            NavigationManager.NavigateTo(facturaSecuenciaPendiente.RutaCorreccion);
     }
 
     private async Task CerrarModalSecuenciaInicial()
@@ -5198,6 +5237,18 @@
         if (isDemoMode)
         {
             await AlertService.ShowInfoAsync("Modo demo: la emision esta bloqueada para invitados.");
+            return;
+        }
+
+        facturaSecuenciaPendiente = await FacturacionService.ObtenerFacturaPendienteSecuenciaAsync(
+            currentUserId,
+            factura.Codemisor,
+            factura.Serie);
+        if (facturaSecuenciaPendiente != null)
+        {
+            await AlertService.ShowWarningAsync(
+                $"La factura {facturaSecuenciaPendiente.NumeroCompleto} todavia no esta autorizada. Debes corregirla o reenviarla antes de continuar.",
+                "Secuencia pendiente");
             return;
         }
 

@@ -140,7 +140,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
         var transportista = view.Transportista;
         var esAutorizada = DocumentoAutorizacionHelper.EsEstadoAutorizado(guia.EstadoSRI);
         var estadoDocumento = esAutorizada ? "Autorizada" : "Emitida";
-        var ambiente = (guia.Ambiente ?? 1) == 1 ? "Pruebas" : "Producción";
+        var ambiente = guia.Ambiente == 1 ? "Pruebas" : "Producción";
         var numeroAutorizacion = string.IsNullOrWhiteSpace(guia.NumAutorizacion) ? "-" : guia.NumAutorizacion;
         var claveAcceso = string.IsNullOrWhiteSpace(guia.CodClave) ? "-" : guia.CodClave;
 

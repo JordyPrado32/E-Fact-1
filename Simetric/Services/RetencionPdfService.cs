@@ -793,7 +793,7 @@ public sealed class RetencionPdfService : IRetencionPdfService
     private static string ObtenerAmbiente(RetencionInfo retencion, ComprasFactura? compra)
     {
         var ambiente = retencion.Ambiente ?? compra?.Ambiente;
-        return ambiente == 2 ? "PRODUCCION" : "PRUEBAS";
+        return ambiente == 1 ? "PRUEBAS" : "PRODUCCION";
     }
 
     private static string ObtenerTipoComprobanteSustento(RetencionGeneradaDetalleViewDto view)

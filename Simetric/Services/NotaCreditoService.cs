@@ -1913,7 +1913,6 @@ public class NotaCreditoService
 
         await using var context = await _dbFactory.CreateDbContextAsync();
         var nota = await context.NotaCreditos
-            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Sec == sec && (!idUsuario.HasValue || x.Usuario == idUsuario.Value));
 
         if (nota == null)
@@ -1936,6 +1935,16 @@ public class NotaCreditoService
                 EstadoSri = DocumentoAutorizacionHelper.EstadoAutorizado,
                 Message = $"La nota de crédito {ObtenerNumeroNotaDocumento(nota)} ya está autorizada por el SRI."
             };
+        }
+
+        if (ComprobanteReenvioFechaHelper.PuedeRenovarFecha(nota.Autorizado, nota.Observacion) &&
+            ComprobanteReenvioFechaHelper.DebeActualizar(nota.FchAutorizacion, nota.CodClave))
+        {
+            nota.FchAutorizacion = DateTime.Today;
+            nota.CodClave = null;
+            nota.NumAutorizacion = null;
+            nota.FechaAutoSri = null;
+            await context.SaveChangesAsync();
         }
 
         var emisor = await context.Emisores
@@ -1966,9 +1975,7 @@ public class NotaCreditoService
             };
         }
 
-        var rutaXml = idUsuario.HasValue
-            ? await AsegurarXmlNotaCreditoRutaUsuarioAsync(sec, idUsuario.Value)
-            : await ProcesarXmlNotaCreditoAsync(sec);
+        var rutaXml = await ProcesarXmlNotaCreditoAsync(sec);
 
         if (string.IsNullOrWhiteSpace(rutaXml) || !File.Exists(rutaXml))
         {

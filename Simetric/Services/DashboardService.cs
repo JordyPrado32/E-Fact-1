@@ -401,7 +401,8 @@ public sealed class DashboardService
                     Fecha = n.FchAutorizacion ?? n.FechaEmiDocModificado,
                     FechaSriTexto = n.FechaAutoSri,
                     Autorizado = n.Autorizado,
-                    Ruta = "/facturacion/notas-credito-generadas"
+                    Ruta = "/facturacion/notas-credito-generadas",
+                    NotificarPendienteAutorizacion = true
                 })
                 .ToListAsync(),
             new List<AuthorizedDocumentCandidate>()));
@@ -421,7 +422,8 @@ public sealed class DashboardService
                     Fecha = n.FchAutorizacion ?? n.FechaEmiDocModificado,
                     FechaSriTexto = n.FechaAutoSri,
                     Autorizado = n.Autorizado,
-                    Ruta = "/facturacion/notas-debito-generadas"
+                    Ruta = "/facturacion/notas-debito-generadas",
+                    NotificarPendienteAutorizacion = true
                 })
                 .ToListAsync(),
             new List<AuthorizedDocumentCandidate>()));
@@ -442,7 +444,8 @@ public sealed class DashboardService
                     Fecha = g.Fecha,
                     FechaSriTexto = g.FechaAutorizacion,
                     EstadoSri = g.EstadoSRI,
-                    Ruta = "/facturacion/guias-remision-generadas"
+                    Ruta = "/facturacion/guias-remision-generadas",
+                    NotificarPendienteAutorizacion = true
                 })
                 .ToListAsync(),
             new List<AuthorizedDocumentCandidate>()));
@@ -461,7 +464,9 @@ public sealed class DashboardService
                     Fecha = r.Fecha,
                     FechaSriTexto = r.FechaAutorizaSri,
                     Autorizado = r.Autorizado,
-                    Ruta = "/facturacion/retenciones-generadas"
+                    EstadoSri = r.Estado,
+                    Ruta = "/facturacion/retenciones-generadas",
+                    NotificarPendienteAutorizacion = true
                 })
                 .ToListAsync(),
             new List<AuthorizedDocumentCandidate>()));
@@ -482,7 +487,8 @@ public sealed class DashboardService
                     FechaSriTexto = c.FechaAutoSRI,
                     Autorizado = c.Autorizado,
                     EstadoSri = c.EstadoEnvioSRI,
-                    Ruta = "/compras/liquidaciones-generadas"
+                    Ruta = "/compras/liquidaciones-generadas",
+                    NotificarPendienteAutorizacion = true
                 })
                 .ToListAsync(),
             new List<AuthorizedDocumentCandidate>()));
@@ -495,7 +501,8 @@ public sealed class DashboardService
                                      || IsAuthorizedBySriState(documento.EstadoSri);
                 var pendienteAutorizacion = documento.NotificarPendienteAutorizacion &&
                                             !estaAutorizado &&
-                                            DebeMostrarAlertaReenvioFactura(documento.Detalleextra);
+                                            documento.Fecha.HasValue &&
+                                            documento.Fecha.Value.Date < DateTime.Today;
 
                 return new
                 {
@@ -522,7 +529,9 @@ public sealed class DashboardService
                 return new DashboardAuthorizedDocumentDto
                 {
                     DocumentoId = documento.DocumentoId,
-                    Titulo = item.PendienteAutorizacion ? "Factura pendiente de autorizacion" : documento.Titulo,
+                    Titulo = item.PendienteAutorizacion
+                        ? documento.Titulo.Replace("autorizada", "pendiente", StringComparison.OrdinalIgnoreCase)
+                        : documento.Titulo,
                     NumeroDocumento = numero == "-" ? $"#{documento.DocumentoId}" : numero,
                     FechaAutorizacion = item.FechaAutorizacion,
                     Ruta = documento.Ruta,

@@ -402,6 +402,28 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
 
             column.Item().Element(card => ComponerBloqueClienteA4(card, view));
             column.Item().Element(card => ComponerDetalle(card, view.Detalles));
+            column.Item().AlignRight().Width(240).Element(card => ComponerBloqueResumen(card, view));
+        });
+    }
+
+    private static void ComponerBloqueResumen(IContainer container, NotaDebitoDetalleViewDto view)
+    {
+        var nota = view.NotaDebito;
+        var descuento = Math.Max(0m, nota.Descuentos ?? view.Detalles.Sum(x => x.Descuento));
+        var subtotalConDescuento = Math.Max(0m, nota.Subtotal ?? view.Detalles.Sum(x => x.Subtotal));
+        var baseBruta = view.Detalles.Any()
+            ? view.Detalles.Sum(x => x.Cantidad * x.PrecioUnitario)
+            : subtotalConDescuento + descuento;
+
+        container.Border(1).BorderColor(Colors.Blue.Lighten4).Padding(8).Column(column =>
+        {
+            column.Spacing(3);
+            column.Item().Text("Resumen").SemiBold().FontColor(Colors.Blue.Darken3);
+            column.Item().Element(x => ComponerDatoLineaA4(x, "Subtotal base gravada:", FormatearMoneda(baseBruta)));
+            column.Item().Element(x => ComponerDatoLineaA4(x, "Descuentos:", FormatearMoneda(descuento)));
+            column.Item().Element(x => ComponerDatoLineaA4(x, "Subtotal con descuento:", FormatearMoneda(subtotalConDescuento)));
+            column.Item().Element(x => ComponerDatoLineaA4(x, "IVA:", FormatearMoneda(nota.Iva ?? 0m)));
+            column.Item().Element(x => ComponerDatoLineaA4(x, "TOTAL:", FormatearMoneda(nota.ValorTotal ?? 0m)));
         });
     }
 
@@ -617,7 +639,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
     }
 
     private static string ObtenerAmbiente(Simetric.Models.NotaDebito nota)
-        => nota.Ambiente == 2 ? "PRODUCCION" : "PRUEBAS";
+        => nota.Ambiente == 1 ? "PRUEBAS" : "PRODUCCION";
 
     private static void ComponerDatoLineaA4(IContainer container, string etiqueta, string? valor)
     {
@@ -681,8 +703,9 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
             }).ToList(),
             Totales =
             [
-                new ThermalTicketLine { Etiqueta = "Subtotal", Valor = FormatearMoneda(nota.Subtotal ?? 0m) },
+                new ThermalTicketLine { Etiqueta = "Base gravada", Valor = FormatearMoneda(view.Detalles.Any() ? view.Detalles.Sum(x => x.Cantidad * x.PrecioUnitario) : (nota.Subtotal ?? 0m) + (nota.Descuentos ?? 0m)) },
                 new ThermalTicketLine { Etiqueta = "Descuentos", Valor = FormatearMoneda(nota.Descuentos ?? 0m) },
+                new ThermalTicketLine { Etiqueta = "Subtotal c/desc.", Valor = FormatearMoneda(nota.Subtotal ?? 0m) },
                 new ThermalTicketLine { Etiqueta = "IVA", Valor = FormatearMoneda(nota.Iva ?? 0m) },
                 new ThermalTicketLine { Etiqueta = "TOTAL", Valor = FormatearMoneda(nota.ValorTotal ?? 0m) }
             ],

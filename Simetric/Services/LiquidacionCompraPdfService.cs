@@ -245,7 +245,7 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
                     }
 
                     column.Item().PaddingTop(2).Element(item => ComponerLineaEncabezado(item, "Tipo emisión:", "NORMAL"));
-                    column.Item().Element(item => ComponerLineaEncabezado(item, "Ambiente:", preview.Ambiente == 2 ? "PRODUCCIÓN" : "PRUEBAS"));
+                    column.Item().Element(item => ComponerLineaEncabezado(item, "Ambiente:", preview.Ambiente == 1 ? "PRUEBAS" : "PRODUCCIÓN"));
 
                     column.Item().PaddingTop(2).Element(item => ComponerCajaDatoEncabezado(item, "Clave de acceso", preview.ClaveAcceso));
 
@@ -327,6 +327,9 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
 
     private static void ComponerBloqueResumen(IContainer container, LiquidacionCompraPreviewDto preview)
     {
+        var subtotalBruto = preview.Detalles.Any()
+            ? preview.Detalles.Sum(x => x.Cantidad * x.PrecioUnitario)
+            : preview.TotalSinImpuestos + preview.TotalDescuento;
         container.Border(1)
             .BorderColor(Colors.Blue.Lighten4)
             .Background(Colors.White)
@@ -345,8 +348,9 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
                 if ((preview.Plazo ?? 0) > 0)
                     column.Item().Element(item => ComponerParDato(item, "Crédito", $"{preview.Plazo} {preview.UnidadTiempo}"));
 
-                column.Item().Element(item => ComponerParDato(item, "Subtotal", FormatearMoneda(preview.TotalSinImpuestos)));
+                column.Item().Element(item => ComponerParDato(item, "Subtotal base gravada", FormatearMoneda(subtotalBruto)));
                 column.Item().Element(item => ComponerParDato(item, "Descuentos", FormatearMoneda(preview.TotalDescuento)));
+                column.Item().Element(item => ComponerParDato(item, "Subtotal con descuento", FormatearMoneda(preview.TotalSinImpuestos)));
                 column.Item().Element(item => ComponerParDato(item, "IVA", FormatearMoneda(preview.IvaTotal)));
 
                 column.Item().PaddingTop(4).Background(Colors.Blue.Lighten5).Padding(6)
@@ -606,8 +610,9 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
             }).ToList(),
             Totales =
             [
-                new ThermalTicketLine { Etiqueta = "Subtotal", Valor = FormatearMoneda(preview.TotalSinImpuestos) },
+                new ThermalTicketLine { Etiqueta = "Base gravada", Valor = FormatearMoneda(lineas.Sum(x => x.Cantidad * x.PrecioUnitario)) },
                 new ThermalTicketLine { Etiqueta = "Descuentos", Valor = FormatearMoneda(preview.TotalDescuento) },
+                new ThermalTicketLine { Etiqueta = "Subtotal c/desc.", Valor = FormatearMoneda(preview.TotalSinImpuestos) },
                 new ThermalTicketLine { Etiqueta = "IVA", Valor = FormatearMoneda(preview.IvaTotal) },
                 new ThermalTicketLine { Etiqueta = "TOTAL", Valor = FormatearMoneda(preview.ImporteTotal) }
             ]

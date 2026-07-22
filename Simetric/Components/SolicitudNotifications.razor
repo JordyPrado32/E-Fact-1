@@ -52,27 +52,27 @@
             @if (TieneElementosVisibles)
             {
                 <div class="solicitud-notification-list">
-                    @if (FacturasPendientesReenvio.Count > 0)
+                    @if (DocumentosPendientesReenvio.Count > 0)
                     {
                         <div class="@GetFacturaPendienteItemClass()">
                             <button type="button"
                                     class="solicitud-notification-main"
-                                    @onclick="IrAFacturasPendientesAsync">
+                                    @onclick="IrADocumentosPendientesAsync">
                                 <span class="solicitud-notification-icon is-pending">
                                     <i class="bi bi-exclamation-triangle-fill"></i>
                                 </span>
                                 <span class="solicitud-notification-copy">
                                     <span class="solicitud-notification-title-row">
-                                        <strong>@GetTituloFacturasPendientes()</strong>
+                                        <strong>@GetTituloDocumentosPendientes()</strong>
                                         <span class="solicitud-notification-flag">Nueva</span>
                                     </span>
-                                    <small>Haz clic para abrir Mis facturas y reenviar manualmente.</small>
-                                    <em>@GetMetaFacturasPendientes()</em>
+                                    <small>@GetResumenDocumentosPendientes()</small>
+                                    <em>Corrige lo necesario y reenvía cada comprobante al SRI.</em>
                                 </span>
                             </button>
                             <button type="button"
                                     class="solicitud-notification-delete"
-                                    @onclick="BorrarFacturasPendientesAsync"
+                                    @onclick="BorrarDocumentosPendientesAsync"
                                     aria-label="Borrar notificación">
                                 <i class="bi bi-x"></i>
                             </button>
@@ -222,13 +222,12 @@
     private IEnumerable<DashboardAuthorizedDocumentDto> DocumentosAutorizadosVisibles =>
         documentosAutorizados.Where(documento =>
             !notificacionesOcultas.Contains(GetDocumentoKey(documento)) &&
-            !(documento.EsPendienteAutorizacion && string.Equals(documento.Ruta, "/facturas", StringComparison.OrdinalIgnoreCase)));
-    private List<DashboardAuthorizedDocumentDto> FacturasPendientesReenvio =>
+            !documento.EsPendienteAutorizacion);
+    private List<DashboardAuthorizedDocumentDto> DocumentosPendientesReenvio =>
         documentosAutorizados
             .Where(documento =>
                 !notificacionesOcultas.Contains(GetDocumentoKey(documento)) &&
-                documento.EsPendienteAutorizacion &&
-                string.Equals(documento.Ruta, "/facturas", StringComparison.OrdinalIgnoreCase))
+                documento.EsPendienteAutorizacion)
             .ToList();
     private IEnumerable<SolicitudNotificacionDto> NotificacionesVisibles =>
         notificaciones.Where(notificacion => !notificacionesOcultas.Contains(GetNotificacionKey(notificacion)));
@@ -236,10 +235,10 @@
         recargasDocumentos.Where(recarga => !notificacionesOcultas.Contains(GetRecargaDocumentosKey(recarga)));
     private IEnumerable<ReporteVentaBackOffice> SolicitudesDocumentosBackOfficeVisibles =>
         solicitudesDocumentosBackOffice.Where(solicitud => !notificacionesOcultas.Contains(GetSolicitudDocumentosBackOfficeKey(solicitud)));
-    private int AutorizacionesNoVistas => DocumentosAutorizadosVisibles.Count(documento => !EsAutorizacionVista(documento)) + (FacturasPendientesReenvio.Count > 0 ? 1 : 0);
+    private int AutorizacionesNoVistas => DocumentosAutorizadosVisibles.Count(documento => !EsAutorizacionVista(documento)) + (DocumentosPendientesReenvio.Count > 0 ? 1 : 0);
     private int TotalAvisos => NotificacionesVisibles.Count() + RecargasDocumentosVisibles.Count() + SolicitudesDocumentosBackOfficeVisibles.Count() + AutorizacionesNoVistas;
     private bool TieneAvisos => TotalAvisos > 0;
-    private bool TieneElementosVisibles => DocumentosAutorizadosVisibles.Any() || FacturasPendientesReenvio.Count > 0 || RecargasDocumentosVisibles.Any() || SolicitudesDocumentosBackOfficeVisibles.Any() || NotificacionesVisibles.Any();
+    private bool TieneElementosVisibles => DocumentosAutorizadosVisibles.Any() || DocumentosPendientesReenvio.Count > 0 || RecargasDocumentosVisibles.Any() || SolicitudesDocumentosBackOfficeVisibles.Any() || NotificacionesVisibles.Any();
 
     protected override async Task OnInitializedAsync()
     {
@@ -385,7 +384,7 @@
 
         try
         {
-            documentosAutorizados = await DashboardService.GetRecentAuthorizedDocumentsAsync(usuarioIdActual, 12);
+            documentosAutorizados = await DashboardService.GetRecentAuthorizedDocumentsAsync(usuarioIdActual, 500);
             await InicializarAutorizacionesVistasAsync();
         }
         catch
@@ -516,9 +515,9 @@
         await PersistirNotificacionesOcultasAsync();
     }
 
-    private async Task BorrarFacturasPendientesAsync()
+    private async Task BorrarDocumentosPendientesAsync()
     {
-        foreach (var documento in FacturasPendientesReenvio)
+        foreach (var documento in DocumentosPendientesReenvio)
         {
             autorizacionesVistas.Add(documento.Clave);
             notificacionesOcultas.Add(GetDocumentoKey(documento));
@@ -554,7 +553,7 @@
             notificacionesOcultas.Add(GetDocumentoKey(documento));
         }
 
-        foreach (var documento in FacturasPendientesReenvio)
+        foreach (var documento in DocumentosPendientesReenvio)
         {
             autorizacionesVistas.Add(documento.Clave);
             notificacionesOcultas.Add(GetDocumentoKey(documento));
@@ -616,14 +615,14 @@
         Navigation.NavigateTo("/backoffice/cobros");
     }
 
-    private async Task IrAFacturasPendientesAsync()
+    private async Task IrADocumentosPendientesAsync()
     {
-        foreach (var documento in FacturasPendientesReenvio)
+        foreach (var documento in DocumentosPendientesReenvio)
             autorizacionesVistas.Add(documento.Clave);
 
         await PersistirAutorizacionesVistasAsync();
         panelAbierto = false;
-        Navigation.NavigateTo("/facturas");
+        Navigation.NavigateTo("/reportes/documentos?autorizacion=PENDIENTES");
     }
 
     private string GetBadgeText() =>
@@ -775,24 +774,26 @@
     private string GetFacturaPendienteItemClass() =>
         "solicitud-notification-item is-unread is-pending-document";
 
-    private string GetTituloFacturasPendientes() =>
-        FacturasPendientesReenvio.Count == 1
-            ? "Tiene 1 factura pendiente"
-            : $"Tiene {FacturasPendientesReenvio.Count} facturas pendientes";
+    private string GetTituloDocumentosPendientes() =>
+        DocumentosPendientesReenvio.Count == 1
+            ? "Tienes 1 comprobante pendiente del día anterior"
+            : $"Tienes {DocumentosPendientesReenvio.Count} comprobantes pendientes";
 
-    private string GetMetaFacturasPendientes()
+    private string GetResumenDocumentosPendientes() =>
+        string.Join(" · ", DocumentosPendientesReenvio
+            .GroupBy(x => ObtenerEtiquetaPendiente(x.Ruta))
+            .Select(g => $"{g.Count()} {g.Key}"));
+
+    private static string ObtenerEtiquetaPendiente(string ruta) => ruta switch
     {
-        var fecha = FacturasPendientesReenvio
-            .Select(documento => documento.FechaAutorizacion)
-            .Where(fecha => fecha.HasValue)
-            .Select(fecha => fecha!.Value)
-            .OrderByDescending(fecha => fecha)
-            .FirstOrDefault();
-
-        return fecha == default
-            ? "Se alcanzaron 3 reintentos automaticos hoy"
-            : $"Se alcanzaron 3 reintentos automaticos hoy - ultima emision {fecha:dd/MM/yyyy HH:mm}";
-    }
+        "/facturas" => "factura(s)",
+        "/facturacion/notas-credito-generadas" => "NC",
+        "/facturacion/notas-debito-generadas" => "ND",
+        "/facturacion/guias-remision-generadas" => "guía(s)",
+        "/facturacion/retenciones-generadas" => "retención(es)",
+        "/compras/liquidaciones-generadas" => "liquidación(es)",
+        _ => "documento(s)"
+    };
 
     private static string GetTitular(SolicitudNotificacionDto notificacion)
     {

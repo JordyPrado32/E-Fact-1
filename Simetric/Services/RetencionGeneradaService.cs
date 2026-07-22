@@ -176,6 +176,24 @@ public class RetencionGeneradaService
             };
         }
 
+        if (ComprobanteReenvioFechaHelper.PuedeRenovarFecha(retencion.Estado, retencion.Mensaje) &&
+            ComprobanteReenvioFechaHelper.DebeActualizar(retencion.Fecha, retencion.Clave))
+        {
+            if (!string.IsNullOrWhiteSpace(retencion.NombreXml))
+            {
+                var xmlAnterior = Path.Combine(ObtenerWebRootPath(), "comprobantes", "generados", retencion.NombreXml);
+                if (File.Exists(xmlAnterior))
+                    File.Delete(xmlAnterior);
+            }
+
+            retencion.Fecha = DateTime.Today;
+            retencion.Clave = null;
+            retencion.NombreXml = null;
+            retencion.NumAutorizacion = null;
+            retencion.FechaAutorizaSri = null;
+            await db.SaveChangesAsync();
+        }
+
         var detalle = await GetRetencionDetalleCoreAsync(sec, idUsuario);
         if (detalle == null)
         {
