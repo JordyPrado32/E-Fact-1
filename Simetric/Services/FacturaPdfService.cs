@@ -205,8 +205,8 @@ public sealed class FacturaPdfService : IFacturaPdfService
         return detalles.Select((detalle, index) =>
         {
             var bruto = detalle.Cantproducto * detalle.Precioproducto;
-            var descuentoPct = NormalizarPorcentajeDescuento(detalle.Descuento);
-            var descuentoValor = bruto * descuentoPct;
+            var descuentoValor = Math.Clamp(detalle.Descuento ?? 0m, 0m, Math.Max(0m, bruto));
+            var descuentoPct = bruto > 0m ? descuentoValor / bruto : 0m;
 
             return new FacturaPdfLinea
             {
@@ -615,8 +615,15 @@ public sealed class FacturaPdfService : IFacturaPdfService
         decimal total,
         IReadOnlyCollection<FacturaPdfLinea> lineas)
     {
-        var subtotalSinImpuestos = Math.Max(0m, subtotal0 + subtotal12 + subtotalNoObjeto + subtotalExento);
-        var subtotalConDescuento = Math.Max(0m, subtotalSinImpuestos - descuentos);
+        var subtotalConDescuento = Math.Max(0m, subtotal);
+        var subtotalBaseGravada = lineas.Where(x => x.TarifaIva > 0 || x.ValorIva > 0).Sum(x => x.Cantidad * x.PrecioUnitario);
+        var subtotalBaseCero = lineas.Where(x => x.TarifaIva == 0 && x.ValorIva == 0).Sum(x => x.Cantidad * x.PrecioUnitario);
+        if (lineas.Count == 0)
+        {
+            subtotalBaseGravada = subtotal12;
+            subtotalBaseCero = subtotal0;
+        }
+        var subtotalSinImpuestos = Math.Max(0m, subtotalBaseGravada + subtotalBaseCero + subtotalNoObjeto + subtotalExento);
         var servicio10 = Math.Max(0m, lineas.Where(x => x.TarifaIva == 10).Sum(x => x.ValorIva));
         var iva15 = Math.Max(0m, iva - servicio10);
 
@@ -655,8 +662,8 @@ public sealed class FacturaPdfService : IFacturaPdfService
                             .SemiBold();
                     }
 
-                    AgregarFila("Subtotal 15%", FormatearMoneda(subtotal12));
-                    AgregarFila("Subtotal 0%", FormatearMoneda(subtotal0));
+                    AgregarFila("Subtotal base gravada", FormatearMoneda(subtotalBaseGravada));
+                    AgregarFila("Subtotal base 0%", FormatearMoneda(subtotalBaseCero));
                     AgregarFila("Subtotal no objeto IVA", FormatearMoneda(subtotalNoObjeto));
                     AgregarFila("Subtotal exento IVA", FormatearMoneda(subtotalExento));
                     AgregarFila("Subtotal sin impuestos", FormatearMoneda(subtotalSinImpuestos));
@@ -1169,7 +1176,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
         {
             1 => "Pruebas",
             2 => "Producción",
-            _ => "-"
+            _ => "Producción"
         };
 
     private static string ObtenerTipoEmisionVisual(string? estadoSri)
@@ -1188,7 +1195,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
             {
                 1 => "Pruebas",
                 2 => "Producción",
-                _ => "-"
+                _ => "Producción"
             }
             : ObtenerAmbienteVisual(ambiente);
 

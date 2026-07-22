@@ -518,6 +518,86 @@ namespace Simetric.Services
                 : siguiente;
         }
 
+        public async Task<FacturaSecuenciaPendienteDto?> ObtenerFacturaPendienteSecuenciaAsync(
+            int idUsuario,
+            int? codEmisor,
+            string? serieRaw)
+        {
+            if (idUsuario <= 0 || codEmisor is null or <= 0 || string.IsNullOrWhiteSpace(serieRaw))
+                return null;
+
+            await using var context = await _dbFactory.CreateDbContextAsync();
+            return await ObtenerFacturaPendienteSecuenciaAsync(context, idUsuario, codEmisor, serieRaw);
+        }
+
+        private static async Task<FacturaSecuenciaPendienteDto?> ObtenerFacturaPendienteSecuenciaAsync(
+            AppDbContext context,
+            int idUsuario,
+            int? codEmisor,
+            string? serieRaw)
+        {
+            var serie = ExtractSerieDigits(serieRaw);
+            if (serie.Length < 6)
+                return null;
+
+            var usuarios = await ObtenerUsuariosSincronizadosPorEmisorRucAsync(context, idUsuario, codEmisor);
+            var query = context.Facturas
+                .AsNoTracking()
+                .Where(f =>
+                    f.Coddocumento == 1 &&
+                    f.Idusuario.HasValue &&
+                    usuarios.Contains(f.Idusuario.Value) &&
+                    (f.Serie ?? string.Empty).Replace("-", string.Empty) == serie);
+
+            if (codEmisor is > 0)
+                query = query.Where(f => f.Codemisor == codEmisor.Value);
+
+            var ultima = await query
+                .OrderByDescending(f => f.Codfactura)
+                .Select(f => new
+                {
+                    f.Codfactura,
+                    f.Serie,
+                    f.Numfactura,
+                    f.Estado,
+                    f.Autorizado,
+                    f.Estadoenviosri,
+                    f.Mensaje,
+                    f.Fchautorizacion,
+                    f.Numautorizacion
+                })
+                .FirstOrDefaultAsync();
+
+            if (ultima == null ||
+                DocumentoAutorizacionHelper.EstaAutorizado(ultima.Autorizado, ultima.Estadoenviosri))
+            {
+                return null;
+            }
+
+            var tieneEvidenciaTransmision =
+                ultima.Fchautorizacion.HasValue ||
+                !string.IsNullOrWhiteSpace(ultima.Numautorizacion) ||
+                !string.IsNullOrWhiteSpace(ultima.Estadoenviosri) ||
+                !string.IsNullOrWhiteSpace(ultima.Mensaje);
+
+            if (ultima.Estado == false && !tieneEvidenciaTransmision)
+                return null;
+
+            var destino = FacturaErrorCorreccionHelper.Clasificar(
+                string.Join(" ", ultima.Estadoenviosri, ultima.Mensaje));
+
+            return new FacturaSecuenciaPendienteDto
+            {
+                Codfactura = ultima.Codfactura,
+                Serie = ultima.Serie ?? serie,
+                Secuencial = ultima.Numfactura ?? string.Empty,
+                EstadoSri = ultima.Estadoenviosri ?? DocumentoAutorizacionHelper.EstadoPendiente,
+                MensajeSri = ultima.Mensaje ?? string.Empty,
+                RutaCorreccion = FacturaErrorCorreccionHelper.ObtenerRuta(destino),
+                EtiquetaCorreccion = FacturaErrorCorreccionHelper.ObtenerEtiqueta(destino)
+            };
+        }
+
         public async Task<bool> DebePreguntarSecuenciaInicialAsync(int idUsuario, int? codEmisor = null, string? serieRaw = null)
         {
             var resolucion = await ResolverSerieFacturaAsync(idUsuario, serieRaw);
@@ -994,6 +1074,20 @@ namespace Simetric.Services
 
                         try
                         {
+                            await AdquirirBloqueoSqlSecuenciaFacturaAsync(context, factura.Codemisor, factura.Serie);
+
+                            var facturaPendiente = await ObtenerFacturaPendienteSecuenciaAsync(
+                                context,
+                                idUsuario,
+                                factura.Codemisor,
+                                resolucionFactura.SerieRaw);
+                            if (facturaPendiente != null)
+                            {
+                                throw new InvalidOperationException(
+                                    $"La factura {facturaPendiente.NumeroCompleto} todavia no esta autorizada. " +
+                                    "Debes corregirla o reenviarla antes de generar la siguiente secuencia.");
+                            }
+
                             factura.Numfactura = await GetNextFacturaNumeroAsync(idUsuario, factura.Codemisor, resolucionFactura.SerieRaw);
 
                             await NormalizarCamposClientePorTipoAsync(context, clienteData);
@@ -1437,18 +1531,18 @@ namespace Simetric.Services
                 };
             }
 
-            if (factura.Fchautorizacion.HasValue && factura.Fchautorizacion.Value < DateTime.Now.AddHours(-24))
+            if (ComprobanteReenvioFechaHelper.PuedeRenovarFecha(factura.Estadoenviosri, factura.Mensaje))
             {
-                await MarcarFacturaSriRechazadaAsync(
-                    codFactura,
-                    "NO AUTORIZADO",
-                    "Factura rechazada automaticamente por no autorizarse dentro de las primeras 24 horas.");
+                var fechaAnterior = factura.Fechaentrega ?? factura.Fchautorizacion ?? DateTime.Today;
+                if (fechaAnterior.Date != DateTime.Today)
+                    factura.Fechavence = ComprobanteReenvioFechaHelper.DesplazarFecha(factura.Fechavence, fechaAnterior);
 
-                return new mensajeSRI
-                {
-                    estado = DocumentoAutorizacionHelper.EstadoNoAutorizado,
-                    mensaje = "Factura rechazada automaticamente por vencimiento de reintentos."
-                };
+                factura.Fechaentrega = DateTime.Today;
+                factura.Fchautorizacion = DateTime.Today;
+                factura.Codclave = null;
+                factura.Numautorizacion = null;
+                factura.Fechaautosri = null;
+                await context.SaveChangesAsync();
             }
 
             var ahora = DateTime.Now;
@@ -2039,6 +2133,23 @@ namespace Simetric.Services
         {
             var lockKey = $"{codEmisor.GetValueOrDefault()}:{ExtractSerieDigits(serieRaw)}";
             return FacturaSequenceLocks.GetOrAdd(lockKey, _ => new SemaphoreSlim(1, 1));
+        }
+
+        private static Task AdquirirBloqueoSqlSecuenciaFacturaAsync(
+            AppDbContext context,
+            int? codEmisor,
+            string? serieRaw)
+        {
+            var recurso = $"FACTURA_SECUENCIA:{codEmisor.GetValueOrDefault()}:{ExtractSerieDigits(serieRaw)}";
+            return context.Database.ExecuteSqlInterpolatedAsync($@"
+DECLARE @resultado INT;
+EXEC @resultado = sys.sp_getapplock
+    @Resource = {recurso},
+    @LockMode = 'Exclusive',
+    @LockOwner = 'Transaction',
+    @LockTimeout = 15000;
+IF @resultado < 0
+    THROW 51000, 'No se pudo reservar la secuencia de factura. Intenta nuevamente.', 1;");
         }
 
         private static async Task<CajaSerieResolucion> ResolverSerieFacturaSistemaAsync(AppDbContext context, string? serieRaw = null)
@@ -3198,12 +3309,6 @@ namespace Simetric.Services
             return "2";
         }
 
-        private static bool ClaveAccesoCoincideAmbiente(string? claveAcceso, string ambiente)
-        {
-            var clave = (claveAcceso ?? string.Empty).Trim();
-            return clave.Length > 23 && string.Equals(clave.Substring(23, 1), ambiente, StringComparison.Ordinal);
-        }
-
         public string GenerarXmlFactura(Factura factura, List<Detallefactura> detalles, string codigoFormaPago)
         {
             var cultura = CultureInfo.InvariantCulture;
@@ -3228,15 +3333,19 @@ namespace Simetric.Services
 
             ValidarDatosAutorizacionFactura(factura);
 
-            string claveAcceso = string.IsNullOrWhiteSpace(factura.Codclave) || !ClaveAccesoCoincideAmbiente(factura.Codclave, ambiente)
-                ? GenerarClaveAcceso(
-                    fechaEmision,
-                    factura.CodemisorNavigation?.Ruc,
-                    ambiente,
-                    serieLimpia,
-                    secuencial,
-                    "1")
-                : factura.Codclave.Trim();
+            string claveEsperada = GenerarClaveAcceso(
+                fechaEmision,
+                factura.CodemisorNavigation?.Ruc,
+                ambiente,
+                serieLimpia,
+                secuencial,
+                "1");
+            string claveAcceso = string.Equals(
+                (factura.Codclave ?? string.Empty).Trim(),
+                claveEsperada,
+                StringComparison.Ordinal)
+                    ? factura.Codclave!.Trim()
+                    : claveEsperada;
 
             factura.Codclave = claveAcceso;
             factura.Ambiente = int.TryParse(ambiente, out var ambienteNumerico) ? ambienteNumerico : 2;

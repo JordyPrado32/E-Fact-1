@@ -170,12 +170,12 @@
 
                 <label class="field-card">
                     <span class="field-label">Desde</span>
-                    <input type="date" class="field-input" value="@FechaDesdeInputValue" @onchange="OnFechaDesdeChanged" />
+                    <InputDate TValue="DateTime?" class="field-input" @bind-Value="fechaDesde" @bind-Value:after="OnFiltersChanged" />
                 </label>
 
                 <label class="field-card">
                     <span class="field-label">Hasta</span>
-                    <input type="date" class="field-input" value="@FechaHastaInputValue" @onchange="OnFechaHastaChanged" />
+                    <InputDate TValue="DateTime?" class="field-input" @bind-Value="fechaHasta" @bind-Value:after="OnFiltersChanged" />
                 </label>
 
                 <label class="field-card">
@@ -419,6 +419,9 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "autorizacion")]
+    public string? AutorizacionQuery { get; set; }
+
     private const int PageSize = 12;
 
     private ReporteComprobantesCargaDto reporte = new();
@@ -438,18 +441,6 @@
     private string autorizacionFiltro = DocumentoAutorizacionHelper.FiltroTodos;
     private DateTime? fechaDesde;
     private DateTime? fechaHasta;
-
-    private string FechaDesdeInputValue
-    {
-        get => fechaDesde?.ToString("yyyy-MM-dd") ?? string.Empty;
-        set => fechaDesde = DateTime.TryParse(value, out var fecha) ? fecha.Date : null;
-    }
-
-    private string FechaHastaInputValue
-    {
-        get => fechaHasta?.ToString("yyyy-MM-dd") ?? string.Empty;
-        set => fechaHasta = DateTime.TryParse(value, out var fecha) ? fecha.Date : null;
-    }
 
     private List<ReporteComprobanteItemDto> ItemsFiltrados => AplicarFiltros(reporte.Items);
 
@@ -565,6 +556,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        if (string.Equals(AutorizacionQuery, DocumentoAutorizacionHelper.FiltroPendientes, StringComparison.OrdinalIgnoreCase))
+            autorizacionFiltro = DocumentoAutorizacionHelper.FiltroPendientes;
+
         await RecargarAsync();
     }
 
@@ -579,31 +573,39 @@
     private async Task RecargarAsync()
     {
         cargando = true;
-        isDemoMode = EsRutaDemoDocumentos();
-
-        if (isDemoMode)
+        await InvokeAsync(StateHasChanged);
+        try
         {
-            reporte = DemoCatalogService.GetReporteComprobantesDemo();
+            isDemoMode = EsRutaDemoDocumentos();
+            if (isDemoMode)
+            {
+                reporte = DemoCatalogService.GetReporteComprobantesDemo();
+            }
+            else
+            {
+                var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+                var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
+                currentUserId = int.TryParse(idClaim, out var id) ? id : 0;
+                if (currentUserId <= 0)
+                {
+                    Navigation.NavigateTo("/", true);
+                    return;
+                }
+
+                reporte = await ReporteComprobantesService.ObtenerReporteUsuarioAsync(currentUserId);
+            }
+
             paginaActual = 1;
             reportChartsSignature = string.Empty;
-            cargando = false;
-            return;
         }
-
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
-        currentUserId = int.TryParse(idClaim, out var id) ? id : 0;
-
-        if (currentUserId <= 0)
+        catch (Exception ex)
         {
-            Navigation.NavigateTo("/", true);
-            return;
+            await AlertService.ShowErrorAsync($"No se pudo actualizar el reporte: {ex.Message}");
         }
-
-        reporte = await ReporteComprobantesService.ObtenerReporteUsuarioAsync(currentUserId);
-        paginaActual = 1;
-        reportChartsSignature = string.Empty;
-        cargando = false;
+        finally
+        {
+            cargando = false;
+        }
     }
 
     private async Task RenderReportDocumentChartsIfNeededAsync()
@@ -652,18 +654,6 @@
     {
         paginaActual = 1;
         return Task.CompletedTask;
-    }
-
-    private Task OnFechaDesdeChanged(ChangeEventArgs args)
-    {
-        FechaDesdeInputValue = Convert.ToString(args.Value) ?? string.Empty;
-        return OnFiltersChanged();
-    }
-
-    private Task OnFechaHastaChanged(ChangeEventArgs args)
-    {
-        FechaHastaInputValue = Convert.ToString(args.Value) ?? string.Empty;
-        return OnFiltersChanged();
     }
 
     private void LimpiarFiltros()

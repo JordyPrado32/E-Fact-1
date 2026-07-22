@@ -411,8 +411,8 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
         NotaCredito nota,
         IReadOnlyCollection<NotaCreditoDetalleLineaDto> detalles)
     {
-        var subtotal15 = detalles.Where(x => x.TarifaIva > 0 || x.ValorIva > 0).Sum(x => x.Subtotal);
-        var subtotal0 = detalles.Where(x => x.TarifaIva == 0 && x.ValorIva == 0).Sum(x => x.Subtotal);
+        var subtotal15 = detalles.Where(x => x.TarifaIva > 0 || x.ValorIva > 0).Sum(x => x.Cantidad * x.PrecioUnitario);
+        var subtotal0 = detalles.Where(x => x.TarifaIva == 0 && x.ValorIva == 0).Sum(x => x.Cantidad * x.PrecioUnitario);
         
         if (!detalles.Any())
         {
@@ -424,7 +424,7 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
         var subtotalExento = 0m;
         var subtotalSinImpuestos = subtotal15 + subtotal0 + subtotalNoObjeto + subtotalExento;
         var descuentos = nota.Descuentos ?? detalles.Sum(x => x.Descuento);
-        var subtotalConDescuento = subtotalSinImpuestos - descuentos;
+        var subtotalConDescuento = Math.Max(0m, nota.Subtotal ?? detalles.Sum(x => x.Subtotal));
         var ice = 0m;
         var iva15 = nota.Iva ?? detalles.Sum(x => x.ValorIva);
         var servicio10 = 0m;
@@ -465,8 +465,8 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
                             .SemiBold();
                     }
 
-                    AgregarFila("Subtotal 15%", FormatearMoneda(subtotal15));
-                    AgregarFila("Subtotal 0%", FormatearMoneda(subtotal0));
+                    AgregarFila("Subtotal base gravada", FormatearMoneda(subtotal15));
+                    AgregarFila("Subtotal base 0%", FormatearMoneda(subtotal0));
                     AgregarFila("Subtotal no objeto IVA", FormatearMoneda(subtotalNoObjeto));
                     AgregarFila("Subtotal exento IVA", FormatearMoneda(subtotalExento));
                     AgregarFila("Subtotal sin impuestos", FormatearMoneda(subtotalSinImpuestos));
@@ -877,8 +877,8 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
 
     private static string ObtenerAmbienteVisual(string? ambienteEmisor)
         => int.TryParse(ambienteEmisor, out var ambienteConfig)
-            ? ambienteConfig == 1 ? "Pruebas" : ambienteConfig == 2 ? "Producción" : "-"
-            : "-";
+            ? ambienteConfig == 1 ? "Pruebas" : "Producción"
+            : "Producción";
 
     private static string ObtenerTipoEmisionVisualFromEmisor(string? tipoEmision)
     {

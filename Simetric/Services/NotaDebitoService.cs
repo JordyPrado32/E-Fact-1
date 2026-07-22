@@ -513,6 +513,16 @@ public class NotaDebitoService
             };
         }
 
+        if (ComprobanteReenvioFechaHelper.PuedeRenovarFecha(nota.Autorizado, nota.Mensaje) &&
+            ComprobanteReenvioFechaHelper.DebeActualizar(nota.FchAutorizacion, nota.CodClave))
+        {
+            nota.FchAutorizacion = DateTime.Today;
+            nota.CodClave = null;
+            nota.NumAutorizacion = null;
+            nota.FechaAutoSri = null;
+            await db.SaveChangesAsync();
+        }
+
         var detalle = await GetNotaDebitoDetalleAsync(sec);
         if (detalle?.Emisor == null)
             return await RegistrarErrorSriAsync(db, nota, "No se encontro el emisor asociado a la nota de debito.");

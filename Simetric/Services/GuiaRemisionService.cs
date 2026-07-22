@@ -425,6 +425,19 @@ namespace Simetric.Services
                 };
             }
 
+            var fechaReenvioActualizada = ComprobanteReenvioFechaHelper.PuedeRenovarFecha(guia.EstadoSRI, guia.Mensaje) &&
+                                          ComprobanteReenvioFechaHelper.DebeActualizar(guia.Fecha, guia.CodClave);
+            if (fechaReenvioActualizada)
+            {
+                var fechaAnterior = guia.Fecha ?? DateTime.Today;
+                guia.FechaIniTransporte = ComprobanteReenvioFechaHelper.DesplazarFecha(guia.FechaIniTransporte, fechaAnterior);
+                guia.FechaFinTransporte = ComprobanteReenvioFechaHelper.DesplazarFecha(guia.FechaFinTransporte, fechaAnterior);
+                guia.Fecha = DateTime.Today;
+                guia.CodClave = null;
+                guia.NumAutorizacion = null;
+                guia.FechaAutorizacion = null;
+            }
+
             var detalle = await GetGuiaRemisionDetalleAsync(sec);
             if (detalle?.Emisor == null)
                 return await RegistrarErrorSriAsync(context, guia, "No se encontro el emisor asociado a la guia de remision.");
@@ -432,6 +445,18 @@ namespace Simetric.Services
             var emisor = detalle.Emisor;
             if (string.IsNullOrWhiteSpace(emisor.PathCertificado) || string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
                 return await RegistrarErrorSriAsync(context, guia, "El emisor no tiene configurado el certificado electronico requerido para enviar la guia al SRI.");
+
+            if (fechaReenvioActualizada)
+            {
+                guia.CodClave = GenerarClaveAcceso(
+                    DateTime.Today,
+                    emisor.Ruc,
+                    "2",
+                    guia.Serie,
+                    guia.NumGuiaRemision,
+                    string.IsNullOrWhiteSpace(emisor.TipoEmision) ? "1" : emisor.TipoEmision.Trim());
+                await context.SaveChangesAsync();
+            }
 
             var xmlUrl = await AsegurarXmlGuiaRemisionAsync(sec);
             var rutaXml = ConstruirXmlRutaLocal(emisor.Ruc ?? string.Empty, guia.Serie, guia.NumGuiaRemision);

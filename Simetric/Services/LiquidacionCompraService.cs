@@ -1000,6 +1000,25 @@ public class LiquidacionCompraService
             };
         }
 
+        if (ComprobanteReenvioFechaHelper.PuedeRenovarFecha(compra.EstadoEnvioSRI, compra.Mensaje) &&
+            ComprobanteReenvioFechaHelper.DebeActualizar(compra.FchAutorizacion ?? compra.FechaRegistro, compra.CodClave))
+        {
+            var fechaAnterior = compra.FchAutorizacion ?? compra.FechaRegistro ?? DateTime.Today;
+            if (!string.IsNullOrWhiteSpace(compra.CodClave))
+            {
+                var xmlAnterior = ConstruirLiquidacionXmlRutaLocal(compra.CodClave);
+                if (File.Exists(xmlAnterior))
+                    File.Delete(xmlAnterior);
+            }
+
+            compra.FechaVence = ComprobanteReenvioFechaHelper.DesplazarFecha(compra.FechaVence, fechaAnterior);
+            compra.FchAutorizacion = DateTime.Today;
+            compra.CodClave = null;
+            compra.NumAutorizacion = null;
+            compra.FechaAutoSRI = null;
+            await context.SaveChangesAsync();
+        }
+
         var detalle = await ConstruirDetalleLiquidacionAsync(compra, context);
         if (detalle == null)
         {
