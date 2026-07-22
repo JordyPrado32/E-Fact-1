@@ -832,7 +832,7 @@
                                             <div class="n-discount-input-wrap">
                                                 <input type="number"
                                                        class="n-input-sm text-end"
-                                                       step="0.01"
+                                                       step="@(GetModoDescuentoDetalle(d) == ModoDescuento.Porcentaje ? "1" : "0.01")"
                                                        min="0"
                                                        max="@(GetModoDescuentoDetalle(d) == ModoDescuento.Porcentaje ? "100" : null)"
                                                        value="@GetDescuentoDetalleVisual(d)"
@@ -947,7 +947,7 @@
                                 </div>
                                 <input type="number"
                                        class="n-input"
-                                       step="0.01"
+                                       step="@(modoDescuentoGlobalTipo == ModoDescuento.Porcentaje ? "1" : "0.01")"
                                        min="0"
                                        max="@(modoDescuentoGlobalTipo == ModoDescuento.Porcentaje ? "100" : null)"
                                        disabled="@BloquearDescuentoGlobal"
@@ -2948,7 +2948,7 @@
         detalle.Descripcion = producto.Descripcion ?? string.Empty;
         detalle.Detalle = cargarDetalleAutomatico ? (producto.Subcategoria ?? producto.Categoria) : string.Empty;
         detalle.Precio = precio ?? producto.PrecioUnitario;
-        detalle.PorcentajeDescuento = descuentoPorcentaje;
+        detalle.PorcentajeDescuento = NormalizarPorcentajeEntero(descuentoPorcentaje);
         detalle.Descuento = descuentoValor;
         detalle.Tarifa = Math.Max(0, producto.TarifaIva);
         detalle.TarifaPersonalizada = false;
@@ -3032,7 +3032,7 @@
     private string GetPorcentajeVisual(DetalleFacturaDto d)
     {
         if (valoresTemporalesPorcentaje.TryGetValue(d, out var valor)) return valor;
-        return d.PorcentajeDescuento.ToString("0.##", CultureInfo.InvariantCulture);
+        return NormalizarPorcentajeEntero(d.PorcentajeDescuento).ToString("0", CultureInfo.InvariantCulture);
     }
 
     private ModoDescuento GetModoDescuentoDetalle(DetalleFacturaDto d)
@@ -3072,7 +3072,7 @@
 
         if (modo == ModoDescuento.Porcentaje)
         {
-            d.PorcentajeDescuento = bruto > 0 ? Math.Clamp(Red2((d.Descuento / bruto) * 100m), 0m, 100m) : 0m;
+            d.PorcentajeDescuento = bruto > 0 ? NormalizarPorcentajeEntero((d.Descuento / bruto) * 100m) : 0m;
             d.Descuento = Red2(bruto * (d.PorcentajeDescuento / 100m));
         }
         else
@@ -3174,8 +3174,9 @@
 
         if (TryParseDecimalFlexible(v, out var porc))
         {
-            porc = Math.Clamp(porc, 0m, 100m);
+            porc = NormalizarPorcentajeEntero(porc);
             d.PorcentajeDescuento = porc;
+            valoresTemporalesPorcentaje[d] = porc.ToString("0", CultureInfo.InvariantCulture);
 
             var subtotalBruto = d.Cantidad * d.Precio;
             d.Descuento = Math.Round(subtotalBruto * (porc / 100m), 2);
@@ -3195,7 +3196,7 @@
     {
         return modoDescuentoGlobalTipo == ModoDescuento.Moneda
             ? descuentoGlobalValor.ToString("0.##", CultureInfo.InvariantCulture)
-            : descuentoGlobalPorcentaje.ToString("0.##", CultureInfo.InvariantCulture);
+            : NormalizarPorcentajeEntero(descuentoGlobalPorcentaje).ToString("0", CultureInfo.InvariantCulture);
     }
 
     private void CambiarModoDescuentoGlobal(ModoDescuento modo)
@@ -3215,7 +3216,7 @@
         else
         {
             descuentoGlobalPorcentaje = subtotalBruto > 0 && descuentoGlobalValor > 0
-                ? Math.Clamp(Red2((descuentoGlobalValor / subtotalBruto) * 100m), 0m, 100m)
+                ? NormalizarPorcentajeEntero((descuentoGlobalValor / subtotalBruto) * 100m)
                 : 0m;
             descuentoGlobalValor = 0m;
         }
@@ -3236,7 +3237,7 @@
         }
         else if (TryParseDecimalFlexible(s, out v))
         {
-            descuentoGlobalPorcentaje = Math.Clamp(v, 0m, 100m);
+            descuentoGlobalPorcentaje = NormalizarPorcentajeEntero(v);
             descuentoGlobalValor = 0m;
         }
         else
@@ -3248,6 +3249,9 @@
         CalcularTotalesFactura();
         StateHasChanged();
     }
+
+    private static decimal NormalizarPorcentajeEntero(decimal valor) =>
+        Math.Clamp(Math.Round(valor, 0, MidpointRounding.AwayFromZero), 0m, 100m);
 
     private void LimpiarTodosLosDescuentos()
     {

@@ -276,45 +276,7 @@ public class NotaCreditoService
     public async Task<List<DetalleNcDto>> ObtenerDetallesDisponiblesAsync(int codFactura)
     {
         using var db = await _dbFactory.CreateDbContextAsync();
-
-        // 1. Traer detalles de la factura original
-        var detallesFactura = await db.Detallefacturas
-            .Where(d => d.Codfactura == codFactura)
-            .ToListAsync();
-
-        // 2. Traer TODO lo que ya se ha anulado en Notas de Crédito previas para esta factura
-        // Buscamos en la tabla DETALLENOTACREDITO uniendo con NOTACREDITO por el codFactura
-        var yaAnulados = await (from nc in db.NotaCreditos
-                                join dnc in db.DetallesNotaCredito on nc.Sec equals dnc.CodNotaCredito
-                                where nc.IdDocModificado == codFactura
-                                select dnc).ToListAsync();
-
-        // 3. Cruzar información: Cantidad Original - Cantidad Anulada
-        var resultado = detallesFactura.Select(df =>
-        {
-            var cantYaAnulada = yaAnulados
-                .Where(a => a.CodProducto == df.Codproducto)
-                .Sum(a => a.CantProducto ?? 0m);
-
-            return new DetalleNcDto
-            {
-                Codproducto = df.Codproducto,
-                Codprincipal = df.Codprincipal,
-                Codauxiliar = df.Codauxiliar,
-                Descripcion = df.Descripproducto ?? "",
-                Detalle = df.Descripproducto ?? "",
-                Cantidad = (df.Cantproducto) - cantYaAnulada, // Restamos
-                Preciounitario = df.Precioproducto,
-                Descuento = 0m,
-                PorcentajeDescuento = 0m,
-                Iva = df.Tarifa,
-                Subtotal = ((df.Cantproducto) - cantYaAnulada) * (df.Precioproducto)
-            };
-        })
-        .Where(r => r.Cantidad > 0) // Si la cantidad llega a 0, ya no sale en la lista
-        .ToList();
-
-        return resultado;
+        return await ConstruirDetallesAutomaticosDisponiblesAsync(db, codFactura);
     }
     public async Task<int> CrearNotaAnulacionTotalAsync(NotaCredito nc, decimal totalFactura, int codProductoAnulacion)
     {
@@ -593,7 +555,7 @@ public class NotaCreditoService
         var yaAnulados = await (
             from nc in db.NotaCreditos
             join dnc in db.DetallesNotaCredito on nc.Sec equals dnc.CodNotaCredito
-            where nc.IdDocModificado == codFactura
+            where nc.IdDocModificado == codFactura && nc.Estado == true
             select dnc
         ).ToListAsync();
 
