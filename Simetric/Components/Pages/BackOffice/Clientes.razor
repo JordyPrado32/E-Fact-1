@@ -20,6 +20,7 @@
 @inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject Simetric.Services.VendedorBackOfficeService VendedorBackOfficeService
+@inject FirmaRenovacionService FirmaService
 
 @{
     var isInternal = string.Equals(ClientType, "internal", StringComparison.OrdinalIgnoreCase) || string.Equals(ClientType, "backoffice", StringComparison.OrdinalIgnoreCase);
@@ -850,6 +851,17 @@
                             <small>Servicios con acceso habilitado</small>
                         </div>
                     </article>
+
+                    <article class="kpi-card">
+                        <div class="kpi-icon @GetFirmaKpiIconClass()">
+                            <i class="bi bi-shield-check"></i>
+                        </div>
+                        <div class="kpi-data">
+                            <span class="kpi-label">Días para renovar firma</span>
+                            <strong>@GetFirmaDiasTexto()</strong>
+                            <small>@GetFirmaDetalleTexto()</small>
+                        </div>
+                    </article>
                 </div>
 
                 <!-- Banner de Estado de Licencias / Servicios -->
@@ -1175,6 +1187,7 @@
     private int ventasVendedorCount;
     private decimal ventasVendedorTotal;
     private DateTime? ultimaVentaVendedor;
+    private FirmaRenovacionInfo? firmaRenovacion;
 
     private List<TipoIdentificacion> tipoIdentificaciones = new();
     private List<Tipocliente> tipoClientesList = new();
@@ -1940,6 +1953,7 @@
             ventasVendedorCount = 0;
             ventasVendedorTotal = 0;
             ultimaVentaVendedor = null;
+            firmaRenovacion = null;
 
             if (EsVendedorBackOffice(u))
             {
@@ -1991,6 +2005,8 @@
             // 5. Contar notas de crédito emitidas
             totalNotasCreditoEmitidas = await context.NotaCreditos
                 .CountAsync(nc => nc.Usuario == u.IdUsuario);
+
+            firmaRenovacion = await FirmaService.ObtenerPorUsuarioAsync(u.IdUsuario);
         }
         catch (Exception ex)
         {
@@ -2010,6 +2026,35 @@
         ventasVendedorCount = 0;
         ventasVendedorTotal = 0;
         ultimaVentaVendedor = null;
+        firmaRenovacion = null;
+    }
+
+    private string GetFirmaDiasTexto()
+    {
+        if (firmaRenovacion?.DiasRestantes is not int dias)
+            return "Sin firma";
+
+        return dias < 0 ? "Caducada" : $"{dias} días";
+    }
+
+    private string GetFirmaDetalleTexto()
+    {
+        if (firmaRenovacion?.FechaExpiracion is not DateTime fechaExpiracion)
+            return "No existe una firma configurada";
+
+        return firmaRenovacion.DiasRestantes is < 0
+            ? $"Venció el {fechaExpiracion:dd/MM/yyyy}"
+            : $"Vence el {fechaExpiracion:dd/MM/yyyy}";
+    }
+
+    private string GetFirmaKpiIconClass()
+    {
+        if (firmaRenovacion?.DiasRestantes is not int dias || dias < 0)
+            return "kpi-icon-danger";
+
+        return dias <= FirmaRenovacionService.UmbralRenovacionDias
+            ? "kpi-icon-warning"
+            : "kpi-icon-success";
     }
 
     private async Task ConfirmarBaja(int id)

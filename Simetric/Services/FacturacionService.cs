@@ -2617,17 +2617,7 @@ IF @resultado < 0
             factura.Estadopago = "PENDIENTE";
             factura.Fechacancelado = null;
             factura.Valorapagar = saldoPendiente;
-
-            if (!factura.Fechavence.HasValue)
-            {
-                var fechaBase = (factura.Fchautorizacion ?? factura.Fechaentrega ?? DateTime.Today).Date;
-                var diasCredito = factura.Tiempocredito is > 0
-                    ? factura.Tiempocredito.Value
-                    : factura.CodclientesNavigation?.DiasCredito is > 0
-                        ? factura.CodclientesNavigation.DiasCredito.Value
-                        : 0;
-                factura.Fechavence = fechaBase.AddDays(diasCredito);
-            }
+            factura.Fechavence = DateTime.Today.AddDays(30);
 
             await context.SaveChangesAsync(cancellationToken);
             return (true, "La factura ahora está disponible en Cuentas por cobrar.");
