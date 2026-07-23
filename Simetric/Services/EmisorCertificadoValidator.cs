@@ -101,21 +101,28 @@ public sealed class EmisorCertificadoValidator
             info.FechaExpiracion.Value > DateTimeOffset.Now;
 
         if (!estaVigente)
+        {
+            var fechaExpiracion = info.FechaExpiracion.Value.LocalDateTime;
             return CertificadoEmisorValidationResult.Fail(
                 $"La firma electronica esta caducada desde el {info.FechaExpiracion.Value:dd/MM/yyyy}.",
-                info.FechaExpiracion.Value.LocalDateTime,
+                fechaExpiracion,
                 identificacionCoincidente,
-                info.DiasRestantes,
+                CalcularDiasRestantes(fechaExpiracion),
                 info.NombreTitular,
                 info.EstadoVigencia);
+        }
 
+        var fechaExpiracionVigente = info.FechaExpiracion.Value.LocalDateTime;
         return CertificadoEmisorValidationResult.Ok(
-            info.FechaExpiracion.Value.LocalDateTime,
+            fechaExpiracionVigente,
             identificacionCoincidente,
-            Math.Max(info.DiasRestantes, 0),
+            Math.Max(CalcularDiasRestantes(fechaExpiracionVigente), 0),
             info.NombreTitular,
             info.EstadoVigencia);
     }
+
+    private static int CalcularDiasRestantes(DateTime fechaExpiracion) =>
+        (fechaExpiracion.Date - DateTime.Today).Days;
 
     private static bool PerteneceAlRuc(string? identificacionCertificado, string? rucEmisor)
     {

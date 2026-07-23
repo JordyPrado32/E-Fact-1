@@ -21,7 +21,7 @@ namespace Simetric.Services
         }
 
         /// <summary>
-        /// Obtiene las facturas a crédito (TipoPago = 19) que aún tienen saldo pendiente.
+        /// Obtiene las facturas a crédito o marcadas internamente como no cobradas que aún tienen saldo pendiente.
         /// </summary>
         public async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientes(int idUsuario, int? idCliente = null)
         {
@@ -628,7 +628,7 @@ namespace Simetric.Services
                 .AsNoTracking()
                 .Where(f =>
                     f.Idusuario == idUsuario &&
-                    f.Tipopago == "19" &&
+                    (f.Tipopago == "19" || f.Estadopago == "PENDIENTE") &&
                     (f.Estado == true || f.Estado == null));
 
         private static async Task<bool> ClientePerteneceUsuarioAsync(AppDbContext context, int idUsuario, int idCliente)

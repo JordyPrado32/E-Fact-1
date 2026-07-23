@@ -2553,7 +2553,11 @@ IF @resultado < 0
                     MensajeSri = f.Mensaje,
                     FechaAutorizacion = f.Fchautorizacion,
                     Total = f.Valortotal,
+                    TotalAbonado = context.Abonos
+                        .Where(a => a.codFactura == f.Codfactura && a.estado == true)
+                        .Sum(a => (decimal?)a.abono) ?? 0m,
                     Tipopago = f.Tipopago,
+                    EstadoPago = f.Estadopago,
                     Estado = f.Estado,
                     Cliente = f.CodclientesNavigation != null
                         ? ((f.CodclientesNavigation.Nombrerazonsocial != null && f.CodclientesNavigation.Nombrerazonsocial != string.Empty)
@@ -2565,6 +2569,68 @@ IF @resultado < 0
                         : null
                 })
                 .ToListAsync();
+        }
+
+        public async Task<(bool Success, string Message)> MarcarFacturaNoCobradaAsync(
+            int codFactura,
+            int idUsuario,
+            CancellationToken cancellationToken = default)
+        {
+            if (codFactura <= 0 || idUsuario <= 0)
+                return (false, "No se pudo identificar la factura.");
+
+            await using var context = await _dbFactory.CreateDbContextAsync(cancellationToken);
+            var factura = await context.Facturas
+                .Include(f => f.CodclientesNavigation)
+                .FirstOrDefaultAsync(
+                    f =>
+                        f.Codfactura == codFactura &&
+                        f.Idusuario == idUsuario &&
+                        (f.CodemisorNavigation == null || !f.CodemisorNavigation.EsEmisorSistema) &&
+                        (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)),
+                    cancellationToken);
+
+            if (factura is null)
+                return (false, "No se encontró la factura.");
+
+            if (factura.Estado == false)
+                return (false, "Una factura anulada no puede enviarse a cuentas por cobrar.");
+
+            if (!DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri))
+                return (false, "La factura debe estar autorizada antes de enviarla a cuentas por cobrar.");
+
+            if (!factura.Codclientes.HasValue)
+                return (false, "La factura no tiene un cliente asociado.");
+
+            var totalFactura = factura.Valortotal ?? 0m;
+            if (totalFactura <= 0m)
+                return (false, "La factura no tiene un valor pendiente válido.");
+
+            var totalAbonado = await context.Abonos
+                .Where(a => a.codFactura == codFactura && a.estado == true)
+                .SumAsync(a => (decimal?)a.abono, cancellationToken) ?? 0m;
+            var saldoPendiente = Math.Max(totalFactura - totalAbonado, 0m);
+
+            if (saldoPendiente <= 0m)
+                return (false, "La factura ya está completamente cobrada. Revisa primero sus abonos registrados.");
+
+            factura.Estadopago = "PENDIENTE";
+            factura.Fechacancelado = null;
+            factura.Valorapagar = saldoPendiente;
+
+            if (!factura.Fechavence.HasValue)
+            {
+                var fechaBase = (factura.Fchautorizacion ?? factura.Fechaentrega ?? DateTime.Today).Date;
+                var diasCredito = factura.Tiempocredito is > 0
+                    ? factura.Tiempocredito.Value
+                    : factura.CodclientesNavigation?.DiasCredito is > 0
+                        ? factura.CodclientesNavigation.DiasCredito.Value
+                        : 0;
+                factura.Fechavence = fechaBase.AddDays(diasCredito);
+            }
+
+            await context.SaveChangesAsync(cancellationToken);
+            return (true, "La factura ahora está disponible en Cuentas por cobrar.");
         }
 
         public async Task<List<FacturaListDto>> ListarFacturasClienteUsuarioAsync(int idUsuario, string identificacionCliente, int top = 200)
