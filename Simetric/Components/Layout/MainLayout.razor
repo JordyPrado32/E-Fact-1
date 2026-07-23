@@ -13,6 +13,7 @@
 @inject DashboardService DashboardService
 @inject EmisorOnboardingService EmisorOnboardingService
 @inject EmisionControlService EmisionControlService
+@inject FirmaRenovacionService FirmaRenovacionService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject ILogger<MainLayout> Logger
@@ -135,6 +136,22 @@ else
                                     <strong aria-live="polite">@SaldoDocumentosHeaderLabel</strong>
                                 </div>
                             </a>
+
+                            @if (_firmaRenovacion is not null)
+                            {
+                                <a class="session-documents-pill session-signature-pill @ObtenerClaseFirmaHeader()"
+                                   href="/firma"
+                                   title="@ObtenerTituloFirmaHeader()"
+                                   aria-label="Consultar estado de la firma electrónica">
+                                    <div class="session-documents-icon">
+                                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                                    </div>
+                                    <div class="session-documents-copy">
+                                        <span>Firma electrónica</span>
+                                        <strong aria-live="polite">@ObtenerTextoFirmaHeader()</strong>
+                                    </div>
+                                </a>
+                            }
                         }
 
                         <div class="session-profile-menu">
@@ -832,6 +849,7 @@ else
     private bool _mostrarBienvenida;
     private string? _welcomeStorageKey;
     private EmisionEstado? _emisionEstado;
+    private FirmaRenovacionInfo? _firmaRenovacion;
     private int _saldoDocumentosHeader;
     private bool _resaltarSaldoDocumentos;
     private int _saldoHighlightVersion;
@@ -1168,6 +1186,9 @@ else
         try
         {
             _emisionEstado = await EmisionControlService.ObtenerEstadoAsync(idUsuario);
+            _firmaRenovacion = idUsuario is > 0
+                ? await FirmaRenovacionService.ObtenerPorUsuarioAsync(idUsuario.Value)
+                : null;
             _saldoDocumentosHeader = _emisionEstado?.SaldoDocumentosDisponibles ?? 0;
             _cuentaListaParaFacturar =
                 _emisionEstado?.PuedeEmitir == true &&
@@ -1192,11 +1213,39 @@ else
         {
             Logger.LogWarning(ex, "No se pudo actualizar el estado de emision desde el layout.");
             _emisionEstado = null;
+            _firmaRenovacion = null;
             _saldoDocumentosHeader = 0;
             _cuentaListaParaFacturar = false;
             _tieneClientesActivos = false;
             _tieneProductosActivos = false;
         }
+    }
+
+    private string ObtenerClaseFirmaHeader() =>
+        _firmaRenovacion?.DiasRestantes switch
+        {
+            < 0 => "is-expired",
+            <= FirmaRenovacionService.UmbralRenovacionDias => "is-renewal",
+            _ => "is-valid"
+        };
+
+    private string ObtenerTextoFirmaHeader()
+    {
+        var dias = _firmaRenovacion?.DiasRestantes;
+        return dias switch
+        {
+            null => "Sin fecha disponible",
+            < 0 => $"Caducada hace {Math.Abs(dias.Value)} día(s)",
+            0 => "Vence hoy",
+            1 => "1 día para renovar",
+            _ => $"{dias} días para renovar"
+        };
+    }
+
+    private string ObtenerTituloFirmaHeader()
+    {
+        var fecha = _firmaRenovacion?.FechaExpiracion?.ToString("dd/MM/yyyy") ?? "sin fecha";
+        return $"{ObtenerTextoFirmaHeader()}. Fecha de expiración: {fecha}.";
     }
 
     private void ActivarResalteSaldo()

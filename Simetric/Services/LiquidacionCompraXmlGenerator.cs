@@ -43,14 +43,14 @@ public class LiquidacionCompraXmlGenerator
                     new XElement("dirEstablecimiento", direccionEmisor),
                     string.IsNullOrWhiteSpace(preview.ContribuyenteEspecial)
                         ? null
-                        : new XElement("contribuyenteEspecial", preview.ContribuyenteEspecial),
+                        : new XElement("contribuyenteEspecial", preview.ContribuyenteEspecial.Trim()),
                     new XElement("obligadoContabilidad", string.IsNullOrWhiteSpace(preview.ObligadoContabilidad) ? "NO" : preview.ObligadoContabilidad),
                     new XElement("tipoIdentificacionProveedor", preview.TipoIdentificacionProveedor),
                     new XElement("razonSocialProveedor", preview.RazonSocialProveedor),
                     new XElement("identificacionProveedor", preview.IdentificacionProveedor),
                     string.IsNullOrWhiteSpace(preview.DireccionProveedor)
                         ? null
-                        : new XElement("direccionProveedor", preview.DireccionProveedor),
+                        : new XElement("direccionProveedor", preview.DireccionProveedor.Trim()),
                     new XElement("totalSinImpuestos", preview.TotalSinImpuestos.ToString("F2", cultura)),
                     new XElement("totalDescuento", preview.TotalDescuento.ToString("F2", cultura)),
                     new XElement("totalConImpuestos", ConstruirTotalesImpuestos(preview, cultura)),
@@ -64,7 +64,7 @@ public class LiquidacionCompraXmlGenerator
                                 ? new XElement("plazo", preview.Plazo.Value.ToString(cultura))
                                 : null,
                             preview.Plazo.HasValue && preview.Plazo.Value > 0 && !string.IsNullOrWhiteSpace(preview.UnidadTiempo)
-                                ? new XElement("unidadTiempo", preview.UnidadTiempo)
+                                ? new XElement("unidadTiempo", preview.UnidadTiempo.Trim())
                                 : null
                         )
                     )
@@ -128,8 +128,8 @@ public class LiquidacionCompraXmlGenerator
             new XElement("codigoPrincipal", string.IsNullOrWhiteSpace(item.CodPrincipal) ? "SIN-CODIGO" : item.CodPrincipal),
             string.IsNullOrWhiteSpace(item.CodAuxiliar)
                 ? null
-                : new XElement("codigoAuxiliar", item.CodAuxiliar),
-            new XElement("descripcion", item.Descripcion),
+                : new XElement("codigoAuxiliar", item.CodAuxiliar.Trim()),
+            new XElement("descripcion", NormalizarTextoUnaLinea(item.Descripcion)),
             new XElement("cantidad", item.Cantidad.ToString("F6", cultura)),
             new XElement("precioUnitario", item.PrecioUnitario.ToString("F6", cultura)),
             new XElement("descuento", item.Descuento.ToString("F2", cultura)),
@@ -151,10 +151,10 @@ public class LiquidacionCompraXmlGenerator
         var campos = new List<XElement>();
 
         if (!string.IsNullOrWhiteSpace(preview.TelefonoProveedor))
-            campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "TelefonoProveedor"), preview.TelefonoProveedor));
+            campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "TelefonoProveedor"), preview.TelefonoProveedor.Trim()));
 
         if (!string.IsNullOrWhiteSpace(preview.EmailProveedor))
-            campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "EmailProveedor"), preview.EmailProveedor));
+            campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "EmailProveedor"), preview.EmailProveedor.Trim()));
 
         campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "OrigenRegistro"), "REGISTRO MANUAL"));
 
@@ -174,4 +174,9 @@ public class LiquidacionCompraXmlGenerator
             _ => 0m
         };
     }
+
+    private static string NormalizarTextoUnaLinea(string? valor) =>
+        string.Join(
+            " ",
+            (valor ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

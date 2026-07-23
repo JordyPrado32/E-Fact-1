@@ -1,0 +1,183 @@
+@page "/backoffice/firmas-por-renovar"
+@using Simetric.Services
+@inject FirmaRenovacionService FirmaRenovacionService
+
+<PageTitle>Firmas por renovar - BackOffice | Numerica</PageTitle>
+
+<div class="fpr-shell animate__animated animate__fadeIn">
+    <section class="fpr-hero">
+        <div>
+            <span class="fpr-kicker">BackOffice</span>
+            <h2>Firmas por renovar</h2>
+            <p>Certificados vencidos o con @FirmaRenovacionService.UmbralRenovacionDias días o menos de vigencia.</p>
+        </div>
+        <button type="button" class="fpr-refresh" @onclick="() => CargarAsync(true)" disabled="@cargando">
+            <i class="bi bi-arrow-clockwise"></i>
+            Actualizar validación
+        </button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="fpr-alert"><i class="bi bi-exclamation-triangle-fill"></i>@error</div>
+    }
+
+    <section class="fpr-kpis">
+        <article class="is-danger">
+            <span>Caducadas</span>
+            <strong>@firmas.Count(f => f.DiasRestantes < 0)</strong>
+            <small>Requieren atención inmediata</small>
+        </article>
+        <article class="is-warning">
+            <span>Próximos 7 días</span>
+            <strong>@firmas.Count(f => f.DiasRestantes is >= 0 and <= 7)</strong>
+            <small>Prioridad alta</small>
+        </article>
+        <article class="is-info">
+            <span>Entre 8 y 15 días</span>
+            <strong>@firmas.Count(f => f.DiasRestantes is >= 8 and <= FirmaRenovacionService.UmbralRenovacionDias)</strong>
+            <small>Seguimiento preventivo</small>
+        </article>
+        <article class="is-success">
+            <span>Correos enviados</span>
+            <strong>@firmas.Count(f => f.CorreoNotificado)</strong>
+            <small>Aviso para contactar a Brigitte</small>
+        </article>
+    </section>
+
+    <section class="fpr-panel">
+        <div class="fpr-toolbar">
+            <div class="fpr-search">
+                <i class="bi bi-search"></i>
+                <input @bind="busqueda" @bind:event="oninput" placeholder="Buscar cliente, RUC o correo..." />
+            </div>
+            <span>@Filtradas.Count registro(s)</span>
+        </div>
+
+        @if (cargando)
+        {
+            <div class="fpr-state">
+                <div class="spinner-border text-primary" role="status"></div>
+                <strong>Validando certificados</strong>
+                <small>Consultando vigencia y fecha de expiración.</small>
+            </div>
+        }
+        else if (Filtradas.Count == 0)
+        {
+            <div class="fpr-state is-empty">
+                <i class="bi bi-shield-check"></i>
+                <strong>No hay firmas pendientes de renovación</strong>
+                <small>No se encontraron certificados para los filtros actuales.</small>
+            </div>
+        }
+        else
+        {
+            <div class="fpr-table-wrap">
+                <table class="fpr-table">
+                    <thead>
+                        <tr>
+                            <th>Cliente</th>
+                            <th>RUC</th>
+                            <th>Expiración</th>
+                            <th>Tiempo restante</th>
+                            <th>Estado</th>
+                            <th>Notificación</th>
+                            <th>Contacto</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var firma in Filtradas)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="fpr-client">
+                                        <strong>@firma.Cliente</strong>
+                                        <small>@firma.Email</small>
+                                    </div>
+                                </td>
+                                <td>@firma.Ruc</td>
+                                <td>@firma.FechaExpiracion?.ToString("dd/MM/yyyy")</td>
+                                <td><strong class="@GetDiasClass(firma)">@GetDiasTexto(firma)</strong></td>
+                                <td><span class="fpr-status @GetEstadoClass(firma)">@firma.Estado</span></td>
+                                <td>
+                                    <span class="fpr-mail @(firma.CorreoNotificado ? "is-sent" : "is-pending")">
+                                        <i class="bi @(firma.CorreoNotificado ? "bi-envelope-check-fill" : "bi-clock-fill")"></i>
+                                        @(firma.CorreoNotificado ? "Correo enviado" : "Pendiente de envío")
+                                    </span>
+                                </td>
+                                <td>
+                                    @if (!string.IsNullOrWhiteSpace(firma.Email))
+                                    {
+                                        <a class="fpr-contact" href="mailto:@firma.Email">
+                                            <i class="bi bi-envelope"></i>
+                                            Escribir
+                                        </a>
+                                    }
+                                    else
+                                    {
+                                        <span class="fpr-no-email">Sin correo</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private readonly List<FirmaRenovacionInfo> firmas = new();
+    private string busqueda = string.Empty;
+    private string? error;
+    private bool cargando = true;
+
+    private List<FirmaRenovacionInfo> Filtradas =>
+        string.IsNullOrWhiteSpace(busqueda)
+            ? firmas
+            : firmas.Where(f =>
+                    f.Cliente.Contains(busqueda, StringComparison.OrdinalIgnoreCase) ||
+                    f.Ruc.Contains(busqueda, StringComparison.OrdinalIgnoreCase) ||
+                    f.Email.Contains(busqueda, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+    protected override Task OnInitializedAsync() => CargarAsync(false);
+
+    private async Task CargarAsync(bool forzarActualizacion)
+    {
+        cargando = true;
+        error = null;
+
+        try
+        {
+            firmas.Clear();
+            firmas.AddRange(await FirmaRenovacionService.ObtenerFirmasPorRenovarAsync(forzarActualizacion));
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudo consultar la vigencia de las firmas: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private static string GetDiasTexto(FirmaRenovacionInfo firma) =>
+        firma.DiasRestantes switch
+        {
+            null => "Sin fecha",
+            < 0 => $"Venció hace {Math.Abs(firma.DiasRestantes.Value)} día(s)",
+            0 => "Vence hoy",
+            1 => "1 día",
+            _ => $"{firma.DiasRestantes} días"
+        };
+
+    private static string GetDiasClass(FirmaRenovacionInfo firma) =>
+        firma.DiasRestantes < 0 ? "is-danger" :
+        firma.DiasRestantes <= 7 ? "is-warning" : "is-info";
+
+    private static string GetEstadoClass(FirmaRenovacionInfo firma) =>
+        firma.DiasRestantes < 0 ? "is-expired" : "is-renewal";
+}

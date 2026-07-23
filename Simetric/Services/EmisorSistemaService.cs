@@ -105,6 +105,13 @@ public sealed class EmisorSistemaService
                 .FirstOrDefaultAsync();
 
             var ownerId = existente?.IdUsuario ?? idUsuarioBackOffice;
+            var certificadoModificado =
+                emisorInput.EliminarClaveCertificado ||
+                !string.Equals(
+                    existente?.PathCertificado?.Trim().TrimStart('~', '/', '\\').Replace('\\', '/'),
+                    emisorInput.PathCertificado,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.IsNullOrWhiteSpace(emisorInput.ClaveCertificado);
 
             if (existente == null)
             {
@@ -151,7 +158,9 @@ public sealed class EmisorSistemaService
             else if (!string.IsNullOrWhiteSpace(emisorInput.ClaveCertificado))
                 existente.ClaveCertificado = emisorInput.ClaveCertificado;
 
-            var validacionCertificado = _emisorCertificadoValidator.Validar(existente);
+            var validacionCertificado = certificadoModificado
+                ? await _emisorCertificadoValidator.ValidarConApiAsync(existente)
+                : _emisorCertificadoValidator.Validar(existente);
             if (!validacionCertificado.IsValid && validacionCertificado.TieneConfiguracion)
                 throw new InvalidOperationException(validacionCertificado.Message);
 

@@ -65,6 +65,46 @@ namespace Simetric.Controllers
             return Ok(emisor);
         }
 
+        [HttpGet("{id:int}/firma/estado")]
+        public async Task<IActionResult> GetEstadoFirma(int id, [FromQuery] int? idUsuario)
+        {
+            if (idUsuario == null || idUsuario <= 0)
+                return BadRequest("Id de usuario requerido.");
+
+            var idCuenta = await ObtenerIdCuentaEmisor(idUsuario.Value);
+            if (idCuenta is null)
+                return NotFound("Usuario no encontrado.");
+
+            var emisor = await _context.Emisores
+                .AsNoTracking()
+                .FirstOrDefaultAsync(e =>
+                    e.Codigo == id &&
+                    e.IdUsuario == idCuenta.Value &&
+                    !e.EsEmisorSistema);
+
+            if (emisor == null)
+                return NotFound();
+
+            var resultado = await _emisorCertificadoValidator.ValidarConApiAsync(
+                emisor,
+                HttpContext.RequestAborted);
+
+            return Ok(new
+            {
+                esValida = resultado.IsValid,
+                estadoVigencia = resultado.IsValid
+                    ? "VIGENTE"
+                    : resultado.Message.Contains("caducada", StringComparison.OrdinalIgnoreCase)
+                        ? "CADUCADA"
+                        : "INVALIDA",
+                mensaje = resultado.Message,
+                nombreTitular = resultado.NombreTitular,
+                identificacion = resultado.IdentificacionExtraida,
+                fechaExpiracion = resultado.FechaExpiracion,
+                diasRestantes = resultado.DiasRestantes
+            });
+        }
+
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] Emisor model)
         {
@@ -88,7 +128,9 @@ namespace Simetric.Controllers
             if (error != null)
                 return BadRequest(error);
 
-            var validacionCertificado = _emisorCertificadoValidator.Validar(model);
+            var validacionCertificado = await _emisorCertificadoValidator.ValidarConApiAsync(
+                model,
+                HttpContext.RequestAborted);
             if (!validacionCertificado.IsValid && validacionCertificado.TieneConfiguracion)
                 return BadRequest(validacionCertificado.Message);
 
@@ -139,6 +181,14 @@ namespace Simetric.Controllers
                 return NotFound();
 
             NormalizarEmisor(model);
+            var certificadoModificado =
+                model.EliminarClaveCertificado ||
+                !string.Equals(
+                    emisorDb.PathCertificado?.Trim().TrimStart('~', '/', '\\').Replace('\\', '/'),
+                    model.PathCertificado,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.IsNullOrWhiteSpace(model.ClaveCertificado);
+
             model.CodEstablecimiento = ObtenerEstablecimientoDesdeRuc(model.Ruc)
                 ?? NormalizarSerie(model.CodEstablecimiento, "001");
             model.CodPuntoEmision = NormalizarSerie(model.CodPuntoEmision, "001");
@@ -187,7 +237,11 @@ namespace Simetric.Controllers
                     emisorDb.ClaveCertificado = model.ClaveCertificado;
                 }
 
-                var validacionCertificado = _emisorCertificadoValidator.Validar(emisorDb);
+                var validacionCertificado = certificadoModificado
+                    ? await _emisorCertificadoValidator.ValidarConApiAsync(
+                        emisorDb,
+                        HttpContext.RequestAborted)
+                    : _emisorCertificadoValidator.Validar(emisorDb);
                 if (!validacionCertificado.IsValid && validacionCertificado.TieneConfiguracion)
                     return BadRequest(validacionCertificado.Message);
 
@@ -319,9 +373,6 @@ namespace Simetric.Controllers
 
             if (string.IsNullOrWhiteSpace(e.Telefono))
                 return "El teléfono es obligatorio.";
-
-            if (!e.Telefono.All(char.IsDigit) || e.Telefono.Length < 7 || e.Telefono.Length > 10)
-                return "El teléfono debe tener entre 7 y 10 dígitos.";
 
             if (string.IsNullOrWhiteSpace(e.LlevaContabilidad))
                 return "Debe seleccionar si lleva contabilidad.";

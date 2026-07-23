@@ -62,7 +62,9 @@ public class ComprobanteRetencionGenerator
                     new XElement("ambiente", preview.Ambiente),
                     new XElement("tipoEmision", "1"),
                     new XElement("razonSocial", preview.NombreEmisorEncontrado),
-                    new XElement("nombreComercial", preview.NombreEmisorEncontrado),
+                    string.IsNullOrWhiteSpace(preview.NombreEmisorEncontrado)
+                        ? null
+                        : new XElement("nombreComercial", preview.NombreEmisorEncontrado.Trim()),
                     new XElement("ruc", rucEmisor),
                     new XElement("claveAcceso", claveAcceso),
                     new XElement("codDoc", "07"),

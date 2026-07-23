@@ -2330,12 +2330,6 @@ public class LiquidacionCompraService
         return !string.IsNullOrWhiteSpace(valor) && valor.Trim().Length >= minimo;
     }
 
-    private static bool EsTelefonoValido(string? valor)
-    {
-        var limpio = new string((valor ?? "").Where(char.IsDigit).ToArray());
-        return limpio.Length is >= 7 and <= 15;
-    }
-
     private static bool EsCorreoValido(string valor)
     {
         try
