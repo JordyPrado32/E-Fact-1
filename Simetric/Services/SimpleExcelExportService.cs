@@ -19,7 +19,17 @@ public sealed record ExcelSheetData(
 
 public sealed record ExcelRowData(IReadOnlyList<ExcelCellData> Cells);
 
-public sealed record ExcelCellData(string Value, int StyleIndex = 0);
+public enum ExcelCellType
+{
+    Text = 0,
+    Number = 1
+}
+
+public sealed record ExcelCellData(
+    string Value,
+    int StyleIndex = 0,
+    ExcelCellType CellType = ExcelCellType.Text,
+    int MergeAcross = 0);
 
 public sealed class SimpleExcelExportService : ISimpleExcelExportService
 {
@@ -80,7 +90,10 @@ public sealed class SimpleExcelExportService : ISimpleExcelExportService
                 {
                     foreach (var cell in row.Cells)
                     {
-                        AddSharedString(lookup, cell.Value);
+                        if (cell.CellType == ExcelCellType.Text)
+                        {
+                            AddSharedString(lookup, cell.Value);
+                        }
                     }
                 }
             }
@@ -115,6 +128,7 @@ public sealed class SimpleExcelExportService : ISimpleExcelExportService
 
     private static string BuildSheetXml(ExcelSheetData sheet, Dictionary<string, int> sharedStrings)
     {
+        var merges = new List<string>();
         var sb = new StringBuilder();
         sb.Append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">""");
 
@@ -140,7 +154,12 @@ public sealed class SimpleExcelExportService : ISimpleExcelExportService
                 for (var colIndex = 0; colIndex < row.Cells.Count; colIndex++)
                 {
                     var cell = row.Cells[colIndex];
-                    AppendSharedStringCell(sb, rowIndex, colIndex + 1, cell.Value, sharedStrings, cell.StyleIndex);
+                    AppendCell(sb, rowIndex, colIndex + 1, cell, sharedStrings);
+
+                    if (cell.MergeAcross > 0)
+                    {
+                        merges.Add($"{GetColumnName(colIndex + 1)}{rowIndex}:{GetColumnName(colIndex + 1 + cell.MergeAcross)}{rowIndex}");
+                    }
                 }
                 sb.Append("</row>");
                 rowIndex++;
@@ -151,7 +170,12 @@ public sealed class SimpleExcelExportService : ISimpleExcelExportService
             sb.Append($"""<row r="{rowIndex}">""");
             for (var colIndex = 0; colIndex < sheet.Headers.Count; colIndex++)
             {
-                AppendSharedStringCell(sb, rowIndex, colIndex + 1, sheet.Headers[colIndex], sharedStrings, 1);
+                AppendCell(
+                    sb,
+                    rowIndex,
+                    colIndex + 1,
+                    new ExcelCellData(sheet.Headers[colIndex], 1),
+                    sharedStrings);
             }
             sb.Append("</row>");
 
@@ -161,26 +185,55 @@ public sealed class SimpleExcelExportService : ISimpleExcelExportService
                 sb.Append($"""<row r="{rowIndex}">""");
                 for (var colIndex = 0; colIndex < row.Count; colIndex++)
                 {
-                    AppendSharedStringCell(sb, rowIndex, colIndex + 1, row[colIndex], sharedStrings, 0);
+                    AppendCell(
+                        sb,
+                        rowIndex,
+                        colIndex + 1,
+                        new ExcelCellData(row[colIndex], 0),
+                        sharedStrings);
                 }
                 sb.Append("</row>");
             }
         }
 
-        sb.Append("</sheetData></worksheet>");
+        sb.Append("</sheetData>");
+
+        if (merges.Count > 0)
+        {
+            sb.Append($"""<mergeCells count="{merges.Count}">""");
+            foreach (var merge in merges)
+            {
+                sb.Append($"""<mergeCell ref="{merge}"/>""");
+            }
+            sb.Append("</mergeCells>");
+        }
+
+        sb.Append("</worksheet>");
         return sb.ToString();
     }
 
-    private static void AppendSharedStringCell(
+    private static void AppendCell(
         StringBuilder sb,
         int rowIndex,
         int columnIndex,
-        string? value,
+        ExcelCellData cell,
         Dictionary<string, int> sharedStrings,
-        int styleIndex)
+        int? styleIndexOverride = null)
     {
         var reference = $"{GetColumnName(columnIndex)}{rowIndex}";
-        var key = value ?? string.Empty;
+        var styleIndex = styleIndexOverride ?? cell.StyleIndex;
+
+        if (cell.CellType == ExcelCellType.Number)
+        {
+            if (decimal.TryParse(cell.Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var numberInvariant) ||
+                decimal.TryParse(cell.Value, System.Globalization.NumberStyles.Any, new System.Globalization.CultureInfo("es-EC"), out numberInvariant))
+            {
+                sb.Append($"""<c r="{reference}" s="{styleIndex}"><v>{numberInvariant.ToString(System.Globalization.CultureInfo.InvariantCulture)}</v></c>""");
+                return;
+            }
+        }
+
+        var key = cell.Value ?? string.Empty;
         sb.Append($"""<c r="{reference}" t="s" s="{styleIndex}"><v>{sharedStrings[key]}</v></c>""");
     }
 
@@ -244,7 +297,7 @@ public sealed class SimpleExcelExportService : ISimpleExcelExportService
     }
 
     private static string BuildStyles() =>
-        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="4"><font><sz val="10"/><name val="Segoe UI"/><color rgb="FF17324A"/></font><font><b/><sz val="10"/><name val="Segoe UI"/><color rgb="FFFFFFFF"/></font><font><b/><sz val="11"/><name val="Segoe UI"/><color rgb="FF17324A"/></font><font><b/><sz val="10"/><name val="Segoe UI"/><color rgb="FF0B5B97"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0B5B97"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF3FB"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF7FBFF"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFD7E3F0"/></left><right style="thin"><color rgb="FFD7E3F0"/></right><top style="thin"><color rgb="FFD7E3F0"/></top><bottom style="thin"><color rgb="FFD7E3F0"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/></cellXfs></styleSheet>""";
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts><fonts count="4"><font><sz val="10"/><name val="Segoe UI"/><color rgb="FF17324A"/></font><font><b/><sz val="10"/><name val="Segoe UI"/><color rgb="FFFFFFFF"/></font><font><b/><sz val="11"/><name val="Segoe UI"/><color rgb="FF17324A"/></font><font><b/><sz val="10"/><name val="Segoe UI"/><color rgb="FF0B5B97"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0B5B97"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF3FB"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF7FBFF"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFD7E3F0"/></left><right style="thin"><color rgb="FFD7E3F0"/></right><top style="thin"><color rgb="FFD7E3F0"/></top><bottom style="thin"><color rgb="FFD7E3F0"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1"/><xf numFmtId="164" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyNumberFormat="1"/></cellXfs></styleSheet>""";
 
     private static void AddEntry(ZipArchive archive, string path, string content)
     {
