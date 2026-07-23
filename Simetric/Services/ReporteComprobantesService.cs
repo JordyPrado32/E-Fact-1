@@ -106,6 +106,12 @@ public sealed class ReporteComprobantesService
             facturaHeaders.TryGetValue(item.Codfactura, out var header);
             facturaDetalles.TryGetValue(item.Codfactura, out var detalle);
             var estaAutorizado = DocumentoAutorizacionHelper.EstaAutorizado(item.Autorizado, item.EstadoSri);
+            var baseSinIva = header?.Subtotal0
+                ?? detalle?.BaseSinIva
+                ?? ObtenerBaseSinIvaFallback(header?.Subtotal ?? 0m, header?.Iva ?? 0m);
+            var baseConIva = header?.SubtotalConIva
+                ?? detalle?.BaseConIva
+                ?? ObtenerBaseConIvaFallback(header?.Subtotal ?? 0m, header?.Iva ?? 0m);
 
             return new ReporteComprobanteItemDto
             {
@@ -129,8 +135,8 @@ public sealed class ReporteComprobantesService
                 PdfUrl = header?.PdfUrl ?? string.Empty,
                 CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                 ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
-                BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(header?.Subtotal ?? 0m, header?.Iva ?? 0m),
-                BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(header?.Subtotal ?? 0m, header?.Iva ?? 0m),
+                BaseSinIva = baseSinIva,
+                BaseConIva = baseConIva,
                 TieneProducto = detalle?.TieneProducto == true,
                 TieneServicio = detalle?.TieneServicio == true
             };
@@ -437,6 +443,8 @@ public sealed class ReporteComprobantesService
             {
                 x.Codfactura,
                 Subtotal = x.Subtotal ?? 0m,
+                Subtotal0 = x.Subtotal0,
+                SubtotalConIva = x.Subtotal12,
                 Iva = x.Iva ?? 0m,
                 ClaveAcceso = x.Codclave ?? string.Empty,
                 RucEmisor = x.CodemisorNavigation != null ? (x.CodemisorNavigation.Ruc ?? string.Empty) : string.Empty,
@@ -448,6 +456,8 @@ public sealed class ReporteComprobantesService
                 x => new FacturaHeaderLookup
                 {
                     Subtotal = x.Subtotal,
+                    Subtotal0 = x.Subtotal0,
+                    SubtotalConIva = x.SubtotalConIva,
                     Iva = x.Iva,
                     ClaveAcceso = x.ClaveAcceso,
                     XmlUrl = ConstruirUrlFactura(x.RucEmisor, x.Serie, x.Numfactura, "xml"),
@@ -850,6 +860,8 @@ public sealed class ReporteComprobantesService
     private sealed class FacturaHeaderLookup
     {
         public decimal Subtotal { get; init; }
+        public decimal? Subtotal0 { get; init; }
+        public decimal? SubtotalConIva { get; init; }
         public decimal Iva { get; init; }
         public string ClaveAcceso { get; init; } = string.Empty;
         public string XmlUrl { get; init; } = string.Empty;

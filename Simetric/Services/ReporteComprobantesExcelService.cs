@@ -154,7 +154,7 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
 
     private static string GetSectionTitle(string? tipoCodigo) => tipoCodigo switch
     {
-        ReporteComprobantesTipos.Factura => "ventas",
+        ReporteComprobantesTipos.Factura => "VENTAS",
         ReporteComprobantesTipos.NotaCredito => "notas de credito",
         ReporteComprobantesTipos.NotaDebito => "notas de debito",
         ReporteComprobantesTipos.GuiaRemision => "guias de remision",
