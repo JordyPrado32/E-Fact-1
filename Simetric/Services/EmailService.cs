@@ -388,7 +388,7 @@ public class EmailService : IEmailService
                       Como usarlo
                     </div>
                     <div style='font-size:14px;line-height:1.7;color:#47627c;margin:0 0 12px 0;'>
-                      1. Ingresa al sistema con tu contraséña temporal.
+                      1. Ingresa al sistema con tu contraséña temporal: <strong>00000000</strong>.
                     </div>
                     <div style='font-size:14px;line-height:1.7;color:#47627c;margin:0 0 12px 0;'>
                       2. Escribe este codigo en la pantalla de cambio de clave.
