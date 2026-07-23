@@ -11,6 +11,7 @@ public interface IReporteComprobantesExcelService
 public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelService
 {
     private static readonly CultureInfo Cultura = new("es-EC");
+    private const int TotalColumnCount = 13;
     private readonly ISimpleExcelExportService _excelExportService;
 
     public ReporteComprobantesExcelService(ISimpleExcelExportService excelExportService)
@@ -55,7 +56,7 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
                 .ToList();
 
             rows.Add(new ExcelRowData([
-                new ExcelCellData(GetSectionTitle(grupo.Key), 2)
+                new ExcelCellData(GetSectionTitle(grupo.Key), 2, ExcelCellType.Text, TotalColumnCount - 1)
             ]));
 
             rows.Add(new ExcelRowData([
@@ -85,10 +86,10 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
                     new ExcelCellData(item.TerceroIdentificacion ?? string.Empty),
                     new ExcelCellData(BuildCodes(item)),
                     new ExcelCellData(BuildDetail(item)),
-                    new ExcelCellData(FormatearMonto(item.BaseSinIva)),
-                    new ExcelCellData(FormatearMonto(item.BaseConIva)),
-                    new ExcelCellData(FormatearMonto(item.Iva)),
-                    new ExcelCellData(FormatearMonto(item.Total)),
+                    MontoCell(item.BaseSinIva),
+                    MontoCell(item.BaseConIva),
+                    MontoCell(item.Iva),
+                    MontoCell(item.Total),
                     new ExcelCellData(item.NumeroAutorizacion ?? string.Empty)
                 ]));
             }
@@ -102,10 +103,10 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
                 new ExcelCellData(string.Empty),
                 new ExcelCellData(string.Empty),
                 new ExcelCellData("TOTAL", 4),
-                new ExcelCellData(FormatearMonto(items.Sum(x => x.BaseSinIva)), 4),
-                new ExcelCellData(FormatearMonto(items.Sum(x => x.BaseConIva)), 4),
-                new ExcelCellData(FormatearMonto(items.Sum(x => x.Iva)), 4),
-                new ExcelCellData(FormatearMonto(items.Sum(x => x.Total)), 4),
+                MontoCell(items.Sum(x => x.BaseSinIva), 6),
+                MontoCell(items.Sum(x => x.BaseConIva), 6),
+                MontoCell(items.Sum(x => x.Iva), 6),
+                MontoCell(items.Sum(x => x.Total), 6),
                 new ExcelCellData(string.Empty)
             ]));
 
@@ -144,6 +145,12 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
 
     private static string FormatearMonto(decimal value)
         => value == 0m ? string.Empty : value.ToString("N2", Cultura);
+
+    private static ExcelCellData MontoCell(decimal value, int styleIndex = 5)
+        => new(
+            value == 0m ? "0" : value.ToString("0.00", CultureInfo.InvariantCulture),
+            styleIndex,
+            ExcelCellType.Number);
 
     private static string GetSectionTitle(string? tipoCodigo) => tipoCodigo switch
     {
