@@ -173,6 +173,7 @@
                             @foreach (var e in filteredEmisores)
                             {
                                 var firmaConfigurada = TieneFirmaConfigurada(e);
+                                var estadoFirma = ObtenerEstadoFirma(e.Codigo);
                                 <tr class="@(firmaModel.Codigo == e.Codigo ? "is-selected" : string.Empty)">
                                     <td>
                                         <div class="cell-main cell-main-stacked">
@@ -184,9 +185,23 @@
                                         <span class="code-pill">@(string.IsNullOrWhiteSpace(e.Ruc) ? "Sin RUC" : e.Ruc)</span>
                                     </td>
                                     <td>
-                                        <span class="signature-status @(firmaConfigurada ? "is-ready" : "is-pending")">
-                                            @(firmaConfigurada ? "Configurada" : "Pendiente")
-                                        </span>
+                                        <div class="signature-status-stack">
+                                            <span class="signature-status @ObtenerClaseEstadoFirma(firmaConfigurada, estadoFirma)">
+                                                @ObtenerEtiquetaEstadoFirma(firmaConfigurada, estadoFirma)
+                                            </span>
+                                            @if (firmaConfigurada && estadoFirma?.EsValida == true)
+                                            {
+                                                <small>@FormatearDiasRenovacion(estadoFirma.DiasRestantes)</small>
+                                            }
+                                            else if (firmaConfigurada && cargandoEstadosFirma)
+                                            {
+                                                <small>Validando vigencia...</small>
+                                            }
+                                            else if (firmaConfigurada && estadoFirma is not null)
+                                            {
+                                                <small>@ObtenerResumenEstadoFirma(estadoFirma)</small>
+                                            }
+                                        </div>
                                     </td>
                                     <td class="text-end">
                                         <div class="action-group">
@@ -241,6 +256,8 @@
                         <small>@(string.IsNullOrWhiteSpace(firmaModel.Ruc) ? "RUC no disponible" : $"RUC {firmaModel.Ruc}")</small>
                     </div>
 
+                    @FirmaEstadoVisual
+
                     @if (esAsociado)
                     {
                         <div class="status-banner status-banner-info status-banner-inline">
@@ -293,6 +310,7 @@
                                        class="form-control form-control-sm cert-password-input"
                                        placeholder="Ingresa la clave del archivo .p12"
                                        @bind="firmaModel.ClaveCertificado"
+                                       @bind:after="InvalidarEstadoFirmaEditor"
                                        autocomplete="off"
                                        disabled="@esAsociado" />
                                 <button class="cert-password-eye" type="button" @onclick="TogglePasswordVisibility" title="Mostrar u ocultar clave">
@@ -378,6 +396,8 @@
                                     <small>@(string.IsNullOrWhiteSpace(firmaModel.Ruc) ? "RUC no disponible" : $"RUC {firmaModel.Ruc}")</small>
                                 </div>
 
+                                @FirmaEstadoVisual
+
                                 @if (esAsociado)
                                 {
                                     <div class="status-banner status-banner-info status-banner-inline">
@@ -430,6 +450,7 @@
                                                    class="form-control form-control-sm cert-password-input"
                                                    placeholder="Ingresa la clave del archivo .p12"
                                                    @bind="firmaModel.ClaveCertificado"
+                                                   @bind:after="InvalidarEstadoFirmaEditor"
                                                    autocomplete="off"
                                                    disabled="@esAsociado" />
                                             <button class="cert-password-eye" type="button" @onclick="TogglePasswordVisibility" title="Mostrar u ocultar clave">
@@ -493,6 +514,10 @@
     private EmisionEstado? emisionEstado;
     private string? nombrePathCertificadoSeleccionado;
     private bool emisorSeleccionadoTieneClaveCertificado;
+    private readonly Dictionary<int, FirmaEstadoDto> estadosFirma = new();
+    private FirmaEstadoDto? firmaEstadoEditor;
+    private bool cargandoEstadosFirma;
+    private bool firmaPendienteValidacion;
     private bool MostrarVolverInicioOnboarding =>
         EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false;
 
@@ -515,6 +540,42 @@
     private bool FirmaConfiguradaActual =>
         !string.IsNullOrWhiteSpace(NombrePathCertificadoActual) &&
         TieneClaveCertificadoActual;
+    private RenderFragment FirmaEstadoVisual => @<text>
+        @if (firmaEstadoEditor is not null)
+        {
+            <div class="signature-validation-alert @ObtenerClaseAlertaFirma(firmaEstadoEditor)">
+                <i class="bi @ObtenerIconoEstadoFirma(firmaEstadoEditor)"></i>
+                <div>
+                    <strong>@ObtenerTituloEstadoFirma(firmaEstadoEditor)</strong>
+                    <span>@ObtenerDetalleEstadoFirma(firmaEstadoEditor)</span>
+                    @if (firmaEstadoEditor.EsValida && !string.IsNullOrWhiteSpace(firmaEstadoEditor.NombreTitular))
+                    {
+                        <small>Titular: @firmaEstadoEditor.NombreTitular</small>
+                    }
+                </div>
+            </div>
+        }
+        else if (cargandoEstadosFirma && FirmaConfiguradaActual)
+        {
+            <div class="signature-validation-alert is-checking">
+                <i class="bi bi-arrow-repeat"></i>
+                <div>
+                    <strong>Validando firma</strong>
+                    <span>Consultando titular y vigencia del certificado.</span>
+                </div>
+            </div>
+        }
+        else if (firmaPendienteValidacion && FirmaConfiguradaActual)
+        {
+            <div class="signature-validation-alert is-checking">
+                <i class="bi bi-shield-lock"></i>
+                <div>
+                    <strong>Validación pendiente</strong>
+                    <span>Al guardar se comprobarán la clave, vigencia y coincidencia con el RUC del emisor.</span>
+                </div>
+            </div>
+        }
+    </text>;
 
     private IEnumerable<EmisorDto> EmisoresFiltrados =>
         string.IsNullOrWhiteSpace(filtro)
@@ -567,6 +628,8 @@
                 : null;
 
             SeleccionarEmisorFirma(seleccionado ?? emisores.FirstOrDefault(e => e.Estado == true) ?? emisores.FirstOrDefault());
+            await CargarEstadosFirmaAsync(idUsuario.Value);
+            firmaEstadoEditor = ObtenerEstadoFirma(firmaModel.Codigo);
             await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
             emisionEstado = await EmisionControlService.ObtenerEstadoAsync(idUsuario);
         }
@@ -587,12 +650,16 @@
             firmaModel = new EmisorUpsertDto();
             nombrePathCertificadoSeleccionado = null;
             emisorSeleccionadoTieneClaveCertificado = false;
+            firmaEstadoEditor = null;
+            firmaPendienteValidacion = false;
             return;
         }
 
         firmaModel = CrearModeloDesdeEmisor(emisor);
         nombrePathCertificadoSeleccionado = null;
         emisorSeleccionadoTieneClaveCertificado = emisor.TieneClaveCertificadoConfigurada;
+        firmaEstadoEditor = ObtenerEstadoFirma(emisor.Codigo);
+        firmaPendienteValidacion = false;
     }
 
     private void AbrirModalFirma()
@@ -645,6 +712,8 @@
             {
                 mensaje = "No se pudo guardar la firma electronica.";
                 debugError = await LeerMensajeErrorHttpAsync(response, "No se pudo guardar la firma electronica.");
+                firmaEstadoEditor = CrearEstadoFirmaInvalido(debugError);
+                firmaPendienteValidacion = false;
                 await MostrarAlertaErrorFirmaAsync(debugError);
                 return;
             }
@@ -670,6 +739,7 @@
     {
         firmaModel.PathCertificado = null;
         nombrePathCertificadoSeleccionado = null;
+        InvalidarEstadoFirmaEditor();
         mensaje = "Archivo de firma quitado del formulario. Guarda para confirmar el cambio.";
         debugError = null;
     }
@@ -679,6 +749,7 @@
         firmaModel.ClaveCertificado = null;
         firmaModel.EliminarClaveCertificado = true;
         emisorSeleccionadoTieneClaveCertificado = false;
+        InvalidarEstadoFirmaEditor();
         mensaje = "Clave del certificado quitada del formulario. Guarda para confirmar el cambio.";
         debugError = null;
     }
@@ -696,6 +767,7 @@
         {
             firmaModel.PathCertificado = relativePath;
             nombrePathCertificadoSeleccionado = e.File?.Name;
+            InvalidarEstadoFirmaEditor();
         });
     }
 
@@ -835,6 +907,136 @@
     private void IrAEmisor() => NavManager.NavigateTo("/emisor");
 
     private void IrAComprarFirma() => NavManager.NavigateTo("/firma/proximamente");
+
+    private async Task CargarEstadosFirmaAsync(int idUsuario)
+    {
+        estadosFirma.Clear();
+        cargandoEstadosFirma = true;
+
+        try
+        {
+            foreach (var emisor in emisores.Where(TieneFirmaConfigurada))
+            {
+                try
+                {
+                    var estado = await Http.GetFromJsonAsync<FirmaEstadoDto>(
+                        $"api/emisores/{emisor.Codigo}/firma/estado?idUsuario={idUsuario}");
+
+                    if (estado is not null)
+                        estadosFirma[emisor.Codigo] = estado;
+                }
+                catch (Exception ex)
+                {
+                    estadosFirma[emisor.Codigo] = CrearEstadoFirmaInvalido(
+                        FormatearMensajeError(ex.Message));
+                }
+            }
+        }
+        finally
+        {
+            cargandoEstadosFirma = false;
+        }
+    }
+
+    private FirmaEstadoDto? ObtenerEstadoFirma(int codigoEmisor) =>
+        estadosFirma.TryGetValue(codigoEmisor, out var estado) ? estado : null;
+
+    private void InvalidarEstadoFirmaEditor()
+    {
+        firmaEstadoEditor = null;
+        firmaPendienteValidacion = true;
+    }
+
+    private static FirmaEstadoDto CrearEstadoFirmaInvalido(string mensaje) => new()
+    {
+        EsValida = false,
+        EstadoVigencia = mensaje.Contains("caducada", StringComparison.OrdinalIgnoreCase)
+            ? "CADUCADA"
+            : "INVALIDA",
+        Mensaje = mensaje
+    };
+
+    private static string ObtenerClaseEstadoFirma(bool configurada, FirmaEstadoDto? estado)
+    {
+        if (!configurada)
+            return "is-pending";
+
+        if (estado?.EsValida == true)
+            return estado.DiasRestantes is <= 30 ? "is-warning" : "is-ready";
+
+        return string.Equals(estado?.EstadoVigencia, "CADUCADA", StringComparison.OrdinalIgnoreCase)
+            ? "is-expired"
+            : "is-invalid";
+    }
+
+    private static string ObtenerEtiquetaEstadoFirma(bool configurada, FirmaEstadoDto? estado)
+    {
+        if (!configurada)
+            return "Pendiente";
+
+        if (estado is null)
+            return "Sin validar";
+
+        if (estado.EsValida)
+            return estado.DiasRestantes is <= 30 ? "Por renovar" : "Vigente";
+
+        return string.Equals(estado.EstadoVigencia, "CADUCADA", StringComparison.OrdinalIgnoreCase)
+            ? "Caducada"
+            : "No válida";
+    }
+
+    private static string ObtenerClaseAlertaFirma(FirmaEstadoDto estado) =>
+        estado.EsValida
+            ? estado.DiasRestantes is <= 30 ? "is-warning" : "is-valid"
+            : string.Equals(estado.EstadoVigencia, "CADUCADA", StringComparison.OrdinalIgnoreCase)
+                ? "is-expired"
+                : "is-invalid";
+
+    private static string ObtenerIconoEstadoFirma(FirmaEstadoDto estado) =>
+        estado.EsValida
+            ? estado.DiasRestantes is <= 30 ? "bi-exclamation-triangle-fill" : "bi-shield-check"
+            : "bi-shield-x";
+
+    private static string ObtenerTituloEstadoFirma(FirmaEstadoDto estado)
+    {
+        if (estado.EsValida)
+            return estado.DiasRestantes is <= 30 ? "Firma próxima a vencer" : "Firma vigente";
+
+        return string.Equals(estado.EstadoVigencia, "CADUCADA", StringComparison.OrdinalIgnoreCase)
+            ? "Firma caducada"
+            : "Firma no válida";
+    }
+
+    private static string ObtenerDetalleEstadoFirma(FirmaEstadoDto estado)
+    {
+        if (!estado.EsValida)
+            return ObtenerResumenEstadoFirma(estado);
+
+        var fecha = estado.FechaExpiracion?.ToString("dd/MM/yyyy") ?? "sin fecha disponible";
+        return $"{FormatearDiasRenovacion(estado.DiasRestantes)}. Expira el {fecha}.";
+    }
+
+    private static string ObtenerResumenEstadoFirma(FirmaEstadoDto estado) =>
+        string.Equals(estado.EstadoVigencia, "CADUCADA", StringComparison.OrdinalIgnoreCase)
+            ? "Firma caducada."
+            : "Firma no válida.";
+
+    private static string FormatearDiasRenovacion(int? diasRestantes) =>
+        diasRestantes switch
+        {
+            null => "Días para renovar no disponibles",
+            0 => "Renueva hoy",
+            1 => "1 día para renovar",
+            _ => $"{diasRestantes} días para renovar"
+        };
+
+    private static string AcortarMensaje(string? mensaje, int longitudMaxima)
+    {
+        var texto = string.IsNullOrWhiteSpace(mensaje) ? "No fue posible validar la firma." : mensaje.Trim();
+        return texto.Length <= longitudMaxima
+            ? texto
+            : $"{texto[..(longitudMaxima - 3)].TrimEnd()}...";
+    }
 
     private string GetTituloEditor() =>
         string.IsNullOrWhiteSpace(firmaModel.NomComercial)
@@ -988,6 +1190,17 @@
         public int? IdUsuario { get; set; }
         public string? CodEstablecimiento { get; set; }
         public string? CodPuntoEmision { get; set; }
+    }
+
+    private sealed class FirmaEstadoDto
+    {
+        public bool EsValida { get; set; }
+        public string? EstadoVigencia { get; set; }
+        public string? Mensaje { get; set; }
+        public string? NombreTitular { get; set; }
+        public string? Identificacion { get; set; }
+        public DateTime? FechaExpiracion { get; set; }
+        public int? DiasRestantes { get; set; }
     }
 
     private class EmisorUpsertDto

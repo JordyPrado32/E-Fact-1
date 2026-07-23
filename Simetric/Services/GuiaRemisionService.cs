@@ -1084,7 +1084,7 @@ namespace Simetric.Services
                                 detalles.Select(d => new XElement("detalle",
                                     !string.IsNullOrWhiteSpace(d.CodInterno) ? new XElement("codigoInterno", d.CodInterno.Trim()) : null,
                                     !string.IsNullOrWhiteSpace(d.CodAdicional) ? new XElement("codigoAdicional", d.CodAdicional.Trim()) : null,
-                                    new XElement("descripcion", Limpiar(d.Descripcion) ?? string.Empty),
+                                    new XElement("descripcion", NormalizarTextoUnaLinea(d.Descripcion)),
                                     new XElement("cantidad", (d.Cantidad ?? 0).ToString("0.######", c))
                                 )))
                         )
@@ -1323,6 +1323,10 @@ namespace Simetric.Services
 
         private static string SoloDigitos(string? valor) => new string((valor ?? string.Empty).Where(char.IsDigit).ToArray());
         private static string? Limpiar(string? valor) => string.IsNullOrWhiteSpace(valor) ? null : valor.Trim();
+        private static string NormalizarTextoUnaLinea(string? valor) =>
+            string.Join(
+                " ",
+                (valor ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         private static string NormalizarSerie(string? serie) => string.IsNullOrWhiteSpace(serie) ? string.Empty : serie.Replace("-", string.Empty).Trim();
         private static string FormatearSerie(string? serie) => NormalizarSerie(serie) is var s && s.Length == 6 ? $"{s[..3]}-{s[3..]}" : NormalizarSerie(serie);
         private static string? NormalizarSiNo(string? valor) => string.IsNullOrWhiteSpace(valor) ? null : (new[] { "S", "SI", "1", "TRUE", "T" }.Contains(valor.Trim().ToUpperInvariant()) ? "SI" : "NO");

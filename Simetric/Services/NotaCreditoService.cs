@@ -832,6 +832,18 @@ public class NotaCreditoService
         //                     secuencial +
         //                     "12345678" +
         //                     "1";
+        var infoAdicional = new List<XElement>();
+        AgregarCampoAdicional(infoAdicional, "Email", cliente?.Correo);
+        AgregarCampoAdicional(infoAdicional, "Motivo", nc.Motivo);
+        AgregarCampoAdicional(infoAdicional, "Observacion", nc.Observacion);
+
+        if (NotaCreditoEstaAutorizada(nc.Autorizado))
+        {
+            AgregarCampoAdicional(infoAdicional, "ClaveAcceso", nc.CodClave ?? claveAcceso);
+            AgregarCampoAdicional(infoAdicional, "NumeroAutorizacion", nc.NumAutorizacion);
+            AgregarCampoAdicional(infoAdicional, "FechaAutorizacion", (nc.FchAutorizacion ?? DateTime.Now).ToString("dd/MM/yyyy HH:mm:ss"));
+        }
+
         XElement xml = new XElement("notaCredito",
             new XAttribute("id", "comprobante"),
             new XAttribute("version", "1.1.0"),
@@ -893,7 +905,7 @@ public class NotaCreditoService
                         string.IsNullOrWhiteSpace(d.Codauxiliar)
                             ? null
                             : new XElement("codigoAdicional", d.Codauxiliar.Trim()),
-                        new XElement("descripcion", d.Descripcion ?? ""),
+                        new XElement("descripcion", NormalizarTextoUnaLinea(d.Descripcion)),
                         new XElement("cantidad", d.Cantidad.ToString("F6", cultura)),
                         new XElement("precioUnitario", d.Preciounitario.ToString("F6", cultura)),
                         new XElement("descuento", d.Descuento.ToString("F2", cultura)),
@@ -903,7 +915,7 @@ public class NotaCreditoService
                             : new XElement("detallesAdicionales",
                                 new XElement("detAdicional",
                                     new XAttribute("nombre", "Detalle"),
-                                    new XAttribute("valor", d.Detalle.Trim()))),
+                                    new XAttribute("valor", NormalizarTextoUnaLinea(d.Detalle)))),
                         new XElement("impuestos",
                             new XElement("impuesto",
                                 new XElement("codigo", "2"),
@@ -917,36 +929,25 @@ public class NotaCreditoService
                 })
             ),
 
-            new XElement("infoAdicional",
-                new XElement("campoAdicional",
-                    new XAttribute("nombre", "Email"),
-                    cliente?.Correo ?? "cliente@correo.com"),
-                new XElement("campoAdicional",
-                    new XAttribute("nombre", "Motivo"),
-                    nc.Motivo ?? "-"),
-                new XElement("campoAdicional",
-                    new XAttribute("nombre", "Observacion"),
-                    nc.Observacion ?? "-"),
-                NotaCreditoEstaAutorizada(nc.Autorizado)
-                    ? new XElement("campoAdicional",
-                        new XAttribute("nombre", "ClaveAcceso"),
-                        nc.CodClave ?? claveAcceso)
-                    : null,
-                NotaCreditoEstaAutorizada(nc.Autorizado)
-                    ? new XElement("campoAdicional",
-                        new XAttribute("nombre", "NumeroAutorizacion"),
-                        nc.NumAutorizacion ?? string.Empty)
-                    : null,
-                NotaCreditoEstaAutorizada(nc.Autorizado)
-                    ? new XElement("campoAdicional",
-                        new XAttribute("nombre", "FechaAutorizacion"),
-                        (nc.FchAutorizacion ?? DateTime.Now).ToString("dd/MM/yyyy HH:mm:ss"))
-                    : null
-            )
+            infoAdicional.Count > 0
+                ? new XElement("infoAdicional", infoAdicional)
+                : null
         );
 
         return xml.ToString();
     }
+
+    private static void AgregarCampoAdicional(ICollection<XElement> campos, string nombre, string? valor)
+    {
+        var valorNormalizado = NormalizarTextoUnaLinea(valor);
+        if (!string.IsNullOrWhiteSpace(valorNormalizado))
+            campos.Add(new XElement("campoAdicional", new XAttribute("nombre", nombre), valorNormalizado));
+    }
+
+    private static string NormalizarTextoUnaLinea(string? valor) =>
+        string.Join(
+            " ",
+            (valor ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     public async Task<List<NotaCreditoListDto>> ListarNotasCreditoUsuarioAsync(int idUsuario)
     {

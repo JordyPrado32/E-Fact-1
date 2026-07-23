@@ -225,6 +225,11 @@ builder.Services.AddScoped<EmisorOnboardingService>();
 builder.Services.AddScoped<EmisionControlService>();
 builder.Services.AddScoped<EmisorCertificadoProtector>();
 builder.Services.AddScoped<EmisorCertificadoValidator>();
+builder.Services.AddScoped<FirmaRenovacionService>();
+builder.Services.AddHttpClient<FirmaInfoApiService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+});
 builder.Services.AddScoped<SolicitudService>();
 builder.Services.AddScoped<UbicacionEcuadorCatalogService>();
 builder.Services.AddScoped<SweetAlertService>();
@@ -274,6 +279,10 @@ builder.Services.AddScoped<IAsistenteFacturacionService, AsistenteFacturacionSer
 
 builder.Services.AddHostedService<ComprobanteCorreoDispatcherService>();
 builder.Services.AddHostedService<FacturaSriReintentoDispatcherService>();
+if (builder.Configuration.GetValue<bool>("FirmaRenovacion:NotificacionesCorreoHabilitadas"))
+{
+    builder.Services.AddHostedService<FirmaRenovacionNotificationService>();
+}
 
 var app = builder.Build();
 

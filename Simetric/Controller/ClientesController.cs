@@ -1207,8 +1207,8 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         dto.Nombrerazonsocial = dto.Nombrerazonsocial?.Trim();
         dto.Numeroidentificacion = dto.Numeroidentificacion?.Trim();
         dto.Direccion = dto.Direccion?.Trim();
-        dto.Telefonoconvencional = SanitizarTelefono(dto.Telefonoconvencional, esCelular: false);
-        dto.Celular = SanitizarTelefono(dto.Celular, esCelular: true);
+        dto.Telefonoconvencional = NormalizarTelefono(dto.Telefonoconvencional);
+        dto.Celular = NormalizarTelefono(dto.Celular);
         dto.Correo = dto.Correo?.Trim();
         dto.CorreosAdicionales = (dto.CorreosAdicionales ?? new List<string>())
             .Select(correo => correo?.Trim() ?? string.Empty)
@@ -1231,17 +1231,8 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         }
     }
 
-    private static string? SanitizarTelefono(string? valor, bool esCelular)
-    {
-        if (string.IsNullOrWhiteSpace(valor)) return null;
-        var digitos = new string(valor.Where(char.IsDigit).ToArray());
-        if (string.IsNullOrEmpty(digitos)) return null;
-        if (esCelular && digitos.Length == 9 && digitos.StartsWith('9'))
-        {
-            digitos = "0" + digitos;
-        }
-        return digitos;
-    }
+    private static string? NormalizarTelefono(string? valor) =>
+        string.IsNullOrWhiteSpace(valor) ? null : valor.Trim();
 
     private static string NormalizarCorreo(string? valor) =>
         (valor ?? string.Empty).Trim().ToLowerInvariant();

@@ -2553,7 +2553,11 @@ IF @resultado < 0
                     MensajeSri = f.Mensaje,
                     FechaAutorizacion = f.Fchautorizacion,
                     Total = f.Valortotal,
+                    TotalAbonado = context.Abonos
+                        .Where(a => a.codFactura == f.Codfactura && a.estado == true)
+                        .Sum(a => (decimal?)a.abono) ?? 0m,
                     Tipopago = f.Tipopago,
+                    EstadoPago = f.Estadopago,
                     Estado = f.Estado,
                     Cliente = f.CodclientesNavigation != null
                         ? ((f.CodclientesNavigation.Nombrerazonsocial != null && f.CodclientesNavigation.Nombrerazonsocial != string.Empty)
@@ -2565,6 +2569,68 @@ IF @resultado < 0
                         : null
                 })
                 .ToListAsync();
+        }
+
+        public async Task<(bool Success, string Message)> MarcarFacturaNoCobradaAsync(
+            int codFactura,
+            int idUsuario,
+            CancellationToken cancellationToken = default)
+        {
+            if (codFactura <= 0 || idUsuario <= 0)
+                return (false, "No se pudo identificar la factura.");
+
+            await using var context = await _dbFactory.CreateDbContextAsync(cancellationToken);
+            var factura = await context.Facturas
+                .Include(f => f.CodclientesNavigation)
+                .FirstOrDefaultAsync(
+                    f =>
+                        f.Codfactura == codFactura &&
+                        f.Idusuario == idUsuario &&
+                        (f.CodemisorNavigation == null || !f.CodemisorNavigation.EsEmisorSistema) &&
+                        (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)),
+                    cancellationToken);
+
+            if (factura is null)
+                return (false, "No se encontró la factura.");
+
+            if (factura.Estado == false)
+                return (false, "Una factura anulada no puede enviarse a cuentas por cobrar.");
+
+            if (!DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri))
+                return (false, "La factura debe estar autorizada antes de enviarla a cuentas por cobrar.");
+
+            if (!factura.Codclientes.HasValue)
+                return (false, "La factura no tiene un cliente asociado.");
+
+            var totalFactura = factura.Valortotal ?? 0m;
+            if (totalFactura <= 0m)
+                return (false, "La factura no tiene un valor pendiente válido.");
+
+            var totalAbonado = await context.Abonos
+                .Where(a => a.codFactura == codFactura && a.estado == true)
+                .SumAsync(a => (decimal?)a.abono, cancellationToken) ?? 0m;
+            var saldoPendiente = Math.Max(totalFactura - totalAbonado, 0m);
+
+            if (saldoPendiente <= 0m)
+                return (false, "La factura ya está completamente cobrada. Revisa primero sus abonos registrados.");
+
+            factura.Estadopago = "PENDIENTE";
+            factura.Fechacancelado = null;
+            factura.Valorapagar = saldoPendiente;
+
+            if (!factura.Fechavence.HasValue)
+            {
+                var fechaBase = (factura.Fchautorizacion ?? factura.Fechaentrega ?? DateTime.Today).Date;
+                var diasCredito = factura.Tiempocredito is > 0
+                    ? factura.Tiempocredito.Value
+                    : factura.CodclientesNavigation?.DiasCredito is > 0
+                        ? factura.CodclientesNavigation.DiasCredito.Value
+                        : 0;
+                factura.Fechavence = fechaBase.AddDays(diasCredito);
+            }
+
+            await context.SaveChangesAsync(cancellationToken);
+            return (true, "La factura ahora está disponible en Cuentas por cobrar.");
         }
 
         public async Task<List<FacturaListDto>> ListarFacturasClienteUsuarioAsync(int idUsuario, string identificacionCliente, int top = 200)
@@ -3350,6 +3416,20 @@ IF @resultado < 0
             factura.Codclave = claveAcceso;
             factura.Ambiente = int.TryParse(ambiente, out var ambienteNumerico) ? ambienteNumerico : 2;
 
+            var infoAdicional = new List<XElement>();
+            AgregarCampoAdicional(infoAdicional, "EmailCliente", factura.CodclientesNavigation?.Correo);
+            AgregarCampoAdicional(infoAdicional, "TelefonoCliente", factura.CodclientesNavigation?.Celular);
+            AgregarCampoAdicional(infoAdicional, "EmailEmisor", factura.CodemisorNavigation?.Email);
+            AgregarCampoAdicional(infoAdicional, "TelefonoEmisor", factura.CodemisorNavigation?.Telefono);
+            AgregarCampoAdicional(infoAdicional, "DatosBancarios", factura.Notas);
+
+            if (DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri))
+            {
+                AgregarCampoAdicional(infoAdicional, "ClaveAcceso", claveAcceso);
+                AgregarCampoAdicional(infoAdicional, "NumeroAutorizacion", factura.Numautorizacion);
+                AgregarCampoAdicional(infoAdicional, "FechaAutorizacion", (factura.Fchautorizacion ?? DateTime.Now).ToString("dd/MM/yyyy HH:mm:ss"));
+            }
+
             XElement xml = new XElement("factura",
                 new XAttribute("id", "comprobante"),
                 new XAttribute("version", "1.1.0"),
@@ -3435,9 +3515,9 @@ IF @resultado < 0
                         var codigoAuxiliar = string.IsNullOrWhiteSpace(d.Codauxiliar)
                             ? codigoPrincipal
                             : d.Codauxiliar.Trim();
-                        var descripcionDetalle = string.IsNullOrWhiteSpace(d.Descripproducto)
-                            ? "Recarga de documentos"
-                            : d.Descripproducto.Trim();
+                        var descripcionDetalle = NormalizarTextoUnaLineaXml(
+                            d.Descripproducto,
+                            "Recarga de documentos");
 
                         return new XElement("detalle",
                             new XElement("codigoPrincipal", codigoPrincipal),
@@ -3459,28 +3539,27 @@ IF @resultado < 0
                         );
                     })
                 ),
-                new XElement("infoAdicional",
-                    new XElement("campoAdicional", new XAttribute("nombre", "EmailCliente"), factura.CodclientesNavigation?.Correo ?? "-"),
-                    new XElement("campoAdicional", new XAttribute("nombre", "TelefonoCliente"), factura.CodclientesNavigation?.Celular ?? "-"),
-                    new XElement("campoAdicional", new XAttribute("nombre", "EmailEmisor"), factura.CodemisorNavigation?.Email ?? "-"),
-                    new XElement("campoAdicional", new XAttribute("nombre", "TelefonoEmisor"), factura.CodemisorNavigation?.Telefono ?? "-"),
-                    !string.IsNullOrWhiteSpace(factura.Notas)
-                        ? new XElement("campoAdicional", new XAttribute("nombre", "DatosBancarios"), factura.Notas.Trim())
-                        : null,
-                    DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri)
-                        ? new XElement("campoAdicional", new XAttribute("nombre", "ClaveAcceso"), claveAcceso)
-                        : null,
-                    DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri)
-                        ? new XElement("campoAdicional", new XAttribute("nombre", "NumeroAutorizacion"), factura.Numautorizacion ?? string.Empty)
-                        : null,
-                    DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri)
-                        ? new XElement("campoAdicional", new XAttribute("nombre", "FechaAutorizacion"), (factura.Fchautorizacion ?? DateTime.Now).ToString("dd/MM/yyyy HH:mm:ss"))
-                        : null
-                )
+                infoAdicional.Count > 0
+                    ? new XElement("infoAdicional", infoAdicional)
+                    : null
             );
 
             var document = new XDocument(new XDeclaration("1.0", "utf-8", null), xml);
             return document.ToString();
+        }
+
+        private static void AgregarCampoAdicional(ICollection<XElement> campos, string nombre, string? valor)
+        {
+            if (!string.IsNullOrWhiteSpace(valor))
+                campos.Add(new XElement("campoAdicional", new XAttribute("nombre", nombre), valor.Trim()));
+        }
+
+        private static string NormalizarTextoUnaLineaXml(string? valor, string reemplazo)
+        {
+            var texto = string.IsNullOrWhiteSpace(valor) ? reemplazo : valor;
+            return string.Join(
+                " ",
+                texto.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         }
 
         private static string ResolverTipoIdentificacionCompradorXml(string? tipoIdentificacionActual, string? identificacionComprador)

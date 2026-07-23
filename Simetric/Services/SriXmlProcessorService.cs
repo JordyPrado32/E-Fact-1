@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using System.Xml.Serialization;
+using System.Xml;
+using System.Xml.Linq;
 using System.Net.Http.Headers;
 using Simetric.Models.Glogales;
 
@@ -28,6 +30,8 @@ public sealed class SriXmlProcessorService
         {
             if (string.IsNullOrWhiteSpace(rutaXml) || !File.Exists(rutaXml))
                 throw new FileNotFoundException($"No se encontro el archivo XML en la ruta: {rutaXml}");
+
+            EliminarDetallesAdicionalesVacios(rutaXml);
 
             var rutaCertificadoReal = ResolverRutaCertificado(rutaCertificado);
             if (string.IsNullOrWhiteSpace(rutaCertificadoReal) || !File.Exists(rutaCertificadoReal))
@@ -104,4 +108,118 @@ public sealed class SriXmlProcessorService
             ?? Environment.GetEnvironmentVariable("SRI_XML_PROCESSOR_API_KEY")?.Trim()
             ?? DefaultApiKey;
     }
+
+    private static void EliminarDetallesAdicionalesVacios(string rutaXml)
+    {
+        var documento = XDocument.Load(rutaXml, LoadOptions.PreserveWhitespace);
+        var huboCambios = false;
+
+        var camposAdicionales = documento
+            .Descendants()
+            .Where(elemento =>
+                string.Equals(elemento.Name.LocalName, "campoAdicional", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var campo in camposAdicionales)
+        {
+            var valorNormalizado = NormalizarTextoUnaLinea(campo.Value);
+            if (string.IsNullOrWhiteSpace(valorNormalizado))
+            {
+                campo.Remove();
+                huboCambios = true;
+            }
+            else if (!string.Equals(campo.Value, valorNormalizado, StringComparison.Ordinal))
+            {
+                campo.Value = valorNormalizado;
+                huboCambios = true;
+            }
+        }
+
+        var detallesAdicionales = documento
+            .Descendants()
+            .Where(elemento =>
+                string.Equals(elemento.Name.LocalName, "detAdicional", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var detalle in detallesAdicionales)
+        {
+            var atributoValor = detalle.Attribute("valor");
+            var valorNormalizado = NormalizarTextoUnaLinea(atributoValor?.Value ?? detalle.Value);
+            if (string.IsNullOrWhiteSpace(valorNormalizado))
+            {
+                detalle.Remove();
+                huboCambios = true;
+            }
+            else if (atributoValor is not null &&
+                     !string.Equals(atributoValor.Value, valorNormalizado, StringComparison.Ordinal))
+            {
+                atributoValor.Value = valorNormalizado;
+                huboCambios = true;
+            }
+        }
+
+        var nombresTextoUnaLinea = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "descripcion",
+            "razon",
+            "motivo",
+            "razonSocial",
+            "nombreComercial",
+            "razonSocialComprador",
+            "razonSocialProveedor",
+            "razonSocialTransportista",
+            "razonSocialDestinatario",
+            "razonSocialSujetoRetenido",
+            "direccionComprador",
+            "direccionProveedor",
+            "dirMatriz",
+            "dirEstablecimiento",
+            "dirPartida",
+            "dirDestinatario"
+        };
+
+        foreach (var elemento in documento
+                     .Descendants()
+                     .Where(elemento => nombresTextoUnaLinea.Contains(elemento.Name.LocalName)))
+        {
+            var valorNormalizado = NormalizarTextoUnaLinea(elemento.Value);
+            if (!string.Equals(elemento.Value, valorNormalizado, StringComparison.Ordinal))
+            {
+                elemento.Value = valorNormalizado;
+                huboCambios = true;
+            }
+        }
+
+        var contenedoresVacios = documento
+            .Descendants()
+            .Where(elemento =>
+                (string.Equals(elemento.Name.LocalName, "infoAdicional", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(elemento.Name.LocalName, "detallesAdicionales", StringComparison.OrdinalIgnoreCase)) &&
+                !elemento.Elements().Any())
+            .ToList();
+
+        if (contenedoresVacios.Count > 0)
+        {
+            contenedoresVacios.Remove();
+            huboCambios = true;
+        }
+
+        if (!huboCambios)
+            return;
+
+        var settings = new XmlWriterSettings
+        {
+            Encoding = new UTF8Encoding(false),
+            Indent = false,
+            OmitXmlDeclaration = documento.Declaration is null
+        };
+
+        using var writer = XmlWriter.Create(rutaXml, settings);
+        documento.Save(writer);
+    }
+
+    private static string NormalizarTextoUnaLinea(string? valor) =>
+        string.Join(
+            " ",
+            (valor ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

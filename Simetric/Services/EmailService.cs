@@ -88,6 +88,12 @@ public interface IEmailService
         string? reference,
         string? authorizationCode,
         int solicitudId);
+    Task EnviarAvisoRenovacionFirmaAsync(
+        string emailDestino,
+        string? nombreCliente,
+        string? ruc,
+        DateTime fechaExpiracion,
+        int diasRestantes);
 }
 
 public class EmailService : IEmailService
@@ -104,6 +110,9 @@ public class EmailService : IEmailService
     private readonly SecureSocketOptions _seguridadPreferida;
     private readonly List<string> _notificacionPagosDestinatarios;
     private readonly string _urlAccesoPlataforma;
+    private readonly string _urlSoportePlataforma;
+    private readonly string _asesoraComercial;
+    private readonly string _telefonoAsesoraComercial;
 
     public EmailService(
         AppDbContext db,
@@ -138,6 +147,12 @@ public class EmailService : IEmailService
             "Smtp:NombreRemitente") ?? "Sistema E-Fact";
         var appBaseUrl = configuration["AppBaseUrl"] ?? "https://efact.numericasoftware.com/";
         _urlAccesoPlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "login").ToString();
+        _urlSoportePlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "soporte").ToString();
+        _asesoraComercial = configuration["WhatsAppCloudApi:CommercialAdvisorName"]?.Trim() ?? "Brigitte";
+        _telefonoAsesoraComercial = new string(
+            (configuration["WhatsAppCloudApi:CommercialAdvisorPhoneNumber"] ?? string.Empty)
+                .Where(char.IsDigit)
+                .ToArray());
         _timeoutMs = GetConfigInt(
             configuration,
             "EmailComprobantes:Smtp:TimeoutMs",
@@ -1323,6 +1338,54 @@ Atentamente,
         };
 
         mensaje.Body = bodyBuilder.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoRenovacionFirmaAsync(
+        string emailDestino,
+        string? nombreCliente,
+        string? ruc,
+        DateTime fechaExpiracion,
+        int diasRestantes)
+    {
+        if (string.IsNullOrWhiteSpace(emailDestino))
+            return;
+
+        var destinatario = MailboxAddress.Parse(emailDestino.Trim());
+        var clienteSeguro = WebUtility.HtmlEncode(
+            string.IsNullOrWhiteSpace(nombreCliente) ? "Estimado cliente" : nombreCliente.Trim());
+        var rucSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(ruc) ? "No registrado" : ruc.Trim());
+        var asesoraSegura = WebUtility.HtmlEncode(_asesoraComercial);
+        var estado = diasRestantes < 0
+            ? $"venció hace {Math.Abs(diasRestantes)} día(s)"
+            : diasRestantes == 0
+                ? "vence hoy"
+                : $"vence en {diasRestantes} día(s)";
+        var enlaceContacto = string.IsNullOrWhiteSpace(_telefonoAsesoraComercial)
+            ? _urlSoportePlataforma
+            : $"https://wa.me/{_telefonoAsesoraComercial}";
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(destinatario);
+        mensaje.Subject = $"Tu firma electrónica {estado} | E-FACT";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = BuildOutlookEmailShell(
+                $"Tu firma electrónica {estado}.",
+                "Numerica e-fact",
+                "Es momento de renovar tu firma electrónica",
+                $"Hola <strong>{clienteSeguro}</strong>. El certificado asociado al RUC <strong>{rucSeguro}</strong> {WebUtility.HtmlEncode(estado)}.",
+                $@"
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='border:1px solid #dce8f6;background:#f8fbff;'>
+                  <tr><td style='padding:18px 20px;font-size:14px;line-height:1.8;color:#334155;'>
+                    <strong>Fecha de expiración:</strong> {fechaExpiracion:dd/MM/yyyy}<br>
+                    Para gestionar la renovación, comunícate con <strong>{asesoraSegura}</strong>, nuestra asesora comercial.
+                  </td></tr>
+                </table>
+                {BuildOutlookButton(enlaceContacto, $"Contactar a {asesoraSegura}")}")
+        }.ToMessageBody();
 
         await SendMessageAsync(mensaje);
     }
