@@ -203,6 +203,13 @@
                                             <i class="bi bi-pencil-square"></i>
                                         </button>
                                         <button type="button"
+                                                class="action-btn action-reset"
+                                                title="Resetear clave"
+                                                disabled="@(!PuedeGestionarUsuario(u))"
+                                                @onclick="() => ResetearPassword(u)">
+                                            <i class="bi bi-shield-lock"></i>
+                                        </button>
+                                        <button type="button"
                                                 class="action-btn action-stats"
                                                 title="Estadísticas de uso"
                                                 disabled="@(!PuedeVerEstadisticas(u))"
@@ -1622,6 +1629,59 @@
         await UserService.SaveUsuarioAsync(u);
         await LoadData();
         await JS.ShowToastAsync("Usuario restablecido correctamente");
+    }
+
+    private async Task ResetearPassword(Usuario u)
+    {
+        if (!PuedeGestionarUsuario(u))
+        {
+            await JS.ShowAlertAsync("Accion no permitida", "Los usuarios BackOffice bloqueados o inactivos no admiten mas acciones desde esta pantalla.", "warning");
+            return;
+        }
+
+        const string passDefault = "00000000";
+        var confirm = await JS.InvokeAsync<bool>("confirm", $"Resetear contrasena de {ObtenerNombreCompleto(u)} a '{passDefault}'?");
+        if (!confirm)
+        {
+            return;
+        }
+
+        var codigoAcceso = string.Empty;
+
+        try
+        {
+            const int minutosExpira = RecoveryCodeHelper.MinutosExpiracionPorDefecto;
+            codigoAcceso = RecoveryCodeHelper.GenerarCodigoNumerico();
+
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuarioDb = await context.Usuarios.FindAsync(u.IdUsuario);
+
+            if (usuarioDb == null)
+            {
+                await JS.ShowAlertAsync("No se pudo completar", "No se encontro el usuario para resetear la contrasena.", "warning");
+                return;
+            }
+
+            usuarioDb.PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(passDefault);
+            usuarioDb.ClaveTemporal = true;
+            usuarioDb.CuentaBloqueada = false;
+            usuarioDb.IntentosFallidos = 0;
+            usuarioDb.FechaDesbloqueo = null;
+            usuarioDb.FechaExpiracionToken = DateTime.Now.AddMinutes(minutosExpira);
+            usuarioDb.TokenRecuperacion = Simetric.Components.Helpers.SecurityHelper.HashPassword(codigoAcceso);
+
+            await context.SaveChangesAsync();
+            await EmailService.EnviarClaveTemporal(usuarioDb.Email, codigoAcceso, minutosExpira, "Reseteo de contrasena por administrador");
+            await JS.ShowAlertAsync("Clave restablecida", "El usuario debe ingresar con '00000000' y usar el codigo enviado al correo para cambiarla.", "success");
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("Clave restablecida con advertencia", $"La clave se cambio a '{passDefault}', pero no se pudo enviar el correo. Codigo de acceso manual: {codigoAcceso}. Error: {ObtenerMensajeError(ex)}", "warning");
+        }
+        finally
+        {
+            await LoadData();
+        }
     }
 
     private async Task VerEstadisticas(Usuario u)
