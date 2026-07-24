@@ -6,6 +6,7 @@
 @using Simetric.Models
 @using Microsoft.AspNetCore.Components.Authorization
 @using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.Data.SqlClient
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager NavManager
@@ -233,13 +234,13 @@
             <article class="dashboard-panel activity-panel">
                 <div class="panel-header">
                     <div>
-                        <h3>Actividad reciente</h3>
-                        <span>Operaciones comerciales recientes</span>
+                        <h3>Novedades importantes de clientes</h3>
+                        <span>Firmas por caducar y usuarios sin documentos</span>
                     </div>
-                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver toda</button>
+                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver clientes</button>
                 </div>
                 <div class="activity-feed">
-                    @foreach (var act in recentActivities)
+                    @foreach (var act in importantAlerts)
                     {
                         <div class="feed-row">
                             <div class="feed-icon @act.Tone">
@@ -258,13 +259,13 @@
             <article class="dashboard-panel provinces-panel panel-span-2">
                 <div class="panel-header">
                     <div>
-                        <h3>Distribución de clientes por provincia</h3>
-                        <span>Presencia geográfica de clientes activos</span>
+                        <h3>Clientes activos por plataforma</h3>
+                        <span>e-fact, eRúbrica y cuentas con ambos servicios</span>
                     </div>
                     <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver Clientes</button>
                 </div>
                 <div class="provinces-body">
-                    @foreach (var prov in provinciaStats)
+                    @foreach (var prov in plataformaStats)
                     {
                         <div class="province-row">
                             <div class="province-meta">
@@ -272,7 +273,7 @@
                                 <span class="prov-value">@prov.Cantidad clientes (@prov.Porcentaje%)</span>
                             </div>
                             <div class="progress-track">
-                                <div class="progress-fill blue" style="width: @(prov.Porcentaje)%"></div>
+                                <div class="progress-fill @prov.Css" style="width: @(prov.Porcentaje)%"></div>
                             </div>
                         </div>
                     }
@@ -345,7 +346,9 @@
     private string fillPoints = "";
     private string pointsString = "";
     private List<ActivityDto> recentActivities = new();
+    private List<ActivityDto> importantAlerts = new();
     private List<ProvinciaStatsDto> provinciaStats = new();
+    private List<PlatformStatsDto> plataformaStats = new();
 
 
     protected override async Task OnInitializedAsync()
@@ -411,38 +414,16 @@
             var ventasValidas = ventas
                 .Where(v => !string.Equals(v.Estado, "anulada", StringComparison.OrdinalIgnoreCase))
                 .ToList();
-
-            // Ajuste dinámico de fecha para ambientes de demo/pruebas
-            if (ventasValidas.Any())
-            {
-                var ultimaVenta = ventasValidas.OrderByDescending(v => v.Fecha).First();
-                var tieneVentasMesActual = ventasValidas.Any(v => v.Fecha.Year == hoy.Year && v.Fecha.Month == hoy.Month);
-                if (!tieneVentasMesActual)
-                {
-                    hoy = ultimaVenta.Fecha;
-                    inicioMes = new DateTime(hoy.Year, hoy.Month, 1);
-                    finMes = inicioMes.AddMonths(1);
-                    inicioMesDateOnly = DateOnly.FromDateTime(inicioMes);
-                    finMesDateOnly = DateOnly.FromDateTime(finMes.AddDays(-1));
-                }
-            }
-
             var ventasMesList = ventasValidas
                 .Where(v => v.Fecha >= inicioMes && v.Fecha < finMes)
+                .ToList();
+            var ventasMesPagadasList = ventasMesList
+                .Where(v => string.Equals(v.Estado, "pagada", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             var ventasDiaList = ventasValidas
                 .Where(v => v.Fecha.Date == hoy.Date)
                 .ToList();
-
-            // Si hoy no tiene ventas, retrocedemos al último día con ventas para evitar la pantalla vacía en demos
-            if (!ventasDiaList.Any() && ventasValidas.Any())
-            {
-                var ultimaVentaConValor = ventasValidas.OrderByDescending(v => v.Fecha).First();
-                hoy = ultimaVentaConValor.Fecha;
-                ventasDiaList = ventasValidas.Where(v => v.Fecha.Date == hoy.Date).ToList();
-            }
-
             ventasDia = ventasDiaList.Sum(v => v.Valor);
             ventasMes = ventasMesList.Sum(v => v.Valor);
             ventasDiaCount = ventasDiaList.Count;
@@ -454,11 +435,21 @@
                 .ToList();
 
             // 3. Obtener usuarios activos (no administradores)
-            var activeUserIds = await context.Usuarios
+            var activeUsers = await context.Usuarios
                 .AsNoTracking()
                 .Where(u => u.Estado == true && u.IdTipoUsuario == 1)
-                .Select(u => u.IdUsuario)
+                .Select(u => new UsuarioDashboardDto(
+                    u.IdUsuario,
+                    u.Nombres,
+                    u.Apellidos,
+                    u.Email,
+                    u.SaldoDocumentos,
+                    u.HistorialComprasDocumentosJson))
                 .ToListAsync();
+
+            var activeUserIds = activeUsers
+                .Select(u => u.IdUsuario)
+                .ToList();
 
             // 1. Clientes activos (sin baseline)
             var clientesActivosDb = await context.Clientes
@@ -489,17 +480,9 @@
                 .Where(EsSuscripcionActiva)
                 .ToList();
 
-            var activeSubscriptionsMrr = 0m;
-            foreach (var s in suscripcionesActivas)
-            {
-                var plan = s.PlanActual ?? "";
-                if (plan.Contains("Premium", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 150m;
-                else if (plan.Contains("Básico", StringComparison.OrdinalIgnoreCase) || plan.Contains("Basic", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 25m;
-                else if (plan.Contains("Firma", StringComparison.OrdinalIgnoreCase) || plan.Contains("e-sign", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 15m;
-                else activeSubscriptionsMrr += 35m;
-            }
-
-            mrrVal = activeSubscriptionsMrr;
+            mrrVal = ventasMesPagadasList
+                .Where(EsVentaRecurrente)
+                .Sum(v => v.Valor);
             licenciasEFactActivas = suscripcionesActivas.Count(s => !EsPlanESign(s.PlanActual));
 
             // 4. Ingresos del mes (sin baseline)
@@ -878,30 +861,6 @@
             {
                 Console.WriteLine($"Error general en el feed de actividad: {exOverall.Message}");
             }
-
-            // Si hay menos de 8 actividades totales, añadimos fallbacks realistas
-            if (activities.Count < 8)
-            {
-                var now = DateTime.Now;
-                var fallbacks = new List<ActivityDto>
-                {
-                    new("ri-refresh-line", "purple", "Suscripción renovada: Distribuidora Nova (e-fact)", "Hace 1 hora", now.AddHours(-1)),
-                    new("ri-hand-coin-line", "orange", "Pago recibido de Comercial Andina S.A. $450.00", "Hace 2 horas", now.AddHours(-2)),
-                    new("ri-file-warning-line", "red", "Nota de crédito emitida: NC 001-001-000000123", "Hace 3 horas", now.AddHours(-3)),
-                    new("ri-file-list-3-line", "blue", "Factura 001-001-000004567 emitida a Importadora del Pacífico", "Hace 4 horas", now.AddHours(-4)),
-                    new("ri-shopping-cart-2-line", "purple", "Compra registrada de Proveedora del Austro $1,200.00", "Hace 5 horas", now.AddHours(-5)),
-                    new("ri-file-shield-2-line", "yellow", "Retención emitida: RET 001-002-000008899 a TechSolutions", "Hace 6 horas", now.AddHours(-6)),
-                    new("ri-truck-line", "cyan", "Guía de remisión emitida: GR 001-010-000000222", "Hace 7 horas", now.AddHours(-7)),
-                    new("ri-hand-coin-line", "orange", "Pago recibido de Inmobiliaria del Sol $350.00", "Hace 8 horas", now.AddHours(-8))
-                };
-
-                foreach (var fb in fallbacks)
-                {
-                    if (activities.Count >= 8) break;
-                    activities.Add(fb);
-                }
-            }
-
             recentActivities = activities
                 .OrderByDescending(a => a.DateVal)
                 .Take(8)
@@ -931,16 +890,6 @@
                     listProvincias.Add(new ProvinciaStatsDto(provName, group.Cantidad, Math.Round((double)group.Cantidad / totalProvincias * 100.0, 1)));
                 }
             }
-
-            if (listProvincias.Count == 0)
-            {
-                listProvincias.Add(new ProvinciaStatsDto("Pichincha (Quito)", 182, 47));
-                listProvincias.Add(new ProvinciaStatsDto("Guayas (Guayaquil)", 104, 27));
-                listProvincias.Add(new ProvinciaStatsDto("Azuay (Cuenca)", 35, 9));
-                listProvincias.Add(new ProvinciaStatsDto("Manabí (Manta)", 20, 5));
-                listProvincias.Add(new ProvinciaStatsDto("Resto del país", 45, 12));
-            }
-
             provinciaStats = listProvincias.OrderByDescending(p => p.Cantidad).ToList();
         }
         catch (Exception ex)
@@ -1010,6 +959,26 @@
         return value.Contains("firma", StringComparison.OrdinalIgnoreCase)
             || value.Contains("e-sign", StringComparison.OrdinalIgnoreCase)
             || value.Contains("esign", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool EsVentaRecurrente(ReporteVentaBackOffice venta)
+    {
+        var producto = venta.Producto ?? string.Empty;
+        var plan = venta.PlanPaquete ?? string.Empty;
+        var texto = $"{producto} {plan}";
+
+        if (texto.Contains("firma", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("e-sign", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("esign", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return producto.Contains("e-fact", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("suscripcion", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("suscripción", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("mensual", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("plan", StringComparison.OrdinalIgnoreCase);
     }
 
     private static DateTime CalcularExpiracion(UsuSolicitudFirma sol)
@@ -1186,4 +1155,12 @@
     private sealed record GraphPointDto(string Month, decimal Value);
     private sealed record ActivityDto(string Icon, string Tone, string Message, string TimeLabel, DateTime DateVal);
     private sealed record ProvinciaStatsDto(string Nombre, int Cantidad, double Porcentaje);
+    private sealed record PlatformStatsDto(string Nombre, int Cantidad, double Porcentaje, string Css);
+    private sealed record UsuarioDashboardDto(
+        int IdUsuario,
+        string? Nombres,
+        string? Apellidos,
+        string Email,
+        int SaldoDocumentos,
+        string? HistorialComprasDocumentosJson);
 }

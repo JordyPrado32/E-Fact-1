@@ -15,6 +15,7 @@ public static class BackOfficeRoutes
     public const string Renovaciones = "/backoffice/renovaciones";
     public const string Reportes = "/backoffice/reportes";
     public const string ReporteVendedores = "/backoffice/reportes/vendedores";
+    public const string ReporteCobranzas = "/backoffice/reportes/cobranzas";
     public const string Configuracion = "/backoffice/configuracion";
     public const string Perfil = "/backoffice/perfil";
 
