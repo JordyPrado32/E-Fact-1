@@ -6,6 +6,7 @@
 @using Simetric.Models
 @using Microsoft.AspNetCore.Components.Authorization
 @using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.Data.SqlClient
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager NavManager
@@ -233,13 +234,13 @@
             <article class="dashboard-panel activity-panel">
                 <div class="panel-header">
                     <div>
-                        <h3>Actividad reciente</h3>
-                        <span>Operaciones comerciales recientes</span>
+                        <h3>Novedades importantes de clientes</h3>
+                        <span>Firmas por caducar y usuarios sin documentos</span>
                     </div>
-                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver toda</button>
+                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver clientes</button>
                 </div>
                 <div class="activity-feed">
-                    @foreach (var act in recentActivities)
+                    @foreach (var act in importantAlerts)
                     {
                         <div class="feed-row">
                             <div class="feed-icon @act.Tone">
@@ -258,13 +259,13 @@
             <article class="dashboard-panel provinces-panel panel-span-2">
                 <div class="panel-header">
                     <div>
-                        <h3>Distribución de clientes por provincia</h3>
-                        <span>Presencia geográfica de clientes activos</span>
+                        <h3>Clientes activos por plataforma</h3>
+                        <span>e-fact, eRúbrica y cuentas con ambos servicios</span>
                     </div>
                     <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver Clientes</button>
                 </div>
                 <div class="provinces-body">
-                    @foreach (var prov in provinciaStats)
+                    @foreach (var prov in plataformaStats)
                     {
                         <div class="province-row">
                             <div class="province-meta">
@@ -272,7 +273,7 @@
                                 <span class="prov-value">@prov.Cantidad clientes (@prov.Porcentaje%)</span>
                             </div>
                             <div class="progress-track">
-                                <div class="progress-fill blue" style="width: @(prov.Porcentaje)%"></div>
+                                <div class="progress-fill @prov.Css" style="width: @(prov.Porcentaje)%"></div>
                             </div>
                         </div>
                     }
@@ -344,8 +345,8 @@
     private List<DotDto> graphDots = new();
     private string fillPoints = "";
     private string pointsString = "";
-    private List<ActivityDto> recentActivities = new();
-    private List<ProvinciaStatsDto> provinciaStats = new();
+    private List<ActivityDto> importantAlerts = new();
+    private List<PlatformStatsDto> plataformaStats = new();
 
 
     protected override async Task OnInitializedAsync()
@@ -454,11 +455,21 @@
                 .ToList();
 
             // 3. Obtener usuarios activos (no administradores)
-            var activeUserIds = await context.Usuarios
+            var activeUsers = await context.Usuarios
                 .AsNoTracking()
                 .Where(u => u.Estado == true && u.IdTipoUsuario == 1)
-                .Select(u => u.IdUsuario)
+                .Select(u => new UsuarioDashboardDto(
+                    u.IdUsuario,
+                    u.Nombres,
+                    u.Apellidos,
+                    u.Email,
+                    u.SaldoDocumentos,
+                    u.HistorialComprasDocumentosJson))
                 .ToListAsync();
+
+            var activeUserIds = activeUsers
+                .Select(u => u.IdUsuario)
+                .ToList();
 
             // 1. Clientes activos (sin baseline)
             var clientesActivosDb = await context.Clientes
@@ -489,6 +500,11 @@
                 .Where(EsSuscripcionActiva)
                 .ToList();
 
+            var serviciosActivosMap = await context.AppServicios
+                .AsNoTracking()
+                .Where(s => suscripcionesActivas.Select(sa => sa.ServicioId).Contains(s.ServicioId))
+                .ToDictionaryAsync(s => s.ServicioId);
+
             var activeSubscriptionsMrr = 0m;
             foreach (var s in suscripcionesActivas)
             {
@@ -500,7 +516,7 @@
             }
 
             mrrVal = activeSubscriptionsMrr;
-            licenciasEFactActivas = suscripcionesActivas.Count(s => !EsPlanESign(s.PlanActual));
+            licenciasEFactActivas = suscripcionesActivas.Count(s => !EsSuscripcionESign(s, serviciosActivosMap));
 
             // 4. Ingresos del mes (sin baseline)
             ingresosMesVal = ventasMes;
@@ -902,7 +918,7 @@
                 }
             }
 
-            recentActivities = activities
+            importantAlerts = activities
                 .OrderByDescending(a => a.DateVal)
                 .Take(8)
                 .ToList();
@@ -941,7 +957,19 @@
                 listProvincias.Add(new ProvinciaStatsDto("Resto del país", 45, 12));
             }
 
-            provinciaStats = listProvincias.OrderByDescending(p => p.Cantidad).ToList();
+            plataformaStats = listProvincias
+                .OrderByDescending(p => p.Cantidad)
+                .Select((p, index) => new PlatformStatsDto(
+                    p.Nombre,
+                    p.Cantidad,
+                    p.Porcentaje,
+                    index switch
+                    {
+                        0 => "blue",
+                        1 => "green",
+                        _ => "purple"
+                    }))
+                .ToList();
         }
         catch (Exception ex)
         {
@@ -1010,6 +1038,27 @@
         return value.Contains("firma", StringComparison.OrdinalIgnoreCase)
             || value.Contains("e-sign", StringComparison.OrdinalIgnoreCase)
             || value.Contains("esign", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool EsSuscripcionESign(
+        UsuarioServicioSuscripcion suscripcion,
+        IReadOnlyDictionary<int, AppServicio> serviciosMap)
+    {
+        if (EsPlanESign(suscripcion.PlanActual))
+        {
+            return true;
+        }
+
+        if (serviciosMap.TryGetValue(suscripcion.ServicioId, out var servicio))
+        {
+            var valor = $"{servicio.Clave} {servicio.Nombre} {servicio.Descripcion}";
+            return valor.Contains("firma", StringComparison.OrdinalIgnoreCase)
+                || valor.Contains("sign", StringComparison.OrdinalIgnoreCase)
+                || valor.Contains("rubrica", StringComparison.OrdinalIgnoreCase)
+                || valor.Contains("rúbrica", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private static DateTime CalcularExpiracion(UsuSolicitudFirma sol)
@@ -1186,4 +1235,12 @@
     private sealed record GraphPointDto(string Month, decimal Value);
     private sealed record ActivityDto(string Icon, string Tone, string Message, string TimeLabel, DateTime DateVal);
     private sealed record ProvinciaStatsDto(string Nombre, int Cantidad, double Porcentaje);
+    private sealed record PlatformStatsDto(string Nombre, int Cantidad, double Porcentaje, string Css);
+    private sealed record UsuarioDashboardDto(
+        int IdUsuario,
+        string? Nombres,
+        string? Apellidos,
+        string Email,
+        int SaldoDocumentos,
+        string? HistorialComprasDocumentosJson);
 }
