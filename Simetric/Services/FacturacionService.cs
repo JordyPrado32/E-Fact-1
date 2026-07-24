@@ -100,7 +100,8 @@ namespace Simetric.Services
             c.Pais,
             c.Provincia,
             c.Ciudad,
-            c.Observaciones
+            c.Observaciones,
+            c.Oblgconta
         };
 
         private static async Task NormalizarCamposClientePorTipoAsync(AppDbContext context, Cliente cliente)
@@ -109,6 +110,10 @@ namespace Simetric.Services
             cliente.Apellidos = LimpiarTextoOpcional(cliente.Apellidos);
             cliente.Nombrerazonsocial = LimpiarTextoOpcional(cliente.Nombrerazonsocial);
             cliente.Nombrecomercial = LimpiarTextoOpcional(cliente.Nombrecomercial);
+            cliente.Oblgconta = cliente.Oblgconta?.Trim().ToUpperInvariant();
+
+            if (cliente.Oblgconta is not ("SI" or "NO"))
+                throw new InvalidOperationException("Debes indicar si el cliente está obligado a llevar contabilidad.");
 
             var descripcionTipo = cliente.TipoCliente.HasValue
                 ? await context.Tipoclientes
@@ -122,6 +127,9 @@ namespace Simetric.Services
 
             if (esJuridica)
             {
+                if (string.IsNullOrWhiteSpace(cliente.Nombrecomercial))
+                    throw new InvalidOperationException("Debes ingresar el nombre comercial del cliente.");
+
                 cliente.Nombres = null;
                 cliente.Apellidos = null;
                 return;
@@ -1138,6 +1146,7 @@ namespace Simetric.Services
                             clienteDb.Pais = clienteData.Pais;
                             clienteDb.Provincia = clienteData.Provincia;
                             clienteDb.Ciudad = clienteData.Ciudad;
+                            clienteDb.Oblgconta = clienteData.Oblgconta;
                             clienteDb.Usuario = idUsuarioEmisor;
                             clienteDb.Estado = true;
                         }

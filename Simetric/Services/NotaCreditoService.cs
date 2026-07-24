@@ -335,12 +335,16 @@ public class NotaCreditoService
         var identificacion = LimpiarTextoNotaCredito(clienteEntrada.Numeroidentificacion);
         var nombre = LimpiarTextoNotaCredito(clienteEntrada.Nombrerazonsocial)
             ?? LimpiarTextoNotaCredito($"{clienteEntrada.Nombres} {clienteEntrada.Apellidos}");
+        var obligadoContabilidad = NormalizarObligadoContabilidad(clienteEntrada.Oblgconta);
 
         if (string.IsNullOrWhiteSpace(identificacion))
             throw new InvalidOperationException("Ingresa la identificacion del cliente.");
 
         if (string.IsNullOrWhiteSpace(nombre))
             throw new InvalidOperationException("Ingresa el nombre o razon social del cliente.");
+
+        if (obligadoContabilidad is null)
+            throw new InvalidOperationException("Debes indicar si el cliente está obligado a llevar contabilidad.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
 
@@ -356,6 +360,20 @@ public class NotaCreditoService
         var cliente = await db.Clientes
             .FirstOrDefaultAsync(c => c.Usuario == ownerId && c.Numeroidentificacion == identificacion);
 
+        var tipoCliente = clienteEntrada.TipoCliente ?? cliente?.TipoCliente;
+        var descripcionTipoCliente = tipoCliente.HasValue
+            ? await db.Tipoclientes
+                .AsNoTracking()
+                .Where(tipo => tipo.TclCodigo == tipoCliente.Value)
+                .Select(tipo => tipo.TclDescripcion)
+                .FirstOrDefaultAsync()
+            : null;
+        var esPersonaJuridica = TipoClienteClasificacion.EsJuridica(descripcionTipoCliente);
+        var nombreComercial = LimpiarTextoNotaCredito(clienteEntrada.Nombrecomercial);
+
+        if (esPersonaJuridica && string.IsNullOrWhiteSpace(nombreComercial))
+            throw new InvalidOperationException("Ingresa el nombre comercial del cliente.");
+
         if (cliente is not null)
         {
             var tipoIdentificacion = LimpiarTextoNotaCredito(clienteEntrada.Tipoidentificacion);
@@ -364,11 +382,14 @@ public class NotaCreditoService
             var correo = LimpiarTextoNotaCredito(clienteEntrada.Correo);
 
             cliente.Nombrerazonsocial = nombre;
+            if (esPersonaJuridica)
+                cliente.Nombrecomercial = nombreComercial;
             cliente.Tipoidentificacion = tipoIdentificacion ?? cliente.Tipoidentificacion ?? "05";
             cliente.Direccion = direccion ?? cliente.Direccion;
             cliente.Celular = celular ?? cliente.Celular;
             cliente.Correo = correo ?? cliente.Correo;
             cliente.TipoCliente = clienteEntrada.TipoCliente ?? cliente.TipoCliente;
+            cliente.Oblgconta = obligadoContabilidad;
             cliente.Estado = true;
 
             await db.SaveChangesAsync();
@@ -382,15 +403,23 @@ public class NotaCreditoService
             Tipoidentificacion = LimpiarTextoNotaCredito(clienteEntrada.Tipoidentificacion) ?? "05",
             Numeroidentificacion = identificacion,
             Nombrerazonsocial = nombre,
+            Nombrecomercial = esPersonaJuridica ? nombreComercial : null,
             Direccion = LimpiarTextoNotaCredito(clienteEntrada.Direccion),
             Celular = LimpiarTextoNotaCredito(clienteEntrada.Celular),
             Correo = LimpiarTextoNotaCredito(clienteEntrada.Correo),
-            TipoCliente = clienteEntrada.TipoCliente
+            TipoCliente = clienteEntrada.TipoCliente,
+            Oblgconta = obligadoContabilidad
         };
 
         db.Clientes.Add(cliente);
         await db.SaveChangesAsync();
         return cliente.Codcliente;
+    }
+
+    private static string? NormalizarObligadoContabilidad(string? valor)
+    {
+        var normalizado = valor?.Trim().ToUpperInvariant();
+        return normalizado is "SI" or "NO" ? normalizado : null;
     }
 
     private static string? LimpiarTextoNotaCredito(string? valor)

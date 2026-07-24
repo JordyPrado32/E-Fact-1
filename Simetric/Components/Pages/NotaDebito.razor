@@ -451,6 +451,25 @@
                 </div>
 
                 <div class="col-lg-3 col-md-6">
+                    <label class="n-label">Obligado a llevar contabilidad *</label>
+                    <div class="n-select-shell">
+                        <select class="n-select" @bind="cliente.Oblgconta">
+                            <option value="">-- Seleccione --</option>
+                            <option value="SI">Sí</option>
+                            <option value="NO">No</option>
+                        </select>
+                    </div>
+                </div>
+
+                @if (ClienteEsPersonaJuridica)
+                {
+                    <div class="col-lg-3 col-md-6">
+                        <label class="n-label">Nombre Comercial *</label>
+                        <input type="text" class="n-input" @bind="cliente.Nombrecomercial" @bind:event="oninput" maxlength="150" />
+                    </div>
+                }
+
+                <div class="col-lg-3 col-md-6">
                     <label class="n-label">Nombre / Razón Social</label>
                     <div class="n-input-wrapper position-relative">
                         <i class="bi bi-person-check n-input-icon"></i>
@@ -1151,6 +1170,10 @@
     private bool BloqueadoPorSaldoDocumentos => emisionEstado?.RequiereCompraDocumentos == true;
     private string MensajeBloqueoDocumentos => emisionEstado?.Mensaje ?? EmisionControlService.MensajeSaldoAgotado;
     private bool CamposClienteEditables => modoEmision == ModoEmisionNotaDebito.Manual;
+    private bool ClienteEsPersonaJuridica =>
+        cliente.TipoCliente is int tipoCliente &&
+        TipoClienteClasificacion.EsJuridica(
+            tiposCliente.FirstOrDefault(tipo => tipo.TclCodigo == tipoCliente)?.TclDescripcion);
     private bool ClienteIngresadoSinRegistro =>
         CamposClienteEditables &&
         cliente.Codcliente <= 0 &&
@@ -2565,6 +2588,20 @@
             return;
         }
 
+        cliente.Oblgconta = cliente.Oblgconta?.Trim().ToUpperInvariant();
+        if (cliente.Oblgconta is not ("SI" or "NO"))
+        {
+            await MostrarAlertaAsync("warning", "Contabilidad requerida", "Debes indicar si el cliente está obligado a llevar contabilidad.");
+            return;
+        }
+
+        cliente.Nombrecomercial = cliente.Nombrecomercial?.Trim();
+        if (ClienteEsPersonaJuridica && string.IsNullOrWhiteSpace(cliente.Nombrecomercial))
+        {
+            await MostrarAlertaAsync("warning", "Nombre comercial requerido", "Debes ingresar el nombre comercial del cliente.");
+            return;
+        }
+
         if (!RequiereFacturaInterna)
         {
             var serieDocModificado = NormalizarSerieRaw(factura.Serie);
@@ -2663,9 +2700,10 @@
                 factura.Serie = NormalizarSerieRaw(factura.Serie);
                 factura.Numfactura = NormalizarSecuencial(factura.Numfactura);
                 serieFacturaVisual = FormatearSerie(factura.Serie);
-                cliente.Codcliente = await NotaDebitoService.ResolverClienteParaNotaDebitoAsync(currentUserId, cliente);
-                factura.Codclientes = cliente.Codcliente;
             }
+
+            cliente.Codcliente = await NotaDebitoService.ResolverClienteParaNotaDebitoAsync(currentUserId, cliente);
+            factura.Codclientes = cliente.Codcliente;
 
             foreach (var detalle in detallesNd)
             {

@@ -1088,6 +1088,9 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
         if (esJuridica)
         {
+            if (string.IsNullOrWhiteSpace(dto.Nombrecomercial))
+                return "El nombre comercial es obligatorio para personas juridicas.";
+
             if (string.IsNullOrWhiteSpace(dto.Nombrerazonsocial))
                 return "La razón social es obligatoria para personas jurídicas.";
 
