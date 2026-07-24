@@ -1,0 +1,454 @@
+@page "/backoffice/reportes/cobranzas"
+@namespace Simetric.Components.Pages.BackOffice
+@using System.Globalization
+@using System.Text.Json
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>Estadisticas Cobranzas - BackOffice</PageTitle>
+
+<link href="css/reportes-compartido.css" rel="stylesheet" />
+
+<div class="reports-container">
+    <div class="report-header-card no-print animate__animated animate__fadeIn">
+        <div class="report-header-top">
+            <h2 class="report-page-title">
+                <i class="bi bi-person-check-fill" style="color:#0f766e;"></i> Estadisticas Cobranzas
+            </h2>
+            <button type="button" class="btn-export" @onclick="DescargarReportePdf">
+                <i class="bi bi-file-earmark-pdf-fill"></i> Descargar PDF Directo
+            </button>
+        </div>
+        <div class="report-header-filters">
+            <div class="filter-group">
+                <span class="filter-label">Desde:</span>
+                <input type="date" @bind="fechaInicio" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Hasta:</span>
+                <input type="date" @bind="fechaFin" @bind:after="OnDatesChanged" class="filter-input" />
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este Mes</button>
+                <button type="button" class="btn-preset @(presetActivo == "trimestre" ? "active" : "")" @onclick='() => AplicarPreset("trimestre")'>Ultimos 90 Dias</button>
+                <button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este Año</button>
+                <button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="reports-viewport printable-report" id="report-view-area">
+        <div class="report-slide report-slide-active">
+            <div class="visual-header">
+                <h3 class="visual-title">Usuarios Rol Cobranza</h3>
+                <p class="visual-subtitle">Indicadores calculados desde auditoria real de aprobaciones de transferencia y ventas BackOffice.</p>
+            </div>
+
+            @if (loading)
+            {
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando datos...</span>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpis-grid">
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-teal"><i class="bi bi-people-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Usuarios cobranza</span>
+                            <strong class="kpi-card-value">@totalUsuariosCobranza</strong>
+                            <span class="kpi-card-trend trend-neutral">Activos o con actividad</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-green"><i class="bi bi-check-circle-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Aprobaciones</span>
+                            <strong class="kpi-card-value">@totalAprobaciones</strong>
+                            <span class="kpi-card-trend trend-up">Transferencias aprobadas</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-blue"><i class="bi bi-currency-dollar"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Monto aprobado</span>
+                            <strong class="kpi-card-value">$ @totalMontoAprobado.ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-up">Desde auditoria</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-receipt-cutoff"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Facturas autorizadas</span>
+                            <strong class="kpi-card-value">@totalFacturasAutorizadas</strong>
+                            <span class="kpi-card-trend trend-neutral">Resultado SRI</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row" style="background:#0f766e;">
+                        <h4 class="table-title">Desempeno por Usuario de Cobranza</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead style="background:#0f766e;">
+                            <tr>
+                                <th>Usuario</th>
+                                <th>Correo</th>
+                                <th>Aprobaciones</th>
+                                <th>Monto aprobado</th>
+                                <th>Ticket promedio</th>
+                                <th>Facturas autorizadas</th>
+                                <th>Ultima aprobacion</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (usuariosPaginados.Any())
+                            {
+                                @foreach (var item in usuariosPaginados)
+                                {
+                                    <tr>
+                                        <td><strong>@item.Nombre</strong></td>
+                                        <td>@item.Email</td>
+                                        <td><span class="badge bg-secondary">@item.Aprobaciones</span></td>
+                                        <td><strong class="text-success">$ @item.MontoAprobado.ToString("N2")</strong></td>
+                                        <td>$ @item.TicketPromedio.ToString("N2")</td>
+                                        <td>@item.FacturasAutorizadas</td>
+                                        <td>@(item.UltimaAprobacion?.ToString("dd/MM/yyyy HH:mm") ?? "Sin actividad")</td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="7" class="text-center text-muted py-4">No hay usuarios de cobranza ni aprobaciones en este rango.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="pagination-controls">
+                        <span class="page-indicator">Pagina @(page + 1) de @MaxPagina</span>
+                        <div class="pagination-btn-group">
+                            <button type="button" class="btn-pagination" disabled="@(page == 0)" @onclick="() => CambiarPagina(-1)">
+                                <i class="bi bi-chevron-left"></i> Ant.
+                            </button>
+                            <button type="button" class="btn-pagination" disabled="@(page >= MaxPagina - 1)" @onclick="() => CambiarPagina(1)">
+                                Sig. <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row">
+                        <h4 class="table-title">Ultimas Aprobaciones Reales</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Cobranzas</th>
+                                <th>Cliente</th>
+                                <th>Servicio</th>
+                                <th>Valor</th>
+                                <th>Comprobante</th>
+                                <th>Factura</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (ultimasAprobaciones.Any())
+                            {
+                                @foreach (var item in ultimasAprobaciones)
+                                {
+                                    <tr>
+                                        <td>@item.FechaAprobacion.ToString("dd/MM/yyyy HH:mm")</td>
+                                        <td>@item.Cobranzas</td>
+                                        <td>@item.Cliente</td>
+                                        <td>@item.Producto</td>
+                                        <td><strong>$ @item.Valor.ToString("N2")</strong></td>
+                                        <td>@item.Comprobante</td>
+                                        <td>@(item.FacturaAutorizada ? "Autorizada" : "No autorizada")</td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="7" class="text-center text-muted py-4">No hay aprobaciones registradas para el periodo seleccionado.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string AccionAprobacionTransferencia = "APROBACION_TRANSFERENCIA_FACTURA_BACKOFFICE";
+    private DateTime fechaInicio = DateTime.Now.AddMonths(-3);
+    private DateTime fechaFin = DateTime.Now;
+    private string presetActivo = "trimestre";
+    private bool loading = true;
+
+    private List<CobranzaUsuarioDto> usuariosCobranza = new();
+    private List<CobranzaAprobacionDto> ultimasAprobaciones = new();
+    private int totalUsuariosCobranza;
+    private int totalAprobaciones;
+    private decimal totalMontoAprobado;
+    private int totalFacturasAutorizadas;
+
+    private int page;
+    private const int PageSize = 10;
+    private int MaxPagina => Math.Max(1, (int)Math.Ceiling(usuariosCobranza.Count / (double)PageSize));
+    private List<CobranzaUsuarioDto> usuariosPaginados => usuariosCobranza.Skip(page * PageSize).Take(PageSize).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AplicarPreset("trimestre");
+        await Task.CompletedTask;
+    }
+
+    private async Task OnDatesChanged()
+    {
+        presetActivo = "";
+        page = 0;
+        await CargarDatosAsync();
+    }
+
+    private void AplicarPreset(string preset)
+    {
+        presetActivo = preset;
+        var hoy = DateTime.Now;
+        if (preset == "mes")
+        {
+            fechaInicio = new DateTime(hoy.Year, hoy.Month, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "trimestre")
+        {
+            fechaInicio = hoy.AddDays(-90);
+            fechaFin = hoy;
+        }
+        else if (preset == "anio")
+        {
+            fechaInicio = new DateTime(hoy.Year, 1, 1);
+            fechaFin = hoy;
+        }
+        else if (preset == "todo")
+        {
+            fechaInicio = new DateTime(2020, 1, 1);
+            fechaFin = hoy;
+        }
+
+        page = 0;
+        _ = CargarDatosAsync();
+    }
+
+    private async Task CargarDatosAsync()
+    {
+        loading = true;
+        StateHasChanged();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var fechaFinExclusive = fechaFin.Date.AddDays(1);
+
+            var auditorias = await context.Auditorias
+                .AsNoTracking()
+                .Where(a => a.Accion == AccionAprobacionTransferencia &&
+                            a.Fecha >= fechaInicio.Date &&
+                            a.Fecha < fechaFinExclusive)
+                .OrderByDescending(a => a.Fecha)
+                .Select(a => new Auditoria
+                {
+                    IdAuditoria = a.IdAuditoria,
+                    IdUsuario = a.IdUsuario,
+                    Fecha = a.Fecha,
+                    ValorNuevo = a.ValorNuevo,
+                    Detalles = a.Detalles
+                })
+                .ToListAsync();
+
+            var idsConActividad = auditorias
+                .Where(a => a.IdUsuario.HasValue)
+                .Select(a => a.IdUsuario!.Value)
+                .Distinct()
+                .ToList();
+
+            var usuarios = await context.Usuarios
+                .AsNoTracking()
+                .Where(u => u.Estado == true &&
+                            u.IdTipoUsuario == 7 &&
+                            (u.TipoCliente == 3 || idsConActividad.Contains(u.IdUsuario)))
+                .ToListAsync();
+
+            var usuariosById = usuarios.ToDictionary(u => u.IdUsuario);
+            var aprobaciones = auditorias.Select(a => MapAprobacion(a, usuariosById)).ToList();
+
+            usuariosCobranza = usuarios
+                .Select(u =>
+                {
+                    var aprobacionesUsuario = aprobaciones.Where(a => a.IdUsuario == u.IdUsuario).ToList();
+                    var monto = aprobacionesUsuario.Sum(a => a.Valor);
+                    return new CobranzaUsuarioDto
+                    {
+                        IdUsuario = u.IdUsuario,
+                        Nombre = ObtenerNombreUsuario(u),
+                        Email = u.Email ?? "",
+                        Aprobaciones = aprobacionesUsuario.Count,
+                        MontoAprobado = monto,
+                        TicketPromedio = aprobacionesUsuario.Count == 0 ? 0m : monto / aprobacionesUsuario.Count,
+                        FacturasAutorizadas = aprobacionesUsuario.Count(a => a.FacturaAutorizada),
+                        UltimaAprobacion = aprobacionesUsuario.Any()
+                            ? aprobacionesUsuario.Select(a => (DateTime?)a.FechaAprobacion).Max()
+                            : null
+                    };
+                })
+                .OrderByDescending(u => u.MontoAprobado)
+                .ThenByDescending(u => u.Aprobaciones)
+                .ThenBy(u => u.Nombre)
+                .ToList();
+
+            ultimasAprobaciones = aprobaciones.Take(15).ToList();
+            totalUsuariosCobranza = usuariosCobranza.Count;
+            totalAprobaciones = aprobaciones.Count;
+            totalMontoAprobado = aprobaciones.Sum(a => a.Valor);
+            totalFacturasAutorizadas = aprobaciones.Count(a => a.FacturaAutorizada);
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CambiarPagina(int step)
+    {
+        page += step;
+        if (page < 0) page = 0;
+        if (page >= MaxPagina) page = MaxPagina - 1;
+    }
+
+    private async Task DescargarReportePdf()
+    {
+        var filename = $"Reporte_Cobranzas_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
+        await JS.InvokeVoidAsync("window.downloadPdfReport", "report-view-area", filename);
+    }
+
+    private static CobranzaAprobacionDto MapAprobacion(Auditoria auditoria, Dictionary<int, Usuario> usuarios)
+    {
+        using var detalles = TryParseJson(auditoria.Detalles);
+        using var nuevo = TryParseJson(auditoria.ValorNuevo);
+        var usuario = auditoria.IdUsuario.HasValue && usuarios.TryGetValue(auditoria.IdUsuario.Value, out var u) ? u : null;
+
+        return new CobranzaAprobacionDto
+        {
+            IdUsuario = auditoria.IdUsuario,
+            FechaAprobacion = GetJsonDateTime(detalles, "FechaAprobacion") ?? auditoria.Fecha,
+            Cobranzas = usuario is null ? $"Usuario #{auditoria.IdUsuario}" : ObtenerNombreUsuario(usuario),
+            Cliente = GetJsonString(detalles, "Cliente", "Cliente no disponible"),
+            Producto = GetJsonString(detalles, "Producto", "e-fact"),
+            Valor = GetJsonDecimal(detalles, "Valor"),
+            Comprobante = GetJsonString(detalles, "Comprobante", "Sin referencia"),
+            FacturaAutorizada = GetJsonBool(nuevo, "Autorizada")
+        };
+    }
+
+    private static string ObtenerNombreUsuario(Usuario usuario)
+    {
+        var nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim();
+        if (!string.IsNullOrWhiteSpace(nombre)) return nombre;
+        return !string.IsNullOrWhiteSpace(usuario.NombreEmpresa)
+            ? usuario.NombreEmpresa
+            : $"Usuario #{usuario.IdUsuario}";
+    }
+
+    private static JsonDocument? TryParseJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonDocument.Parse(json); }
+        catch { return null; }
+    }
+
+    private static string GetJsonString(JsonDocument? document, string propertyName, string fallback = "")
+    {
+        if (document?.RootElement.TryGetProperty(propertyName, out var property) == true)
+        {
+            return property.ValueKind switch
+            {
+                JsonValueKind.String => property.GetString() ?? fallback,
+                JsonValueKind.Number => property.GetRawText(),
+                JsonValueKind.True => "Si",
+                JsonValueKind.False => "No",
+                _ => fallback
+            };
+        }
+
+        return fallback;
+    }
+
+    private static DateTime? GetJsonDateTime(JsonDocument? document, string propertyName)
+    {
+        var raw = GetJsonString(document, propertyName);
+        return DateTime.TryParse(raw, out var value) ? value : null;
+    }
+
+    private static decimal GetJsonDecimal(JsonDocument? document, string propertyName)
+    {
+        if (document?.RootElement.TryGetProperty(propertyName, out var property) == true)
+        {
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetDecimal(out var value)) return value;
+            if (property.ValueKind == JsonValueKind.String &&
+                decimal.TryParse(property.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out value))
+            {
+                return value;
+            }
+        }
+
+        return 0m;
+    }
+
+    private static bool GetJsonBool(JsonDocument? document, string propertyName)
+    {
+        if (document?.RootElement.TryGetProperty(propertyName, out var property) == true)
+        {
+            if (property.ValueKind is JsonValueKind.True or JsonValueKind.False) return property.GetBoolean();
+            if (property.ValueKind == JsonValueKind.String && bool.TryParse(property.GetString(), out var value)) return value;
+        }
+
+        return false;
+    }
+
+    private sealed class CobranzaUsuarioDto
+    {
+        public int IdUsuario { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public int Aprobaciones { get; set; }
+        public decimal MontoAprobado { get; set; }
+        public decimal TicketPromedio { get; set; }
+        public int FacturasAutorizadas { get; set; }
+        public DateTime? UltimaAprobacion { get; set; }
+    }
+
+    private sealed class CobranzaAprobacionDto
+    {
+        public int? IdUsuario { get; set; }
+        public DateTime FechaAprobacion { get; set; }
+        public string Cobranzas { get; set; } = string.Empty;
+        public string Cliente { get; set; } = string.Empty;
+        public string Producto { get; set; } = string.Empty;
+        public decimal Valor { get; set; }
+        public string Comprobante { get; set; } = string.Empty;
+        public bool FacturaAutorizada { get; set; }
+    }
+}
