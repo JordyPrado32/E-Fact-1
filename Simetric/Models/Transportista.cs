@@ -43,7 +43,6 @@ namespace Simetric.Models
         public string? Direccion { get; set; }
 
         [Column("telefono")]
-        [StringLength(50)]
         public string? Telefono { get; set; }
     }
 }

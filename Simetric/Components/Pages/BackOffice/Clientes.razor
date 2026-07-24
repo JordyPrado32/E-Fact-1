@@ -169,7 +169,7 @@
                                     <div class="user-cell">
                                         @if (TieneAvatar(u.AvatarUrl))
                                         {
-                                            <img src="@u.AvatarUrl"
+                                            <img src="@ResolveAvatarUrl(u.AvatarUrl)"
                                                  alt="Avatar de @u.Nombres @u.Apellidos"
                                                  class="user-avatar" />
                                         }
@@ -326,7 +326,7 @@
                         <div class="avatar-preview-wrap">
                             @if (TieneAvatar(tempUser.AvatarUrl))
                             {
-                                <img src="@tempUser.AvatarUrl"
+                                <img src="@ResolveAvatarUrl(tempUser.AvatarUrl)"
                                      alt="Avatar del usuario"
                                      class="avatar-preview" />
                             }
@@ -351,9 +351,9 @@
                             <div class="avatar-selector">
                                 @foreach (var avatar in avatarFiles)
                                 {
-                                    var avatarUrl = $"images/avatars/{avatar}";
+                                    var avatarUrl = $"/images/Avatars/{avatar}";
                                     <button type="button"
-                                            class="avatar-selector-item @(tempUser.AvatarUrl == avatarUrl ? "avatar-selector-item-selected" : string.Empty)"
+                                            class="avatar-selector-item @(EsMismoAvatar(tempUser.AvatarUrl, avatarUrl) ? "avatar-selector-item-selected" : string.Empty)"
                                             @onclick='() => SeleccionarAvatar(avatarUrl)'>
                                         <img src="@avatarUrl" alt="Avatar disponible" />
                                     </button>
@@ -446,7 +446,7 @@
 
                             <div class="form-field">
                                 <label class="field-label">Celular</label>
-                                <input @bind="tempUser.Celular" class="form-control field-input" maxlength="10" placeholder="0999999999" />
+                                <input @bind="tempUser.Celular" class="form-control field-input" placeholder="+593 99 999 9999" autocomplete="tel" />
                             </div>
 
                             <div class="form-note form-field-wide">
@@ -508,7 +508,7 @@
                     <aside class="detail-profile">
                         @if (TieneAvatar(usuarioSeleccionado.AvatarUrl))
                         {
-                            <img src="@usuarioSeleccionado.AvatarUrl"
+                            <img src="@ResolveAvatarUrl(usuarioSeleccionado.AvatarUrl)"
                                  alt="Avatar del usuario"
                                  class="detail-avatar" />
                         }
@@ -617,7 +617,7 @@
                 <div class="avatar-gallery-grid">
                     @foreach (var avatar in avatarFiles)
                     {
-                        var avatarUrl = $"images/avatars/{avatar}";
+                        var avatarUrl = $"/images/Avatars/{avatar}";
                         <article class="avatar-gallery-card">
                             @if (!string.Equals(avatar, "default.png", StringComparison.OrdinalIgnoreCase))
                             {
@@ -1676,7 +1676,7 @@
     {
         try
         {
-            var path = Path.Combine(Env.WebRootPath, "images", "avatars");
+            var path = Path.Combine(Env.WebRootPath, "images", "Avatars");
             if (!Directory.Exists(path))
             {
                 Directory.CreateDirectory(path);
@@ -2100,7 +2100,7 @@
             }
 
             var fileName = $"avatar_{Guid.NewGuid()}{Path.GetExtension(file.Name)}";
-            var path = Path.Combine(Env.WebRootPath, "images", "avatars", fileName);
+            var path = Path.Combine(Env.WebRootPath, "images", "Avatars", fileName);
 
             using var stream = file.OpenReadStream(2 * 1024 * 1024);
             using var fs = new FileStream(path, FileMode.Create);
@@ -2124,18 +2124,23 @@
 
         try
         {
-            var path = Path.Combine(Env.WebRootPath, "images", "avatars", nombreArchivo);
+            var path = Path.Combine(Env.WebRootPath, "images", "Avatars", nombreArchivo);
             if (File.Exists(path))
             {
                 File.Delete(path);
             }
 
-            var avatarUrl = $"images/avatars/{nombreArchivo}";
+            var avatarUrl = $"/images/Avatars/{nombreArchivo}";
+            var avatarUrlSinBarra = avatarUrl.TrimStart('/');
+            var avatarUrlAnterior = $"images/avatars/{nombreArchivo}";
 
             await using (var context = await DbFactory.CreateDbContextAsync())
             {
                 var usuariosConAvatar = await context.Usuarios
-                    .Where(u => u.AvatarUrl == avatarUrl)
+                    .Where(u => u.AvatarUrl == avatarUrl ||
+                                u.AvatarUrl == avatarUrlSinBarra ||
+                                u.AvatarUrl == avatarUrlAnterior ||
+                                u.AvatarUrl == $"/{avatarUrlAnterior}")
                     .ToListAsync();
 
                 if (usuariosConAvatar.Any())
@@ -2149,13 +2154,13 @@
                 }
             }
 
-            if (string.Equals(tempUser.AvatarUrl, avatarUrl, StringComparison.OrdinalIgnoreCase))
+            if (EsMismoAvatar(tempUser.AvatarUrl, avatarUrl))
             {
                 tempUser.AvatarUrl = null;
             }
 
             if (usuarioSeleccionado is not null &&
-                string.Equals(usuarioSeleccionado.AvatarUrl, avatarUrl, StringComparison.OrdinalIgnoreCase))
+                EsMismoAvatar(usuarioSeleccionado.AvatarUrl, avatarUrl))
             {
                 usuarioSeleccionado.AvatarUrl = null;
             }
@@ -2228,9 +2233,6 @@
             if (string.IsNullOrWhiteSpace(tempUser.DireccionEmpresa))
                 return "La dirección es obligatoria.";
         }
-
-        if (!isInternal && !System.Text.RegularExpressions.Regex.IsMatch(tempUser.Celular, @"^09\d{8}$"))
-            return "El celular debe tener 10 digitos y empezar con 09.";
 
         if (tempUser.IdTipoUsuario is null or 0)
             return "Debes seleccionar un rol para el usuario.";
@@ -2368,6 +2370,29 @@
         !string.IsNullOrWhiteSpace(avatarUrl) &&
         !avatarUrl.EndsWith("/default.png", StringComparison.OrdinalIgnoreCase) &&
         !avatarUrl.EndsWith("\\default.png", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsMismoAvatar(string? izquierda, string? derecha) =>
+        string.Equals(ResolveAvatarUrl(izquierda), ResolveAvatarUrl(derecha), StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveAvatarUrl(string? avatarUrl)
+    {
+        if (string.IsNullOrWhiteSpace(avatarUrl))
+            return string.Empty;
+
+        var value = avatarUrl.Trim().Replace('\\', '/');
+        if (value.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return value;
+
+        var relativeUrl = value.TrimStart('/');
+        const string avatarPrefix = "images/avatars/";
+        if (relativeUrl.StartsWith(avatarPrefix, StringComparison.OrdinalIgnoreCase))
+            relativeUrl = $"images/Avatars/{relativeUrl[avatarPrefix.Length..]}";
+
+        return relativeUrl.StartsWith("images/", StringComparison.OrdinalIgnoreCase)
+            ? $"/{relativeUrl}" : value;
+    }
 
     private static string FormatFechaNacimiento(DateTime? fecha) =>
         fecha.HasValue ? fecha.Value.ToString("yyyy-MM-dd") : string.Empty;

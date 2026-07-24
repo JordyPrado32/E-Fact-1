@@ -21,8 +21,6 @@ namespace Simetric.ViewModels
             ErrorMessage = "Debe ingresar al menos dos apellidos")]
         public string Apellidos { get; set; } = string.Empty;
 
-        [Required(ErrorMessage = "El celular es obligatorio")]
-        [RegularExpression(@"^[0-9]{10}$", ErrorMessage = "El celular debe tener 10 dígitos numéricos")]
         public string Celular { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "El email es obligatorio")]

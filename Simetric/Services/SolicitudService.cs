@@ -1437,23 +1437,11 @@ namespace Simetric.Services
                     return true;
 
                 case "SOL_TELEFONO_1":
-                    var telefono1 = SoloDigitos(valor);
-                    if (telefono1.Length is < 10 or > 15)
-                    {
-                        return false;
-                    }
-
-                    solicitud.SolTelefono1 = telefono1;
+                    solicitud.SolTelefono1 = valor.Trim();
                     return true;
 
                 case "SOL_TELEFONO_2":
-                    var telefono2 = SoloDigitos(valor);
-                    if (telefono2.Length is < 7 or > 15)
-                    {
-                        return false;
-                    }
-
-                    solicitud.SolTelefono2 = telefono2;
+                    solicitud.SolTelefono2 = valor.Trim();
                     return true;
 
                 case "SOL_CORREO_1":

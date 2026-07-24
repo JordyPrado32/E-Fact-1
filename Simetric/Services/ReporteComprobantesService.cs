@@ -11,6 +11,7 @@ namespace Simetric.Services;
 
 public sealed class ReporteComprobantesService
 {
+    private static readonly CultureInfo CulturaFechas = new("es-EC");
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly FacturacionService _facturacionService;
     private readonly NotaCreditoService _notaCreditoService;
@@ -87,6 +88,9 @@ public sealed class ReporteComprobantesService
         var notaCreditoHeaders = await CargarNotasCreditoHeaderAsync(context, notaCreditoIds);
         var notaDebitoHeaders = await CargarNotasDebitoHeaderAsync(context, notaDebitoIds);
         var retencionHeaders = await CargarRetencionesHeaderAsync(context, retenciones.Select(x => x.Sec).Distinct().ToArray());
+        var liquidacionFechasAutorizacion = await CargarFechasAutorizacionLiquidacionesAsync(
+            context,
+            liquidaciones.Select(x => x.CodFactura).Distinct().ToArray());
 
         var facturaDetalles = await CargarDetallesFacturaAsync(context, facturaIds);
         var notaCreditoDetalles = await CargarDetallesNotaCreditoAsync(context, notaCreditoIds);
@@ -118,7 +122,9 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Codfactura,
                 TipoDocumento = "Facturas",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.Factura,
-                FechaEmision = item.FechaEmision,
+                FechaEmision = estaAutorizado
+                    ? header?.FechaAutorizacion ?? item.FechaAutorizacion
+                    : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Cliente ?? "Cliente",
                 TerceroIdentificacion = item.IdentificacionCliente ?? string.Empty,
@@ -153,7 +159,7 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Notas de credito",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.NotaCredito,
-                FechaEmision = item.FechaDocumentoModificado,
+                FechaEmision = estaAutorizado ? header?.FechaAutorizacion : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Cliente,
                 TerceroIdentificacion = item.IdentificacionCliente,
@@ -188,7 +194,7 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Notas de debito",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.NotaDebito,
-                FechaEmision = item.FechaDocumentoModificado,
+                FechaEmision = estaAutorizado ? header?.FechaAutorizacion : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Cliente,
                 TerceroIdentificacion = item.IdentificacionCliente,
@@ -223,7 +229,9 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Guias de remision",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.GuiaRemision,
-                FechaEmision = item.FechaEmision,
+                FechaEmision = estaAutorizado
+                    ? ParseFechaAutorizacion(item.FechaAutorizacion)
+                    : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Destinatario,
                 TerceroIdentificacion = item.IdentificacionDestinatario,
@@ -260,7 +268,7 @@ public sealed class ReporteComprobantesService
                     DocumentoId = item.Sec,
                     TipoDocumento = "Retenciones",
                     TipoDocumentoCodigo = ReporteComprobantesTipos.Retencion,
-                    FechaEmision = item.Fecha,
+                    FechaEmision = estaAutorizado ? header.FechaAutorizacion : null,
                     NumeroDocumento = item.NumeroCompleto,
                     TerceroNombre = item.Proveedor,
                     TerceroIdentificacion = item.IdentificacionProveedor,
@@ -289,7 +297,7 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Retenciones",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.Retencion,
-                FechaEmision = item.Fecha,
+                FechaEmision = estaAutorizado ? header?.FechaAutorizacion : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Proveedor,
                 TerceroIdentificacion = item.IdentificacionProveedor,
@@ -319,7 +327,9 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.CodFactura,
                 TipoDocumento = "Liquidaciones de compra",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.LiquidacionCompra,
-                FechaEmision = item.FechaEmision,
+                FechaEmision = estaAutorizado
+                    ? liquidacionFechasAutorizacion.GetValueOrDefault(item.CodFactura)
+                    : null,
                 NumeroDocumento = item.NumeroDocumento,
                 TerceroNombre = item.Proveedor,
                 TerceroIdentificacion = item.IdentificacionProveedor,
@@ -446,6 +456,7 @@ public sealed class ReporteComprobantesService
                 Subtotal0 = x.Subtotal0,
                 SubtotalConIva = x.Subtotal12,
                 Iva = x.Iva ?? 0m,
+                FechaAutorizacion = x.Fchautorizacion,
                 ClaveAcceso = x.Codclave ?? string.Empty,
                 RucEmisor = x.CodemisorNavigation != null ? (x.CodemisorNavigation.Ruc ?? string.Empty) : string.Empty,
                 x.Serie,
@@ -459,6 +470,7 @@ public sealed class ReporteComprobantesService
                     Subtotal0 = x.Subtotal0,
                     SubtotalConIva = x.SubtotalConIva,
                     Iva = x.Iva,
+                    FechaAutorizacion = x.FechaAutorizacion,
                     ClaveAcceso = x.ClaveAcceso,
                     XmlUrl = ConstruirUrlFactura(x.RucEmisor, x.Serie, x.Numfactura, "xml"),
                     PdfUrl = ConstruirUrlFactura(x.RucEmisor, x.Serie, x.Numfactura, "pdf")
@@ -483,6 +495,8 @@ public sealed class ReporteComprobantesService
                 nc.Sec,
                 nc.CodClave,
                 nc.NumNotaCredito,
+                nc.FechaAutoSri,
+                nc.FchAutorizacion,
                 RucEmisor = e != null ? (e.Ruc ?? string.Empty) : string.Empty
             })
             .ToListAsync();
@@ -492,6 +506,7 @@ public sealed class ReporteComprobantesService
             x => new NotaHeaderLookup
             {
                 ClaveAcceso = x.CodClave ?? string.Empty,
+                FechaAutorizacion = ParseFechaAutorizacion(x.FechaAutoSri) ?? x.FchAutorizacion,
                 PdfUrl = ConstruirUrlNotaCredito(x.RucEmisor, x.NumNotaCredito, "pdf")
             });
     }
@@ -514,6 +529,8 @@ public sealed class ReporteComprobantesService
                 nd.Sec,
                 nd.CodClave,
                 nd.NumNotaDebito,
+                nd.FechaAutoSri,
+                nd.FchAutorizacion,
                 RucEmisor = e != null ? (e.Ruc ?? string.Empty) : string.Empty
             })
             .ToListAsync();
@@ -523,8 +540,34 @@ public sealed class ReporteComprobantesService
             x => new NotaHeaderLookup
             {
                 ClaveAcceso = x.CodClave ?? string.Empty,
+                FechaAutorizacion = ParseFechaAutorizacion(x.FechaAutoSri) ?? x.FchAutorizacion,
                 PdfUrl = ConstruirUrlNotaDebito(x.RucEmisor, x.NumNotaDebito, "pdf")
             });
+    }
+
+    private static async Task<Dictionary<int, DateTime?>> CargarFechasAutorizacionLiquidacionesAsync(
+        AppDbContext context,
+        IReadOnlyCollection<int> ids)
+    {
+        if (ids.Count == 0)
+        {
+            return new Dictionary<int, DateTime?>();
+        }
+
+        var data = await context.ComprasFacturas
+            .AsNoTracking()
+            .Where(x => ids.Contains(x.CodFactura) && x.CodDocumento == "03")
+            .Select(x => new
+            {
+                x.CodFactura,
+                x.FechaAutoSRI,
+                x.FchAutorizacion
+            })
+            .ToListAsync();
+
+        return data.ToDictionary(
+            x => x.CodFactura,
+            x => ParseFechaAutorizacion(x.FechaAutoSRI) ?? x.FchAutorizacion);
     }
 
     private static async Task<Dictionary<int, RetencionHeaderLookup>> CargarRetencionesHeaderAsync(AppDbContext context, IReadOnlyCollection<int> ids)
@@ -544,6 +587,7 @@ public sealed class ReporteComprobantesService
                 x.Clave,
                 x.NombreXml,
                 x.NumRetencion,
+                x.FechaAutorizaSri,
                 x.IdEmpresa,
                 x.IdSucursal
             })
@@ -572,6 +616,7 @@ public sealed class ReporteComprobantesService
             x => new RetencionHeaderLookup
             {
                 IdCompra = x.IcCompra,
+                FechaAutorizacion = ParseFechaAutorizacion(x.FechaAutorizaSri),
                 PdfUrl = ConstruirUrlRetencionPdf(
                     rucPorEmpresaSucursal.GetValueOrDefault($"{x.IdEmpresa}|{x.IdSucursal}", string.Empty),
                     x.NumRetencion,
@@ -790,6 +835,29 @@ public sealed class ReporteComprobantesService
     private static decimal ObtenerBaseConIvaFallback(decimal baseImponible, decimal iva)
         => iva > 0m ? baseImponible : 0m;
 
+    private static DateTime? ParseFechaAutorizacion(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return null;
+
+        if (DateTime.TryParse(
+                valor.Trim(),
+                CulturaFechas,
+                DateTimeStyles.AllowWhiteSpaces,
+                out var fechaLocal))
+        {
+            return fechaLocal;
+        }
+
+        return DateTime.TryParse(
+            valor.Trim(),
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.RoundtripKind,
+            out var fechaInvariant)
+                ? fechaInvariant
+                : null;
+    }
+
     private static string ConstruirUrlFactura(string? ruc, string? serie, string? numero, string extension)
     {
         if (string.IsNullOrWhiteSpace(ruc))
@@ -863,6 +931,7 @@ public sealed class ReporteComprobantesService
         public decimal? Subtotal0 { get; init; }
         public decimal? SubtotalConIva { get; init; }
         public decimal Iva { get; init; }
+        public DateTime? FechaAutorizacion { get; init; }
         public string ClaveAcceso { get; init; } = string.Empty;
         public string XmlUrl { get; init; } = string.Empty;
         public string PdfUrl { get; init; } = string.Empty;
@@ -871,12 +940,14 @@ public sealed class ReporteComprobantesService
     private sealed class NotaHeaderLookup
     {
         public string ClaveAcceso { get; init; } = string.Empty;
+        public DateTime? FechaAutorizacion { get; init; }
         public string PdfUrl { get; init; } = string.Empty;
     }
 
     private sealed class RetencionHeaderLookup
     {
         public int? IdCompra { get; init; }
+        public DateTime? FechaAutorizacion { get; init; }
         public string XmlUrl { get; init; } = string.Empty;
         public string PdfUrl { get; init; } = string.Empty;
     }
@@ -989,7 +1060,7 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
                         column.Item().MaxWidth(120).Image(logo).FitWidth();
                     }
 
-                    column.Item().PaddingTop(logo != null ? 8 : 0).Text("Reporte consolidado de comprobantes")
+                    column.Item().PaddingTop(logo != null ? 8 : 0).Text("REPORTE CONSOLIDADO DE COMPROBANTES")
                         .FontSize(18)
                         .SemiBold()
                         .FontColor("#0B5B97");
@@ -1016,7 +1087,7 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
                 .Padding(12)
                 .Column(column =>
                 {
-                    column.Item().Text("Control del reporte")
+                    column.Item().Text("CONTROL DEL REPORTE")
                         .FontSize(12)
                         .SemiBold()
                         .FontColor("#0B5B97");
@@ -1056,7 +1127,7 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
             .Column(column =>
             {
                 column.Spacing(6);
-                column.Item().Text("Filtros aplicados")
+                column.Item().Text("FILTROS APLICADOS")
                     .FontSize(11)
                     .SemiBold()
                     .FontColor("#0B5B97");
@@ -1087,10 +1158,10 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
     {
         container.Row(row =>
         {
-            row.RelativeItem().Element(card => ComponerTarjetaMetrica(card, "Documentos", totalItems.ToString("N0", Cultura), "Comprobantes visibles en el reporte."));
-            row.RelativeItem().Element(card => ComponerTarjetaMetrica(card, "Base", FormatearMoneda(totalBase), "Subtotal o base imponible consolidada."));
+            row.RelativeItem().Element(card => ComponerTarjetaMetrica(card, "DOCUMENTOS", totalItems.ToString("N0", Cultura), "Comprobantes visibles en el reporte."));
+            row.RelativeItem().Element(card => ComponerTarjetaMetrica(card, "BASE", FormatearMoneda(totalBase), "Subtotal o base imponible consolidada."));
             row.RelativeItem().Element(card => ComponerTarjetaMetrica(card, "IVA", FormatearMoneda(totalIva), "Carga tributaria visible en el filtro."));
-            row.RelativeItem().Element(card => ComponerTarjetaMetrica(card, "Total", FormatearMoneda(totalGeneral), "Importe global de los documentos filtrados."));
+            row.RelativeItem().Element(card => ComponerTarjetaMetrica(card, "TOTAL", FormatearMoneda(totalGeneral), "Importe global de los documentos filtrados."));
         });
     }
 
@@ -1126,7 +1197,7 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
             .Column(column =>
             {
                 column.Spacing(8);
-                column.Item().Text("Distribucion por tipo de documento")
+                column.Item().Text("DISTRIBUCION POR TIPO DE DOCUMENTO")
                     .FontSize(11)
                     .SemiBold()
                     .FontColor("#0B5B97");
@@ -1142,9 +1213,9 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
 
                     table.Header(header =>
                     {
-                        header.Cell().Element(HeaderCellStyle).Text("Tipo");
-                        header.Cell().Element(HeaderCellStyle).AlignRight().Text("Cantidad");
-                        header.Cell().Element(HeaderCellStyle).AlignRight().Text("Total");
+                        header.Cell().Element(HeaderCellStyle).Text("TIPO");
+                        header.Cell().Element(HeaderCellStyle).AlignRight().Text("CANTIDAD");
+                        header.Cell().Element(HeaderCellStyle).AlignRight().Text("TOTAL");
                     });
 
                     foreach (var item in resumen)
@@ -1166,7 +1237,7 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
             .Column(column =>
             {
                 column.Spacing(8);
-                column.Item().Text("Documentos visibles")
+                column.Item().Text("DOCUMENTOS VISIBLES")
                     .FontSize(11)
                     .SemiBold()
                     .FontColor("#0B5B97");
@@ -1187,14 +1258,14 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
 
                     table.Header(header =>
                     {
-                        header.Cell().Element(HeaderCellStyle).Text("Fecha");
-                        header.Cell().Element(HeaderCellStyle).Text("Tipo");
-                        header.Cell().Element(HeaderCellStyle).Text("Numero");
-                        header.Cell().Element(HeaderCellStyle).Text("Tercero");
-                        header.Cell().Element(HeaderCellStyle).Text("Detalle");
-                        header.Cell().Element(HeaderCellStyle).Text("Accesos");
-                        header.Cell().Element(HeaderCellStyle).Text("Estado");
-                        header.Cell().Element(HeaderCellStyle).AlignRight().Text("Total");
+                        header.Cell().Element(HeaderCellStyle).Text("FECHA AUTORIZACION");
+                        header.Cell().Element(HeaderCellStyle).Text("TIPO");
+                        header.Cell().Element(HeaderCellStyle).Text("NUMERO");
+                        header.Cell().Element(HeaderCellStyle).Text("TERCERO");
+                        header.Cell().Element(HeaderCellStyle).Text("DETALLE");
+                        header.Cell().Element(HeaderCellStyle).Text("ACCESOS");
+                        header.Cell().Element(HeaderCellStyle).Text("ESTADO");
+                        header.Cell().Element(HeaderCellStyle).AlignRight().Text("TOTAL");
                     });
 
                     foreach (var item in items)
@@ -1247,7 +1318,7 @@ public sealed class ReporteComprobantesPdfService : IReporteComprobantesPdfServi
             .Column(column =>
             {
                 column.Spacing(8);
-                column.Item().Text("Accesos XML y PDF")
+                column.Item().Text("ACCESOS XML Y PDF")
                     .FontSize(11)
                     .SemiBold()
                     .FontColor("#0B5B97");

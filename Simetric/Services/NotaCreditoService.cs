@@ -852,7 +852,9 @@ public class NotaCreditoService
                 new XElement("ambiente", ambiente),
                 new XElement("tipoEmision", "1"),
                 new XElement("razonSocial", emisor?.RazonSocial ?? "-"),
-                new XElement("nombreComercial", emisor?.NomComercial ?? "-"),
+                !string.IsNullOrWhiteSpace(emisor?.NomComercial)
+                    ? new XElement("nombreComercial", emisor.NomComercial)
+                    : null,
                 new XElement("ruc", emisor?.Ruc ?? ""),
                 new XElement("claveAcceso", claveAcceso),
                 new XElement("codDoc", "04"),
@@ -871,7 +873,7 @@ public class NotaCreditoService
                         ? cliente!.Nombrerazonsocial
                         : ((cliente?.Nombres ?? "") + " " + (cliente?.Apellidos ?? "")).Trim()),
                 new XElement("identificacionComprador", cliente?.Numeroidentificacion ?? ""),
-                new XElement("obligadoContabilidad", cliente?.Oblgconta ?? "NO"),
+                new XElement("obligadoContabilidad", string.IsNullOrWhiteSpace(cliente?.Oblgconta) ? "NO" : cliente.Oblgconta),
                 new XElement("codDocModificado", "01"),
                 new XElement("numDocModificado", FormatearDocumentoModificadoXml(nc.Serie, nc.NumDocModificado)),
                 new XElement("fechaEmisionDocSustento", nc.FechaEmiDocModificado?.ToString("dd/MM/yyyy") ?? DateTime.Now.ToString("dd/MM/yyyy")),
@@ -888,7 +890,7 @@ public class NotaCreditoService
                     )
                 ),
 
-                new XElement("motivo", nc.Motivo ?? "ANULACION")
+                new XElement("motivo", string.IsNullOrWhiteSpace(nc.Motivo) ? "ANULACION" : nc.Motivo)
             ),
 
             new XElement("detalles",
@@ -934,6 +936,7 @@ public class NotaCreditoService
                 : null
         );
 
+        SriXmlSanitizer.Preparar(xml);
         return xml.ToString();
     }
 

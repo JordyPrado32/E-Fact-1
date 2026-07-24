@@ -709,16 +709,6 @@ public sealed class EContaxCatalogService
             throw new InvalidOperationException("Correo electronico invalido.");
         }
 
-        if (string.IsNullOrWhiteSpace(dto.Celular) || !dto.Celular.All(char.IsDigit) || dto.Celular.Length != 10)
-            throw new InvalidOperationException("El celular debe tener 10 digitos.");
-
-        if (string.IsNullOrWhiteSpace(dto.Telefonoconvencional) ||
-            !dto.Telefonoconvencional.All(char.IsDigit) ||
-            dto.Telefonoconvencional.Length is < 7 or > 10)
-        {
-            throw new InvalidOperationException("El telefono convencional debe tener entre 7 y 10 digitos.");
-        }
-
         if (string.IsNullOrWhiteSpace(dto.Direccion))
             throw new InvalidOperationException("La direccion es obligatoria.");
 

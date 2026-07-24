@@ -1031,7 +1031,7 @@ namespace Simetric.Services
             if (!string.IsNullOrWhiteSpace(transportista.Telefono)) infoAdicional.Add(new XElement("campoAdicional", new XAttribute("nombre", "telefono"), transportista.Telefono.Trim()));
             if (!string.IsNullOrWhiteSpace(transportista.Correo)) infoAdicional.Add(new XElement("campoAdicional", new XAttribute("nombre", "email"), transportista.Correo.Trim()));
 
-            return new XDocument(
+            var documento = new XDocument(
                 new XDeclaration("1.0", "utf-8", "yes"),
                 new XElement("guiaRemision",
                     new XAttribute("id", "comprobante"),
@@ -1091,6 +1091,9 @@ namespace Simetric.Services
                     ),
                     infoAdicional.Any() ? new XElement("infoAdicional", infoAdicional) : null
                 ));
+
+            SriXmlSanitizer.Preparar(documento);
+            return documento;
         }
 
         private static async Task<string> GuardarXmlAsync(XDocument documento, string nombreArchivo)

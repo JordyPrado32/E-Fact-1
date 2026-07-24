@@ -559,21 +559,7 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
     }
 
     private static string FormatearTextoCasing(string? valor)
-    {
-        if (string.IsNullOrWhiteSpace(valor))
-            return "-";
-
-        var trim = valor.Trim();
-        bool tieneMinusculas = trim.Any(char.IsLower);
-        if (tieneMinusculas)
-        {
-            return trim;
-        }
-
-        var palabras = trim.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var palabrasCapitalizadas = palabras.Select(p => p.Length == 1 ? p.ToUpperInvariant() : char.ToUpperInvariant(p[0]) + p[1..]);
-        return string.Join(' ', palabrasCapitalizadas);
-    }
+        => PdfTextCaseHelper.Formatear(valor);
 
     private static ThermalTicketModel ConstruirTicketTermico(LiquidacionCompraPreviewDto preview, IReadOnlyCollection<LiquidacionPdfLinea> lineas)
     {
@@ -585,7 +571,7 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
             FechaEmisionTexto = (preview.FechaEmision ?? DateTime.Today).ToString("dd/MM/yyyy", Cultura),
             EtiquetaAcceso = preview.EstaAutorizada ? "Numero de autorizacion" : "Clave temporal",
             ClaveAcceso = preview.EstaAutorizada ? (preview.NumeroAutorizacion ?? string.Empty) : (preview.ClaveAcceso ?? string.Empty),
-            EmisorNombre = preview.RazonSocialEmisor ?? "EMISOR",
+            EmisorNombre = FormatearTextoCasing(preview.RazonSocialEmisor ?? "EMISOR"),
             EmisorSecundario = $"RUC: {preview.RucEmisor ?? "-"}",
             TituloItems = "Detalle",
             Bloques =
@@ -595,7 +581,7 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
                     Titulo = "Proveedor",
                     Lineas =
                     [
-                        new ThermalTicketLine { Etiqueta = "Nombre", Valor = string.IsNullOrWhiteSpace(preview.RazonSocialProveedor) ? "Proveedor" : preview.RazonSocialProveedor },
+                        new ThermalTicketLine { Etiqueta = "Nombre", Valor = string.IsNullOrWhiteSpace(preview.RazonSocialProveedor) ? "Proveedor" : FormatearTextoCasing(preview.RazonSocialProveedor) },
                         new ThermalTicketLine { Etiqueta = "Id", Valor = preview.IdentificacionProveedor ?? "-" },
                         new ThermalTicketLine { Etiqueta = "Pago", Valor = ObtenerFormaPago(preview) }
                     ]

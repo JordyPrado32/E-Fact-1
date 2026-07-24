@@ -89,6 +89,7 @@ public class LiquidacionCompraXmlGenerator
         var nombreArchivo = $"LIQ_{preview.ClaveAcceso}.xml";
         var rutaCompleta = Path.Combine(carpeta, nombreArchivo);
 
+        SriXmlSanitizer.Preparar(doc);
         await Task.Run(() => doc.Save(rutaCompleta));
         return nombreArchivo;
     }
