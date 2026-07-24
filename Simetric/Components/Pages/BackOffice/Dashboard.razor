@@ -50,7 +50,7 @@
                                 <small class="kpi-sublabel">@kpi.SubLabel</small>
                             }
                         </span>
-                        <strong class="kpi-value">@kpi.Value</strong>
+                        <strong class="kpi-value @(kpi.Value.Contains('\n') ? "multiline" : string.Empty)">@kpi.Value</strong>
                     </div>
                 </article>
             }
@@ -235,7 +235,7 @@
                 <div class="panel-header">
                     <div>
                         <h3>Novedades importantes de clientes</h3>
-                        <span>Firmas por caducar y usuarios sin documentos</span>
+                        <span>Firmas por caducar y usuarios con 1 documento</span>
                     </div>
                     <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver clientes</button>
                 </div>
@@ -481,7 +481,7 @@
                 .CountAsync(u => u.Estado == true && u.IdTipoUsuario == 1);
 
             var activeClientsRaw = Math.Max(clientesActivosDb, usuariosActivosDb);
-            clientesActivosVal = activeClientsRaw;
+            clientesActivosVal = activeUsers.Count;
 
             // 2. Documentos emitidos hoy por usuarios no administradores (sin baseline)
             var docsHoyDb = await context.Facturas
@@ -506,15 +506,6 @@
                 .ToDictionaryAsync(s => s.ServicioId);
 
             var activeSubscriptionsMrr = 0m;
-            foreach (var s in suscripcionesActivas)
-            {
-                var plan = s.PlanActual ?? "";
-                if (plan.Contains("Premium", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 150m;
-                else if (plan.Contains("Básico", StringComparison.OrdinalIgnoreCase) || plan.Contains("Basic", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 25m;
-                else if (plan.Contains("Firma", StringComparison.OrdinalIgnoreCase) || plan.Contains("e-sign", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 15m;
-                else activeSubscriptionsMrr += 35m;
-            }
-
             mrrVal = activeSubscriptionsMrr;
             licenciasEFactActivas = suscripcionesActivas.Count(s => !EsSuscripcionESign(s, serviciosActivosMap));
 
@@ -599,15 +590,7 @@
                 var monthName = m.ToString("MMM", CultureInfo.GetCultureInfo("es-ES"));
                 monthName = char.ToUpper(monthName[0]) + monthName.Substring(1).Replace(".", "");
 
-                var dbVal = ventasValidas
-                    .Where(v => v.Fecha.Year == m.Year && v.Fecha.Month == m.Month)
-                    .Sum(v => v.Valor);
-
-                var finalVal = dbVal;
-                if (i == 5)
-                {
-                    finalVal = mrrVal;
-                }
+                var finalVal = 0m;
 
                 graphPoints.Add(new GraphPointDto(monthName, finalVal));
             }
@@ -918,9 +901,54 @@
                 }
             }
 
-            importantAlerts = activities
-                .OrderByDescending(a => a.DateVal)
-                .Take(8)
+            var alertasImportantes = new List<ActivityDto>();
+
+            foreach (var usuario in activeUsers
+                .Where(u => u.SaldoDocumentos <= 1)
+                .OrderBy(u => u.SaldoDocumentos)
+                .ThenBy(u => u.Nombres)
+                .ThenBy(u => u.Apellidos))
+            {
+                var nombreUsuario = $"{usuario.Nombres} {usuario.Apellidos}".Trim();
+                if (string.IsNullOrWhiteSpace(nombreUsuario))
+                {
+                    nombreUsuario = usuario.Email;
+                }
+
+                alertasImportantes.Add(new ActivityDto(
+                    "ri-file-warning-line",
+                    usuario.SaldoDocumentos == 0 ? "red" : "orange",
+                    usuario.SaldoDocumentos == 0
+                        ? $"{nombreUsuario} no tiene documentos disponibles."
+                        : $"{nombreUsuario} tiene solo 1 documento disponible.",
+                    usuario.Email,
+                    DateTime.Today.AddMinutes(-usuario.IdUsuario)));
+            }
+
+            foreach (var firma in firmasPorVencer.OrderBy(f => f.Vence))
+            {
+                var diasRestantes = Math.Max(0, (firma.Vence.Date - DateTime.Today).Days);
+                alertasImportantes.Add(new ActivityDto(
+                    "ri-shield-keyhole-line",
+                    diasRestantes <= 7 ? "red" : "yellow",
+                    $"{NombreFirma(firma.Solicitud)} tiene su firma por caducar en {diasRestantes} día(s).",
+                    firma.Vence.ToString("dd/MM/yyyy"),
+                    firma.Vence));
+            }
+
+            if (!alertasImportantes.Any())
+            {
+                alertasImportantes.Add(new ActivityDto(
+                    "ri-checkbox-circle-line",
+                    "green",
+                    "No hay usuarios con 0 o 1 documento ni firmas por caducar.",
+                    "Actualizado hoy",
+                    DateTime.Now));
+            }
+
+            importantAlerts = alertasImportantes
+                .OrderBy(a => a.DateVal)
+                .Take(5)
                 .ToList();
 
             // 9. Distribución por provincia
@@ -957,19 +985,25 @@
                 listProvincias.Add(new ProvinciaStatsDto("Resto del país", 45, 12));
             }
 
-            plataformaStats = listProvincias
-                .OrderByDescending(p => p.Cantidad)
-                .Select((p, index) => new PlatformStatsDto(
-                    p.Nombre,
-                    p.Cantidad,
-                    p.Porcentaje,
-                    index switch
-                    {
-                        0 => "blue",
-                        1 => "green",
-                        _ => "purple"
-                    }))
-                .ToList();
+            var clientesEFact = activeUsers.Count;
+
+            var clientesESign = 0;
+
+            var totalClientesPlataforma = Math.Max(activeUsers.Count, 1);
+
+            plataformaStats =
+            [
+                new PlatformStatsDto(
+                    "Clientes e-fact",
+                    clientesEFact,
+                    Math.Round((double)clientesEFact / totalClientesPlataforma * 100d, 1),
+                    "blue"),
+                new PlatformStatsDto(
+                    "Clientes e-sign",
+                    clientesESign,
+                    Math.Round((double)clientesESign / totalClientesPlataforma * 100d, 1),
+                    "green")
+            ];
         }
         catch (Exception ex)
         {
@@ -1038,6 +1072,18 @@
         return value.Contains("firma", StringComparison.OrdinalIgnoreCase)
             || value.Contains("e-sign", StringComparison.OrdinalIgnoreCase)
             || value.Contains("esign", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TienePlanIlimitado(string? historialJson)
+    {
+        if (string.IsNullOrWhiteSpace(historialJson))
+        {
+            return false;
+        }
+
+        return historialJson.Contains("\"EsIlimitado\":true", StringComparison.OrdinalIgnoreCase)
+            || historialJson.Contains("\"SaldoAplicado\":true", StringComparison.OrdinalIgnoreCase)
+                && historialJson.Contains("ilimit", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool EsSuscripcionESign(
@@ -1207,8 +1253,8 @@
 
     private List<KpiDashboardDto> BuildKpis() =>
     [
-        new KpiDashboardDto("ri-team-line", "blue", "MRR (Ingresos recurrentes)", Money(mrrVal), false, "", false, "", ""),
-        new KpiDashboardDto("ri-group-line", "green", "Clientes activos", clientesActivosVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", ""),
+        new KpiDashboardDto("ri-team-line", "blue", "MRR (Ingresos recurrentes)", "eRúbrica $0.00\neDeclara $0.00\nePeople $0.00\neContax $0.00", false, "", false, "", ""),
+        new KpiDashboardDto("ri-group-line", "green", "Clientes activos", $"e-fact {clientesActivosVal.ToString("N0", CultureInfo.InvariantCulture)}\neRúbrica 0 clientes", false, "", false, "", ""),
         new KpiDashboardDto("ri-file-list-3-line", "purple", "Documentos emitidos hoy", documentosHoyVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", ""),
         new KpiDashboardDto("ri-money-dollar-circle-line", "orange", "Ingresos del mes", Money(ingresosMesVal), false, "", false, "", ""),
         new KpiDashboardDto("ri-calendar-event-line", "blue", "Renovaciones próximas", renovacionesProximasVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", "", "(30 días)"),
