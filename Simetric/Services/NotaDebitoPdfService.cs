@@ -303,7 +303,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
             .Column(column =>
             {
                 column.Spacing(2);
-                column.Item().Element(item => ComponerDatoLineaA4(item, "Emisor:", emisor?.RazonSocial ?? "EMISOR"));
+                column.Item().Element(item => ComponerDatoLineaA4(item, "Emisor:", FormatearTextoCasing(emisor?.RazonSocial ?? "EMISOR")));
                 column.Item().Element(item => ComponerDatoLineaA4(item, "RUC:", emisor?.Ruc));
                 column.Item().Element(item => ComponerDatoLineaA4(item, "Matriz:", emisor?.DireccionMatriz ?? emisor?.Direccion));
 
@@ -342,13 +342,13 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
                 }
 
                 column.Item().PaddingTop(logoSistema != null ? 8 : 0)
-                    .Text(emisor?.RazonSocial ?? "EMISOR")
+                    .Text(FormatearTextoCasing(emisor?.RazonSocial ?? "EMISOR"))
                     .FontSize(16)
                     .SemiBold()
                     .FontColor(Colors.Blue.Darken3);
 
                 if (!string.IsNullOrWhiteSpace(emisor?.NomComercial))
-                    column.Item().PaddingTop(4).Text($"Nombre comercial: {emisor.NomComercial}").FontColor(Colors.Grey.Darken2);
+                    column.Item().PaddingTop(4).Text($"Nombre comercial: {FormatearTextoCasing(emisor.NomComercial)}").FontColor(Colors.Grey.Darken2);
 
                 if (!string.IsNullOrWhiteSpace(emisor?.Ruc))
                     column.Item().PaddingTop(2).Text($"RUC: {emisor.Ruc}").FontColor(Colors.Grey.Darken2);
@@ -595,17 +595,20 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
             return "Cliente";
 
         if (!string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial))
-            return cliente.Nombrerazonsocial.Trim();
+            return FormatearTextoCasing(cliente.Nombrerazonsocial);
 
         var nombre = $"{cliente.Nombres} {cliente.Apellidos}".Trim();
         if (!string.IsNullOrWhiteSpace(nombre))
-            return nombre;
+            return FormatearTextoCasing(nombre);
 
         if (!string.IsNullOrWhiteSpace(cliente.Nombrecomercial))
-            return cliente.Nombrecomercial.Trim();
+            return FormatearTextoCasing(cliente.Nombrecomercial);
 
         return "Cliente";
     }
+
+    private static string FormatearTextoCasing(string? valor)
+        => PdfTextCaseHelper.Formatear(valor);
 
     private static string FormatearMoneda(decimal valor)
         => $"${valor.ToString("N2", Cultura)}";
@@ -678,7 +681,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
             FechaEmisionTexto = nota.FechaEmiDocModificado?.ToString("dd/MM/yyyy", Cultura) ?? string.Empty,
             EtiquetaAcceso = DocumentoAutorizacionHelper.ObtenerEtiquetaAcceso(estaAutorizada, nota.NumAutorizacion),
             ClaveAcceso = DocumentoAutorizacionHelper.ObtenerValorAcceso(estaAutorizada, nota.NumAutorizacion, nota.CodClave),
-            EmisorNombre = view.Emisor?.RazonSocial ?? "EMISOR",
+            EmisorNombre = FormatearTextoCasing(view.Emisor?.RazonSocial ?? "EMISOR"),
             EmisorSecundario = $"RUC: {view.Emisor?.Ruc ?? "-"}",
             TituloItems = "Cargos",
             Bloques =

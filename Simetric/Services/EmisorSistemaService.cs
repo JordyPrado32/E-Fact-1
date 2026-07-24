@@ -624,10 +624,6 @@ END
         if (!string.IsNullOrWhiteSpace(e.ClaveInterna) && e.ClaveInterna.Length > 25)
             return "La clave interna no puede exceder 25 caracteres.";
 
-        if (!string.IsNullOrWhiteSpace(e.Telefono) &&
-            (!e.Telefono.All(char.IsDigit) || e.Telefono.Length < 7 || e.Telefono.Length > 10))
-            return "El telefono debe tener entre 7 y 10 digitos.";
-
         if (string.IsNullOrWhiteSpace(e.LlevaContabilidad))
             return "Debe seleccionar si lleva contabilidad.";
 

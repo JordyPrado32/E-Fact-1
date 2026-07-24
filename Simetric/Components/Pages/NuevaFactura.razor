@@ -988,7 +988,7 @@
                                             <span class="n-frequent-concept-icon"><i class="bi bi-box-seam"></i></span>
                                             <span>
                                                 <strong>@(producto.Descripcion ?? "Producto")</strong>
-                                                <small>@(string.IsNullOrWhiteSpace(producto.Codprincipal) ? "Sin codigo" : producto.Codprincipal) | $ @producto.PrecioUnitario.ToString("N2")</small>
+                                                <small>@(string.IsNullOrWhiteSpace(producto.Codprincipal) ? "Sin código" : producto.Codprincipal) · $@producto.PrecioUnitario.ToString("N2")</small>
                                             </span>
                                         </button>
                                     }
@@ -1931,6 +1931,8 @@
     private bool continuarConClienteSinRegistro = false;
     private int indiceSugerenciaClienteActiva = -1;
     private int indiceSugerenciaIdentificacionActiva = -1;
+    private int versionBusquedaCliente;
+    private int versionBusquedaIdentificacion;
     private const int MaxCorreosOpcionalesFactura = 4;
     private List<CorreoOpcionalFacturaInput> correosOpcionalesFactura = new();
     private List<string> correosPersistidosClienteFactura = new();
@@ -3423,6 +3425,8 @@
 
     private void LimpiarClienteFacturaParaNuevaBusqueda(string? identificacion = null)
     {
+        versionBusquedaCliente++;
+        versionBusquedaIdentificacion++;
         var numero = new string((identificacion ?? string.Empty).Where(char.IsDigit).ToArray());
 
         cliente = new Simetric.Models.Cliente
@@ -3475,13 +3479,28 @@
 
         if (val.Length >= 1)
         {
-            sugerenciasIdentificacion = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, val);
+            var version = ++versionBusquedaIdentificacion;
+            var resultados = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, val);
+            if (version != versionBusquedaIdentificacion ||
+                !string.Equals(cliente.Numeroidentificacion?.Trim(), val, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            sugerenciasIdentificacion = resultados;
             indiceSugerenciaIdentificacionActiva = ObtenerIndiceInicial(sugerenciasIdentificacion);
-            clienteDetectadoEnCatalogoFactura = sugerenciasIdentificacion.Any(c =>
-                string.Equals(c.Numeroidentificacion?.Trim(), val, StringComparison.Ordinal));
+            var coincidenciaExacta = sugerenciasIdentificacion.FirstOrDefault(c =>
+                string.Equals(c.Numeroidentificacion?.Trim(), val, StringComparison.OrdinalIgnoreCase));
+            clienteDetectadoEnCatalogoFactura = coincidenciaExacta != null;
+
+            if (coincidenciaExacta != null && val.Length is 10 or 13)
+            {
+                await SeleccionarCliente(coincidenciaExacta);
+            }
         }
         else
         {
+            versionBusquedaIdentificacion++;
             sugerenciasIdentificacion = null;
             indiceSugerenciaIdentificacionActiva = -1;
             clienteDetectadoEnCatalogoFactura = false;
@@ -3498,6 +3517,7 @@
             return;
         }
 
+        versionBusquedaIdentificacion++;
         sugerenciasIdentificacion = null;
         indiceSugerenciaIdentificacionActiva = -1;
 
@@ -3534,7 +3554,16 @@
 
         SincronizarClienteDesdeBusquedaUnificada(textoBusqueda);
 
-        sugerencias = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoBusqueda);
+        var textoConsultado = textoBusqueda;
+        var version = ++versionBusquedaCliente;
+        var resultados = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoConsultado);
+        if (version != versionBusquedaCliente ||
+            !string.Equals(textoBusqueda, textoConsultado, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        sugerencias = resultados;
         indiceSugerenciaClienteActiva = ObtenerIndiceInicial(sugerencias);
         if (!string.IsNullOrWhiteSpace(cliente.Numeroidentificacion))
         {
@@ -3546,7 +3575,16 @@
 
     private async Task MostrarSugerenciasClientesAsync(FocusEventArgs _)
     {
-        sugerencias = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoBusqueda ?? string.Empty);
+        var textoConsultado = textoBusqueda ?? string.Empty;
+        var version = ++versionBusquedaCliente;
+        var resultados = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoConsultado);
+        if (version != versionBusquedaCliente ||
+            !string.Equals(textoBusqueda ?? string.Empty, textoConsultado, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        sugerencias = resultados;
         indiceSugerenciaClienteActiva = ObtenerIndiceInicial(sugerencias);
     }
 
@@ -3560,7 +3598,16 @@
             return;
         }
 
-        sugerencias = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoBusqueda ?? string.Empty);
+        var textoConsultado = textoBusqueda ?? string.Empty;
+        var version = ++versionBusquedaCliente;
+        var resultados = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoConsultado);
+        if (version != versionBusquedaCliente ||
+            !string.Equals(textoBusqueda ?? string.Empty, textoConsultado, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        sugerencias = resultados;
         indiceSugerenciaClienteActiva = ObtenerIndiceInicial(sugerencias);
         await InvokeAsync(StateHasChanged);
     }
@@ -3576,7 +3623,15 @@
         }
 
         var filtro = cliente.Numeroidentificacion ?? string.Empty;
-        sugerenciasIdentificacion = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, filtro);
+        var version = ++versionBusquedaIdentificacion;
+        var resultados = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, filtro);
+        if (version != versionBusquedaIdentificacion ||
+            !string.Equals(cliente.Numeroidentificacion ?? string.Empty, filtro, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        sugerenciasIdentificacion = resultados;
         indiceSugerenciaIdentificacionActiva = ObtenerIndiceInicial(sugerenciasIdentificacion);
         clienteDetectadoEnCatalogoFactura = sugerenciasIdentificacion.Any(c =>
             string.Equals(c.Numeroidentificacion?.Trim(), filtro.Trim(), StringComparison.Ordinal));
@@ -3593,6 +3648,7 @@
             return;
         }
 
+        versionBusquedaCliente++;
         sugerencias = null;
         indiceSugerenciaClienteActiva = -1;
         StateHasChanged();
@@ -3732,6 +3788,8 @@
 
     private async Task SeleccionarCliente(Simetric.Models.Cliente c)
     {
+        versionBusquedaCliente++;
+        versionBusquedaIdentificacion++;
         seleccionandoClienteDesdeLista = false;
         cliente = c;
         clienteDetectadoEnCatalogoFactura = true;

@@ -167,8 +167,8 @@ public sealed class SystemClienteServiceAdapter : IClienteService
             Tipoidentificacion = tipoIdentificacionCodigo,
             Numeroidentificacion = identificacion,
             Correo = request.Correo!.Trim(),
-            Celular = request.Celular!.Trim(),
-            Telefonoconvencional = request.Telefono!.Trim(),
+            Celular = request.Celular?.Trim(),
+            Telefonoconvencional = request.Telefono?.Trim(),
             Direccion = request.Direccion!.Trim(),
             Oblgconta = (request.ObligadoContabilidad ?? "NO").Trim().ToUpperInvariant(),
             Pais = paisId,
@@ -266,8 +266,6 @@ public sealed class SystemClienteServiceAdapter : IClienteService
 
         if (string.IsNullOrWhiteSpace(request.Identificacion)) missing.Add("identificación");
         if (string.IsNullOrWhiteSpace(request.Correo)) missing.Add("correo");
-        if (string.IsNullOrWhiteSpace(request.Celular)) missing.Add("celular");
-        if (string.IsNullOrWhiteSpace(request.Telefono)) missing.Add("teléfono");
         if (string.IsNullOrWhiteSpace(request.Direccion)) missing.Add("dirección");
         if (string.IsNullOrWhiteSpace(request.ObligadoContabilidad)) missing.Add("obligado a llevar contabilidad");
         if (string.IsNullOrWhiteSpace(request.Pais)) missing.Add("país");

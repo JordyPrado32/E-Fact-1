@@ -490,13 +490,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
     // ── Utiles de texto ────────────────────────────────────────────────────────
 
     private static string FormatearTextoCasing(string? valor)
-    {
-        if (string.IsNullOrWhiteSpace(valor)) return "-";
-        var trim = valor.Trim();
-        if (trim.Any(char.IsLower)) return trim;
-        var palabras = trim.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return string.Join(' ', palabras.Select(p => p.Length == 1 ? p.ToUpperInvariant() : char.ToUpperInvariant(p[0]) + p[1..]));
-    }
+        => PdfTextCaseHelper.Formatear(valor);
 
     // ── Nombres de archivo ─────────────────────────────────────────────────────
 
@@ -531,7 +525,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
                 DocumentoAutorizacionHelper.EsEstadoAutorizado(view.Guia.EstadoSRI),
                 view.Guia.NumAutorizacion,
                 view.Guia.CodClave),
-            EmisorNombre = view.Emisor?.RazonSocial ?? "EMISOR",
+            EmisorNombre = FormatearTextoCasing(view.Emisor?.RazonSocial ?? "EMISOR"),
             EmisorSecundario = $"RUC: {view.Emisor?.Ruc ?? "-"}",
             TituloItems = "Traslado",
             Bloques =
@@ -541,7 +535,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
                     Titulo = "Transportista",
                     Lineas =
                     [
-                        new ThermalTicketLine { Etiqueta = "Nombre", Valor = view.Transportista?.RazonSocial ?? "Transportista" },
+                        new ThermalTicketLine { Etiqueta = "Nombre", Valor = FormatearTextoCasing(view.Transportista?.RazonSocial ?? "Transportista") },
                         new ThermalTicketLine { Etiqueta = "Id", Valor = view.Transportista?.NumeroIdentificacion ?? "-" },
                         new ThermalTicketLine { Etiqueta = "Placa", Valor = view.Guia.Placa ?? view.Transportista?.Placa ?? "-" }
                     ]
@@ -551,7 +545,7 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
                     Titulo = "Destinatario",
                     Lineas =
                     [
-                        new ThermalTicketLine { Etiqueta = "Nombre", Valor = view.Destinatario?.RazonSocial ?? "Destinatario" },
+                        new ThermalTicketLine { Etiqueta = "Nombre", Valor = FormatearTextoCasing(view.Destinatario?.RazonSocial ?? "Destinatario") },
                         new ThermalTicketLine { Etiqueta = "Id", Valor = view.Destinatario?.IdDestinatario ?? "-" },
                         new ThermalTicketLine { Etiqueta = "Motivo", Valor = view.Destinatario?.MotivoTraslado ?? "-" }
                     ]

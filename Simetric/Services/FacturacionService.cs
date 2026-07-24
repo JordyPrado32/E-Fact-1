@@ -362,13 +362,18 @@ namespace Simetric.Services
                 return null;
 
             await using var context = await _dbFactory.CreateDbContextAsync();
+            var idUsuarioTitular = (await GetFacturaUsuarioContextoAsync(context, idUsuario)).IdUsuarioTitularCuenta;
+            var identificacionNormalizada = identificacion.Trim().ToLowerInvariant();
 
             return await context.Clientes
                 .AsNoTracking()
-                .FirstOrDefaultAsync(c =>
-                    c.Usuario == idUsuario &&
-                    c.Numeroidentificacion == identificacion.Trim() &&
-                    (c.Estado == null || c.Estado == true));
+                .Where(c =>
+                    c.Usuario == idUsuarioTitular &&
+                    c.Numeroidentificacion != null &&
+                    c.Numeroidentificacion.Trim().ToLower() == identificacionNormalizada &&
+                    (c.Estado == null || c.Estado == true))
+                .OrderByDescending(c => c.Codcliente)
+                .FirstOrDefaultAsync();
         }
 
         public async Task<List<Cliente>> BuscarClientesFiltroAsync(int idUsuario, string filtro)
@@ -376,11 +381,12 @@ namespace Simetric.Services
             filtro = filtro.Trim().ToLowerInvariant();
 
             await using var context = await _dbFactory.CreateDbContextAsync();
+            var idUsuarioTitular = (await GetFacturaUsuarioContextoAsync(context, idUsuario)).IdUsuarioTitularCuenta;
 
             var query = context.Clientes
                 .AsNoTracking()
                 .Where(c =>
-                    c.Usuario == idUsuario &&
+                    c.Usuario == idUsuarioTitular &&
                     (c.Estado == null || c.Estado == true));
 
             if (!string.IsNullOrWhiteSpace(filtro))
@@ -395,7 +401,12 @@ namespace Simetric.Services
             }
 
             return await query
-                .OrderBy(c => c.Nombrerazonsocial ?? c.Nombrecomercial ?? c.Nombres ?? c.Apellidos)
+                .OrderByDescending(c =>
+                    !string.IsNullOrWhiteSpace(filtro) &&
+                    c.Numeroidentificacion != null &&
+                    c.Numeroidentificacion.Trim().ToLower() == filtro)
+                .ThenBy(c => c.Nombrerazonsocial ?? c.Nombrecomercial ?? c.Nombres ?? c.Apellidos)
+                .ThenByDescending(c => c.Codcliente)
                 .Take(15)
                 .ToListAsync();
         }
@@ -406,10 +417,11 @@ namespace Simetric.Services
                 return new List<string>();
 
             await using var context = await _dbFactory.CreateDbContextAsync();
+            var idUsuarioTitular = (await GetFacturaUsuarioContextoAsync(context, idUsuario)).IdUsuarioTitularCuenta;
 
             var perteneceAlUsuario = await context.Clientes
                 .AsNoTracking()
-                .AnyAsync(c => c.Codcliente == codCliente && c.Usuario == idUsuario);
+                .AnyAsync(c => c.Codcliente == codCliente && c.Usuario == idUsuarioTitular);
 
             if (!perteneceAlUsuario)
                 return new List<string>();
@@ -1091,16 +1103,27 @@ namespace Simetric.Services
                             factura.Numfactura = await GetNextFacturaNumeroAsync(idUsuario, factura.Codemisor, resolucionFactura.SerieRaw);
 
                             await NormalizarCamposClientePorTipoAsync(context, clienteData);
+                            var identificacionCliente = (clienteData.Numeroidentificacion ?? string.Empty).Trim();
+                            clienteData.Numeroidentificacion = identificacionCliente;
+                            await AdquirirBloqueoSqlClienteAsync(
+                                context,
+                                idUsuarioEmisor,
+                                identificacionCliente);
 
                         var clienteDb = await context.Clientes
-                            .FirstOrDefaultAsync(c =>
-                                c.Usuario == idUsuario &&
-                                c.Numeroidentificacion == clienteData.Numeroidentificacion);
+                            .Where(c =>
+                                c.Usuario == idUsuarioEmisor &&
+                                c.Numeroidentificacion != null &&
+                                c.Numeroidentificacion.Trim() == identificacionCliente)
+                            .OrderByDescending(c => c.Estado == true)
+                            .ThenByDescending(c => c.Codcliente)
+                            .FirstOrDefaultAsync();
 
                         if (clienteDb != null)
                         {
                             prevCliente = SnapshotCliente(clienteDb);
 
+                            clienteDb.Numeroidentificacion = identificacionCliente;
                             clienteDb.Nombres = clienteData.Nombres;
                             clienteDb.Apellidos = clienteData.Apellidos;
                             clienteDb.Nombrerazonsocial = clienteData.Nombrerazonsocial;
@@ -1115,13 +1138,13 @@ namespace Simetric.Services
                             clienteDb.Pais = clienteData.Pais;
                             clienteDb.Provincia = clienteData.Provincia;
                             clienteDb.Ciudad = clienteData.Ciudad;
-                            clienteDb.Usuario = idUsuario;
+                            clienteDb.Usuario = idUsuarioEmisor;
                             clienteDb.Estado = true;
                         }
                         else
                         {
                             clienteData.Fechaingreso = DateOnly.FromDateTime(DateTime.Now);
-                            clienteData.Usuario = idUsuario;
+                            clienteData.Usuario = idUsuarioEmisor;
                             clienteData.Estado = true;
                             clienteData.Codcliente = 0;
 
@@ -2150,6 +2173,23 @@ EXEC @resultado = sys.sp_getapplock
     @LockTimeout = 15000;
 IF @resultado < 0
     THROW 51000, 'No se pudo reservar la secuencia de factura. Intenta nuevamente.', 1;");
+        }
+
+        private static Task AdquirirBloqueoSqlClienteAsync(
+            AppDbContext context,
+            int idUsuarioTitular,
+            string identificacion)
+        {
+            var recurso = $"FACTURA_CLIENTE:{idUsuarioTitular}:{identificacion}";
+            return context.Database.ExecuteSqlInterpolatedAsync($@"
+DECLARE @resultado INT;
+EXEC @resultado = sys.sp_getapplock
+    @Resource = {recurso},
+    @LockMode = 'Exclusive',
+    @LockOwner = 'Transaction',
+    @LockTimeout = 15000;
+IF @resultado < 0
+    THROW 51001, 'No se pudo reservar el cliente. Intenta nuevamente.', 1;");
         }
 
         private static async Task<CajaSerieResolucion> ResolverSerieFacturaSistemaAsync(AppDbContext context, string? serieRaw = null)
@@ -3427,7 +3467,9 @@ IF @resultado < 0
                     new XElement("ambiente", ambiente),
                     new XElement("tipoEmision", "1"),
                     new XElement("razonSocial", factura.CodemisorNavigation?.RazonSocial),
-                    new XElement("nombreComercial", factura.CodemisorNavigation?.NomComercial),
+                    !string.IsNullOrWhiteSpace(factura.CodemisorNavigation?.NomComercial)
+                        ? new XElement("nombreComercial", factura.CodemisorNavigation.NomComercial)
+                        : null,
                     new XElement("ruc", factura.CodemisorNavigation?.Ruc),
                     new XElement("claveAcceso", claveAcceso),
                     new XElement("codDoc", "01"),
@@ -3442,7 +3484,11 @@ IF @resultado < 0
                 new XElement("infoFactura",
                     new XElement("fechaEmision", fechaEmision.ToString("dd/MM/yyyy")),
                     new XElement("dirEstablecimiento", factura.CodemisorNavigation?.DirEstablecimiento ?? factura.CodemisorNavigation?.DireccionMatriz),
-                    new XElement("obligadoContabilidad", factura.CodemisorNavigation?.LlevaContabilidad),
+                    new XElement(
+                        "obligadoContabilidad",
+                        string.IsNullOrWhiteSpace(factura.CodemisorNavigation?.LlevaContabilidad)
+                            ? "NO"
+                            : factura.CodemisorNavigation.LlevaContabilidad),
                     new XElement("tipoIdentificacionComprador", tipoIdentificacionComprador),
                     new XElement("razonSocialComprador",
                         !string.IsNullOrWhiteSpace(factura.CodclientesNavigation?.Nombrerazonsocial)
@@ -3535,6 +3581,7 @@ IF @resultado < 0
             );
 
             var document = new XDocument(new XDeclaration("1.0", "utf-8", null), xml);
+            SriXmlSanitizer.Preparar(document);
             return document.ToString();
         }
 

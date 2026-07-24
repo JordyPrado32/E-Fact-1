@@ -61,12 +61,9 @@ namespace Simetric.Models
         [Column("SOL_SEXO")]
         public string SolSexo { get; set; } = string.Empty;
 
-        [Required(ErrorMessage = "Ingrese el celular principal.")]
-        [StringLength(20, ErrorMessage = "El celular principal no puede exceder 20 caracteres.")]
         [Column("SOL_TELEFONO_1")]
         public string SolTelefono1 { get; set; } = string.Empty;
 
-        [StringLength(20, ErrorMessage = "El telefono secundario no puede exceder 20 caracteres.")]
         [Column("SOL_TELEFONO_2")]
         public string? SolTelefono2 { get; set; }
 
@@ -166,8 +163,6 @@ namespace Simetric.Models
             var segundoApellido = NormalizarEspacios(SolSegundoApellido);
             var nacionalidad = NormalizarEspacios(SolNacionalidad);
             var sexo = (SolSexo ?? string.Empty).Trim().ToUpperInvariant();
-            var telefonoPrincipal = SoloDigitos(SolTelefono1);
-            var telefonoSecundario = SoloDigitos(SolTelefono2);
             var correoPrincipal = (SolCorreo1 ?? string.Empty).Trim().ToLowerInvariant();
             var correoSecundario = (SolCorreo2 ?? string.Empty).Trim().ToLowerInvariant();
             var requiereRuc = tipoPersona == "JURIDICA" || SolTieneRuc;
@@ -281,29 +276,6 @@ namespace Simetric.Models
                 yield return new ValidationResult(
                     "Seleccione un sexo valido.",
                     new[] { nameof(SolSexo) });
-            }
-
-            if (!EsCelularEcuatorianoValido(telefonoPrincipal))
-            {
-                yield return new ValidationResult(
-                    "Ingrese un celular principal valido de 10 digitos que empiece con 09.",
-                    new[] { nameof(SolTelefono1) });
-            }
-
-            if (!string.IsNullOrWhiteSpace(telefonoSecundario) &&
-                !EsTelefonoSecundarioValido(telefonoSecundario))
-            {
-                yield return new ValidationResult(
-                    "El telefono secundario debe ser un celular o convencional ecuatoriano valido.",
-                    new[] { nameof(SolTelefono2) });
-            }
-
-            if (!string.IsNullOrWhiteSpace(telefonoSecundario) &&
-                telefonoSecundario == telefonoPrincipal)
-            {
-                yield return new ValidationResult(
-                    "El telefono secundario debe ser diferente al celular principal.",
-                    new[] { nameof(SolTelefono2) });
             }
 
             if (!string.IsNullOrWhiteSpace(correoSecundario) &&
@@ -507,12 +479,6 @@ namespace Simetric.Models
 
             return Regex.IsMatch(direccion, @"^[\p{L}\d#.,\-\/() ]+$");
         }
-
-        private static bool EsCelularEcuatorianoValido(string telefono)
-            => Regex.IsMatch(telefono, @"^09\d{8}$");
-
-        private static bool EsTelefonoSecundarioValido(string telefono)
-            => Regex.IsMatch(telefono, @"^(09\d{8}|0[2-7]\d{7})$");
 
         private static bool EsCedulaEcuatorianaValida(string cedula)
         {

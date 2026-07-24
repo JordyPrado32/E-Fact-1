@@ -599,14 +599,14 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
             return "Cliente";
 
         if (!string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial))
-            return cliente.Nombrerazonsocial.Trim();
+            return FormatearTextoCasing(cliente.Nombrerazonsocial);
 
         var nombre = $"{cliente.Nombres} {cliente.Apellidos}".Trim();
         if (!string.IsNullOrWhiteSpace(nombre))
-            return nombre;
+            return FormatearTextoCasing(nombre);
 
         if (!string.IsNullOrWhiteSpace(cliente.Nombrecomercial))
-            return cliente.Nombrecomercial.Trim();
+            return FormatearTextoCasing(cliente.Nombrecomercial);
 
         return "Cliente";
     }
@@ -648,7 +648,7 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
                 NotaAutorizada(nota.Autorizado),
                 nota.NumAutorizacion,
                 nota.CodClave),
-            EmisorNombre = view.Emisor?.RazonSocial ?? "EMISOR",
+            EmisorNombre = FormatearTextoCasing(view.Emisor?.RazonSocial ?? "EMISOR"),
             EmisorSecundario = $"RUC: {view.Emisor?.Ruc ?? "-"}",
             TituloItems = "Ajustes",
             Bloques =
@@ -915,17 +915,5 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
     }
 
     private static string FormatearTextoCasing(string? valor)
-    {
-        if (string.IsNullOrWhiteSpace(valor))
-            return "-";
-
-        var trim = valor.Trim();
-        bool tieneMinusculas = trim.Any(char.IsLower);
-        if (tieneMinusculas)
-            return trim;
-
-        var palabras = trim.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var palabrasCapitalizadas = palabras.Select(p => p.Length == 1 ? p.ToUpperInvariant() : char.ToUpperInvariant(p[0]) + p[1..]);
-        return string.Join(' ', palabrasCapitalizadas);
-    }
+        => PdfTextCaseHelper.Formatear(valor);
 }

@@ -303,7 +303,7 @@ public sealed class RetencionPdfService : IRetencionPdfService
             .Column(column =>
             {
                 column.Spacing(2);
-                column.Item().Element(item => ComponerDatoLineaA4(item, "Emisor:", emisor?.RazonSocial ?? "EMISOR"));
+                column.Item().Element(item => ComponerDatoLineaA4(item, "Emisor:", FormatearTextoCasing(emisor?.RazonSocial ?? "EMISOR")));
                 column.Item().Element(item => ComponerDatoLineaA4(item, "RUC:", emisor?.Ruc));
                 column.Item().Element(item => ComponerDatoLineaA4(item, "Matriz:", emisor?.DireccionMatriz ?? emisor?.Direccion));
 
@@ -493,13 +493,13 @@ public sealed class RetencionPdfService : IRetencionPdfService
                         .FitWidth();
                 }
 
-                column.Item().PaddingTop(logoSistema != null ? 8 : 0).Text(emisor?.RazonSocial ?? "EMISOR")
+                column.Item().PaddingTop(logoSistema != null ? 8 : 0).Text(FormatearTextoCasing(emisor?.RazonSocial ?? "EMISOR"))
                     .FontSize(16)
                     .SemiBold()
                     .FontColor(Colors.Blue.Darken3);
 
                 if (!string.IsNullOrWhiteSpace(emisor?.NomComercial))
-                    column.Item().PaddingTop(4).Text($"Nombre comercial: {emisor.NomComercial}").FontColor(Colors.Grey.Darken2);
+                    column.Item().PaddingTop(4).Text($"Nombre comercial: {FormatearTextoCasing(emisor.NomComercial)}").FontColor(Colors.Grey.Darken2);
 
                 if (!string.IsNullOrWhiteSpace(emisor?.Ruc))
                     column.Item().PaddingTop(2).Text($"RUC: {emisor.Ruc}").FontColor(Colors.Grey.Darken2);
@@ -741,7 +741,7 @@ public sealed class RetencionPdfService : IRetencionPdfService
     private static string ObtenerNombreProveedor(RetencionGeneradaDetalleViewDto view)
     {
         if (!string.IsNullOrWhiteSpace(view.Proveedor?.nombre))
-            return view.Proveedor.nombre.Trim();
+            return FormatearTextoCasing(view.Proveedor.nombre);
 
         var nombre = string.Join(" ", new[]
         {
@@ -752,9 +752,12 @@ public sealed class RetencionPdfService : IRetencionPdfService
         }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
 
         return !string.IsNullOrWhiteSpace(nombre)
-            ? nombre
+            ? FormatearTextoCasing(nombre)
             : (view.RetencionInfo.IdCliente ?? "Proveedor");
     }
+
+    private static string FormatearTextoCasing(string? valor)
+        => PdfTextCaseHelper.Formatear(valor);
 
     private static bool MostrarNumeroAutorizacion(string? numeroAutorizacion)
         => !string.IsNullOrWhiteSpace(numeroAutorizacion);
@@ -890,7 +893,7 @@ public sealed class RetencionPdfService : IRetencionPdfService
                 estaAutorizada,
                 view.RetencionInfo.NumAutorizacion,
                 view.RetencionInfo.Clave),
-            EmisorNombre = view.Emisor?.RazonSocial ?? "EMISOR",
+            EmisorNombre = FormatearTextoCasing(view.Emisor?.RazonSocial ?? "EMISOR"),
             EmisorSecundario = $"RUC: {view.Emisor?.Ruc ?? "-"}",
             TituloItems = "Retenciones",
             Bloques =

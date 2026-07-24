@@ -46,7 +46,6 @@ namespace Simetric.ViewModels
         [StringLength(200, ErrorMessage = "La direccion no puede superar los 200 caracteres.")]
         public string? DireccionEmpresa { get; set; }
 
-        [RegularExpression(@"^09\d{8}$", ErrorMessage = "El celular debe tener 10 digitos y empezar con 09.")]
         public string? Celular { get; set; }
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
@@ -69,8 +68,6 @@ namespace Simetric.ViewModels
                 yield return new ValidationResult("La identificacion es obligatoria.", new[] { nameof(Identificacion) });
             if (string.IsNullOrWhiteSpace(DireccionEmpresa))
                 yield return new ValidationResult("La direccion es obligatoria.", new[] { nameof(DireccionEmpresa) });
-            if (string.IsNullOrWhiteSpace(Celular))
-                yield return new ValidationResult("El celular es obligatorio.", new[] { nameof(Celular) });
         }
     }
 

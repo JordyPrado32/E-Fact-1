@@ -248,7 +248,6 @@ public class ContribuyenteUpsertDto : IValidatableObject
     public string? Direccion { get; set; }
     public string? Telefonoconvencional { get; set; }
 
-    [Required(ErrorMessage = "El celular es obligatorio")]
     public string? Celular { get; set; }
 
     [Required(ErrorMessage = "El correo electrónico es obligatorio")]
@@ -347,14 +346,5 @@ public class ContribuyenteUpsertDto : IValidatableObject
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(Telefonoconvencional) && !System.Text.RegularExpressions.Regex.IsMatch(Telefonoconvencional, @"^\d{7,10}$"))
-        {
-            yield return new ValidationResult("El teléfono convencional debe tener entre 7 y 10 dígitos.", new[] { nameof(Telefonoconvencional) });
-        }
-
-        if (!string.IsNullOrWhiteSpace(Celular) && !System.Text.RegularExpressions.Regex.IsMatch(Celular, @"^\d{10}$"))
-        {
-            yield return new ValidationResult("El celular debe tener exactamente 10 dígitos.", new[] { nameof(Celular) });
-        }
     }
 }

@@ -1076,6 +1076,7 @@ public class NotaDebitoService
                 : null
         );
 
+        SriXmlSanitizer.Preparar(xml);
         return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" + Environment.NewLine + xml.ToString(SaveOptions.DisableFormatting);
     }
 

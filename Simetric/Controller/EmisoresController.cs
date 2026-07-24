@@ -371,9 +371,6 @@ namespace Simetric.Controllers
             if (!string.IsNullOrWhiteSpace(e.ClaveInterna) && e.ClaveInterna.Length > 25)
                 return "La clave interna no puede exceder 25 caracteres.";
 
-            if (string.IsNullOrWhiteSpace(e.Telefono))
-                return "El teléfono es obligatorio.";
-
             if (string.IsNullOrWhiteSpace(e.LlevaContabilidad))
                 return "Debe seleccionar si lleva contabilidad.";
 

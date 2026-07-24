@@ -1232,7 +1232,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
             ClaveAcceso = ObtenerTextoOGuion(factura.Codclave),
             AmbienteTexto = ObtenerAmbienteVisual(factura.Ambiente, facturaView.Emisor?.TipoAmbiente),
             TipoEmisionTexto = ObtenerTipoEmisionVisualFromEmisor(facturaView.Emisor?.TipoEmision),
-            EmisorNombre = facturaView.Emisor?.RazonSocial ?? "EMISOR",
+            EmisorNombre = FormatearTextoCasing(facturaView.Emisor?.RazonSocial ?? "EMISOR"),
             EmisorSecundario = $"RUC: {facturaView.Emisor?.Ruc ?? "-"}",
             TituloItems = "Items",
             Bloques =
@@ -1275,21 +1275,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
     }
 
     private static string FormatearTextoCasing(string? valor)
-    {
-        if (string.IsNullOrWhiteSpace(valor))
-            return "-";
-
-        var trim = valor.Trim();
-        bool tieneMinusculas = trim.Any(char.IsLower);
-        if (tieneMinusculas)
-        {
-            return trim;
-        }
-
-        var palabras = trim.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var palabrasCapitalizadas = palabras.Select(p => p.Length == 1 ? p.ToUpperInvariant() : char.ToUpperInvariant(p[0]) + p[1..]);
-        return string.Join(' ', palabrasCapitalizadas);
-    }
+        => PdfTextCaseHelper.Formatear(valor);
 
     private sealed class FacturaPdfLinea
     {

@@ -30,7 +30,7 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
         var archivo = _excelExportService.Create(
             $"reporte_documentos_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
             new ExcelSheetData(
-                "Documentos",
+                "DOCUMENTOS",
                 Array.Empty<string>(),
                 Array.Empty<IReadOnlyList<string>>(),
                 rows,
@@ -60,19 +60,19 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
             ]));
 
             rows.Add(new ExcelRowData([
-                new ExcelCellData("Fecha", 1),
-                new ExcelCellData("Tipo documento", 1),
-                new ExcelCellData("Numero", 1),
-                new ExcelCellData("Estado", 1),
-                new ExcelCellData("Tercero", 1),
-                new ExcelCellData("Identificacion", 1),
-                new ExcelCellData("Codigo", 1),
-                new ExcelCellData("Detalle", 1),
-                new ExcelCellData("Base Sin IVA", 1),
-                new ExcelCellData("Base Con IVA", 1),
+                new ExcelCellData("FECHA AUTORIZACION", 1),
+                new ExcelCellData("TIPO DOCUMENTO", 1),
+                new ExcelCellData("NUMERO", 1),
+                new ExcelCellData("ESTADO", 1),
+                new ExcelCellData("TERCERO", 1),
+                new ExcelCellData("IDENTIFICACION", 1),
+                new ExcelCellData("CODIGO", 1),
+                new ExcelCellData("DETALLE", 1),
+                new ExcelCellData("BASE SIN IVA", 1),
+                new ExcelCellData("BASE CON IVA", 1),
                 new ExcelCellData("IVA", 1),
-                new ExcelCellData("Total", 1),
-                new ExcelCellData("Numero autorizacion", 1)
+                new ExcelCellData("TOTAL", 1),
+                new ExcelCellData("NUMERO AUTORIZACION", 1)
             ]));
 
             foreach (var item in items)
@@ -155,12 +155,12 @@ public sealed class ReporteComprobantesExcelService : IReporteComprobantesExcelS
     private static string GetSectionTitle(string? tipoCodigo) => tipoCodigo switch
     {
         ReporteComprobantesTipos.Factura => "VENTAS",
-        ReporteComprobantesTipos.NotaCredito => "notas de credito",
-        ReporteComprobantesTipos.NotaDebito => "notas de debito",
-        ReporteComprobantesTipos.GuiaRemision => "guias de remision",
-        ReporteComprobantesTipos.Retencion => "retenciones",
-        ReporteComprobantesTipos.LiquidacionCompra => "liquidaciones de compra",
-        _ => "documentos"
+        ReporteComprobantesTipos.NotaCredito => "NOTAS DE CREDITO",
+        ReporteComprobantesTipos.NotaDebito => "NOTAS DE DEBITO",
+        ReporteComprobantesTipos.GuiaRemision => "GUIAS DE REMISION",
+        ReporteComprobantesTipos.Retencion => "RETENCIONES",
+        ReporteComprobantesTipos.LiquidacionCompra => "LIQUIDACIONES DE COMPRA",
+        _ => "DOCUMENTOS"
     };
 
     private static int GetSectionOrder(string? tipoCodigo) => tipoCodigo switch

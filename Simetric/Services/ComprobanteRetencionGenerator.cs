@@ -256,6 +256,7 @@ public class ComprobanteRetencionGenerator
 
         string rutaCompleta = Path.Combine(ruta, nombreArchivo);
 
+        SriXmlSanitizer.Preparar(doc);
         await Task.Run(() => doc.Save(rutaCompleta));
 
         return nombreArchivo;
