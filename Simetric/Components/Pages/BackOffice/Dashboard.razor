@@ -345,7 +345,9 @@
     private List<DotDto> graphDots = new();
     private string fillPoints = "";
     private string pointsString = "";
+    private List<ActivityDto> recentActivities = new();
     private List<ActivityDto> importantAlerts = new();
+    private List<ProvinciaStatsDto> provinciaStats = new();
     private List<PlatformStatsDto> plataformaStats = new();
 
 
@@ -412,38 +414,16 @@
             var ventasValidas = ventas
                 .Where(v => !string.Equals(v.Estado, "anulada", StringComparison.OrdinalIgnoreCase))
                 .ToList();
-
-            // Ajuste dinámico de fecha para ambientes de demo/pruebas
-            if (ventasValidas.Any())
-            {
-                var ultimaVenta = ventasValidas.OrderByDescending(v => v.Fecha).First();
-                var tieneVentasMesActual = ventasValidas.Any(v => v.Fecha.Year == hoy.Year && v.Fecha.Month == hoy.Month);
-                if (!tieneVentasMesActual)
-                {
-                    hoy = ultimaVenta.Fecha;
-                    inicioMes = new DateTime(hoy.Year, hoy.Month, 1);
-                    finMes = inicioMes.AddMonths(1);
-                    inicioMesDateOnly = DateOnly.FromDateTime(inicioMes);
-                    finMesDateOnly = DateOnly.FromDateTime(finMes.AddDays(-1));
-                }
-            }
-
             var ventasMesList = ventasValidas
                 .Where(v => v.Fecha >= inicioMes && v.Fecha < finMes)
+                .ToList();
+            var ventasMesPagadasList = ventasMesList
+                .Where(v => string.Equals(v.Estado, "pagada", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             var ventasDiaList = ventasValidas
                 .Where(v => v.Fecha.Date == hoy.Date)
                 .ToList();
-
-            // Si hoy no tiene ventas, retrocedemos al último día con ventas para evitar la pantalla vacía en demos
-            if (!ventasDiaList.Any() && ventasValidas.Any())
-            {
-                var ultimaVentaConValor = ventasValidas.OrderByDescending(v => v.Fecha).First();
-                hoy = ultimaVentaConValor.Fecha;
-                ventasDiaList = ventasValidas.Where(v => v.Fecha.Date == hoy.Date).ToList();
-            }
-
             ventasDia = ventasDiaList.Sum(v => v.Valor);
             ventasMes = ventasMesList.Sum(v => v.Valor);
             ventasDiaCount = ventasDiaList.Count;
@@ -500,23 +480,10 @@
                 .Where(EsSuscripcionActiva)
                 .ToList();
 
-            var serviciosActivosMap = await context.AppServicios
-                .AsNoTracking()
-                .Where(s => suscripcionesActivas.Select(sa => sa.ServicioId).Contains(s.ServicioId))
-                .ToDictionaryAsync(s => s.ServicioId);
-
-            var activeSubscriptionsMrr = 0m;
-            foreach (var s in suscripcionesActivas)
-            {
-                var plan = s.PlanActual ?? "";
-                if (plan.Contains("Premium", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 150m;
-                else if (plan.Contains("Básico", StringComparison.OrdinalIgnoreCase) || plan.Contains("Basic", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 25m;
-                else if (plan.Contains("Firma", StringComparison.OrdinalIgnoreCase) || plan.Contains("e-sign", StringComparison.OrdinalIgnoreCase)) activeSubscriptionsMrr += 15m;
-                else activeSubscriptionsMrr += 35m;
-            }
-
-            mrrVal = activeSubscriptionsMrr;
-            licenciasEFactActivas = suscripcionesActivas.Count(s => !EsSuscripcionESign(s, serviciosActivosMap));
+            mrrVal = ventasMesPagadasList
+                .Where(EsVentaRecurrente)
+                .Sum(v => v.Valor);
+            licenciasEFactActivas = suscripcionesActivas.Count(s => !EsPlanESign(s.PlanActual));
 
             // 4. Ingresos del mes (sin baseline)
             ingresosMesVal = ventasMes;
@@ -894,31 +861,7 @@
             {
                 Console.WriteLine($"Error general en el feed de actividad: {exOverall.Message}");
             }
-
-            // Si hay menos de 8 actividades totales, añadimos fallbacks realistas
-            if (activities.Count < 8)
-            {
-                var now = DateTime.Now;
-                var fallbacks = new List<ActivityDto>
-                {
-                    new("ri-refresh-line", "purple", "Suscripción renovada: Distribuidora Nova (e-fact)", "Hace 1 hora", now.AddHours(-1)),
-                    new("ri-hand-coin-line", "orange", "Pago recibido de Comercial Andina S.A. $450.00", "Hace 2 horas", now.AddHours(-2)),
-                    new("ri-file-warning-line", "red", "Nota de crédito emitida: NC 001-001-000000123", "Hace 3 horas", now.AddHours(-3)),
-                    new("ri-file-list-3-line", "blue", "Factura 001-001-000004567 emitida a Importadora del Pacífico", "Hace 4 horas", now.AddHours(-4)),
-                    new("ri-shopping-cart-2-line", "purple", "Compra registrada de Proveedora del Austro $1,200.00", "Hace 5 horas", now.AddHours(-5)),
-                    new("ri-file-shield-2-line", "yellow", "Retención emitida: RET 001-002-000008899 a TechSolutions", "Hace 6 horas", now.AddHours(-6)),
-                    new("ri-truck-line", "cyan", "Guía de remisión emitida: GR 001-010-000000222", "Hace 7 horas", now.AddHours(-7)),
-                    new("ri-hand-coin-line", "orange", "Pago recibido de Inmobiliaria del Sol $350.00", "Hace 8 horas", now.AddHours(-8))
-                };
-
-                foreach (var fb in fallbacks)
-                {
-                    if (activities.Count >= 8) break;
-                    activities.Add(fb);
-                }
-            }
-
-            importantAlerts = activities
+            recentActivities = activities
                 .OrderByDescending(a => a.DateVal)
                 .Take(8)
                 .ToList();
@@ -947,29 +890,7 @@
                     listProvincias.Add(new ProvinciaStatsDto(provName, group.Cantidad, Math.Round((double)group.Cantidad / totalProvincias * 100.0, 1)));
                 }
             }
-
-            if (listProvincias.Count == 0)
-            {
-                listProvincias.Add(new ProvinciaStatsDto("Pichincha (Quito)", 182, 47));
-                listProvincias.Add(new ProvinciaStatsDto("Guayas (Guayaquil)", 104, 27));
-                listProvincias.Add(new ProvinciaStatsDto("Azuay (Cuenca)", 35, 9));
-                listProvincias.Add(new ProvinciaStatsDto("Manabí (Manta)", 20, 5));
-                listProvincias.Add(new ProvinciaStatsDto("Resto del país", 45, 12));
-            }
-
-            plataformaStats = listProvincias
-                .OrderByDescending(p => p.Cantidad)
-                .Select((p, index) => new PlatformStatsDto(
-                    p.Nombre,
-                    p.Cantidad,
-                    p.Porcentaje,
-                    index switch
-                    {
-                        0 => "blue",
-                        1 => "green",
-                        _ => "purple"
-                    }))
-                .ToList();
+            provinciaStats = listProvincias.OrderByDescending(p => p.Cantidad).ToList();
         }
         catch (Exception ex)
         {
@@ -1040,25 +961,24 @@
             || value.Contains("esign", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool EsSuscripcionESign(
-        UsuarioServicioSuscripcion suscripcion,
-        IReadOnlyDictionary<int, AppServicio> serviciosMap)
+    private static bool EsVentaRecurrente(ReporteVentaBackOffice venta)
     {
-        if (EsPlanESign(suscripcion.PlanActual))
+        var producto = venta.Producto ?? string.Empty;
+        var plan = venta.PlanPaquete ?? string.Empty;
+        var texto = $"{producto} {plan}";
+
+        if (texto.Contains("firma", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("e-sign", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("esign", StringComparison.OrdinalIgnoreCase))
         {
-            return true;
+            return false;
         }
 
-        if (serviciosMap.TryGetValue(suscripcion.ServicioId, out var servicio))
-        {
-            var valor = $"{servicio.Clave} {servicio.Nombre} {servicio.Descripcion}";
-            return valor.Contains("firma", StringComparison.OrdinalIgnoreCase)
-                || valor.Contains("sign", StringComparison.OrdinalIgnoreCase)
-                || valor.Contains("rubrica", StringComparison.OrdinalIgnoreCase)
-                || valor.Contains("rúbrica", StringComparison.OrdinalIgnoreCase);
-        }
-
-        return false;
+        return producto.Contains("e-fact", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("suscripcion", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("suscripción", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("mensual", StringComparison.OrdinalIgnoreCase)
+            || texto.Contains("plan", StringComparison.OrdinalIgnoreCase);
     }
 
     private static DateTime CalcularExpiracion(UsuSolicitudFirma sol)

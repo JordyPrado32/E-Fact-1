@@ -10,7 +10,7 @@
 @inject IJSRuntime JS
 @inject NavigationManager NavManager
 
-<PageTitle>Reporte Vendedores - BackOffice</PageTitle>
+<PageTitle>Estadisticas Vendedores - BackOffice</PageTitle>
 
 <link href="css/reportes-compartido.css" rel="stylesheet" />
 
@@ -66,7 +66,7 @@
     <div class="report-header-card no-print animate__animated animate__fadeIn">
         <div class="report-header-top">
             <h2 class="report-page-title">
-                <i class="bi bi-person-vcard-fill" style="color:#1f9cff;"></i> Reporte Vendedores
+                <i class="bi bi-person-vcard-fill" style="color:#1f9cff;"></i> Estadisticas Vendedores
             </h2>
             <button type="button" class="btn-export" style="background:#1f9cff;" @onclick="DescargarReportePdf">
                 <i class="bi bi-file-earmark-pdf-fill"></i> Descargar PDF Directo
@@ -112,9 +112,9 @@
                     <div class="bo-kpi-card">
                         <div class="kpi-icon-container kpi-icon-teal"><i class="bi bi-people-fill"></i></div>
                         <div class="kpi-details">
-                            <span class="kpi-card-title">Vendedores</span>
-                            <strong class="kpi-card-value">@totalVendedoresConRegistros</strong>
-                            <span class="kpi-card-trend trend-neutral">Con registros en el rango</span>
+                            <span class="kpi-card-title">Vendedores activos</span>
+                            <strong class="kpi-card-value">@totalVendedoresActivos</strong>
+                            <span class="kpi-card-trend trend-neutral">Rol vendedor</span>
                         </div>
                     </div>
                     <div class="bo-kpi-card">
@@ -128,15 +128,15 @@
                     <div class="bo-kpi-card">
                         <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-bag-check-fill"></i></div>
                         <div class="kpi-details">
-                            <span class="kpi-card-title">Suscripciones / Planes</span>
+                            <span class="kpi-card-title">Compras generadas</span>
                             <strong class="kpi-card-value">@totalComprasVendedores</strong>
-                            <span class="kpi-card-trend trend-neutral">Compras en el sistema</span>
+                            <span class="kpi-card-trend trend-neutral">Ventas no anuladas</span>
                         </div>
                     </div>
                     <div class="bo-kpi-card">
                         <div class="kpi-icon-container kpi-icon-green"><i class="bi bi-currency-dollar"></i></div>
                         <div class="kpi-details">
-                            <span class="kpi-card-title">Total Recaudado</span>
+                            <span class="kpi-card-title">Total generado</span>
                             <strong class="kpi-card-value">$ @totalMontoVendedores.ToString("N2")</strong>
                             <span class="kpi-card-trend trend-up">Ingresos generados</span>
                         </div>
@@ -177,7 +177,47 @@
 
                 <div class="report-table-card" style="border-color:#0f1c3f;">
                     <div class="table-header-row" style="background:#0f1c3f;">
-                        <h4 class="table-title">Usuarios Registrados por Vendedor</h4>
+                        <h4 class="table-title">Desempeno por Vendedor</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead style="background:#0f1c3f;">
+                            <tr>
+                                <th>Vendedor</th>
+                                <th>Estado</th>
+                                <th>Clientes registrados</th>
+                                <th>Compras</th>
+                                <th>Monto generado</th>
+                                <th>Ticket promedio</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (vendedoresStatsPaginados.Any())
+                            {
+                                @foreach (var item in vendedoresStatsPaginados)
+                                {
+                                    <tr>
+                                        <td><strong>@item.Vendedor</strong></td>
+                                        <td>@(item.Activo ? "Activo" : "Bloqueado")</td>
+                                        <td>@item.ClientesRegistrados</td>
+                                        <td><span class="badge bg-secondary">@item.Compras</span></td>
+                                        <td><strong class="text-blue">$ @item.TotalGenerado.ToString("N2")</strong></td>
+                                        <td>$ @item.TicketPromedio.ToString("N2")</td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">No hay vendedores registrados.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="report-table-card" style="border-color:#0f1c3f;">
+                    <div class="table-header-row" style="background:#0f1c3f;">
+                        <h4 class="table-title">Clientes Registrados por Vendedor</h4>
                     </div>
                     <table class="bo-table">
                         <thead style="background:#0f1c3f;">
@@ -186,7 +226,7 @@
                                 <th>Cliente Registrado</th>
                                 <th>Correo</th>
                                 <th>Fecha Registro</th>
-                                <th>Planes Comprados</th>
+                                <th>Compras</th>
                                 <th>Total Gastado</th>
                             </tr>
                         </thead>
@@ -237,10 +277,11 @@
     private bool loading = true;
 
     private List<ReporteVendedorDto> reporteVendedoresList = new();
+    private List<VendedorStatsDto> vendedoresStatsList = new();
     private List<ChartItemDto> vendedoresChartData = new();
     private decimal maxVendedoresChart = 100;
 
-    private int totalVendedoresConRegistros = 0;
+    private int totalVendedoresActivos = 0;
     private int totalUsuariosPorVendedor = 0;
     private int totalComprasVendedores = 0;
     private decimal totalMontoVendedores = 0;
@@ -249,6 +290,7 @@
     private const int PageSize = 10;
     private int MaxPaginaVendedores => Math.Max(1, (int)Math.Ceiling(reporteVendedoresList.Count / (double)PageSize));
     private List<ReporteVendedorDto> reporteVendedoresPaginados => reporteVendedoresList.Skip(pageVendedores * PageSize).Take(PageSize).ToList();
+    private List<VendedorStatsDto> vendedoresStatsPaginados => vendedoresStatsList.Take(PageSize).ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -296,6 +338,7 @@
         try
         {
             await using var context = await DbFactory.CreateDbContextAsync();
+            var finExclusivo = fechaFin.Date.AddDays(1);
 
             var vendedores = await context.VendedoresBackOffice
                 .AsNoTracking()
@@ -303,18 +346,29 @@
                 .ToListAsync();
 
             var vendedoresIds = vendedores.Select(v => v.IdVendedor).ToList();
+            totalVendedoresActivos = vendedores.Count(v => v.Activo);
 
-            var usuariosVendedor = await context.Usuarios
+            var usuariosVendedorAll = await context.Usuarios
                 .AsNoTracking()
-                .Where(u => u.IdVendedor.HasValue && vendedoresIds.Contains(u.IdVendedor.Value) &&
-                            (!u.FechaCreacion.HasValue || (u.FechaCreacion.Value >= fechaInicio && u.FechaCreacion.Value <= fechaFin)))
+                .Where(u => u.IdVendedor.HasValue && vendedoresIds.Contains(u.IdVendedor.Value))
                 .OrderByDescending(u => u.FechaCreacion)
                 .ToListAsync();
 
+            var usuariosVendedor = usuariosVendedorAll
+                .Where(u => u.FechaCreacion.HasValue
+                    && u.FechaCreacion.Value >= fechaInicio.Date
+                    && u.FechaCreacion.Value < finExclusivo)
+                .ToList();
+
             var reportesBackOffice = await context.ReporteVentasBackOffice
                 .AsNoTracking()
-                .Where(r => r.Fecha >= fechaInicio && r.Fecha <= fechaFin)
+                .Where(r => r.Fecha >= fechaInicio.Date &&
+                            r.Fecha < finExclusivo)
                 .ToListAsync();
+
+            reportesBackOffice = reportesBackOffice
+                .Where(r => !string.Equals(r.Estado, "anulada", StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
             reporteVendedoresList = usuariosVendedor
                 .Select(usuario =>
@@ -341,28 +395,39 @@
                 .ThenBy(x => x.Vendedor)
                 .ToList();
 
-            totalVendedoresConRegistros = reporteVendedoresList
-                .Where(x => x.TotalComprado > 0)
-                .Select(x => x.IdVendedor)
-                .Distinct()
-                .Count();
+            vendedoresStatsList = vendedores
+                .Select(vendedor =>
+                {
+                    var clientesRegistrados = usuariosVendedor.Count(u => u.IdVendedor == vendedor.IdVendedor);
+                    var usuariosAfiliados = usuariosVendedorAll.Where(u => u.IdVendedor == vendedor.IdVendedor).ToList();
+                    var ventas = reportesBackOffice
+                        .Where(r => usuariosAfiliados.Any(u => CoincideClienteReporte(u, r.Cliente)))
+                        .ToList();
+                    var monto = ventas.Sum(v => v.Valor);
 
-            // Default to count of all unique active sellers if total is 0
-            if (totalVendedoresConRegistros == 0)
-            {
-                totalVendedoresConRegistros = reporteVendedoresList
-                    .Select(x => x.IdVendedor)
-                    .Distinct()
-                    .Count();
-            }
+                    return new VendedorStatsDto
+                    {
+                        IdVendedor = vendedor.IdVendedor,
+                        Vendedor = vendedor.Nombre,
+                        Activo = vendedor.Activo,
+                        ClientesRegistrados = clientesRegistrados,
+                        Compras = ventas.Count,
+                        TotalGenerado = monto,
+                        TicketPromedio = ventas.Count == 0 ? 0m : monto / ventas.Count
+                    };
+                })
+                .OrderByDescending(v => v.TotalGenerado)
+                .ThenByDescending(v => v.Compras)
+                .ThenBy(v => v.Vendedor)
+                .ToList();
 
             totalUsuariosPorVendedor = reporteVendedoresList.Count;
-            totalComprasVendedores = reporteVendedoresList.Sum(x => x.Compras);
-            totalMontoVendedores = reporteVendedoresList.Sum(x => x.TotalComprado);
+            totalComprasVendedores = vendedoresStatsList.Sum(x => x.Compras);
+            totalMontoVendedores = vendedoresStatsList.Sum(x => x.TotalGenerado);
 
-            vendedoresChartData = reporteVendedoresList
+            vendedoresChartData = vendedoresStatsList
                 .GroupBy(x => x.Vendedor)
-                .Select(g => new ChartItemDto { Etiqueta = g.Key, Valor = g.Sum(x => x.TotalComprado) })
+                .Select(g => new ChartItemDto { Etiqueta = g.Key, Valor = g.Sum(x => x.TotalGenerado) })
                 .OrderByDescending(x => x.Valor)
                 .Take(5)
                 .ToList();
@@ -451,5 +516,16 @@
     {
         var filename = $"Reporte_Vendedores_{DateTime.Now:yyyyMMdd_HHmm}.pdf";
         await JS.InvokeVoidAsync("window.downloadPdfReport", "report-view-area", filename);
+    }
+
+    private sealed class VendedorStatsDto
+    {
+        public int IdVendedor { get; set; }
+        public string Vendedor { get; set; } = "";
+        public bool Activo { get; set; }
+        public int ClientesRegistrados { get; set; }
+        public int Compras { get; set; }
+        public decimal TotalGenerado { get; set; }
+        public decimal TicketPromedio { get; set; }
     }
 }
