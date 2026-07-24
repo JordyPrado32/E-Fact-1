@@ -13,6 +13,7 @@
 @inject EmisorOnboardingService EmisorOnboardingService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject VendedorBackOfficeService VendedorBackOfficeService
 
 <div class="bo-page">
     <aside class="bo-layout-sidebar">
@@ -107,8 +108,10 @@
             var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(ClaimTypes.Role)?.Value;
             var tipoCliente = user.FindFirst("TipoCliente")?.Value;
             var idUsuarioStr = user.FindFirst("IdUsuario")?.Value;
-            if (int.TryParse(idUsuarioStr, out var idUsuario))
+            var idUsuario = 0;
+            if (int.TryParse(idUsuarioStr, out var parsedIdUsuario))
             {
+                idUsuario = parsedIdUsuario;
                 using var context = await DbFactory.CreateDbContextAsync();
                 var dbUser = await context.Usuarios.FindAsync(idUsuario);
                 if (dbUser != null)
@@ -121,7 +124,14 @@
                        string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
             bool esContador = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
                               string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase);
-            userRoleLabel = esV ? "Vendedor" : esContador ? "Cobranzas" : role == "7" ? "Administrador" : "Usuario";
+            var tienePerfilVendedor = idUsuario > 0 && await VendedorBackOfficeService.TienePerfilUsuarioAsync(idUsuario);
+            var puedeUsarHerramientasVendedor = esV || tienePerfilVendedor;
+            userRoleLabel = puedeUsarHerramientasVendedor && esContador
+                ? "Cobranzas y ventas"
+                : puedeUsarHerramientasVendedor ? "Vendedor"
+                : esContador ? "Cobranzas"
+                : role == "7" ? "Administrador"
+                : "Usuario";
 
             if (!string.IsNullOrWhiteSpace(userDisplayName))
             {
@@ -257,8 +267,28 @@
                        string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
             bool esContador = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
                               string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase);
-                       
-            if (esV)
+            var tienePerfilVendedor = idUsuario > 0 && await VendedorBackOfficeService.TienePerfilUsuarioAsync(idUsuario);
+            var puedeUsarHerramientasVendedor = esV || tienePerfilVendedor;
+
+            if (esContador && puedeUsarHerramientasVendedor)
+            {
+                var relativePath = NavManager.ToBaseRelativePath(NavManager.Uri).ToLowerInvariant();
+                var pathNoQuery = relativePath.Split('?', '#')[0];
+                bool isAllowed = pathNoQuery.StartsWith("backoffice/ventas") ||
+                                 pathNoQuery.StartsWith("backoffice/precios-recargas") ||
+                                 pathNoQuery.StartsWith("backoffice/vendedores") ||
+                                 pathNoQuery.StartsWith("backoffice/cobros") ||
+                                 pathNoQuery.StartsWith("backoffice/mis-facturas") ||
+                                 pathNoQuery.StartsWith("backoffice/mis-facturas-backoffice") ||
+                                 pathNoQuery.StartsWith("backoffice/mis-notas-credito") ||
+                                 pathNoQuery.StartsWith("backoffice/mis-notas-credito-backoffice") ||
+                                 pathNoQuery.StartsWith("backoffice/perfil");
+                if (!isAllowed)
+                {
+                    NavManager.NavigateTo("/backoffice/cobros");
+                }
+            }
+            else if (puedeUsarHerramientasVendedor)
             {
                 var relativePath = NavManager.ToBaseRelativePath(NavManager.Uri).ToLowerInvariant();
                 // Strip query parameters

@@ -146,6 +146,38 @@ public sealed class VendedorBackOfficeService
         await ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);
     }
 
+    public async Task<bool> TienePerfilUsuarioAsync(int idUsuario)
+    {
+        await EnsureSchemaAsync();
+        if (idUsuario <= 0)
+            return false;
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var codigo = $"usr_{idUsuario}";
+
+        if (await context.VendedoresBackOffice
+            .AsNoTracking()
+            .AnyAsync(x =>
+                !x.EsSistema &&
+                (x.CodigoReferencia == codigo || x.IdUsuarioCreacion == idUsuario)))
+        {
+            return true;
+        }
+
+        var idVendedorUsuario = await context.Usuarios
+            .AsNoTracking()
+            .Where(x => x.IdUsuario == idUsuario)
+            .Select(x => x.IdVendedor)
+            .FirstOrDefaultAsync();
+
+        if (!idVendedorUsuario.HasValue)
+            return false;
+
+        return await context.VendedoresBackOffice
+            .AsNoTracking()
+            .AnyAsync(x => !x.EsSistema && x.IdVendedor == idVendedorUsuario.Value);
+    }
+
     public async Task<VendedorBackOffice?> ObtenerPerfilUsuarioAsync(int idUsuario, string? nombreCompleto = null)
     {
         await EnsureSchemaAsync();

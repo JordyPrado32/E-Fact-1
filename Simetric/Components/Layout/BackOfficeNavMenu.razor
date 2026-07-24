@@ -11,6 +11,7 @@
 @inject EmisorOnboardingService EmisorOnboardingService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject VendedorBackOfficeService VendedorBackOfficeService
 @implements IDisposable
 
 <div class="bo-sidebar">  
@@ -31,7 +32,7 @@
             </div>
         }
 
-        @if (esVendedor)
+        @if (puedeUsarHerramientasVendedor)
         {
             <div class="bo-nav-item">
                 <NavLink class="bo-menu-link" href="/backoffice/ventas" Match="NavLinkMatch.Prefix" @onclick="NotifyNavigate">
@@ -52,7 +53,7 @@
                 </NavLink>
             </div>
         }
-        else if (esContador)
+        @if (esContador)
         {
             <div class="bo-nav-item">
                 <NavLink class="bo-menu-link" href="/backoffice/mis-facturas-backoffice" Match="NavLinkMatch.Prefix" @onclick="NotifyNavigate">
@@ -85,7 +86,7 @@
                 </NavLink>
             </div>
         }
-        else
+        @if (!puedeUsarHerramientasVendedor && !esContador)
         {
             <div class="bo-nav-item">
                 <NavLink class="bo-menu-link" href="/backoffice" Match="NavLinkMatch.All" @onclick="NotifyNavigate">
@@ -261,6 +262,8 @@
     private bool _cerrandoSesion;
     private bool esVendedor;
     private bool esContador;
+    private bool tienePerfilVendedor;
+    private bool puedeUsarHerramientasVendedor;
     private bool puedeCambiarServicio;
     private int solicitudesDocumentosPendientes;
 
@@ -280,8 +283,10 @@
             var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(ClaimTypes.Role)?.Value;
             var tipoCliente = user.FindFirst("TipoCliente")?.Value;
             var idUsuarioStr = user.FindFirst("IdUsuario")?.Value;
-            if (int.TryParse(idUsuarioStr, out var idUsuario))
+            var idUsuario = 0;
+            if (int.TryParse(idUsuarioStr, out var parsedIdUsuario))
             {
+                idUsuario = parsedIdUsuario;
                 using var context = await DbFactory.CreateDbContextAsync();
                 var dbUser = await context.Usuarios.FindAsync(idUsuario);
                 if (dbUser != null)
@@ -292,10 +297,18 @@
             }
             esVendedor = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) && string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase);
             esContador = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) && string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase);
+            tienePerfilVendedor = idUsuario > 0 && await VendedorBackOfficeService.TienePerfilUsuarioAsync(idUsuario);
+            puedeUsarHerramientasVendedor = esVendedor || tienePerfilVendedor;
             puedeCambiarServicio = string.Equals(role, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase);
-            userRoleLabel = esVendedor ? "Vendedor" : esContador ? "Cobranzas" : role == "2" ? "Super Admin" : role == "7" ? "Administrador" : "Usuario";
+            userRoleLabel = puedeUsarHerramientasVendedor && esContador
+                ? "Cobranzas y ventas"
+                : puedeUsarHerramientasVendedor ? "Vendedor"
+                : esContador ? "Cobranzas"
+                : role == "2" ? "Super Admin"
+                : role == "7" ? "Administrador"
+                : "Usuario";
 
-            if (!esVendedor)
+            if (esContador || !puedeUsarHerramientasVendedor)
             {
                 await CargarSolicitudesDocumentosPendientesAsync();
             }
