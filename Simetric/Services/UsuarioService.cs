@@ -60,18 +60,16 @@ namespace Simetric.Services
             // Esto guardará algo como "Images/Avatars/geek.png"
             usuarioDb.AvatarUrl = modelo.AvatarUrl;
 
-            // 2. La fecha de nacimiento ahora puede actualizarse desde el perfil.
-            usuarioDb.FechaNacimiento = modelo.FechaNacimiento?.Date;
             usuarioDb.TipoCliente = modelo.TipoCliente;
 
-            // 3. Lógica de Password usando SecurityHelper
+            // 2. Lógica de Password usando SecurityHelper
             if (!string.IsNullOrWhiteSpace(modelo.NuevaPassword))
             {
                 usuarioDb.PasswordHash = SecurityHelper.HashPassword(modelo.NuevaPassword);
                 usuarioDb.ClaveTemporal = false;
             }
 
-            // 4. Persistencia
+            // 3. Persistencia
             context.Usuarios.Update(usuarioDb);
             return await context.SaveChangesAsync() > 0;
         }
