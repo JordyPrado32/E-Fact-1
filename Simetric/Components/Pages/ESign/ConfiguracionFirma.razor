@@ -1,0 +1,437 @@
+@page "/e-sign/configuracion/firma"
+@rendermode InteractiveServer
+@using System.Net.Http.Json
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Hosting
+@using Simetric.Services
+@using Simetric.Services.ESign
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment HostEnvironment
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Firma, clave y logo | E-Rúbrica</PageTitle>
+
+<div class="esign-config-page">
+    @if (cargando)
+    {
+        <div class="esign-state">
+            <span class="spinner-border" role="status"></span>
+            <h3>Cargando configuracion</h3>
+        </div>
+    }
+    else
+    {
+        <header class="esign-config-header">
+            <div>
+                <span class="header-kicker">E-Rúbrica</span>
+                <h1>Firma, clave y logo</h1>
+                <p>La configuracion existente de E-Fact se carga automaticamente; completa solo los datos pendientes.</p>
+            </div>
+            <button class="btn-back" @onclick='() => NavManager.NavigateTo("/e-sign")'>
+                <i class="bi bi-arrow-left"></i>
+                <span>Volver</span>
+            </button>
+        </header>
+
+        @if (!emisores.Any())
+        {
+            <section class="config-empty">
+                <i class="bi bi-building-x"></i>
+                <h3>No hay emisores activos</h3>
+                <p>Primero registra un emisor en E-Fact para poder clonar firma, clave y logo.</p>
+                <button type="button" class="esign-btn-primary" @onclick='() => NavManager.NavigateTo("/emisor")'>
+                    <i class="bi bi-building"></i>
+                    <span>Ir a emisor</span>
+                </button>
+            </section>
+        }
+        else
+        {
+            <section class="config-grid">
+                <aside class="config-emisores">
+                    <span class="header-kicker">Emisor</span>
+                    @foreach (var emisor in emisores)
+                    {
+                        <button type="button"
+                                class="emisor-option @(modelo.Codigo == emisor.Codigo ? "is-active" : null)"
+                                @onclick="() => SeleccionarEmisor(emisor)">
+                            <strong>@GetNombreEmisor(emisor)</strong>
+                            <span>@(string.IsNullOrWhiteSpace(emisor.Ruc) ? "Sin RUC" : emisor.Ruc)</span>
+                        </button>
+                    }
+                </aside>
+
+                <EditForm Model="modelo" OnValidSubmit="GuardarAsync" class="config-form">
+                    <div class="config-form-head">
+                        <div>
+                            <span class="header-kicker">Configuracion activa</span>
+                            <h3>@GetNombreModelo()</h3>
+                        </div>
+                        <span class="status-pill @(ConfiguracionCompleta ? "is-ready" : "is-pending")">
+                            @(ConfiguracionCompleta ? "Completa" : "Pendiente")
+                        </span>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(mensaje))
+                    {
+                        <div class="status-banner @(esError ? "status-error" : "status-ok")">
+                            <i class="bi @(esError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                            <span>@mensaje</span>
+                        </div>
+                    }
+
+                    <div class="field-grid">
+                        <label class="config-upload-card @(TieneCertificado ? "is-ready" : "is-missing")">
+                            <InputFile class="upload-input" accept=".p12" OnChange="SubirP12Async" />
+                            <span class="upload-card-icon"><i class="bi bi-file-earmark-lock"></i></span>
+                            <span class="upload-card-main">
+                                <strong>Firma .p12</strong>
+                                <small>@NombreCertificado</small>
+                            </span>
+                            <span class="upload-card-status">@(TieneCertificado ? "Cargada" : "Pendiente")</span>
+                        </label>
+
+                        <div class="config-password-card @(TieneClave ? "is-ready" : "is-missing")">
+                            <div class="password-card-head">
+                                <span class="upload-card-icon"><i class="bi bi-key"></i></span>
+                                <span>
+                                    <strong>Clave de firma</strong>
+                                    <small>@(TieneClave ? "Clave disponible" : "Pendiente")</small>
+                                </span>
+                            </div>
+                            <input type="password"
+                                   @bind="modelo.ClaveCertificado"
+                                   placeholder="Escribe una nueva clave solo si quieres actualizarla"
+                                   autocomplete="new-password" />
+                            <small>@(tieneClaveGuardada && string.IsNullOrWhiteSpace(modelo.ClaveCertificado) ? "Ya existe una clave guardada en E-Fact." : "Esta clave se guardara para este emisor.")</small>
+                        </div>
+
+                        <label class="config-upload-card @(TieneLogo ? "is-ready" : "is-missing")">
+                            <InputFile class="upload-input" accept="image/jpeg,image/png,.jpg,.jpeg,.png" OnChange="SubirLogoAsync" />
+                            <span class="upload-card-icon"><i class="bi bi-image"></i></span>
+                            <span class="upload-card-main">
+                                <strong>Logo de empresa</strong>
+                                <small>@NombreLogo</small>
+                            </span>
+                            <span class="upload-card-status">@(TieneLogo ? "Cargado" : "Pendiente")</span>
+                        </label>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(modelo.LogoImagen))
+                    {
+                        <div class="logo-preview">
+                            <img src="@modelo.LogoImagen" alt="Logo de empresa" />
+                        </div>
+                    }
+
+                    <div class="form-actions">
+                        <button type="submit" class="esign-btn-primary" disabled="@guardando">
+                            <i class="bi bi-save"></i>
+                            <span>@(guardando ? "Guardando..." : "Guardar configuracion")</span>
+                        </button>
+                    </div>
+                </EditForm>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private const long MaxCertificadoSize = 5 * 1024 * 1024;
+    private const long MaxLogoSize = 2 * 1024 * 1024;
+    private bool cargando = true;
+    private bool guardando;
+    private bool esError;
+    private bool tieneClaveGuardada;
+    private string? mensaje;
+    private string? certificadoSeleccionado;
+    private string? logoSeleccionado;
+    private int currentUserId;
+    private readonly List<EmisorDto> emisores = new();
+    private EmisorDto? emisorSeleccionado;
+    private EmisorUpsertDto modelo = new();
+
+    private bool ConfiguracionCompleta =>
+        TieneCertificado && TieneClave && TieneLogo;
+
+    private bool TieneCertificado => !string.IsNullOrWhiteSpace(modelo.PathCertificado);
+
+    private bool TieneClave => tieneClaveGuardada || !string.IsNullOrWhiteSpace(modelo.ClaveCertificado);
+
+    private bool TieneLogo => !string.IsNullOrWhiteSpace(modelo.LogoImagen);
+
+    private string NombreCertificado =>
+        certificadoSeleccionado
+        ?? ObtenerNombreArchivo(modelo.PathCertificado)
+        ?? "Ningun .p12 seleccionado";
+
+    private string NombreLogo =>
+        logoSeleccionado
+        ?? (!string.IsNullOrWhiteSpace(modelo.LogoImagen) ? "Logo actual cargado" : "Ningun logo seleccionado");
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true ||
+            !int.TryParse(user.FindFirst("IdUsuario")?.Value, out currentUserId) ||
+            currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(currentUserId, ESignRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        await CargarEmisoresAsync();
+        cargando = false;
+    }
+
+    private async Task CargarEmisoresAsync()
+    {
+        emisores.Clear();
+        var data = await Http.GetFromJsonAsync<List<EmisorDto>>($"api/emisores?idUsuario={currentUserId}") ?? new();
+        emisores.AddRange(data.Where(e => e.Estado != false));
+        SeleccionarEmisor(emisores.FirstOrDefault());
+    }
+
+    private void SeleccionarEmisor(EmisorDto? emisor)
+    {
+        emisorSeleccionado = emisor;
+        certificadoSeleccionado = null;
+        logoSeleccionado = null;
+        mensaje = null;
+
+        modelo = emisor is null ? new EmisorUpsertDto() : CrearModeloDesdeEmisor(emisor);
+        tieneClaveGuardada = emisor?.TieneClaveCertificadoConfigurada == true;
+        if (ConfiguracionCompleta)
+        {
+            SetMensaje("Configuracion cargada automaticamente desde E-Fact.", false);
+        }
+    }
+
+    private async Task GuardarAsync()
+    {
+        if (modelo.Codigo <= 0)
+            return;
+
+        if (string.IsNullOrWhiteSpace(modelo.PathCertificado))
+        {
+            SetMensaje("Debes cargar o clonar la firma .p12.", true);
+            return;
+        }
+
+        if (!tieneClaveGuardada && string.IsNullOrWhiteSpace(modelo.ClaveCertificado))
+        {
+            SetMensaje("Debes ingresar la clave de la firma.", true);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(modelo.LogoImagen))
+        {
+            SetMensaje("Debes cargar o clonar el logo de empresa.", true);
+            return;
+        }
+
+        guardando = true;
+        try
+        {
+            modelo.IdUsuario = currentUserId;
+            modelo.ClaveCertificado = modelo.ClaveCertificado?.Trim();
+            var response = await Http.PutAsJsonAsync($"api/emisores/{modelo.Codigo}", modelo);
+            if (!response.IsSuccessStatusCode)
+            {
+                SetMensaje(await response.Content.ReadAsStringAsync(), true);
+                return;
+            }
+
+            await CargarEmisoresAsync();
+            SetMensaje("Configuracion de E-Rúbrica guardada correctamente.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMensaje(ex.Message, true);
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task SubirP12Async(InputFileChangeEventArgs e)
+    {
+        if (e.FileCount != 1)
+        {
+            SetMensaje("Selecciona un solo archivo .p12.", true);
+            return;
+        }
+
+        var file = e.File;
+        if (!string.Equals(Path.GetExtension(file.Name), ".p12", StringComparison.OrdinalIgnoreCase))
+        {
+            SetMensaje("Solo se permiten archivos .p12.", true);
+            return;
+        }
+
+        if (file.Size <= 0 || file.Size > MaxCertificadoSize)
+        {
+            SetMensaje("El archivo .p12 debe pesar hasta 5 MB.", true);
+            return;
+        }
+
+        var relativePath = $"certs/path/{Guid.NewGuid():N}.p12";
+        var physicalPath = Path.Combine(HostEnvironment.ContentRootPath, "App_Data", relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(physicalPath)!);
+
+        await using var source = file.OpenReadStream(MaxCertificadoSize);
+        await using var target = File.Create(physicalPath);
+        await source.CopyToAsync(target);
+
+        modelo.PathCertificado = relativePath;
+        certificadoSeleccionado = file.Name;
+        SetMensaje("Firma .p12 cargada. Guarda para confirmar.", false);
+    }
+
+    private async Task SubirLogoAsync(InputFileChangeEventArgs e)
+    {
+        if (e.FileCount != 1)
+        {
+            SetMensaje("Selecciona un solo logo.", true);
+            return;
+        }
+
+        var file = e.File;
+        var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
+        if (extension is not ".jpg" and not ".jpeg" and not ".png")
+        {
+            SetMensaje("Solo se permiten logos JPG, JPEG o PNG.", true);
+            return;
+        }
+
+        var contentType = (file.ContentType ?? string.Empty).ToLowerInvariant();
+        if (contentType is not "image/jpeg" and not "image/png")
+        {
+            SetMensaje("El logo seleccionado no tiene un formato valido.", true);
+            return;
+        }
+
+        if (file.Size <= 0 || file.Size > MaxLogoSize)
+        {
+            SetMensaje("El logo debe pesar hasta 2 MB.", true);
+            return;
+        }
+
+        await using var stream = file.OpenReadStream(MaxLogoSize);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        var result = LogoImageProcessor.Normalize(ms.ToArray(), contentType);
+
+        modelo.LogoImagen = $"data:{result.ContentType};base64,{Convert.ToBase64String(result.Bytes)}";
+        logoSeleccionado = file.Name;
+        SetMensaje("Logo cargado correctamente. Guarda para confirmar.", false);
+    }
+
+    private void SetMensaje(string texto, bool error)
+    {
+        mensaje = string.IsNullOrWhiteSpace(texto) ? null : texto.Trim('"', ' ', '\r', '\n');
+        esError = error;
+    }
+
+    private string GetNombreModelo() =>
+        FirstFilled(modelo.NomComercial, modelo.RazonSocial, $"Emisor #{modelo.Codigo}");
+
+    private static string GetNombreEmisor(EmisorDto emisor) =>
+        FirstFilled(emisor.NomComercial, emisor.RazonSocial, $"Emisor #{emisor.Codigo}");
+
+    private static string FirstFilled(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string? ObtenerNombreArchivo(string? rutaArchivo) =>
+        string.IsNullOrWhiteSpace(rutaArchivo)
+            ? null
+            : Path.GetFileName(rutaArchivo.Replace('\\', '/'));
+
+    private static EmisorUpsertDto CrearModeloDesdeEmisor(EmisorDto item) => new()
+    {
+        Codigo = item.Codigo,
+        RazonSocial = item.RazonSocial,
+        Ruc = item.Ruc,
+        NomComercial = item.NomComercial,
+        DirEstablecimiento = item.DirEstablecimiento,
+        LlevaContabilidad = item.LlevaContabilidad?.Trim()?.ToUpperInvariant() ?? string.Empty,
+        LogoImagen = item.LogoImagen,
+        ClaveInterna = item.ClaveInterna,
+        DireccionMatriz = item.DireccionMatriz,
+        Retenciones = string.IsNullOrWhiteSpace(item.Retenciones) ? "NO" : item.Retenciones,
+        PathCertificado = item.PathCertificado,
+        ClaveCertificado = null,
+        Telefono = item.Telefono,
+        Estado = item.Estado ?? true,
+        IdUsuario = item.IdUsuario,
+        CodEstablecimiento = item.CodEstablecimiento,
+        CodPuntoEmision = item.CodPuntoEmision,
+        Email = item.Email
+    };
+
+    private sealed class EmisorDto
+    {
+        public int Codigo { get; set; }
+        public string? RazonSocial { get; set; }
+        public string? Ruc { get; set; }
+        public string? NomComercial { get; set; }
+        public string? DirEstablecimiento { get; set; }
+        public string? Email { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("llevacontabilidad")]
+        public string? LlevaContabilidad { get; set; }
+        public string? LogoImagen { get; set; }
+        public string? DireccionMatriz { get; set; }
+        public string? ClaveInterna { get; set; }
+        public string? Retenciones { get; set; }
+        public string? PathCertificado { get; set; }
+        public bool TieneClaveCertificadoConfigurada { get; set; }
+        public string? Telefono { get; set; }
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+    }
+
+    private sealed class EmisorUpsertDto
+    {
+        public int Codigo { get; set; }
+        public string? RazonSocial { get; set; }
+        public string? Ruc { get; set; }
+        public string? NomComercial { get; set; }
+        public string? Email { get; set; }
+        public string? DirEstablecimiento { get; set; }
+        public string? LlevaContabilidad { get; set; }
+        public string? LogoImagen { get; set; }
+        public string? DireccionMatriz { get; set; }
+        public string? ClaveInterna { get; set; }
+        public string? Retenciones { get; set; }
+        public string? PathCertificado { get; set; }
+        public string? ClaveCertificado { get; set; }
+        public string? Telefono { get; set; }
+        public bool? Estado { get; set; }
+        public int? IdUsuario { get; set; }
+        public string? CodEstablecimiento { get; set; }
+        public string? CodPuntoEmision { get; set; }
+    }
+}

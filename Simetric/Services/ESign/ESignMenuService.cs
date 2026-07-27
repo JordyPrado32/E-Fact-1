@@ -160,7 +160,7 @@ namespace Simetric.Services.ESign
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (2, NULL, 'Documentos firmados', 1, '/e-sign/documentos', 'ri-file-shield-2-line');
                 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 3)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (3, NULL, N'eRúbrica', 1, '', 'ri-pen-nib-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (3, NULL, N'E-Rúbrica', 1, '', 'ri-pen-nib-line');
                 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 4)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (4, 3, 'Nueva Solicitud', 1, '/solicitud/nueva', 'ri-file-add-line');
@@ -195,20 +195,51 @@ namespace Simetric.Services.ESign
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 14)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (14, 12, 'Usuarios', 1, '/e-sign/administracion/usuarios', 'ri-user-shared-line');
 
+                IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 15)
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (15, 6, 'Firma, clave y logo', 1, '/e-sign/configuracion/firma', 'ri-shield-keyhole-line');
+
                 SET IDENTITY_INSERT [dbo].[ESIGN_MENUS] OFF;";
                 await db.ExecuteAsync(seedMenus);
+
+                const string ensureFirmaConfigMenu = @"
+                DECLARE @ConfiguracionId INT = (
+                    SELECT TOP 1 [IDMENU]
+                    FROM [dbo].[ESIGN_MENUS]
+                    WHERE [RUTAMENU] = ''
+                      AND [NOMBREMENU] IN ('Configuracion', N'Configuración')
+                    ORDER BY [IDMENU]
+                );
+
+                IF @ConfiguracionId IS NULL
+                    SET @ConfiguracionId = 6;
+
+                IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [RUTAMENU] = '/e-sign/configuracion/firma')
+                BEGIN
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU])
+                    VALUES (@ConfiguracionId, 'Firma, clave y logo', 1, '/e-sign/configuracion/firma', 'ri-shield-keyhole-line');
+                END
+                ELSE
+                BEGIN
+                    UPDATE [dbo].[ESIGN_MENUS]
+                    SET [IDMENUPADRE] = @ConfiguracionId,
+                        [NOMBREMENU] = 'Firma, clave y logo',
+                        [ESTADOMENU] = 1,
+                        [ICONOMENU] = 'ri-shield-keyhole-line'
+                    WHERE [RUTAMENU] = '/e-sign/configuracion/firma';
+                END";
+                await db.ExecuteAsync(ensureFirmaConfigMenu);
 
                 // Asegurar que Soporte quede fuera de Configuración a nivel raíz
                 await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [IDMENUPADRE] = NULL WHERE [IDMENU] = 7;");
 
                 // Actualizar el nombre visible del módulo si ya fue sembrado con la marca anterior.
-                await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [NOMBREMENU] = N'eRúbrica' WHERE [IDMENU] = 3 AND [NOMBREMENU] IN ('E-Sign', 'e-sign', 'ESign', 'Firma Electronica', N'Firma Electrónica');");
+                await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [NOMBREMENU] = N'E-Rúbrica' WHERE [IDMENU] = 3 AND [NOMBREMENU] IN ('E-Sign', 'e-sign', 'ESign', 'Firma Electronica', N'Firma Electrónica');");
 
                 // Actualizar icono de Administración a ri-settings-3-line (igual a e-fact)
                 await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [ICONOMENU] = 'ri-settings-3-line' WHERE [IDMENU] = 12;");
 
                 // Asegurar que Nueva Solicitud (ID 4) y el menú principal de Mis Firmas (ID 10) estén activos
-                await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [ESTADOMENU] = 1 WHERE [IDMENU] IN (4, 10);");
+                await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [ESTADOMENU] = 1 WHERE [IDMENU] IN (4, 10) OR [RUTAMENU] = '/e-sign/configuracion/firma';");
 
                 // Restablecer mapeos para menús reactivados (4 y 10) a todos los roles
                 const string restoreMapping = @"
@@ -217,6 +248,7 @@ namespace Simetric.Services.ESign
                 FROM [dbo].[ESIGN_ROLES] r
                 CROSS JOIN [dbo].[ESIGN_MENUS] m
                 WHERE m.[IDMENU] IN (4, 10)
+                   OR m.[RUTAMENU] = '/e-sign/configuracion/firma'
                 AND NOT EXISTS (
                     SELECT 1 FROM [dbo].[ESIGN_ROL_MENU] rm
                     WHERE rm.[IDROL] = r.[IDROL] AND rm.[IDMENU] = m.[IDMENU]
@@ -431,6 +463,7 @@ namespace Simetric.Services.ESign
 
         public async Task<List<Menu>> GetMenusByRol(int idTipoUsuario)
         {
+            await EnsureSchemaAsync();
             using var db = Connection;
             const string sql = @"
                 SELECT DISTINCT m.IDMENU, m.NOMBREMENU, m.RUTAMENU, m.ICONOMENU, m.IDMENUPADRE, m.ESTADOMENU, m.ORDENMENU
@@ -447,6 +480,7 @@ namespace Simetric.Services.ESign
 
         public async Task<List<Menu>> GetAllMenus()
         {
+            await EnsureSchemaAsync();
             using var db = Connection;
             const string sql = "SELECT * FROM ESIGN_MENUS WHERE ESTADOMENU = 1 ORDER BY ISNULL(IDMENUPADRE, 0), ISNULL(ORDENMENU, 0), NOMBREMENU";
             return (await db.QueryAsync<Menu>(sql)).ToList();
@@ -454,6 +488,7 @@ namespace Simetric.Services.ESign
 
         public async Task<List<Menu>> GetMenusByRolId(int idRol)
         {
+            await EnsureSchemaAsync();
             using var db = Connection;
             const string sql = @"
                 SELECT m.* FROM ESIGN_MENUS m

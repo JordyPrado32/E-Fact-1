@@ -1,31 +1,34 @@
 @page "/e-sign/documentos"
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Hosting
 @using System.Security.Claims
 @using Simetric.Services
 @using Simetric.Services.ESign
 @inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment HostEnvironment
 @inject NavigationManager NavManager
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 
-<PageTitle>Documentos Firmados | eRúbrica</PageTitle>
+<PageTitle>Documentos firmados | E-Rúbrica</PageTitle>
 
 <div class="esign-page">
     @if (cargando)
     {
         <div class="esign-state">
             <span class="spinner-border" role="status"></span>
-            <h3>Cargando Documentos</h3>
+            <h3>Cargando documentos</h3>
         </div>
     }
     else
     {
         <header class="esign-header-section">
             <div class="header-content">
-                <span class="header-kicker">eRúbrica</span>
-                <h1>Documentos Firmados</h1>
-                <p>Sube archivos PDF para firmarlos digitalmente con validez legal o descarga tus archivos ya procesados.</p>
+                <span class="header-kicker">E-Rúbrica</span>
+                <h1>Documentos firmados</h1>
+                <p>Arrastra o selecciona un PDF para prepararlo en tu bandeja de firma.</p>
             </div>
             <button class="btn-back" @onclick="IrAlInicio">
                 <i class="bi bi-arrow-left"></i>
@@ -33,45 +36,83 @@
             </button>
         </header>
 
-        <section class="esign-upload-container">
+        <section class="esign-upload-container @(archivoArrastrado ? "is-dragging" : null)"
+                 @ondragenter="ActivarArrastre"
+                 @ondragleave="DesactivarArrastre"
+                 @ondrop="DesactivarArrastre">
+            <InputFile class="drop-file-input" accept="application/pdf,.pdf" OnChange="ProcesarPdfAsync" />
             <div class="upload-box">
-                <div class="upload-icon"><i class="bi bi-cloud-arrow-up-fill"></i></div>
-                <h3>Arrastra y suelta tu archivo PDF aquí</h3>
-                <p>O haz clic para seleccionar un documento desde tu computadora (Max. 10MB)</p>
-                <div class="upload-actions">
-                    <button type="button" class="esign-btn-primary" @onclick="FirmarSimulado">
-                        <i class="bi bi-file-earmark-lock-fill"></i> Seleccionar y Firmar
-                    </button>
+                <div class="upload-icon"><i class="bi bi-file-earmark-pdf-fill"></i></div>
+                <div class="upload-copy">
+                    <h3>Suelta aqui tu PDF</h3>
+                    <p>O haz clic en esta zona para seleccionarlo desde tu computadora.</p>
+                </div>
+                <div class="upload-meta">
+                    <span><i class="bi bi-check2-circle"></i> Solo PDF</span>
+                    <span><i class="bi bi-hdd"></i> Maximo 10 MB</span>
+                    <span><i class="bi bi-shield-check"></i> Listo para firma</span>
                 </div>
             </div>
         </section>
 
-        @if (mostrarMensajeExito)
+        @if (!string.IsNullOrWhiteSpace(mensaje))
         {
-            <div class="alert alert-success animate__animated animate__fadeIn" role="alert">
-                <i class="bi bi-check-circle-fill"></i>
-                <div>
-                    <strong>¡Documento firmado con éxito!</strong> El archivo se ha procesado y guardado en tu bandeja.
-                </div>
+            <div class="alert @(esMensajeError ? "alert-danger" : "alert-success") animate__animated animate__fadeIn" role="alert">
+                <i class="bi @(esMensajeError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")"></i>
+                <div>@mensaje</div>
             </div>
         }
 
+        <section class="esign-panel">
+            <div class="panel-header">
+                <span class="header-kicker">Bandeja</span>
+                <h3>PDF cargados</h3>
+            </div>
 
+            @if (!documentos.Any())
+            {
+                <div class="empty-documents">
+                    <i class="bi bi-file-earmark-lock"></i>
+                    <strong>No hay PDFs cargados en esta sesion.</strong>
+                    <span>Cuando selecciones un archivo, aparecera aqui para descargarlo o revisarlo.</span>
+                </div>
+            }
+            else
+            {
+                <div class="esign-list">
+                    @foreach (var doc in documentos)
+                    {
+                        <div class="esign-list-row">
+                            <div class="doc-icon"><i class="bi bi-file-earmark-pdf-fill"></i></div>
+                            <div class="row-main">
+                                <strong title="@doc.Nombre">@doc.Nombre</strong>
+                                <span>@doc.Tamano | @doc.Fecha.ToString("dd/MM/yyyy HH:mm") | @doc.Firmante</span>
+                            </div>
+                            <div class="row-actions">
+                                <a class="action-btn" href="@doc.Url" target="_blank" title="Abrir PDF">
+                                    <i class="bi bi-box-arrow-up-right"></i>
+                                </a>
+                                <a class="action-btn" href="@doc.Url" download="@doc.Nombre" title="Descargar PDF">
+                                    <i class="bi bi-download"></i>
+                                </a>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
     }
 </div>
 
 @code {
+    private const long MaxPdfSize = 10 * 1024 * 1024;
     private bool cargando = true;
-    private bool mostrarMensajeExito = false;
+    private bool archivoArrastrado;
+    private bool esMensajeError;
+    private string? mensaje;
     private string currentUserName = "Usuario";
-
-    private List<DocumentoFirmadoMock> documentos = new()
-    {
-        new("Contrato_Arrendamiento_Oficina_2026.pdf", "1.4 MB", DateTime.Now.AddDays(-1), "Representante Legal"),
-        new("Acta_Constitucion_Simetric_Software.pdf", "4.2 MB", DateTime.Now.AddDays(-5), "Representante Legal"),
-        new("Formulario_104_SRI_Mayo_2026.pdf", "850 KB", DateTime.Now.AddDays(-10), "Contador General"),
-        new("Acuerdo_Confidencialidad_NDA.pdf", "1.1 MB", DateTime.Now.AddDays(-12), "Socio Comercial")
-    };
+    private int currentUserId;
+    private readonly List<DocumentoFirmadoItem> documentos = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -84,7 +125,7 @@
             return;
         }
 
-        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var userId) || userId <= 0)
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out currentUserId) || currentUserId <= 0)
         {
             NavManager.NavigateTo("/login", forceLoad: true);
             return;
@@ -95,7 +136,7 @@
             AppAccessService.AdminRoleId,
             StringComparison.OrdinalIgnoreCase);
 
-        var access = await AppAccessService.CanAccessAsync(userId, ESignRoutes.ServiceKey, isSuperAdmin);
+        var access = await AppAccessService.CanAccessAsync(currentUserId, ESignRoutes.ServiceKey, isSuperAdmin);
         if (!access.HasAccess)
         {
             NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
@@ -103,37 +144,78 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
-
-        var nombres = user.FindFirst(ClaimTypes.Name)?.Value ?? user.Identity?.Name ?? string.Empty;
-        currentUserName = nombres;
-
+        currentUserName = user.FindFirst(ClaimTypes.Name)?.Value ?? user.Identity?.Name ?? currentUserName;
         cargando = false;
     }
 
     private void IrAlInicio() => NavManager.NavigateTo("/e-sign");
 
-    private async Task FirmarSimulado()
-    {
-        mostrarMensajeExito = false;
-        await Task.Delay(800); // Simular procesamiento
-        documentos.Insert(0, new DocumentoFirmadoMock("Documento_Firmado_Nuevo.pdf", "1.2 MB", DateTime.Now, currentUserName));
-        mostrarMensajeExito = true;
-        StateHasChanged();
-    }
+    private void ActivarArrastre() => archivoArrastrado = true;
 
-    public class DocumentoFirmadoMock
-    {
-        public string Nombre { get; set; }
-        public string Tamano { get; set; }
-        public DateTime Fecha { get; set; }
-        public string Firmante { get; set; }
+    private void DesactivarArrastre() => archivoArrastrado = false;
 
-        public DocumentoFirmadoMock(string nombre, string tamano, DateTime fecha, string firmante)
+    private async Task ProcesarPdfAsync(InputFileChangeEventArgs e)
+    {
+        mensaje = null;
+        esMensajeError = false;
+
+        if (e.FileCount != 1)
         {
-            Nombre = nombre;
-            Tamano = tamano;
-            Fecha = fecha;
-            Firmante = firmante;
+            SetMensaje("Selecciona un solo archivo PDF.", true);
+            return;
         }
+
+        var file = e.File;
+        if (file.Size <= 0)
+        {
+            SetMensaje("El PDF seleccionado esta vacio.", true);
+            return;
+        }
+
+        if (file.Size > MaxPdfSize)
+        {
+            SetMensaje("El PDF supera el maximo permitido de 10 MB.", true);
+            return;
+        }
+
+        if (!string.Equals(Path.GetExtension(file.Name), ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            SetMensaje("Solo se permiten archivos PDF.", true);
+            return;
+        }
+
+        var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}.pdf";
+        var relativeDirectory = Path.Combine("uploads", "e-rubrica", "documentos", currentUserId.ToString());
+        var physicalDirectory = Path.Combine(HostEnvironment.WebRootPath, relativeDirectory);
+        Directory.CreateDirectory(physicalDirectory);
+
+        var physicalPath = Path.Combine(physicalDirectory, storedFileName);
+        await using (var source = file.OpenReadStream(MaxPdfSize))
+        await using (var target = File.Create(physicalPath))
+        {
+            await source.CopyToAsync(target);
+        }
+
+        documentos.Insert(0, new DocumentoFirmadoItem(
+            file.Name,
+            FormatearTamano(file.Size),
+            DateTime.Now,
+            currentUserName,
+            "/" + Path.Combine(relativeDirectory, storedFileName).Replace('\\', '/')));
+
+        SetMensaje("PDF cargado correctamente. La firma criptografica queda pendiente de integrar con el motor de firma PDF.", false);
     }
+
+    private void SetMensaje(string texto, bool esError)
+    {
+        mensaje = texto;
+        esMensajeError = esError;
+    }
+
+    private static string FormatearTamano(long bytes) =>
+        bytes >= 1024 * 1024
+            ? $"{bytes / 1024d / 1024d:0.##} MB"
+            : $"{Math.Max(1, bytes / 1024d):0.##} KB";
+
+    private sealed record DocumentoFirmadoItem(string Nombre, string Tamano, DateTime Fecha, string Firmante, string Url);
 }
