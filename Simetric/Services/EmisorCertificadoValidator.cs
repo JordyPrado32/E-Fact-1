@@ -70,17 +70,40 @@ public sealed class EmisorCertificadoValidator
 
         var apiResult = await _firmaInfoApiService.ConsultarAsync(rutaFisica, clave, cancellationToken);
         if (!apiResult.Success || apiResult.Info is null)
-            return CertificadoEmisorValidationResult.Fail("Firma no válida.");
+            return CertificadoEmisorValidationResult.Fail(
+                string.IsNullOrWhiteSpace(apiResult.Message) ? "Firma no valida." : apiResult.Message,
+                apiResponseJson: apiResult.RawJson,
+                apiHttpStatusCode: apiResult.HttpStatusCode,
+                apiSuccess: apiResult.Success);
 
         var info = apiResult.Info;
         if (!info.EsValida)
-            return CertificadoEmisorValidationResult.Fail("Firma no válida.");
+            return CertificadoEmisorValidationResult.Fail(
+                string.IsNullOrWhiteSpace(info.Mensaje) ? "Firma no valida." : info.Mensaje,
+                nombreTitular: info.NombreTitular,
+                estadoVigencia: info.EstadoVigencia,
+                apiResponseJson: apiResult.RawJson,
+                apiHttpStatusCode: apiResult.HttpStatusCode,
+                apiSuccess: apiResult.Success);
 
         if (!info.TieneClavePrivada)
-            return CertificadoEmisorValidationResult.Fail("La firma no contiene una clave privada valida.");
+            return CertificadoEmisorValidationResult.Fail(
+                "La firma no contiene una clave privada valida.",
+                nombreTitular: info.NombreTitular,
+                estadoVigencia: info.EstadoVigencia,
+                apiResponseJson: apiResult.RawJson,
+                apiHttpStatusCode: apiResult.HttpStatusCode,
+                apiSuccess: apiResult.Success);
 
         if (info.FechaExpiracion is null)
-            return CertificadoEmisorValidationResult.Fail("El servicio no devolvio la fecha de expiracion de la firma.");
+            return CertificadoEmisorValidationResult.Fail(
+                "El servicio no devolvio la fecha de expiracion de la firma.",
+                identificacionExtraida: FirstFilled(info.Ruc, info.Cedula),
+                nombreTitular: info.NombreTitular,
+                estadoVigencia: info.EstadoVigencia,
+                apiResponseJson: apiResult.RawJson,
+                apiHttpStatusCode: apiResult.HttpStatusCode,
+                apiSuccess: apiResult.Success);
 
         var identificaciones = new[] { info.Ruc, info.Cedula }
             .Where(valor => !string.IsNullOrWhiteSpace(valor))
@@ -94,7 +117,13 @@ public sealed class EmisorCertificadoValidator
 
         if (identificacionCoincidente is null)
             return CertificadoEmisorValidationResult.Fail(
-                $"La firma pertenece a una identificacion diferente y no coincide con el RUC {emisor.Ruc} del emisor.");
+                $"La firma pertenece a una identificacion diferente y no coincide con el RUC {emisor.Ruc} del emisor.",
+                identificacionExtraida: FirstFilled(info.Ruc, info.Cedula),
+                nombreTitular: info.NombreTitular,
+                estadoVigencia: info.EstadoVigencia,
+                apiResponseJson: apiResult.RawJson,
+                apiHttpStatusCode: apiResult.HttpStatusCode,
+                apiSuccess: apiResult.Success);
 
         var estaVigente =
             string.Equals(info.EstadoVigencia?.Trim(), "VIGENTE", StringComparison.OrdinalIgnoreCase) &&
@@ -109,7 +138,10 @@ public sealed class EmisorCertificadoValidator
                 identificacionCoincidente,
                 CalcularDiasRestantes(fechaExpiracion),
                 info.NombreTitular,
-                info.EstadoVigencia);
+                info.EstadoVigencia,
+                apiResult.RawJson,
+                apiResult.HttpStatusCode,
+                apiResult.Success);
         }
 
         var fechaExpiracionVigente = info.FechaExpiracion.Value.LocalDateTime;
@@ -118,7 +150,10 @@ public sealed class EmisorCertificadoValidator
             identificacionCoincidente,
             Math.Max(CalcularDiasRestantes(fechaExpiracionVigente), 0),
             info.NombreTitular,
-            info.EstadoVigencia);
+            info.EstadoVigencia,
+            apiResult.RawJson,
+            apiResult.HttpStatusCode,
+            apiResult.Success);
     }
 
     private static int CalcularDiasRestantes(DateTime fechaExpiracion) =>
@@ -232,6 +267,9 @@ public sealed class EmisorCertificadoValidator
         var digitos = new string(valor.Where(char.IsDigit).ToArray());
         return string.IsNullOrWhiteSpace(digitos) ? null : digitos;
     }
+
+    private static string? FirstFilled(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
 }
 
 public sealed record CertificadoEmisorValidationResult(
@@ -242,14 +280,20 @@ public sealed record CertificadoEmisorValidationResult(
     string? IdentificacionExtraida = null,
     int? DiasRestantes = null,
     string? NombreTitular = null,
-    string? EstadoVigencia = null)
+    string? EstadoVigencia = null,
+    string? ApiResponseJson = null,
+    int? ApiHttpStatusCode = null,
+    bool? ApiSuccess = null)
 {
     public static CertificadoEmisorValidationResult Ok(
         DateTime? fechaExpiracion,
         string? identificacionExtraida,
         int? diasRestantes = null,
         string? nombreTitular = null,
-        string? estadoVigencia = null) =>
+        string? estadoVigencia = null,
+        string? apiResponseJson = null,
+        int? apiHttpStatusCode = null,
+        bool? apiSuccess = null) =>
         new(
             true,
             true,
@@ -258,7 +302,10 @@ public sealed record CertificadoEmisorValidationResult(
             identificacionExtraida,
             diasRestantes,
             nombreTitular,
-            estadoVigencia);
+            estadoVigencia,
+            apiResponseJson,
+            apiHttpStatusCode,
+            apiSuccess);
 
     public static CertificadoEmisorValidationResult NoConfigurado() =>
         new(false, false, EmisionControlService.MensajeFirmaRequerida);
@@ -269,7 +316,10 @@ public sealed record CertificadoEmisorValidationResult(
         string? identificacionExtraida = null,
         int? diasRestantes = null,
         string? nombreTitular = null,
-        string? estadoVigencia = null) =>
+        string? estadoVigencia = null,
+        string? apiResponseJson = null,
+        int? apiHttpStatusCode = null,
+        bool? apiSuccess = null) =>
         new(
             false,
             true,
@@ -278,5 +328,8 @@ public sealed record CertificadoEmisorValidationResult(
             identificacionExtraida,
             diasRestantes,
             nombreTitular,
-            estadoVigencia);
+            estadoVigencia,
+            apiResponseJson,
+            apiHttpStatusCode,
+            apiSuccess);
 }

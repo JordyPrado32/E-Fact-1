@@ -89,20 +89,63 @@ namespace Simetric.Controllers
                 emisor,
                 HttpContext.RequestAborted);
 
+            var estadoVigencia = resultado.IsValid
+                ? "VIGENTE"
+                : resultado.Message.Contains("caducada", StringComparison.OrdinalIgnoreCase)
+                    ? "CADUCADA"
+                    : "INVALIDA";
+            var logGuardado = await RegistrarValidacionFirmaAsync(
+                idUsuario.Value,
+                emisor,
+                resultado,
+                estadoVigencia);
+
             return Ok(new
             {
                 esValida = resultado.IsValid,
-                estadoVigencia = resultado.IsValid
-                    ? "VIGENTE"
-                    : resultado.Message.Contains("caducada", StringComparison.OrdinalIgnoreCase)
-                        ? "CADUCADA"
-                        : "INVALIDA",
+                estadoVigencia,
                 mensaje = resultado.Message,
                 nombreTitular = resultado.NombreTitular,
                 identificacion = resultado.IdentificacionExtraida,
                 fechaExpiracion = resultado.FechaExpiracion,
-                diasRestantes = resultado.DiasRestantes
+                diasRestantes = resultado.DiasRestantes,
+                logGuardado
             });
+        }
+
+        private async Task<bool> RegistrarValidacionFirmaAsync(
+            int idUsuario,
+            Emisor emisor,
+            CertificadoEmisorValidationResult resultado,
+            string estadoVigencia)
+        {
+            try
+            {
+                _context.EsignFirmaValidacionApiLogs.Add(new EsignFirmaValidacionApiLog
+                {
+                    IdUsuario = idUsuario,
+                    CodEmisor = emisor.Codigo,
+                    Ruc = emisor.Ruc,
+                    FechaValidacion = DateTime.Now,
+                    EsValida = resultado.IsValid,
+                    EstadoVigencia = estadoVigencia,
+                    Mensaje = resultado.Message,
+                    NombreTitular = resultado.NombreTitular,
+                    Identificacion = resultado.IdentificacionExtraida,
+                    FechaExpiracion = resultado.FechaExpiracion,
+                    DiasRestantes = resultado.DiasRestantes,
+                    HttpStatusCode = resultado.ApiHttpStatusCode,
+                    ApiSuccess = resultado.ApiSuccess,
+                    ResponseJson = resultado.ApiResponseJson
+                });
+
+                await _context.SaveChangesAsync(HttpContext.RequestAborted);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         [HttpPost]

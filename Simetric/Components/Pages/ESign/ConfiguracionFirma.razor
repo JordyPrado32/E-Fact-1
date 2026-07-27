@@ -59,7 +59,7 @@
                     {
                         <button type="button"
                                 class="emisor-option @(modelo.Codigo == emisor.Codigo ? "is-active" : null)"
-                                @onclick="() => SeleccionarEmisor(emisor)">
+                                @onclick="() => SeleccionarEmisorAsync(emisor)">
                             <strong>@GetNombreEmisor(emisor)</strong>
                             <span>@(string.IsNullOrWhiteSpace(emisor.Ruc) ? "Sin RUC" : emisor.Ruc)</span>
                         </button>
@@ -122,6 +122,35 @@
                         </label>
                     </div>
 
+                    <section class="firma-validation-card @(FirmaEstadoClass)">
+                        <div class="validation-main">
+                            <span class="upload-card-icon"><i class="bi bi-shield-check"></i></span>
+                            <div>
+                                <span class="header-kicker">Validacion API</span>
+                                <h4>@FirmaEstadoTitulo</h4>
+                                <p>@FirmaEstadoMensaje</p>
+                            </div>
+                        </div>
+
+                        @if (firmaEstadoActual is not null)
+                        {
+                            <div class="validation-details">
+                                <span><strong>Titular</strong>@(firmaEstadoActual.NombreTitular ?? "Sin dato")</span>
+                                <span><strong>Identificacion</strong>@(firmaEstadoActual.Identificacion ?? "Sin dato")</span>
+                                <span><strong>Expira</strong>@FormatearFecha(firmaEstadoActual.FechaExpiracion)</span>
+                                <span><strong>Dias restantes</strong>@(firmaEstadoActual.DiasRestantes?.ToString() ?? "Sin dato")</span>
+                            </div>
+                        }
+
+                        <button type="button"
+                                class="esign-btn-secondary"
+                                disabled="@(!PuedeValidarFirma || validandoFirma)"
+                                @onclick="ValidarFirmaActualAsync">
+                            <i class="bi @(validandoFirma ? "bi-arrow-repeat" : "bi-cloud-check")"></i>
+                            <span>@(validandoFirma ? "Validando..." : "Validar ahora")</span>
+                        </button>
+                    </section>
+
                     @if (!string.IsNullOrWhiteSpace(modelo.LogoImagen))
                     {
                         <div class="logo-preview">
@@ -148,9 +177,12 @@
     private bool guardando;
     private bool esError;
     private bool tieneClaveGuardada;
+    private bool validandoFirma;
     private string? mensaje;
+    private string? mensajeValidacionFirma;
     private string? certificadoSeleccionado;
     private string? logoSeleccionado;
+    private FirmaEstadoDto? firmaEstadoActual;
     private int currentUserId;
     private readonly List<EmisorDto> emisores = new();
     private EmisorDto? emisorSeleccionado;
@@ -164,6 +196,33 @@
     private bool TieneClave => tieneClaveGuardada || !string.IsNullOrWhiteSpace(modelo.ClaveCertificado);
 
     private bool TieneLogo => !string.IsNullOrWhiteSpace(modelo.LogoImagen);
+
+    private bool PuedeValidarFirma => modelo.Codigo > 0 && TieneCertificado && TieneClave;
+
+    private string FirmaEstadoClass =>
+        firmaEstadoActual is null
+            ? "is-pending"
+            : firmaEstadoActual.EsValida
+                ? "is-ready"
+                : "is-error";
+
+    private string FirmaEstadoTitulo =>
+        validandoFirma
+            ? "Validando firma electronica"
+            : firmaEstadoActual is null
+                ? "Firma pendiente de validar"
+                : firmaEstadoActual.EsValida
+                    ? "Firma valida y vigente"
+                    : "Firma no valida";
+
+    private string FirmaEstadoMensaje =>
+        validandoFirma
+            ? "Consultando la misma validacion de E-Fact..."
+            : !PuedeValidarFirma
+                ? "Carga firma .p12 y clave para validar con API."
+                : !string.IsNullOrWhiteSpace(mensajeValidacionFirma)
+                    ? mensajeValidacionFirma
+                    : "La firma se validara con el mismo proceso de E-Fact.";
 
     private string NombreCertificado =>
         certificadoSeleccionado
@@ -209,21 +268,28 @@
         emisores.Clear();
         var data = await Http.GetFromJsonAsync<List<EmisorDto>>($"api/emisores?idUsuario={currentUserId}") ?? new();
         emisores.AddRange(data.Where(e => e.Estado != false));
-        SeleccionarEmisor(emisores.FirstOrDefault());
+        await SeleccionarEmisorAsync(emisores.FirstOrDefault());
     }
 
-    private void SeleccionarEmisor(EmisorDto? emisor)
+    private async Task SeleccionarEmisorAsync(EmisorDto? emisor)
     {
         emisorSeleccionado = emisor;
         certificadoSeleccionado = null;
         logoSeleccionado = null;
         mensaje = null;
+        firmaEstadoActual = null;
+        mensajeValidacionFirma = null;
 
         modelo = emisor is null ? new EmisorUpsertDto() : CrearModeloDesdeEmisor(emisor);
         tieneClaveGuardada = emisor?.TieneClaveCertificadoConfigurada == true;
         if (ConfiguracionCompleta)
         {
             SetMensaje("Configuracion cargada automaticamente desde E-Fact.", false);
+        }
+
+        if (PuedeValidarFirma)
+        {
+            await ValidarFirmaActualAsync();
         }
     }
 
@@ -354,6 +420,43 @@
         esError = error;
     }
 
+    private async Task ValidarFirmaActualAsync()
+    {
+        if (!PuedeValidarFirma)
+        {
+            firmaEstadoActual = null;
+            mensajeValidacionFirma = "Carga firma .p12 y clave para validar con API.";
+            return;
+        }
+
+        validandoFirma = true;
+        mensajeValidacionFirma = null;
+
+        try
+        {
+            var estado = await Http.GetFromJsonAsync<FirmaEstadoDto>(
+                $"api/emisores/{modelo.Codigo}/firma/estado?idUsuario={currentUserId}");
+
+            firmaEstadoActual = estado;
+            mensajeValidacionFirma = estado is null
+                ? "No se pudo obtener el estado de la firma."
+                : estado.EsValida
+                    ? estado.LogGuardado
+                        ? "Validacion correcta. El JSON de la API fue registrado."
+                        : "Validacion correcta. No se pudo registrar el JSON en la tabla."
+                    : FirstFilled(estado.Mensaje, "La API no valido la firma.");
+        }
+        catch (Exception ex)
+        {
+            firmaEstadoActual = null;
+            mensajeValidacionFirma = ex.Message;
+        }
+        finally
+        {
+            validandoFirma = false;
+        }
+    }
+
     private string GetNombreModelo() =>
         FirstFilled(modelo.NomComercial, modelo.RazonSocial, $"Emisor #{modelo.Codigo}");
 
@@ -367,6 +470,9 @@
         string.IsNullOrWhiteSpace(rutaArchivo)
             ? null
             : Path.GetFileName(rutaArchivo.Replace('\\', '/'));
+
+    private static string FormatearFecha(DateTime? fecha) =>
+        fecha?.ToString("dd/MM/yyyy") ?? "Sin dato";
 
     private static EmisorUpsertDto CrearModeloDesdeEmisor(EmisorDto item) => new()
     {
@@ -411,6 +517,18 @@
         public int? IdUsuario { get; set; }
         public string? CodEstablecimiento { get; set; }
         public string? CodPuntoEmision { get; set; }
+    }
+
+    private sealed class FirmaEstadoDto
+    {
+        public bool EsValida { get; set; }
+        public string? EstadoVigencia { get; set; }
+        public string? Mensaje { get; set; }
+        public string? NombreTitular { get; set; }
+        public string? Identificacion { get; set; }
+        public DateTime? FechaExpiracion { get; set; }
+        public int? DiasRestantes { get; set; }
+        public bool LogGuardado { get; set; }
     }
 
     private sealed class EmisorUpsertDto

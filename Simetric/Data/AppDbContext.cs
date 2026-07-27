@@ -80,6 +80,7 @@ namespace Simetric.Data
         public DbSet<EContaxUsuarioContexto> EContaxUsuariosContexto { get; set; }
         public DbSet<EdeclareTarjeta> EdeclareTarjetas { get; set; }
         public DbSet<EsignTarjeta> EsignTarjetas { get; set; }
+        public DbSet<EsignFirmaValidacionApiLog> EsignFirmaValidacionApiLogs { get; set; }
 
         public override int SaveChanges()
         {
@@ -138,6 +139,32 @@ namespace Simetric.Data
                 entity.HasKey(e => e.Id);
                 entity.HasIndex(e => new { e.TipoDocumento, e.DocumentoId })
                     .IsUnique();
+            });
+
+            modelBuilder.Entity<EsignFirmaValidacionApiLog>(entity =>
+            {
+                entity.ToTable("ESIGN_FIRMA_VALIDACION_API_LOG", "dbo");
+                entity.HasKey(e => e.Id);
+
+                entity.Property(e => e.Id).HasColumnName("ID_VALIDACION");
+                entity.Property(e => e.IdUsuario).HasColumnName("ID_USUARIO");
+                entity.Property(e => e.CodEmisor).HasColumnName("COD_EMISOR");
+                entity.Property(e => e.Ruc).HasColumnName("RUC").HasMaxLength(15).IsUnicode(false);
+                entity.Property(e => e.FechaValidacion).HasColumnName("FECHA_VALIDACION");
+                entity.Property(e => e.EsValida).HasColumnName("ES_VALIDA");
+                entity.Property(e => e.EstadoVigencia).HasColumnName("ESTADO_VIGENCIA").HasMaxLength(30);
+                entity.Property(e => e.Mensaje).HasColumnName("MENSAJE").HasMaxLength(500);
+                entity.Property(e => e.NombreTitular).HasColumnName("NOMBRE_TITULAR").HasMaxLength(200);
+                entity.Property(e => e.Identificacion).HasColumnName("IDENTIFICACION").HasMaxLength(20).IsUnicode(false);
+                entity.Property(e => e.FechaExpiracion).HasColumnName("FECHA_EXPIRACION");
+                entity.Property(e => e.DiasRestantes).HasColumnName("DIAS_RESTANTES");
+                entity.Property(e => e.HttpStatusCode).HasColumnName("HTTP_STATUS_CODE");
+                entity.Property(e => e.ApiSuccess).HasColumnName("API_SUCCESS");
+                entity.Property(e => e.ResponseJson).HasColumnName("RESPONSE_JSON").HasColumnType("nvarchar(max)");
+                entity.Property(e => e.ErrorTecnico).HasColumnName("ERROR_TECNICO").HasMaxLength(1000);
+
+                entity.HasIndex(e => new { e.CodEmisor, e.FechaValidacion });
+                entity.HasIndex(e => new { e.IdUsuario, e.FechaValidacion });
             });
 
             modelBuilder.Entity<EContaxRol>(entity =>

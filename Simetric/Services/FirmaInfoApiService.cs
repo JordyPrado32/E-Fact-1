@@ -43,7 +43,7 @@ public sealed class FirmaInfoApiService
             {
                 var mensaje = ExtraerMensaje(rawBody)
                     ?? $"El servicio de firma respondio con estado {(int)response.StatusCode}.";
-                return FirmaInfoApiResult.Error(mensaje);
+                return FirmaInfoApiResult.Error(mensaje, rawBody, (int)response.StatusCode);
             }
 
             var info = JsonSerializer.Deserialize<FirmaInfoApiResponse>(
@@ -51,8 +51,8 @@ public sealed class FirmaInfoApiService
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
             return info is null
-                ? FirmaInfoApiResult.Error("El servicio de firma devolvio una respuesta vacia o invalida.")
-                : FirmaInfoApiResult.Ok(info);
+                ? FirmaInfoApiResult.Error("El servicio de firma devolvio una respuesta vacia o invalida.", rawBody, (int)response.StatusCode)
+                : FirmaInfoApiResult.Ok(info, rawBody, (int)response.StatusCode);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -101,13 +101,15 @@ public sealed class FirmaInfoApiService
 public sealed record FirmaInfoApiResult(
     bool Success,
     string Message,
-    FirmaInfoApiResponse? Info)
+    FirmaInfoApiResponse? Info,
+    string? RawJson = null,
+    int? HttpStatusCode = null)
 {
-    public static FirmaInfoApiResult Ok(FirmaInfoApiResponse info) =>
-        new(true, string.Empty, info);
+    public static FirmaInfoApiResult Ok(FirmaInfoApiResponse info, string? rawJson = null, int? httpStatusCode = null) =>
+        new(true, string.Empty, info, rawJson, httpStatusCode);
 
-    public static FirmaInfoApiResult Error(string message) =>
-        new(false, message, null);
+    public static FirmaInfoApiResult Error(string message, string? rawJson = null, int? httpStatusCode = null) =>
+        new(false, message, null, rawJson, httpStatusCode);
 }
 
 public sealed class FirmaInfoApiResponse
