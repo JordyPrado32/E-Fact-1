@@ -21,10 +21,6 @@ namespace Simetric.ViewModels
         [EmailAddress(ErrorMessage = "El correo electrónico no es válido.")]
         public string Email { get; set; } = string.Empty;
 
-        [Required(ErrorMessage = "La fecha de nacimiento es obligatoria.")]
-        [FechaNacimientoValida]
-        public DateTime? FechaNacimiento { get; set; }
-
         public string? AvatarUrl { get; set; }
 
         [StringLength(100, MinimumLength = 8, ErrorMessage = "La contraseña debe tener entre 8 y 100 caracteres.")]
@@ -95,42 +91,5 @@ namespace Simetric.ViewModels
                 : new ValidationResult(ErrorMessage ?? "Este campo solo puede contener letras y espacios.");
         }
     }
-
-    public sealed class FechaNacimientoValidaAttribute : ValidationAttribute
-    {
-        private static readonly DateTime FechaMinimaPermitida = new(1920, 1, 1);
-
-        protected override ValidationResult? IsValid(object? value, ValidationContext validationContext)
-        {
-            if (value is null)
-            {
-                return ValidationResult.Success;
-            }
-
-            if (value is not DateTime fechaNacimiento)
-            {
-                return new ValidationResult("La fecha ingresada no es válida.");
-            }
-
-            var fecha = fechaNacimiento.Date;
-            var hoy = DateTime.Today;
-
-            if (fecha > hoy)
-            {
-                return new ValidationResult("La fecha de nacimiento no puede ser futura.");
-            }
-
-            if (fecha < FechaMinimaPermitida)
-            {
-                return new ValidationResult("La fecha de nacimiento no puede ser anterior al 01/01/1920.");
-            }
-
-            if (fecha > hoy.AddYears(-18))
-            {
-                return new ValidationResult("Debes ser mayor de 18 años.");
-            }
-
-            return ValidationResult.Success;
-        }
-    }
 }
+
