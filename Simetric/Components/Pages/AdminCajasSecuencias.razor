@@ -1,0 +1,906 @@
+@page "/administracion/cajas-secuencias"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@inject AuthenticationStateProvider AuthStateProvider
+@inject AdminCajaSecuenciaService AdminService
+@inject IJSRuntime JS
+
+<PageTitle>Cajas y secuencias | Numerica e-fact</PageTitle>
+
+<div class="sequence-shell">
+    <section class="sequence-hero">
+        <div>
+            <span class="section-kicker">Administración</span>
+            <h2>Cajas y secuencias</h2>
+            <p>Consulta puntos de emisión y últimos secuenciales de todos los clientes.</p>
+        </div>
+        <div class="hero-summary">
+            <span>Cajas visibles</span>
+            <strong>@CajasFiltradas.Count</strong>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="status-banner @(mensajeEsError ? "is-error" : "is-success")">@mensaje</div>
+    }
+
+    @if (cargando)
+    {
+        <section class="table-card state-card">
+            <span class="spinner-border text-primary" role="status"></span>
+            <strong>Cargando cajas y secuencias</strong>
+        </section>
+    }
+    else if (!tienePermiso)
+    {
+        <section class="table-card state-card">
+            <i class="ri-lock-2-line"></i>
+            <strong>Acceso restringido</strong>
+            <span>Su rol no tiene permiso para administrar cajas y secuencias.</span>
+        </section>
+    }
+    else
+    {
+        <section class="toolbar-card">
+            <div>
+                <span class="section-kicker">Filtros</span>
+                <h3>Localizar una caja</h3>
+            </div>
+            <div class="toolbar-actions">
+                <label class="search-field">
+                    <i class="ri-search-line"></i>
+                    <input @bind="Filtro"
+                           @bind:event="oninput"
+                           placeholder="Cliente, correo, RUC, empresa, serie o SEC" />
+                </label>
+                <button type="button" class="secondary-btn" @onclick="Cargar" disabled="@guardando">
+                    <i class="ri-refresh-line"></i>
+                    Refrescar
+                </button>
+            </div>
+        </section>
+
+        <section class="table-card">
+            <div class="table-card-head">
+                <div>
+                    <span class="section-kicker">Listado general</span>
+                    <h3>Cajas y puntos de emisión registrados</h3>
+                </div>
+                <span class="table-badge">@CajasFiltradas.Count registros</span>
+            </div>
+
+            @if (CajasFiltradas.Count == 0)
+            {
+                <div class="state-card">
+                    <i class="ri-inbox-2-line"></i>
+                    <strong>No se encontraron cajas</strong>
+                    <span>Pruebe con otro criterio de búsqueda.</span>
+                </div>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table entity-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Caja</th>
+                                <th>Serie</th>
+                                <th>Últimos secuenciales</th>
+                                <th>Estado</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var caja in CajasPaginadas)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="cell-main">
+                                            <strong>@NombreCliente(caja)</strong>
+                                            <span><i class="ri-mail-line"></i> @(string.IsNullOrWhiteSpace(caja.Email) ? "Sin correo" : caja.Email)</span>
+                                            <span><i class="ri-fingerprint-line"></i> RUC @(string.IsNullOrWhiteSpace(caja.Ruc) ? "no registrado" : caja.Ruc)</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="cell-main compact">
+                                            <strong>Caja @caja.NumeroCaja</strong>
+                                            <span>SEC @caja.CajaSec</span>
+                                            <span>Usuario @caja.IdUsuario</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="series-pill">@caja.Serie</span>
+                                    </td>
+                                    <td>
+                                        <div class="sequence-grid">
+                                            @foreach (var item in caja.Secuencias)
+                                            {
+                                                <span title="@item.DocumentLabel">
+                                                    <small>@AbreviarDocumento(item.DocumentKey)</small>
+                                                    <strong>@item.LastSequence.ToString("D9")</strong>
+                                                </span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="status-stack">
+                                            <span class="status-pill @(caja.Activa ? "is-active" : "is-inactive")">
+                                                @(caja.Activa ? "Activa" : "Inactiva")
+                                            </span>
+                                            @if (caja.EsCajaSistema)
+                                            {
+                                                <small class="system-label">Caja del sistema</small>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td class="text-end">
+                                        <button type="button"
+                                                class="action-btn"
+                                                title="Editar caja y secuencias"
+                                                @onclick="() => AbrirEditar(caja)">
+                                            <i class="ri-pencil-line"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-pagination">
+                    <span>Mostrando @PrimerRegistro-@UltimoRegistro de @CajasFiltradas.Count registros</span>
+                    <div class="pagination-actions">
+                        <button type="button"
+                                class="pagination-btn"
+                                disabled="@(paginaActual <= 1)"
+                                @onclick="() => CambiarPagina(paginaActual - 1)">
+                            <i class="ri-arrow-left-s-line"></i>
+                        </button>
+                        <strong>@paginaActual / @TotalPaginas</strong>
+                        <button type="button"
+                                class="pagination-btn"
+                                disabled="@(paginaActual >= TotalPaginas)"
+                                @onclick="() => CambiarPagina(paginaActual + 1)">
+                            <i class="ri-arrow-right-s-line"></i>
+                        </button>
+                    </div>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@if (cajaEdicion is not null)
+{
+    <div class="modal-backdrop" @onclick="CerrarEditar">
+        <section class="edit-modal" @onclick:stopPropagation="true">
+            <header class="modal-head">
+                <div>
+                    <span class="section-kicker">Edición administrativa</span>
+                    <h3>@NombreCliente(cajaEdicion)</h3>
+                    <p>Caja @cajaEdicion.NumeroCaja · SEC @cajaEdicion.CajaSec</p>
+                </div>
+                <button type="button" class="close-btn" @onclick="CerrarEditar" disabled="@guardando">
+                    <i class="ri-close-line"></i>
+                </button>
+            </header>
+
+            <div class="modal-body">
+                <label class="series-field">
+                    <span>Establecimiento - punto de emisión</span>
+                    <input value="@cajaEdicion.Serie"
+                           maxlength="7"
+                           inputmode="numeric"
+                           @oninput="e => cajaEdicion.Serie = e.Value?.ToString() ?? string.Empty"
+                           disabled="@guardando" />
+                    <small>Formato SRI: 001-001. El establecimiento y punto no pueden ser 000.</small>
+                </label>
+
+                <div class="modal-table-wrap">
+                    <table class="table modal-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Documento</th>
+                                <th>Último secuencial</th>
+                                <th>Inicializado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in cajaEdicion.Secuencias)
+                            {
+                                <tr>
+                                    <td><strong>@item.DocumentLabel</strong></td>
+                                    <td>
+                                        <input type="number"
+                                               min="0"
+                                               max="999999999"
+                                               value="@item.LastSequence"
+                                               @oninput="e => item.LastSequence = ParseSequence(e.Value)"
+                                               disabled="@guardando" />
+                                    </td>
+                                    <td>
+                                        <label class="initialized-check">
+                                            <input type="checkbox" @bind="item.Initialized" disabled="@guardando" />
+                                            <span>@(item.Initialized ? "Sí" : "No")</span>
+                                        </label>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <footer class="modal-actions">
+                <button type="button" class="secondary-btn" @onclick="CerrarEditar" disabled="@guardando">
+                    Cancelar
+                </button>
+                <button type="button" class="primary-btn" @onclick="GuardarEdicion" disabled="@guardando">
+                    @if (guardando)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                        <span>Guardando...</span>
+                    }
+                    else
+                    {
+                        <i class="ri-save-line"></i>
+                        <span>Guardar cambios</span>
+                    }
+                </button>
+            </footer>
+        </section>
+    </div>
+}
+
+<style>
+    .sequence-shell {
+        max-width: 1260px;
+        margin: 0 auto;
+        padding: 1.5rem 1rem 3rem;
+        display: grid;
+        gap: 1rem;
+        color: #0f172a;
+    }
+
+    .sequence-hero,
+    .toolbar-card,
+    .table-card {
+        border: 1px solid #dce6f0;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, .97);
+        box-shadow: 0 14px 32px rgba(15, 23, 42, .05);
+    }
+
+    .sequence-hero {
+        padding: 1.35rem;
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .sequence-hero h2,
+    .toolbar-card h3,
+    .table-card-head h3,
+    .modal-head h3 {
+        margin: .35rem 0 0;
+    }
+
+    .sequence-hero p,
+    .modal-head p {
+        margin: .4rem 0 0;
+        color: #64748b;
+    }
+
+    .section-kicker {
+        color: #006bb5;
+        font-size: .72rem;
+        font-weight: 800;
+        letter-spacing: .13em;
+        text-transform: uppercase;
+    }
+
+    .hero-summary {
+        text-align: right;
+        color: #64748b;
+    }
+
+    .hero-summary strong {
+        display: block;
+        color: #006bb5;
+        font-size: 1.8rem;
+    }
+
+    .status-banner {
+        border-radius: 13px;
+        padding: .85rem 1rem;
+        font-weight: 700;
+    }
+
+    .status-banner.is-success {
+        background: #ecfdf5;
+        color: #047857;
+    }
+
+    .status-banner.is-error {
+        background: #fef2f2;
+        color: #b91c1c;
+    }
+
+    .toolbar-card,
+    .table-card-head {
+        padding: 1rem 1.1rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .toolbar-actions {
+        width: min(100%, 620px);
+        display: flex;
+        gap: .75rem;
+    }
+
+    .search-field {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 0 .8rem;
+    }
+
+    .search-field input {
+        width: 100%;
+        padding: .72rem 0;
+        border: 0;
+        outline: 0;
+    }
+
+    .primary-btn,
+    .secondary-btn,
+    .pagination-btn,
+    .action-btn,
+    .close-btn {
+        border: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: .45rem;
+        font-weight: 800;
+    }
+
+    .primary-btn,
+    .secondary-btn {
+        border-radius: 12px;
+        padding: .72rem 1rem;
+    }
+
+    .primary-btn {
+        background: linear-gradient(135deg, #006bb5, #0a84d6);
+        color: #fff;
+    }
+
+    .secondary-btn {
+        background: #eef6fc;
+        color: #006bb5;
+    }
+
+    .table-card {
+        overflow: hidden;
+    }
+
+    .table-badge {
+        padding: .4rem .7rem;
+        border-radius: 999px;
+        background: #eaf4fb;
+        color: #006bb5;
+        font-size: .78rem;
+        font-weight: 800;
+    }
+
+    .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        border-top: 1px solid #edf3f8;
+    }
+
+    .entity-table {
+        width: 100%;
+        min-width: 1050px;
+    }
+
+    .entity-table thead th,
+    .modal-table thead th {
+        padding: 1rem 1.1rem;
+        background: linear-gradient(180deg, #f7fbff, #eef5fb);
+        border-bottom: 1px solid #dfeaf4;
+        color: #31526d;
+        font-size: .76rem;
+        font-weight: 800;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    .entity-table tbody td {
+        padding: 1rem 1.1rem;
+        border-bottom: 1px solid #eef3f7;
+        vertical-align: middle;
+    }
+
+    .entity-table tbody tr:hover td {
+        background: rgba(0, 107, 181, .035);
+    }
+
+    .cell-main,
+    .status-stack {
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .cell-main {
+        min-width: 210px;
+    }
+
+    .cell-main.compact {
+        min-width: 90px;
+    }
+
+    .cell-main span,
+    .status-stack small {
+        color: #64748b;
+        font-size: .8rem;
+    }
+
+    .series-pill {
+        display: inline-flex;
+        padding: .42rem .68rem;
+        border-radius: 9px;
+        background: #edf7ff;
+        color: #006bb5;
+        font-weight: 800;
+        letter-spacing: .08em;
+        white-space: nowrap;
+    }
+
+    .sequence-grid {
+        min-width: 360px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(78px, 1fr));
+        gap: .35rem;
+    }
+
+    .sequence-grid > span {
+        padding: .36rem .45rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        background: #f8fafc;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .sequence-grid small {
+        color: #64748b;
+        font-size: .65rem;
+        font-weight: 800;
+    }
+
+    .sequence-grid strong {
+        color: #0f172a;
+        font-size: .73rem;
+    }
+
+    .status-pill {
+        width: fit-content;
+        padding: .28rem .58rem;
+        border-radius: 999px;
+        font-size: .74rem;
+        font-weight: 800;
+    }
+
+    .status-pill.is-active {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .status-pill.is-inactive {
+        background: #f1f5f9;
+        color: #64748b;
+    }
+
+    .system-label {
+        color: #6d28d9 !important;
+    }
+
+    .action-btn,
+    .close-btn,
+    .pagination-btn {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+    }
+
+    .action-btn {
+        background: #eaf4fb;
+        color: #006bb5;
+    }
+
+    .action-btn:hover {
+        background: #006bb5;
+        color: #fff;
+    }
+
+    .table-pagination {
+        padding: 1rem 1.1rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        color: #64748b;
+        font-size: .85rem;
+    }
+
+    .pagination-actions {
+        display: flex;
+        align-items: center;
+        gap: .65rem;
+    }
+
+    .pagination-btn {
+        background: #eef6fc;
+        color: #006bb5;
+    }
+
+    .state-card {
+        padding: 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: .55rem;
+        color: #64748b;
+        text-align: center;
+    }
+
+    .state-card i {
+        color: #006bb5;
+        font-size: 1.8rem;
+    }
+
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1090;
+        padding: 1.25rem;
+        display: grid;
+        place-items: center;
+        background: rgba(15, 23, 42, .58);
+        backdrop-filter: blur(3px);
+    }
+
+    .edit-modal {
+        width: min(920px, 96vw);
+        max-height: 92vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        border-radius: 22px;
+        background: #fff;
+        box-shadow: 0 28px 80px rgba(15, 23, 42, .3);
+    }
+
+    .modal-head,
+    .modal-actions {
+        padding: 1rem 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .modal-head {
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .close-btn {
+        background: #f1f5f9;
+        color: #475569;
+    }
+
+    .modal-body {
+        overflow-y: auto;
+        padding: 1.15rem;
+        display: grid;
+        gap: 1rem;
+    }
+
+    .series-field span,
+    .series-field small {
+        display: block;
+    }
+
+    .series-field span {
+        margin-bottom: .4rem;
+        font-weight: 800;
+    }
+
+    .series-field small {
+        margin-top: .35rem;
+        color: #64748b;
+    }
+
+    .series-field input,
+    .modal-table input[type="number"] {
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: .62rem .75rem;
+        color: #006bb5;
+        font-weight: 800;
+    }
+
+    .series-field input {
+        width: 140px;
+        letter-spacing: .08em;
+    }
+
+    .modal-table-wrap {
+        overflow-x: auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+    }
+
+    .modal-table {
+        min-width: 620px;
+    }
+
+    .modal-table td {
+        padding: .75rem 1rem;
+        border-bottom: 1px solid #eef3f7;
+        vertical-align: middle;
+    }
+
+    .modal-table input[type="number"] {
+        width: 170px;
+        text-align: right;
+    }
+
+    .initialized-check {
+        display: inline-flex;
+        align-items: center;
+        gap: .45rem;
+        font-weight: 700;
+    }
+
+    .modal-actions {
+        justify-content: flex-end;
+        border-top: 1px solid #e2e8f0;
+    }
+
+    button:disabled,
+    input:disabled {
+        cursor: not-allowed;
+        opacity: .6;
+    }
+
+    @@media (max-width: 760px) {
+        .sequence-hero,
+        .toolbar-card,
+        .table-card-head,
+        .table-pagination {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .hero-summary {
+            text-align: left;
+        }
+
+        .toolbar-actions {
+            width: 100%;
+            flex-direction: column;
+        }
+
+        .edit-modal {
+            width: 100%;
+        }
+    }
+</style>
+
+@code {
+    private const int PageSize = 10;
+    private readonly List<AdminCajaSecuenciaDto> cajas = new();
+    private int actorUserId;
+    private int paginaActual = 1;
+    private bool cargando = true;
+    private bool guardando;
+    private bool tienePermiso = true;
+    private bool mensajeEsError;
+    private string filtro = string.Empty;
+    private string? mensaje;
+    private AdminCajaSecuenciaDto? cajaEdicion;
+
+    private string Filtro
+    {
+        get => filtro;
+        set
+        {
+            filtro = value;
+            paginaActual = 1;
+        }
+    }
+
+    private List<AdminCajaSecuenciaDto> CajasFiltradas =>
+        cajas.Where(CoincideFiltro).ToList();
+
+    private IEnumerable<AdminCajaSecuenciaDto> CajasPaginadas =>
+        CajasFiltradas
+            .Skip((paginaActual - 1) * PageSize)
+            .Take(PageSize);
+
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(CajasFiltradas.Count / (double)PageSize));
+    private int PrimerRegistro => CajasFiltradas.Count == 0 ? 0 : ((paginaActual - 1) * PageSize) + 1;
+    private int UltimoRegistro => Math.Min(paginaActual * PageSize, CajasFiltradas.Count);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        actorUserId = int.TryParse(authState.User.FindFirst("IdUsuario")?.Value, out var id)
+            ? id
+            : 0;
+
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        cargando = true;
+        mensaje = null;
+
+        try
+        {
+            cajas.Clear();
+            cajas.AddRange(await AdminService.GetAllAsync(actorUserId));
+            tienePermiso = true;
+            paginaActual = Math.Min(paginaActual, TotalPaginas);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            tienePermiso = false;
+            mensajeEsError = true;
+            mensaje = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            mensajeEsError = true;
+            mensaje = $"No se pudieron cargar las cajas. {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private void AbrirEditar(AdminCajaSecuenciaDto caja)
+    {
+        cajaEdicion = Clonar(caja);
+        mensaje = null;
+    }
+
+    private void CerrarEditar()
+    {
+        if (!guardando)
+        {
+            cajaEdicion = null;
+        }
+    }
+
+    private async Task GuardarEdicion()
+    {
+        if (cajaEdicion is null)
+        {
+            return;
+        }
+
+        guardando = true;
+        mensaje = null;
+
+        try
+        {
+            var nombre = NombreCliente(cajaEdicion);
+            var numeroCaja = cajaEdicion.NumeroCaja;
+            await AdminService.SaveAsync(actorUserId, cajaEdicion);
+            cajaEdicion = null;
+            await Cargar();
+            mensajeEsError = false;
+            mensaje = $"Caja {numeroCaja} de {nombre} actualizada correctamente.";
+            await JS.ShowToastAsync("Caja y secuencias actualizadas");
+        }
+        catch (Exception ex)
+        {
+            mensajeEsError = true;
+            mensaje = ex.Message;
+            await JS.ShowAlertAsync("No se pudo guardar", ex.Message, "error");
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private void CambiarPagina(int pagina)
+    {
+        paginaActual = Math.Clamp(pagina, 1, TotalPaginas);
+    }
+
+    private bool CoincideFiltro(AdminCajaSecuenciaDto caja)
+    {
+        if (string.IsNullOrWhiteSpace(filtro))
+        {
+            return true;
+        }
+
+        var term = filtro.Trim();
+        return Contiene(caja.Cliente, term) ||
+               Contiene(caja.Email, term) ||
+               Contiene(caja.Ruc, term) ||
+               Contiene(caja.RazonSocial, term) ||
+               Contiene(caja.Serie, term) ||
+               caja.CajaSec.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) ||
+               caja.IdUsuario.ToString().Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static AdminCajaSecuenciaDto Clonar(AdminCajaSecuenciaDto caja) =>
+        new()
+        {
+            CajaSec = caja.CajaSec,
+            NumeroCaja = caja.NumeroCaja,
+            IdUsuario = caja.IdUsuario,
+            Cliente = caja.Cliente,
+            Email = caja.Email,
+            Ruc = caja.Ruc,
+            RazonSocial = caja.RazonSocial,
+            Activa = caja.Activa,
+            EsCajaSistema = caja.EsCajaSistema,
+            Serie = caja.Serie,
+            Secuencias = caja.Secuencias.Select(item => new AdminDocumentoSecuenciaDto
+            {
+                DocumentKey = item.DocumentKey,
+                DocumentLabel = item.DocumentLabel,
+                Initialized = item.Initialized,
+                LastSequence = item.LastSequence
+            }).ToList()
+        };
+
+    private static string AbreviarDocumento(string documentKey) =>
+        documentKey switch
+        {
+            "factura" => "FAC",
+            "guia-remision" => "GUI",
+            "nota-credito" => "NC",
+            "nota-debito" => "ND",
+            "liquidacion-compra" => "LIQ",
+            "compra-manual" => "COM",
+            "retencion" => "RET",
+            _ => documentKey
+        };
+
+    private static bool Contiene(string? value, string term) =>
+        (value ?? string.Empty).Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    private static string NombreCliente(AdminCajaSecuenciaDto caja) =>
+        !string.IsNullOrWhiteSpace(caja.RazonSocial)
+            ? caja.RazonSocial
+            : !string.IsNullOrWhiteSpace(caja.Cliente)
+                ? caja.Cliente
+                : $"Usuario {caja.IdUsuario}";
+
+    private static long ParseSequence(object? value) =>
+        long.TryParse(value?.ToString(), out var parsed)
+            ? Math.Clamp(parsed, 0, 999_999_999)
+            : 0;
+}

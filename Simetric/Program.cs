@@ -219,6 +219,7 @@ builder.Services.AddScoped<IEstadoCuentaPdfService, EstadoCuentaPdfService>();
 builder.Services.AddScoped<IFacturasExcelService, FacturasExcelService>();
 builder.Services.AddScoped<ISimpleExcelExportService, SimpleExcelExportService>();
 builder.Services.AddScoped<InitialSequencePromptService>();
+builder.Services.AddScoped<AdminCajaSecuenciaService>();
 builder.Services.AddSingleton<TutorialRegistryService>();
 builder.Services.AddScoped<TutorialStateService>();
 builder.Services.AddScoped<EmisorOnboardingService>();
@@ -292,6 +293,9 @@ try
     await using var scope = app.Services.CreateAsyncScope();
     var initialSequencePromptService = scope.ServiceProvider.GetRequiredService<InitialSequencePromptService>();
     await initialSequencePromptService.EnsureSchemaAsync();
+
+    var adminCajaSecuenciaService = scope.ServiceProvider.GetRequiredService<AdminCajaSecuenciaService>();
+    await adminCajaSecuenciaService.EnsureMenuAsync();
 
     var comprobanteCorreoEstadoService = scope.ServiceProvider.GetRequiredService<ComprobanteCorreoEstadoService>();
     await comprobanteCorreoEstadoService.EnsureSchemaAsync();
