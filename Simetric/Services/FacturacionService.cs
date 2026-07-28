@@ -45,8 +45,8 @@ namespace Simetric.Services
         private readonly ILogger<FacturacionService> _logger;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly FacturaStoredProcedureBootstrapService _facturaStoredProcedureBootstrapService;
-        private readonly IWebHostEnvironment _hostEnvironment;
         private readonly EmisorCertificadoProtector _certificadoProtector;
+        private readonly FirmaPathResolver _firmaPathResolver;
         public string? UltimoErrorGuardarFactura { get; private set; }
 
         public FacturacionService(
@@ -63,8 +63,8 @@ namespace Simetric.Services
             ILogger<FacturacionService> logger,
             IHttpContextAccessor httpContextAccessor,
             FacturaStoredProcedureBootstrapService facturaStoredProcedureBootstrapService,
-            IWebHostEnvironment hostEnvironment,
-            EmisorCertificadoProtector certificadoProtector)
+            EmisorCertificadoProtector certificadoProtector,
+            FirmaPathResolver firmaPathResolver)
         {
             _dbFactory = dbFactory;
             _emailService = emailService;
@@ -79,8 +79,8 @@ namespace Simetric.Services
             _logger = logger;
             _httpContextAccessor = httpContextAccessor;
             _facturaStoredProcedureBootstrapService = facturaStoredProcedureBootstrapService;
-            _hostEnvironment = hostEnvironment;
             _certificadoProtector = certificadoProtector;
+            _firmaPathResolver = firmaPathResolver;
         }
 
         private static object SnapshotCliente(Cliente c) => new
@@ -1821,44 +1821,9 @@ namespace Simetric.Services
 
         private string ResolverRutaFirmaElectronica(string? rutaFirma)
         {
-            var rutaNormalizada = (rutaFirma ?? string.Empty).Trim().TrimStart('~', '/', '\\').Replace('\\', '/');
-            if (string.IsNullOrWhiteSpace(rutaNormalizada))
-                throw new FileNotFoundException("No se encontro la firma electronica configurada.");
-
-            var rutaOriginal = (rutaFirma ?? string.Empty).Trim().Replace('\\', '/');
-            var nombreArchivo = Path.GetFileName(rutaNormalizada);
-            var contentRoot = _hostEnvironment.ContentRootPath;
-            var webRoot = string.IsNullOrWhiteSpace(_hostEnvironment.WebRootPath)
-                ? Path.Combine(contentRoot, "wwwroot")
-                : _hostEnvironment.WebRootPath;
-            var candidatos = new List<string>();
-
-            if (Path.IsPathRooted(rutaOriginal))
-                candidatos.Add(rutaOriginal.Replace('/', Path.DirectorySeparatorChar));
-
-            if (Path.IsPathRooted(rutaNormalizada))
-                candidatos.Add(rutaNormalizada.Replace('/', Path.DirectorySeparatorChar));
-
-            void AgregarCandidato(string baseDir, string relativePath)
-            {
-                if (string.IsNullOrWhiteSpace(baseDir))
-                    return;
-
-                candidatos.Add(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-            }
-
-            AgregarCandidato(webRoot, $"App_Data/{rutaNormalizada}");
-            AgregarCandidato(contentRoot, $"App_Data/{rutaNormalizada}");
-            AgregarCandidato(contentRoot, rutaNormalizada);
-            AgregarCandidato(webRoot, $"App_Data/certs/path/{nombreArchivo}");
-            AgregarCandidato(contentRoot, $"App_Data/certs/path/{nombreArchivo}");
-            AgregarCandidato(webRoot, $"App_Data/certs/system/{nombreArchivo}");
-            AgregarCandidato(contentRoot, $"App_Data/certs/system/{nombreArchivo}");
-
-            return candidatos
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault(File.Exists)
-                ?? throw new FileNotFoundException($"No se encontro la firma electronica configurada: {rutaNormalizada}");
+            return _firmaPathResolver.ResolverRutaExistente(rutaFirma)
+                ?? throw new FileNotFoundException(
+                    $"No se encontro la firma electronica configurada: {FirmaPathResolver.NormalizarRutaRelativa(rutaFirma)}");
         }
 
         private string ResolverClaveFirmaElectronica(string? claveFirma)

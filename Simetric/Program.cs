@@ -225,6 +225,7 @@ builder.Services.AddScoped<EmisorOnboardingService>();
 builder.Services.AddScoped<EmisionControlService>();
 builder.Services.AddScoped<EmisorCertificadoProtector>();
 builder.Services.AddScoped<EmisorCertificadoValidator>();
+builder.Services.AddScoped<FirmaPathResolver>();
 builder.Services.AddScoped<FirmaRenovacionService>();
 builder.Services.AddHttpClient<FirmaInfoApiService>(client =>
 {

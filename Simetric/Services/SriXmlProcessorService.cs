@@ -13,11 +13,16 @@ public sealed class SriXmlProcessorService
     private const string DefaultApiKey = "E-factSimetricNumericaKey2026*#";
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
+    private readonly FirmaPathResolver _firmaPathResolver;
 
-    public SriXmlProcessorService(HttpClient httpClient, IConfiguration configuration)
+    public SriXmlProcessorService(
+        HttpClient httpClient,
+        IConfiguration configuration,
+        FirmaPathResolver firmaPathResolver)
     {
         _httpClient = httpClient;
         _configuration = configuration;
+        _firmaPathResolver = firmaPathResolver;
     }
 
     public async Task<mensajeSRI> ProcessXmlAsync(
@@ -85,20 +90,9 @@ public sealed class SriXmlProcessorService
         }
     }
 
-    private static string? ResolverRutaCertificado(string? rutaCertificado)
+    private string? ResolverRutaCertificado(string? rutaCertificado)
     {
-        if (string.IsNullOrWhiteSpace(rutaCertificado))
-            return null;
-
-        var candidatos = new[]
-        {
-            rutaCertificado,
-            Path.Combine(Directory.GetCurrentDirectory(), rutaCertificado),
-            Path.Combine(Directory.GetCurrentDirectory(), "App_Data", Path.GetFileName(rutaCertificado)),
-            Path.Combine(Directory.GetCurrentDirectory(), "App_Data", "certs", "path", Path.GetFileName(rutaCertificado))
-        };
-
-        return candidatos.FirstOrDefault(File.Exists) ?? candidatos.Last();
+        return _firmaPathResolver.ResolverRutaExistente(rutaCertificado);
     }
 
     private string ResolveApiKey()

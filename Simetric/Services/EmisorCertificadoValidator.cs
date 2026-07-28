@@ -1,25 +1,21 @@
-using Microsoft.AspNetCore.Hosting;
 using Simetric.Models;
 
 namespace Simetric.Services;
 
 public sealed class EmisorCertificadoValidator
 {
-    private readonly IWebHostEnvironment _hostEnvironment;
     private readonly EmisorCertificadoProtector _certificadoProtector;
     private readonly FirmaInfoApiService _firmaInfoApiService;
-    private readonly IConfiguration _configuration;
+    private readonly FirmaPathResolver _firmaPathResolver;
 
     public EmisorCertificadoValidator(
-        IWebHostEnvironment hostEnvironment,
         EmisorCertificadoProtector certificadoProtector,
         FirmaInfoApiService firmaInfoApiService,
-        IConfiguration configuration)
+        FirmaPathResolver firmaPathResolver)
     {
-        _hostEnvironment = hostEnvironment;
         _certificadoProtector = certificadoProtector;
         _firmaInfoApiService = firmaInfoApiService;
-        _configuration = configuration;
+        _firmaPathResolver = firmaPathResolver;
     }
 
     public CertificadoEmisorValidationResult Validar(Emisor? emisor)
@@ -60,15 +56,23 @@ public sealed class EmisorCertificadoValidator
         if (!validacionConfiguracion.IsValid)
             return validacionConfiguracion;
 
-        var rutaFisica = ResolverRutaParaApi(emisor!.PathCertificado);
-        if (string.IsNullOrWhiteSpace(rutaFisica))
+        var rutasFirma = _firmaPathResolver.ResolverRutasParaApi(emisor!.PathCertificado);
+        if (rutasFirma.Count == 0)
             return CertificadoEmisorValidationResult.Fail("No se encontro el archivo .p12 configurado para el emisor.");
 
         var clave = _certificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
         if (string.IsNullOrWhiteSpace(clave))
             return CertificadoEmisorValidationResult.Fail("No se pudo obtener la clave de la firma electronica.");
 
-        var apiResult = await _firmaInfoApiService.ConsultarAsync(rutaFisica, clave, cancellationToken);
+        FirmaInfoApiResult? apiResult = null;
+        foreach (var rutaFirma in rutasFirma)
+        {
+            apiResult = await _firmaInfoApiService.ConsultarAsync(rutaFirma, clave, cancellationToken);
+            if (apiResult.Success || cancellationToken.IsCancellationRequested)
+                break;
+        }
+
+        apiResult ??= FirmaInfoApiResult.Error("No se pudo validar la ruta del archivo de firma.");
         if (!apiResult.Success || apiResult.Info is null)
             return CertificadoEmisorValidationResult.Fail(
                 string.IsNullOrWhiteSpace(apiResult.Message) ? "Firma no valida." : apiResult.Message,
@@ -194,67 +198,6 @@ public sealed class EmisorCertificadoValidator
         }
 
         return normalizada;
-    }
-
-    private string? ResolverRutaFisica(string? ruta)
-    {
-        if (string.IsNullOrWhiteSpace(ruta))
-            return null;
-
-        var rutaOriginal = ruta.Trim();
-        var rutaNormalizada = NormalizarRutaCertificado(ruta);
-        if (string.IsNullOrWhiteSpace(rutaNormalizada))
-            return null;
-
-        var candidatos = new List<string>();
-        var nombreArchivo = Path.GetFileName(rutaNormalizada);
-        var contentRoot = _hostEnvironment.ContentRootPath;
-        var webRoot = string.IsNullOrWhiteSpace(_hostEnvironment.WebRootPath)
-            ? Path.Combine(contentRoot, "wwwroot")
-            : _hostEnvironment.WebRootPath;
-
-        if (Path.IsPathRooted(rutaOriginal))
-            candidatos.Add(rutaOriginal);
-
-        void AgregarCandidato(string baseDir, string relativePath)
-        {
-            if (!string.IsNullOrWhiteSpace(baseDir) && !string.IsNullOrWhiteSpace(relativePath))
-                candidatos.Add(Path.Combine(
-                    baseDir,
-                    relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        }
-
-        AgregarCandidato(contentRoot, $"App_Data/{rutaNormalizada}");
-        AgregarCandidato(webRoot, $"App_Data/{rutaNormalizada}");
-        AgregarCandidato(contentRoot, rutaNormalizada);
-        AgregarCandidato(webRoot, rutaNormalizada);
-        AgregarCandidato(contentRoot, $"App_Data/certs/path/{nombreArchivo}");
-        AgregarCandidato(webRoot, $"App_Data/certs/path/{nombreArchivo}");
-        AgregarCandidato(contentRoot, $"App_Data/certs/system/{nombreArchivo}");
-        AgregarCandidato(webRoot, $"App_Data/certs/system/{nombreArchivo}");
-
-        return candidatos
-            .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault(File.Exists);
-    }
-
-    private string? ResolverRutaParaApi(string? ruta)
-    {
-        var rutaLocal = ResolverRutaFisica(ruta);
-        if (!string.IsNullOrWhiteSpace(rutaLocal))
-            return rutaLocal;
-
-        var rutaFirmasBase = _configuration["FirmaInfoApi:RutaFirmasBase"]?.Trim();
-        var rutaNormalizada = NormalizarRutaCertificado(ruta);
-        if (string.IsNullOrWhiteSpace(rutaFirmasBase) || string.IsNullOrWhiteSpace(rutaNormalizada))
-            return null;
-
-        var rutaRelativa = rutaNormalizada.Replace('/', Path.DirectorySeparatorChar);
-        if (!rutaNormalizada.Contains('/'))
-            rutaRelativa = Path.Combine("certs", "path", rutaRelativa);
-
-        return Path.GetFullPath(Path.Combine(rutaFirmasBase, rutaRelativa));
     }
 
     private static string? NormalizarDigitos(string? valor)

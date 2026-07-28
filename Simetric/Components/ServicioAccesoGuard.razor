@@ -8,9 +8,11 @@
 @inject NavigationManager NavManager
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject AppAccessService AppAccessService
+@implements IDisposable
 
 @code {
     private bool _evaluando;
+    private bool _disposed;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -22,7 +24,7 @@
 
     private async Task ValidarAccesoAsync()
     {
-        if (_evaluando)
+        if (_evaluando || _disposed)
             return;
 
         if (NavManager.Uri.Contains("/demo/", StringComparison.OrdinalIgnoreCase))
@@ -37,6 +39,9 @@
         try
         {
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            if (_disposed)
+                return;
+
             var user = authState.User;
 
             if (user.Identity?.IsAuthenticated != true)
@@ -51,6 +56,9 @@
             var expectedService = AppAccessService.FreeServiceKey;
 
             var currentService = await SelectedAppServiceState.GetCurrentServiceKeyAsync();
+            if (_disposed)
+                return;
+
             if (string.IsNullOrWhiteSpace(currentService))
             {
                 await SelectedAppServiceState.SetCurrentServiceKeyAsync(expectedService);
@@ -59,14 +67,14 @@
 
             if (!string.Equals(currentService, expectedService, StringComparison.OrdinalIgnoreCase))
             {
-                NavManager.NavigateToIfNeeded("/portal-servicios");
+                NavegarSiActivo("/portal-servicios");
                 return;
             }
 
             var userIdClaim = user.FindFirst("IdUsuario")?.Value;
             if (!int.TryParse(userIdClaim, out var userId) || userId <= 0)
             {
-                NavManager.NavigateToIfNeeded("/portal-servicios");
+                NavegarSiActivo("/portal-servicios");
                 return;
             }
 
@@ -75,10 +83,12 @@
                 userId,
                 expectedService,
                 roleId == AppAccessService.AdminRoleId);
+            if (_disposed)
+                return;
 
             if (!canAccess.HasAccess)
             {
-                NavManager.NavigateToIfNeeded(
+                NavegarSiActivo(
                     $"/suscripciones?servicio={Uri.EscapeDataString(expectedService)}",
                     replace: true);
                 return;
@@ -93,6 +103,17 @@
         {
             _evaluando = false;
         }
+    }
+
+    private void NavegarSiActivo(string ruta, bool replace = false)
+    {
+        if (!_disposed)
+            NavManager.NavigateToIfNeeded(ruta, replace: replace);
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
     }
 
     private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);

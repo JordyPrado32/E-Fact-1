@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using System.Net.Http.Json
 @using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.AspNetCore.Hosting
@@ -319,12 +320,17 @@
         guardando = true;
         try
         {
+            MigrarCertificadoSistemaARutaCompartida();
             modelo.IdUsuario = currentUserId;
+            modelo.PathCertificado = modelo.PathCertificado?.Trim();
             modelo.ClaveCertificado = modelo.ClaveCertificado?.Trim();
             var response = await Http.PutAsJsonAsync($"api/emisores/{modelo.Codigo}", modelo);
             if (!response.IsSuccessStatusCode)
             {
-                SetMensaje(await response.Content.ReadAsStringAsync(), true);
+                var detalle = await LeerMensajeErrorHttpAsync(
+                    response,
+                    "No se pudo guardar la configuracion de firma y logo.");
+                SetMensaje(detalle, true);
                 return;
             }
 
@@ -333,7 +339,7 @@
         }
         catch (Exception ex)
         {
-            SetMensaje(ex.Message, true);
+            SetMensaje(FormatearMensajeError(ex.Message), true);
         }
         finally
         {
@@ -341,83 +347,246 @@
         }
     }
 
+    private void MigrarCertificadoSistemaARutaCompartida()
+    {
+        var rutaActual = modelo.PathCertificado?.Trim().Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(rutaActual) ||
+            !rutaActual.StartsWith("certs/system/", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var nombreArchivo = Path.GetFileName(rutaActual);
+        var origen = Path.Combine(
+            HostEnvironment.ContentRootPath,
+            "App_Data",
+            rutaActual.Replace('/', Path.DirectorySeparatorChar));
+        var rutaNueva = $"certs/path/{nombreArchivo}";
+        var destino = Path.Combine(
+            HostEnvironment.ContentRootPath,
+            "App_Data",
+            rutaNueva.Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(origen))
+            return;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destino)!);
+        if (!File.Exists(destino))
+            File.Copy(origen, destino);
+
+        modelo.PathCertificado = rutaNueva;
+    }
+
     private async Task SubirP12Async(InputFileChangeEventArgs e)
     {
-        if (e.FileCount != 1)
+        try
         {
-            SetMensaje("Selecciona un solo archivo .p12.", true);
-            return;
-        }
+            if (e.FileCount != 1 || e.File is null)
+            {
+                SetMensaje("Selecciona un solo archivo .p12.", true);
+                return;
+            }
 
-        var file = e.File;
-        if (!string.Equals(Path.GetExtension(file.Name), ".p12", StringComparison.OrdinalIgnoreCase))
+            var file = e.File;
+            if (!string.Equals(Path.GetExtension(file.Name), ".p12", StringComparison.OrdinalIgnoreCase))
+            {
+                SetMensaje("Solo se permiten archivos .p12.", true);
+                return;
+            }
+
+            var contentType = (file.ContentType ?? string.Empty).Trim().ToLowerInvariant();
+            var tiposPermitidos = new[]
+            {
+                string.Empty,
+                "application/x-pkcs12",
+                "application/pkcs12",
+                "application/x-pkcs-12",
+                "application/octet-stream"
+            };
+            if (!tiposPermitidos.Contains(contentType))
+            {
+                SetMensaje("El archivo seleccionado no es un certificado .p12 valido.", true);
+                return;
+            }
+
+            if (file.Size <= 0)
+            {
+                SetMensaje("El archivo .p12 esta vacio.", true);
+                return;
+            }
+
+            if (file.Size > MaxCertificadoSize)
+            {
+                SetMensaje("El archivo .p12 excede el tamano maximo de 5 MB.", true);
+                return;
+            }
+
+            await using var source = file.OpenReadStream(MaxCertificadoSize);
+            using var buffer = new MemoryStream();
+            await source.CopyToAsync(buffer);
+            var bytes = buffer.ToArray();
+            if (bytes.Length == 0)
+            {
+                SetMensaje("No se pudo leer el archivo .p12 seleccionado.", true);
+                return;
+            }
+
+            var relativePath = $"certs/path/{Guid.NewGuid():N}.p12";
+            var physicalPath = Path.Combine(
+                HostEnvironment.ContentRootPath,
+                "App_Data",
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(physicalPath)!);
+            await File.WriteAllBytesAsync(physicalPath, bytes);
+
+            modelo.PathCertificado = relativePath;
+            certificadoSeleccionado = file.Name;
+            firmaEstadoActual = null;
+            mensajeValidacionFirma = "Guarda la configuracion para validar la nueva firma.";
+            SetMensaje("Firma .p12 cargada. Guarda para confirmar.", false);
+        }
+        catch (Exception ex)
         {
-            SetMensaje("Solo se permiten archivos .p12.", true);
-            return;
+            SetMensaje(FormatearMensajeError(ex.Message), true);
         }
-
-        if (file.Size <= 0 || file.Size > MaxCertificadoSize)
-        {
-            SetMensaje("El archivo .p12 debe pesar hasta 5 MB.", true);
-            return;
-        }
-
-        var relativePath = $"certs/path/{Guid.NewGuid():N}.p12";
-        var physicalPath = Path.Combine(HostEnvironment.ContentRootPath, "App_Data", relativePath.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(physicalPath)!);
-
-        await using var source = file.OpenReadStream(MaxCertificadoSize);
-        await using var target = File.Create(physicalPath);
-        await source.CopyToAsync(target);
-
-        modelo.PathCertificado = relativePath;
-        certificadoSeleccionado = file.Name;
-        SetMensaje("Firma .p12 cargada. Guarda para confirmar.", false);
     }
 
     private async Task SubirLogoAsync(InputFileChangeEventArgs e)
     {
-        if (e.FileCount != 1)
+        try
         {
-            SetMensaje("Selecciona un solo logo.", true);
-            return;
-        }
+            if (e.FileCount != 1 || e.File is null)
+            {
+                SetMensaje("Selecciona un solo logo.", true);
+                return;
+            }
 
-        var file = e.File;
-        var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
-        if (extension is not ".jpg" and not ".jpeg" and not ".png")
+            var file = e.File;
+            var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
+            if (extension is not ".jpg" and not ".jpeg" and not ".png")
+            {
+                SetMensaje("Solo se permiten logos JPG, JPEG o PNG.", true);
+                return;
+            }
+
+            var contentType = (file.ContentType ?? string.Empty).Trim().ToLowerInvariant();
+            if (contentType is not "image/jpeg" and not "image/png")
+            {
+                SetMensaje("El logo seleccionado no tiene un formato valido.", true);
+                return;
+            }
+
+            if (file.Size <= 0)
+            {
+                SetMensaje("El archivo de logo esta vacio.", true);
+                return;
+            }
+
+            if (file.Size > MaxLogoSize)
+            {
+                SetMensaje("El logo excede el tamano maximo de 2 MB.", true);
+                return;
+            }
+
+            await using var stream = file.OpenReadStream(MaxLogoSize);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            var bytes = buffer.ToArray();
+            if (bytes.Length == 0)
+            {
+                SetMensaje("No se pudo leer el logo seleccionado.", true);
+                return;
+            }
+
+            var result = LogoImageProcessor.Normalize(bytes, contentType);
+            modelo.LogoImagen = $"data:{result.ContentType};base64,{Convert.ToBase64String(result.Bytes)}";
+            logoSeleccionado = file.Name;
+            SetMensaje("Logo cargado correctamente. Guarda para confirmar.", false);
+        }
+        catch (Exception ex)
         {
-            SetMensaje("Solo se permiten logos JPG, JPEG o PNG.", true);
-            return;
+            SetMensaje(FormatearMensajeError(ex.Message), true);
         }
-
-        var contentType = (file.ContentType ?? string.Empty).ToLowerInvariant();
-        if (contentType is not "image/jpeg" and not "image/png")
-        {
-            SetMensaje("El logo seleccionado no tiene un formato valido.", true);
-            return;
-        }
-
-        if (file.Size <= 0 || file.Size > MaxLogoSize)
-        {
-            SetMensaje("El logo debe pesar hasta 2 MB.", true);
-            return;
-        }
-
-        await using var stream = file.OpenReadStream(MaxLogoSize);
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms);
-        var result = LogoImageProcessor.Normalize(ms.ToArray(), contentType);
-
-        modelo.LogoImagen = $"data:{result.ContentType};base64,{Convert.ToBase64String(result.Bytes)}";
-        logoSeleccionado = file.Name;
-        SetMensaje("Logo cargado correctamente. Guarda para confirmar.", false);
     }
 
     private void SetMensaje(string texto, bool error)
     {
         mensaje = string.IsNullOrWhiteSpace(texto) ? null : texto.Trim('"', ' ', '\r', '\n');
         esError = error;
+    }
+
+    private async Task<string> LeerMensajeErrorHttpAsync(
+        HttpResponseMessage response,
+        string fallbackMessage)
+    {
+        var rawBody = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(rawBody))
+            return fallbackMessage;
+
+        var normalizedBody = rawBody.Trim();
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        if (string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase) ||
+            PareceHtml(normalizedBody))
+        {
+            return $"{fallbackMessage} El servidor devolvio un error interno.";
+        }
+
+        var mensajeJson = IntentarExtraerMensajeJson(normalizedBody);
+        return FormatearMensajeError(
+            string.IsNullOrWhiteSpace(mensajeJson) ? normalizedBody : mensajeJson);
+    }
+
+    private static string FormatearMensajeError(string? rawMessage)
+    {
+        if (string.IsNullOrWhiteSpace(rawMessage))
+            return "Se produjo un error inesperado.";
+
+        var limpio = rawMessage
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+
+        if (PareceHtml(limpio))
+            return "El servidor devolvio un error interno no controlado.";
+
+        return limpio.Length > 320
+            ? $"{limpio[..317].TrimEnd()}..."
+            : limpio;
+    }
+
+    private static string? IntentarExtraerMensajeJson(string rawBody)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(rawBody);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.String)
+                return root.GetString();
+
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            foreach (var nombre in new[] { "message", "mensaje", "title" })
+            {
+                if (root.TryGetProperty(nombre, out var property) &&
+                    property.ValueKind == JsonValueKind.String)
+                {
+                    return property.GetString();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return null;
+    }
+
+    private static bool PareceHtml(string value)
+    {
+        var sample = value.TrimStart();
+        return sample.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
+               sample.StartsWith("<html", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task ValidarFirmaActualAsync()
