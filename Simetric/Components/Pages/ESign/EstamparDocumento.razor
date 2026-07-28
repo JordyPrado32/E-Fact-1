@@ -200,20 +200,79 @@
                 }
             </section>
         }
+
+        <section class="stamp-panel qr-validation-panel">
+            <div class="panel-heading qr-heading">
+                <i class="bi bi-check-lg"></i>
+                <div>
+                    <h2>Validar QR</h2>
+                    <p>Pega el token o la URL leida del QR para comprobar su autenticidad.</p>
+                </div>
+            </div>
+
+            <label class="stamp-data">
+                <span>Token o URL de verificacion</span>
+                <textarea
+                    rows="4"
+                    @bind="qrEntrada"
+                    placeholder="v1... o http://localhost:5029/api/verificaciones/qr?token=v1..."></textarea>
+            </label>
+
+            <div class="qr-actions">
+                <button type="button" class="qr-validate-btn" @onclick="ValidarQrAsync" disabled="@procesandoValidacionQr">
+                    <i class="bi @(procesandoValidacionQr ? "bi-arrow-repeat" : "bi-shield-check")"></i>
+                    <span>@(procesandoValidacionQr ? "Validando..." : "Validar autenticidad")</span>
+                </button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(qrMensaje))
+            {
+                <div class="qr-result @(qrEsError ? "is-error" : "is-valid")" role="status">
+                    <i class="bi @(qrEsError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                    <div>
+                        <strong>@(qrEsError ? "QR no valido" : "QR autentico")</strong>
+                        <span>@qrMensaje</span>
+                    </div>
+                </div>
+            }
+
+            @if (qrResultado is not null)
+            {
+                <dl class="qr-details">
+                    <div>
+                        <dt>Firmado</dt>
+                        <dd>@qrResultado.FirmadoEnUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</dd>
+                    </div>
+                    <div>
+                        <dt>SHA-256 documento original</dt>
+                        <dd><code>@qrResultado.DocumentoOriginalSha256</code></dd>
+                    </div>
+                </dl>
+
+                <details class="qr-json">
+                    <summary>Ver datos incluidos en el QR</summary>
+                    <pre>@qrDatosJson</pre>
+                </details>
+            }
+        </section>
     }
 </div>
 
 @code {
     private const long MaxPdfSize = 10 * 1024 * 1024;
     private const long MaxAssetSize = 5 * 1024 * 1024;
-    private const long MaxRequestSize = 15 * 1024 * 1024;
 
     private bool cargando = true;
     private bool procesando;
+    private bool procesandoValidacionQr;
     private bool esError;
+    private bool qrEsError;
     private int currentUserId;
     private string? mensaje;
+    private string? qrMensaje;
     private string datos = string.Empty;
+    private string qrEntrada = string.Empty;
+    private string? qrDatosJson;
     private int pagina = 1;
     private double xMm = 10;
     private double yMm = 10;
@@ -227,6 +286,7 @@
     private bool tienePreferenciaGuardada;
     private StampPreference? preferenciaGuardada;
     private ResultadoEstampado? resultado;
+    private QrVerificationApiResponse? qrResultado;
     private DotNetObjectReference<EstamparDocumento>? dotNetRef;
     private IJSObjectReference? stampSelectorModule;
     private IJSObjectReference? stampSelectorInstance;
@@ -338,8 +398,6 @@
             var apiResult = await FirmaStampApiService.EstamparAsync(
                 pdfFile!,
                 recursosFirma.Logo,
-                recursosFirma.Certificado,
-                recursosFirma.PasswordCertificado,
                 datos.Trim(),
                 pagina,
                 xMm,
@@ -452,20 +510,20 @@
 
         if (string.IsNullOrWhiteSpace(emisor.PathCertificado))
         {
-            estado = "El emisor no tiene certificado configurado en EFact.";
-            return false;
+            estado = "El emisor no tiene certificado configurado en EFact; se usaran los datos del emisor.";
+            return true;
         }
 
         if (string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
         {
-            estado = "El emisor no tiene clave de certificado configurada en EFact.";
-            return false;
+            estado = "El emisor no tiene clave de certificado configurada en EFact; se usaran los datos del emisor.";
+            return true;
         }
 
         rutaCertificadoEmisor = FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
         if (string.IsNullOrWhiteSpace(rutaCertificadoEmisor))
         {
-            estado = $"EFact tiene registrado el certificado '{emisor.PathCertificado}', se buscara por RUC al estampar.";
+            estado = $"EFact tiene registrado el certificado '{emisor.PathCertificado}', se buscara por RUC para llenar el JSON.";
             return true;
         }
 
@@ -567,45 +625,44 @@
             return null;
         }
 
-        var password = CertificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
-        if (string.IsNullOrWhiteSpace(password))
-            password = emisor.ClaveCertificado?.Trim();
-
-        if (string.IsNullOrWhiteSpace(password))
-        {
-            Error("No se pudo resolver la clave del certificado configurada en EFact.");
-            return null;
-        }
-
-        var rutaCertificado = rutaCertificadoEmisor ?? FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
-        if (string.IsNullOrWhiteSpace(rutaCertificado))
-            rutaCertificado = ResolverCertificadoPorClaveYRuc(password);
-
-        if (string.IsNullOrWhiteSpace(rutaCertificado))
-        {
-            Error($"No se encontro el archivo del certificado configurado en EFact: {emisor.PathCertificado}");
-            return null;
-        }
-
-        var certificadoBytes = await File.ReadAllBytesAsync(rutaCertificado);
-        if (certificadoBytes.Length <= 0 || certificadoBytes.Length > MaxAssetSize)
-        {
-            Error("El certificado configurado en EFact debe pesar maximo 5 MB.");
-            return null;
-        }
-
-        if (pdfFile!.Size + logo.Content.Length + certificadoBytes.Length > MaxRequestSize)
+        if (pdfFile!.Size + logo.Content.Length > MaxAssetSize + MaxPdfSize)
         {
             Error("El total de archivos no debe superar 15 MB.");
             return null;
         }
 
-        var certificado = new FirmaStampApiFile(
-            certificadoBytes,
-            Path.GetFileName(rutaCertificado),
-            "application/x-pkcs12");
+        await Task.CompletedTask;
+        return new RecursosFirma(logo);
+    }
 
-        return new RecursosFirma(logo, certificado, password.Trim());
+    private async Task ValidarQrAsync()
+    {
+        qrMensaje = null;
+        qrEsError = false;
+        qrResultado = null;
+        qrDatosJson = null;
+
+        procesandoValidacionQr = true;
+        try
+        {
+            var apiResult = await FirmaStampApiService.ValidarQrAsync(qrEntrada.Trim());
+            if (!apiResult.Success || apiResult.Verification is null)
+            {
+                qrEsError = true;
+                qrMensaje = apiResult.Message;
+                return;
+            }
+
+            qrResultado = apiResult.Verification;
+            qrDatosJson = JsonSerializer.Serialize(
+                qrResultado.Datos,
+                new JsonSerializerOptions { WriteIndented = true });
+            qrMensaje = "La firma criptografica y la estructura del contenido son validas.";
+        }
+        finally
+        {
+            procesandoValidacionQr = false;
+        }
     }
 
     private string? ResolverCertificadoPorClaveYRuc(string password)
@@ -814,10 +871,7 @@
         double YMm,
         double WidthMm);
 
-    private sealed record RecursosFirma(
-        FirmaStampApiFile Logo,
-        FirmaStampApiFile Certificado,
-        string PasswordCertificado);
+    private sealed record RecursosFirma(FirmaStampApiFile Logo);
 
     private sealed record ResultadoEstampado(
         string Nombre,
