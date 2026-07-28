@@ -1,0 +1,437 @@
+@page "/e-sign/documentos/estampar"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Hosting
+@using Microsoft.JSInterop
+@using System.Security.Claims
+@using Simetric.Services
+@using Simetric.Services.ESign
+@implements IAsyncDisposable
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment HostEnvironment
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject FirmaStampApiService FirmaStampApiService
+@inject IJSRuntime JS
+
+<PageTitle>Estampar documento | E-Rubrica</PageTitle>
+
+<div class="stamp-page">
+    @if (cargando)
+    {
+        <section class="esign-state">
+            <span class="spinner-border" role="status"></span>
+            <h3>Cargando estampado</h3>
+        </section>
+    }
+    else
+    {
+        <header class="stamp-header">
+            <div>
+                <span class="header-kicker">E-Rubrica</span>
+                <h1>Estampar PDF</h1>
+                <p>Consume la API de firma para generar el documento estampado en PDF.</p>
+            </div>
+            <button type="button" class="btn-back" @onclick="IrAlInicio">
+                <i class="bi bi-arrow-left"></i>
+                <span>Volver</span>
+            </button>
+        </header>
+
+        @if (!string.IsNullOrWhiteSpace(mensaje))
+        {
+            <div class="stamp-alert @(esError ? "is-error" : "is-ok")" role="alert">
+                <i class="bi @(esError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                <span>@mensaje</span>
+            </div>
+        }
+
+        <section class="stamp-grid">
+            <article class="stamp-panel">
+                <div class="panel-heading">
+                    <span class="header-kicker">Archivos</span>
+                    <h2>Documento, logo y certificado</h2>
+                </div>
+
+                <div class="file-grid">
+                    <label class="stamp-file-card @(pdfFile is null ? null : "is-ready")">
+                        <InputFile id="stampPdfInput" class="file-input" accept="application/pdf,.pdf" OnChange="SeleccionarPdf" />
+                        <i class="bi bi-file-earmark-pdf"></i>
+                        <strong>PDF</strong>
+                        <span>@(pdfFile?.Name ?? "Seleccionar PDF")</span>
+                    </label>
+
+                    <label class="stamp-file-card @(logoFile is null ? null : "is-ready")">
+                        <InputFile class="file-input" accept="image/png,image/jpeg,.png,.jpg,.jpeg" OnChange="SeleccionarLogo" />
+                        <i class="bi bi-image"></i>
+                        <strong>Logo</strong>
+                        <span>@(logoFile?.Name ?? "Seleccionar logo")</span>
+                    </label>
+
+                    <label class="stamp-file-card @(certificadoFile is null ? null : "is-ready")">
+                        <InputFile class="file-input" accept=".p12,.pfx" OnChange="SeleccionarCertificado" />
+                        <i class="bi bi-file-earmark-lock"></i>
+                        <strong>Certificado</strong>
+                        <span>@(certificadoFile?.Name ?? "Seleccionar P12/PFX")</span>
+                    </label>
+                </div>
+            </article>
+
+            <article class="stamp-panel">
+                <div class="panel-heading">
+                    <span class="header-kicker">Parametros</span>
+                    <h2>Datos del estampado</h2>
+                </div>
+
+                <div class="stamp-form-grid">
+                    <label>
+                        <span>Clave del certificado</span>
+                        <input type="password" @bind="passwordCertificado" autocomplete="new-password" />
+                    </label>
+                </div>
+
+                <label class="stamp-data">
+                    <span>Datos JSON</span>
+                    <textarea rows="9" @bind="datos"></textarea>
+                </label>
+
+                <div class="stamp-actions">
+                    <button type="button" class="esign-btn-primary" @onclick="EstamparAsync" disabled="@procesando">
+                        <i class="bi @(procesando ? "bi-arrow-repeat" : "bi-pen")"></i>
+                        <span>@(procesando ? "Procesando..." : "Estampar PDF")</span>
+                    </button>
+                </div>
+            </article>
+        </section>
+
+        <section class="stamp-panel stamp-preview-panel">
+            <div class="panel-heading">
+                <span class="header-kicker">Ubicacion del sello</span>
+                <h2>Seleccion visual en el PDF</h2>
+                <p>Haz clic para ubicar el sello o arrastra hacia abajo y a la derecha para dibujar su tamano.</p>
+            </div>
+
+            <div class="pdf-selector">
+                <div class="pdf-toolbar">
+                    <button type="button" id="stampPreviousPage" aria-label="Pagina anterior">
+                        <i class="bi bi-chevron-left"></i>
+                    </button>
+                    <span>Pagina <strong id="stampCurrentPage">1</strong> de <strong id="stampPageCount">0</strong></span>
+                    <button type="button" id="stampNextPage" aria-label="Pagina siguiente">
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                    <span class="selection-status" id="stampSelectionStatus">Carga un PDF para seleccionar la posicion.</span>
+                </div>
+                <div class="pdf-stage" id="stampPdfStage">
+                    <canvas id="stampPdfCanvas" hidden></canvas>
+                    <div class="stamp-footprint" id="stampFootprint" hidden>
+                        <span class="position-dot"></span>
+                        <button
+                            type="button"
+                            class="resize-handle"
+                            id="stampResizeHandle"
+                            aria-label="Cambiar tamano del sello"
+                            title="Arrastra para cambiar el tamano"></button>
+                    </div>
+                    <div class="pdf-placeholder" id="stampPdfPlaceholder">
+                        <strong>Vista previa del documento</strong>
+                        <span>Despues de cargar el PDF, haz clic sobre la pagina.</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="position-grid">
+                <label>
+                    <span>Pagina</span>
+                    <input type="number" min="1" @bind="pagina" readonly />
+                </label>
+                <label>
+                    <span>X (mm)</span>
+                    <input type="number" min="0" max="2000" step="0.01" @bind="xMm" readonly />
+                </label>
+                <label>
+                    <span>Y (mm)</span>
+                    <input type="number" min="0" max="2000" step="0.01" @bind="yMm" readonly />
+                </label>
+                <label>
+                    <span>Ancho (mm)</span>
+                    <input type="number" min="55" max="120" step="0.01" @bind="anchoMm" readonly />
+                </label>
+            </div>
+            <small class="position-note">El punto azul marca la posicion. La esquina inferior derecha permite ajustar el tamano manteniendo la proporcion real del sello.</small>
+        </section>
+
+        @if (resultado is not null)
+        {
+            <section class="stamp-panel stamp-result">
+                <div>
+                    <span class="header-kicker">Resultado</span>
+                    <h2>Documento estampado</h2>
+                    <p>@resultado.Nombre | @resultado.Fecha.ToString("dd/MM/yyyy HH:mm")</p>
+                </div>
+                <div class="result-actions">
+                    <a class="action-btn" href="@resultado.Url" target="_blank" title="Abrir PDF">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                    </a>
+                    <a class="action-btn" href="@resultado.Url" download="@resultado.Nombre" title="Descargar PDF">
+                        <i class="bi bi-download"></i>
+                    </a>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(resultado.OutputSha256))
+                {
+                    <code>@resultado.OutputSha256</code>
+                }
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private const long MaxPdfSize = 10 * 1024 * 1024;
+    private const long MaxAssetSize = 5 * 1024 * 1024;
+    private const long MaxRequestSize = 15 * 1024 * 1024;
+
+    private bool cargando = true;
+    private bool procesando;
+    private bool esError;
+    private int currentUserId;
+    private string? mensaje;
+    private string passwordCertificado = string.Empty;
+    private string datos = "{\n  \"EsValida\": true,\n  \"EstadoVigencia\": \"VIGENTE\",\n  \"NombreTitular\": \"NOMBRE DEL TITULAR\",\n  \"Ruc\": \"1710892413001\"\n}";
+    private int pagina = 1;
+    private double xMm = 10;
+    private double yMm = 10;
+    private double anchoMm = 80;
+    private IBrowserFile? pdfFile;
+    private IBrowserFile? logoFile;
+    private IBrowserFile? certificadoFile;
+    private ResultadoEstampado? resultado;
+    private DotNetObjectReference<EstamparDocumento>? dotNetRef;
+    private IJSObjectReference? stampSelectorModule;
+    private IJSObjectReference? stampSelectorInstance;
+    private bool stampSelectorInitialized;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out currentUserId) || currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(currentUserId, ESignRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        cargando = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (cargando || stampSelectorInitialized)
+            return;
+
+        stampSelectorInitialized = true;
+        dotNetRef = DotNetObjectReference.Create(this);
+        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js");
+        stampSelectorInstance = await stampSelectorModule.InvokeAsync<IJSObjectReference>(
+            "init",
+            new
+            {
+                pdfInputId = "stampPdfInput",
+                canvasId = "stampPdfCanvas",
+                stageId = "stampPdfStage",
+                placeholderId = "stampPdfPlaceholder",
+                footprintId = "stampFootprint",
+                resizeHandleId = "stampResizeHandle",
+                previousButtonId = "stampPreviousPage",
+                nextButtonId = "stampNextPage",
+                currentPageLabelId = "stampCurrentPage",
+                pageCountLabelId = "stampPageCount",
+                selectionStatusId = "stampSelectionStatus"
+            },
+            dotNetRef);
+    }
+
+    private void IrAlInicio() => NavManager.NavigateTo("/e-sign");
+
+    private void SeleccionarPdf(InputFileChangeEventArgs e) => pdfFile = e.File;
+
+    private void SeleccionarLogo(InputFileChangeEventArgs e) => logoFile = e.File;
+
+    private void SeleccionarCertificado(InputFileChangeEventArgs e) => certificadoFile = e.File;
+
+    [JSInvokable]
+    public void OnStampSelectionChanged(int selectedPage, double selectedX, double selectedY, double selectedWidth)
+    {
+        pagina = selectedPage;
+        xMm = Math.Round(selectedX, 2);
+        yMm = Math.Round(selectedY, 2);
+        anchoMm = Math.Round(selectedWidth, 2);
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnStampPageChanged(int selectedPage)
+    {
+        pagina = selectedPage;
+        StateHasChanged();
+    }
+
+    private async Task EstamparAsync()
+    {
+        mensaje = null;
+        esError = false;
+        resultado = null;
+
+        if (!ValidarFormulario())
+            return;
+
+        procesando = true;
+        try
+        {
+            var apiResult = await FirmaStampApiService.EstamparAsync(
+                pdfFile!,
+                logoFile!,
+                certificadoFile!,
+                passwordCertificado.Trim(),
+                datos.Trim(),
+                pagina,
+                xMm,
+                yMm,
+                anchoMm);
+
+            if (!apiResult.Success || apiResult.Pdf is null)
+            {
+                SetMensaje(apiResult.Message, true);
+                return;
+            }
+
+            var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_estampado.pdf";
+            var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", currentUserId.ToString());
+            var physicalDirectory = Path.Combine(HostEnvironment.WebRootPath, relativeDirectory);
+            Directory.CreateDirectory(physicalDirectory);
+
+            var physicalPath = Path.Combine(physicalDirectory, storedFileName);
+            await File.WriteAllBytesAsync(physicalPath, apiResult.Pdf);
+
+            resultado = new ResultadoEstampado(
+                "documento-estampado.pdf",
+                "/" + Path.Combine(relativeDirectory, storedFileName).Replace('\\', '/'),
+                DateTime.Now,
+                apiResult.OriginalSha256,
+                apiResult.OutputSha256);
+
+            SetMensaje("PDF estampado correctamente.", false);
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private bool ValidarFormulario()
+    {
+        if (pdfFile is null)
+            return Error("Selecciona el PDF.");
+
+        if (logoFile is null)
+            return Error("Selecciona el logo.");
+
+        if (certificadoFile is null)
+            return Error("Selecciona el certificado P12 o PFX.");
+
+        if (pdfFile.Size <= 0 || pdfFile.Size > MaxPdfSize)
+            return Error("El PDF debe pesar maximo 10 MB.");
+
+        if (logoFile.Size <= 0 || logoFile.Size > MaxAssetSize)
+            return Error("El logo debe pesar maximo 5 MB.");
+
+        if (certificadoFile.Size <= 0 || certificadoFile.Size > MaxAssetSize)
+            return Error("El certificado debe pesar maximo 5 MB.");
+
+        if (pdfFile.Size + logoFile.Size + certificadoFile.Size > MaxRequestSize)
+            return Error("El total de archivos no debe superar 15 MB.");
+
+        if (!EsExtension(pdfFile.Name, ".pdf"))
+            return Error("El documento debe ser PDF.");
+
+        if (!EsExtension(certificadoFile.Name, ".p12") && !EsExtension(certificadoFile.Name, ".pfx"))
+            return Error("El certificado debe ser .p12 o .pfx.");
+
+        if (string.IsNullOrWhiteSpace(passwordCertificado))
+            return Error("Ingresa la clave del certificado.");
+
+        if (string.IsNullOrWhiteSpace(datos))
+            return Error("Ingresa los datos JSON.");
+
+        if (pagina < 1)
+            return Error("La pagina debe ser mayor que cero.");
+
+        if (xMm < 0 || xMm > 2000 || yMm < 0 || yMm > 2000)
+            return Error("X e Y deben estar entre 0 y 2000 mm.");
+
+        if (anchoMm < 55 || anchoMm > 120)
+            return Error("El ancho debe estar entre 55 y 120 mm.");
+
+        return true;
+    }
+
+    private bool Error(string texto)
+    {
+        SetMensaje(texto, true);
+        return false;
+    }
+
+    private void SetMensaje(string texto, bool error)
+    {
+        mensaje = texto;
+        esError = error;
+    }
+
+    private static bool EsExtension(string fileName, string extension) =>
+        string.Equals(Path.GetExtension(fileName), extension, StringComparison.OrdinalIgnoreCase);
+
+    private sealed record ResultadoEstampado(
+        string Nombre,
+        string Url,
+        DateTime Fecha,
+        string? OriginalSha256,
+        string? OutputSha256);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (stampSelectorInstance is not null)
+        {
+            await stampSelectorInstance.InvokeVoidAsync("dispose");
+            await stampSelectorInstance.DisposeAsync();
+        }
+
+        if (stampSelectorModule is not null)
+        {
+            await stampSelectorModule.DisposeAsync();
+        }
+
+        dotNetRef?.Dispose();
+    }
+}

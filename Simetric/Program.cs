@@ -231,6 +231,10 @@ builder.Services.AddHttpClient<FirmaInfoApiService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
 });
+builder.Services.AddHttpClient<FirmaStampApiService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(90);
+});
 builder.Services.AddScoped<SolicitudService>();
 builder.Services.AddScoped<UbicacionEcuadorCatalogService>();
 builder.Services.AddScoped<SweetAlertService>();
