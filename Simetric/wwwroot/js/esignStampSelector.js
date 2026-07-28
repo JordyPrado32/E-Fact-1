@@ -28,9 +28,24 @@ export async function init(options, dotNetRef) {
     let resizeStart = null;
     let pointerMoved = false;
     let pageNumber = 1;
+    let preferredSelection = null;
+    let autoApplyPreferred = false;
 
     const minimumStampWidthMm = 55;
     const maximumStampWidthMm = 120;
+
+    const normalizeSelection = selection => {
+        if (!selection) {
+            return null;
+        }
+
+        return {
+            page: Number(selection.page ?? selection.Page ?? 1),
+            xMm: Number(selection.xMm ?? selection.XMm ?? 0),
+            yMm: Number(selection.yMm ?? selection.YMm ?? 0),
+            widthMm: Number(selection.widthMm ?? selection.WidthMm ?? 80)
+        };
+    };
 
     const setStatus = (message, isError = false) => {
         selectionStatus.textContent = message;
@@ -147,6 +162,12 @@ export async function init(options, dotNetRef) {
             updateFootprint();
             setStatus("Haz clic para ubicar o arrastra hacia abajo y a la derecha para dibujar el sello.");
             await dotNetRef.invokeMethodAsync("OnStampPageChanged", pageNumber);
+            if (!selectedPosition && autoApplyPreferred && preferredSelection?.page === pageNumber) {
+                await applySelection(
+                    preferredSelection.xMm,
+                    preferredSelection.yMm,
+                    preferredSelection.widthMm);
+            }
         } catch (error) {
             if (error?.name !== "RenderingCancelledException") {
                 setStatus("No se pudo mostrar esta pagina.", true);
@@ -173,7 +194,9 @@ export async function init(options, dotNetRef) {
         try {
             setStatus("Abriendo PDF...");
             pdfDocument = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-            pageNumber = 1;
+            pageNumber = autoApplyPreferred && preferredSelection?.page
+                ? Math.min(pdfDocument.numPages, Math.max(1, preferredSelection.page))
+                : 1;
             await renderPage();
         } catch {
             pdfDocument = null;
@@ -302,6 +325,31 @@ export async function init(options, dotNetRef) {
     updateNavigation();
 
     return {
+        async setPreferredSelection(selection, autoApply) {
+            preferredSelection = normalizeSelection(selection);
+            autoApplyPreferred = Boolean(autoApply);
+        },
+        async setAutoApplyPreferred(autoApply) {
+            autoApplyPreferred = Boolean(autoApply);
+        },
+        async applyPreferredSelection(selection) {
+            preferredSelection = normalizeSelection(selection) || preferredSelection;
+            if (!preferredSelection) {
+                return;
+            }
+
+            if (pdfDocument && preferredSelection.page !== pageNumber) {
+                pageNumber = Math.min(pdfDocument.numPages, Math.max(1, preferredSelection.page));
+                await renderPage();
+            }
+
+            if (pdfDocument) {
+                await applySelection(
+                    preferredSelection.xMm,
+                    preferredSelection.yMm,
+                    preferredSelection.widthMm);
+            }
+        },
         dispose() {
             pdfInput.removeEventListener("change", onPdfChange);
             canvas.removeEventListener("pointerdown", onCanvasPointerDown);

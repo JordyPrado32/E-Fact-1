@@ -19,8 +19,8 @@ public sealed class FirmaStampApiService
 
     public async Task<FirmaStampApiResult> EstamparAsync(
         IBrowserFile pdf,
-        IBrowserFile logo,
-        IBrowserFile certificado,
+        FirmaStampApiFile logo,
+        FirmaStampApiFile certificado,
         string passwordCertificado,
         string datos,
         int pagina,
@@ -29,8 +29,19 @@ public sealed class FirmaStampApiService
         double anchoMm,
         CancellationToken cancellationToken = default)
     {
-        var baseUrl = _configuration["FirmaStampApi:BaseUrl"]?.Trim();
-        var apiKey = _configuration["FirmaStampApi:ApiKey"]?.Trim();
+        var baseUrl = FirstNonEmpty(
+            _configuration["FirmaStampApi:BaseUrl"],
+            _configuration["ApiFirma:BaseUrl"]);
+        var apiKey = FirstNonEmpty(
+            _configuration["FirmaStampApi:ApiKey"],
+            _configuration["ApiFirma:ApiKey"],
+            _configuration["ApiSecurity:ApiKey"],
+            _configuration["FirmaStampApi__ApiKey"],
+            _configuration["ApiFirma__ApiKey"],
+            _configuration["ApiSecurity__ApiKey"],
+            Environment.GetEnvironmentVariable("FirmaStampApi__ApiKey"),
+            Environment.GetEnvironmentVariable("ApiFirma__ApiKey"),
+            Environment.GetEnvironmentVariable("ApiSecurity__ApiKey"));
 
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
             return FirmaStampApiResult.Error("La URL de la API de estampado no esta configurada.");
@@ -39,8 +50,8 @@ public sealed class FirmaStampApiService
             return FirmaStampApiResult.Error("La API key de estampado no esta configurada.");
 
         await using var pdfStream = pdf.OpenReadStream(MaxFileBytes, cancellationToken);
-        await using var logoStream = logo.OpenReadStream(MaxFileBytes, cancellationToken);
-        await using var certificadoStream = certificado.OpenReadStream(MaxFileBytes, cancellationToken);
+        await using var logoStream = new MemoryStream(logo.Content, writable: false);
+        await using var certificadoStream = new MemoryStream(certificado.Content, writable: false);
 
         using var form = new MultipartFormDataContent();
         using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
@@ -48,8 +59,8 @@ public sealed class FirmaStampApiService
         using var certificadoContent = CreateFileContent(certificadoStream, certificado.ContentType);
 
         form.Add(pdfContent, "pdf", pdf.Name);
-        form.Add(logoContent, "logo", logo.Name);
-        form.Add(certificadoContent, "certificado", certificado.Name);
+        form.Add(logoContent, "logo", logo.FileName);
+        form.Add(certificadoContent, "certificado", certificado.FileName);
         form.Add(new StringContent(passwordCertificado), "passwordCertificado");
         form.Add(new StringContent(datos), "datos");
         form.Add(new StringContent(pagina.ToString(CultureInfo.InvariantCulture)), "pagina");
@@ -102,6 +113,9 @@ public sealed class FirmaStampApiService
         return content;
     }
 
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
+
     private static string? TryGetHeader(HttpResponseMessage response, string name) =>
         response.Headers.TryGetValues(name, out var values)
             ? values.FirstOrDefault()
@@ -143,6 +157,11 @@ public sealed class FirmaStampApiService
         return rawBody;
     }
 }
+
+public sealed record FirmaStampApiFile(
+    byte[] Content,
+    string FileName,
+    string ContentType);
 
 public sealed record FirmaStampApiResult(
     bool Success,

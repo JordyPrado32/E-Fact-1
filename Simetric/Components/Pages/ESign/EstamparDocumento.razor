@@ -3,17 +3,25 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.AspNetCore.Hosting
+@using Microsoft.EntityFrameworkCore
 @using Microsoft.JSInterop
+@using System.Security.Cryptography.X509Certificates
 @using System.Security.Claims
+@using System.Text.Json
+@using Simetric.Data
+@using Simetric.Models
 @using Simetric.Services
 @using Simetric.Services.ESign
 @implements IAsyncDisposable
 @inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<AppDbContext> DbFactory
 @inject IWebHostEnvironment HostEnvironment
 @inject NavigationManager NavManager
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject FirmaStampApiService FirmaStampApiService
+@inject FirmaPathResolver FirmaPathResolver
+@inject EmisorCertificadoProtector CertificadoProtector
 @inject IJSRuntime JS
 
 <PageTitle>Estampar documento | E-Rubrica</PageTitle>
@@ -51,8 +59,9 @@
         <section class="stamp-grid">
             <article class="stamp-panel">
                 <div class="panel-heading">
-                    <span class="header-kicker">Archivos</span>
-                    <h2>Documento, logo y certificado</h2>
+                    <span class="header-kicker">Documento</span>
+                    <h2>PDF a estampar</h2>
+                    <p>El logo, certificado y clave se toman del emisor configurado en EFact.</p>
                 </div>
 
                 <div class="file-grid">
@@ -62,20 +71,14 @@
                         <strong>PDF</strong>
                         <span>@(pdfFile?.Name ?? "Seleccionar PDF")</span>
                     </label>
+                </div>
 
-                    <label class="stamp-file-card @(logoFile is null ? null : "is-ready")">
-                        <InputFile class="file-input" accept="image/png,image/jpeg,.png,.jpg,.jpeg" OnChange="SeleccionarLogo" />
-                        <i class="bi bi-image"></i>
-                        <strong>Logo</strong>
-                        <span>@(logoFile?.Name ?? "Seleccionar logo")</span>
-                    </label>
-
-                    <label class="stamp-file-card @(certificadoFile is null ? null : "is-ready")">
-                        <InputFile class="file-input" accept=".p12,.pfx" OnChange="SeleccionarCertificado" />
-                        <i class="bi bi-file-earmark-lock"></i>
-                        <strong>Certificado</strong>
-                        <span>@(certificadoFile?.Name ?? "Seleccionar P12/PFX")</span>
-                    </label>
+                <div class="issuer-summary @(emisorConfigurado ? "is-ready" : "is-missing")">
+                    <i class="bi @(emisorConfigurado ? "bi-shield-check" : "bi-shield-exclamation")"></i>
+                    <div>
+                        <strong>@(emisor?.RazonSocial ?? "Emisor EFact")</strong>
+                        <span>@estadoEmisorMensaje</span>
+                    </div>
                 </div>
             </article>
 
@@ -85,19 +88,16 @@
                     <h2>Datos del estampado</h2>
                 </div>
 
-                <div class="stamp-form-grid">
-                    <label>
-                        <span>Clave del certificado</span>
-                        <input type="password" @bind="passwordCertificado" autocomplete="new-password" />
-                    </label>
-                </div>
-
                 <label class="stamp-data">
                     <span>Datos JSON</span>
                     <textarea rows="9" @bind="datos"></textarea>
                 </label>
 
                 <div class="stamp-actions">
+                    <button type="button" class="esign-btn-secondary" @onclick="RegenerarDatosJsonAsync" disabled="@procesando">
+                        <i class="bi bi-arrow-clockwise"></i>
+                        <span>Traer datos</span>
+                    </button>
                     <button type="button" class="esign-btn-primary" @onclick="EstamparAsync" disabled="@procesando">
                         <i class="bi @(procesando ? "bi-arrow-repeat" : "bi-pen")"></i>
                         <span>@(procesando ? "Procesando..." : "Estampar PDF")</span>
@@ -161,6 +161,21 @@
                 </label>
             </div>
             <small class="position-note">El punto azul marca la posicion. La esquina inferior derecha permite ajustar el tamano manteniendo la proporcion real del sello.</small>
+
+            <div class="stamp-preference">
+                <label>
+                    <input type="checkbox" @bind="usarPreferenciaSiempre" @bind:after="CambiarUsoPreferenciaAsync" />
+                    <span>Usar esta ubicacion automaticamente al cargar PDF</span>
+                </label>
+                <div class="preference-actions">
+                    <button type="button" class="action-btn preference-btn" @onclick="GuardarPreferenciaAsync" title="Guardar ubicacion preferida">
+                        <i class="bi bi-bookmark-check"></i>
+                    </button>
+                    <button type="button" class="action-btn preference-btn" @onclick="AplicarPreferenciaAsync" disabled="@(!tienePreferenciaGuardada)" title="Usar ubicacion guardada">
+                        <i class="bi bi-pin-map"></i>
+                    </button>
+                </div>
+            </div>
         </section>
 
         @if (resultado is not null)
@@ -198,15 +213,19 @@
     private bool esError;
     private int currentUserId;
     private string? mensaje;
-    private string passwordCertificado = string.Empty;
-    private string datos = "{\n  \"EsValida\": true,\n  \"EstadoVigencia\": \"VIGENTE\",\n  \"NombreTitular\": \"NOMBRE DEL TITULAR\",\n  \"Ruc\": \"1710892413001\"\n}";
+    private string datos = string.Empty;
     private int pagina = 1;
     private double xMm = 10;
     private double yMm = 10;
     private double anchoMm = 80;
     private IBrowserFile? pdfFile;
-    private IBrowserFile? logoFile;
-    private IBrowserFile? certificadoFile;
+    private Emisor? emisor;
+    private bool emisorConfigurado;
+    private string estadoEmisorMensaje = "Validando configuracion de EFact...";
+    private string? rutaCertificadoEmisor;
+    private bool usarPreferenciaSiempre;
+    private bool tienePreferenciaGuardada;
+    private StampPreference? preferenciaGuardada;
     private ResultadoEstampado? resultado;
     private DotNetObjectReference<EstamparDocumento>? dotNetRef;
     private IJSObjectReference? stampSelectorModule;
@@ -243,6 +262,7 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        await CargarEmisorAsync();
         cargando = false;
     }
 
@@ -271,23 +291,24 @@
                 selectionStatusId = "stampSelectionStatus"
             },
             dotNetRef);
+
+        await CargarPreferenciaAsync();
     }
 
     private void IrAlInicio() => NavManager.NavigateTo("/e-sign");
 
     private void SeleccionarPdf(InputFileChangeEventArgs e) => pdfFile = e.File;
 
-    private void SeleccionarLogo(InputFileChangeEventArgs e) => logoFile = e.File;
-
-    private void SeleccionarCertificado(InputFileChangeEventArgs e) => certificadoFile = e.File;
-
     [JSInvokable]
-    public void OnStampSelectionChanged(int selectedPage, double selectedX, double selectedY, double selectedWidth)
+    public async Task OnStampSelectionChanged(int selectedPage, double selectedX, double selectedY, double selectedWidth)
     {
         pagina = selectedPage;
         xMm = Math.Round(selectedX, 2);
         yMm = Math.Round(selectedY, 2);
         anchoMm = Math.Round(selectedWidth, 2);
+        if (usarPreferenciaSiempre)
+            await GuardarPreferenciaInternaAsync(false, false);
+
         StateHasChanged();
     }
 
@@ -310,11 +331,15 @@
         procesando = true;
         try
         {
+            var recursosFirma = await ResolverRecursosFirmaAsync();
+            if (recursosFirma is null)
+                return;
+
             var apiResult = await FirmaStampApiService.EstamparAsync(
                 pdfFile!,
-                logoFile!,
-                certificadoFile!,
-                passwordCertificado.Trim(),
+                recursosFirma.Logo,
+                recursosFirma.Certificado,
+                recursosFirma.PasswordCertificado,
                 datos.Trim(),
                 pagina,
                 xMm,
@@ -355,32 +380,14 @@
         if (pdfFile is null)
             return Error("Selecciona el PDF.");
 
-        if (logoFile is null)
-            return Error("Selecciona el logo.");
-
-        if (certificadoFile is null)
-            return Error("Selecciona el certificado P12 o PFX.");
+        if (!emisorConfigurado)
+            return Error(estadoEmisorMensaje);
 
         if (pdfFile.Size <= 0 || pdfFile.Size > MaxPdfSize)
             return Error("El PDF debe pesar maximo 10 MB.");
 
-        if (logoFile.Size <= 0 || logoFile.Size > MaxAssetSize)
-            return Error("El logo debe pesar maximo 5 MB.");
-
-        if (certificadoFile.Size <= 0 || certificadoFile.Size > MaxAssetSize)
-            return Error("El certificado debe pesar maximo 5 MB.");
-
-        if (pdfFile.Size + logoFile.Size + certificadoFile.Size > MaxRequestSize)
-            return Error("El total de archivos no debe superar 15 MB.");
-
         if (!EsExtension(pdfFile.Name, ".pdf"))
             return Error("El documento debe ser PDF.");
-
-        if (!EsExtension(certificadoFile.Name, ".p12") && !EsExtension(certificadoFile.Name, ".pfx"))
-            return Error("El certificado debe ser .p12 o .pfx.");
-
-        if (string.IsNullOrWhiteSpace(passwordCertificado))
-            return Error("Ingresa la clave del certificado.");
 
         if (string.IsNullOrWhiteSpace(datos))
             return Error("Ingresa los datos JSON.");
@@ -397,6 +404,384 @@
         return true;
     }
 
+    private async Task CargarEmisorAsync()
+    {
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.IdUsuario == currentUserId);
+
+        var idUsuarioEmisor = usuario?.estadoAsociado == true && usuario.idJefe is > 0
+            ? usuario.idJefe.Value
+            : currentUserId;
+
+        var emisoresCuenta = await context.Emisores
+            .AsNoTracking()
+            .Where(item => item.IdUsuario == idUsuarioEmisor && item.Estado && !item.EsEmisorSistema)
+            .OrderByDescending(item => item.Codigo)
+            .ToListAsync();
+
+        emisor = emisoresCuenta.FirstOrDefault(item =>
+        {
+            var ruta = FirmaPathResolver.ResolverRutaExistente(item.PathCertificado);
+            return !string.IsNullOrWhiteSpace(item.LogoImagen) &&
+                !string.IsNullOrWhiteSpace(item.ClaveCertificado) &&
+                !string.IsNullOrWhiteSpace(ruta);
+        }) ?? emisoresCuenta.FirstOrDefault();
+
+        emisorConfigurado = ValidarConfiguracionEmisor(out var estado);
+        estadoEmisorMensaje = estado;
+        await ActualizarDatosJsonDesdeConfiguracionAsync();
+    }
+
+    private bool ValidarConfiguracionEmisor(out string estado)
+    {
+        rutaCertificadoEmisor = null;
+
+        if (emisor is null)
+        {
+            estado = "No se encontro un emisor activo configurado en EFact.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(emisor.LogoImagen))
+        {
+            estado = "El emisor no tiene logo configurado en EFact.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(emisor.PathCertificado))
+        {
+            estado = "El emisor no tiene certificado configurado en EFact.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
+        {
+            estado = "El emisor no tiene clave de certificado configurada en EFact.";
+            return false;
+        }
+
+        rutaCertificadoEmisor = FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
+        if (string.IsNullOrWhiteSpace(rutaCertificadoEmisor))
+        {
+            estado = $"EFact tiene registrado el certificado '{emisor.PathCertificado}', se buscara por RUC al estampar.";
+            return true;
+        }
+
+        estado = $"RUC {emisor.Ruc} | logo y certificado listos desde EFact.";
+        return true;
+    }
+
+    private async Task RegenerarDatosJsonAsync()
+    {
+        await ActualizarDatosJsonDesdeConfiguracionAsync();
+        SetMensaje("Datos del certificado cargados en el JSON.", false);
+    }
+
+    private async Task ActualizarDatosJsonDesdeConfiguracionAsync()
+    {
+        if (emisor is null)
+        {
+            datos = CrearDatosJson(null, null);
+            return;
+        }
+
+        var password = CertificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
+        if (string.IsNullOrWhiteSpace(password))
+            password = emisor.ClaveCertificado?.Trim();
+
+        CertificadoDatos? certificadoDatos = null;
+        if (!string.IsNullOrWhiteSpace(password))
+        {
+            var rutaCertificado = rutaCertificadoEmisor ?? FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
+            if (string.IsNullOrWhiteSpace(rutaCertificado))
+                rutaCertificado = ResolverCertificadoPorClaveYRuc(password);
+
+            if (!string.IsNullOrWhiteSpace(rutaCertificado))
+                certificadoDatos = LeerDatosCertificado(rutaCertificado, password);
+        }
+
+        datos = CrearDatosJson(emisor, certificadoDatos);
+        await Task.CompletedTask;
+    }
+
+    private static string CrearDatosJson(Emisor? emisor, CertificadoDatos? certificado)
+    {
+        var info = new SortedDictionary<string, object?>
+        {
+            ["EsValida"] = certificado?.EsValida ?? true,
+            ["EstadoVigencia"] = certificado?.EstadoVigencia ?? "VIGENTE",
+            ["NombreTitular"] = FirstFilled(certificado?.NombreTitular, emisor?.RazonSocial, emisor?.NomComercial),
+            ["Ruc"] = FirstFilled(certificado?.Ruc, emisor?.Ruc),
+            ["Emisor"] = FirstFilled(emisor?.RazonSocial, emisor?.NomComercial),
+            ["NombreComercial"] = emisor?.NomComercial,
+            ["FechaEmision"] = certificado?.FechaEmision,
+            ["FechaExpiracion"] = certificado?.FechaExpiracion
+        };
+
+        return JsonSerializer.Serialize(info, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private CertificadoDatos? LeerDatosCertificado(string rutaCertificado, string password)
+    {
+        try
+        {
+            var bytes = File.ReadAllBytes(rutaCertificado);
+            using var certificado = new X509Certificate2(
+                bytes,
+                password,
+                X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+
+            var ruc = NormalizarDigitos(emisor?.Ruc);
+            var now = DateTimeOffset.Now;
+            return new CertificadoDatos(
+                NombreTitular: FirstFilled(GetSubjectValue(certificado, "CN"), emisor?.RazonSocial, emisor?.NomComercial),
+                Ruc: FirstFilled(ruc, GetSubjectValue(certificado, "SERIALNUMBER")),
+                EstadoVigencia: certificado.NotBefore <= now.DateTime && certificado.NotAfter >= now.DateTime ? "VIGENTE" : "CADUCADA",
+                EsValida: certificado.NotBefore <= now.DateTime && certificado.NotAfter >= now.DateTime,
+                FechaEmision: certificado.NotBefore,
+                FechaExpiracion: certificado.NotAfter);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<RecursosFirma?> ResolverRecursosFirmaAsync()
+    {
+        if (emisor is null)
+            return null;
+
+        var logo = CrearLogoDesdeEmisor(emisor.LogoImagen);
+        if (logo is null)
+        {
+            Error("El logo configurado en EFact no tiene un formato valido.");
+            return null;
+        }
+
+        if (logo.Content.Length <= 0 || logo.Content.Length > MaxAssetSize)
+        {
+            Error("El logo configurado en EFact debe pesar maximo 5 MB.");
+            return null;
+        }
+
+        var password = CertificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
+        if (string.IsNullOrWhiteSpace(password))
+            password = emisor.ClaveCertificado?.Trim();
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            Error("No se pudo resolver la clave del certificado configurada en EFact.");
+            return null;
+        }
+
+        var rutaCertificado = rutaCertificadoEmisor ?? FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
+        if (string.IsNullOrWhiteSpace(rutaCertificado))
+            rutaCertificado = ResolverCertificadoPorClaveYRuc(password);
+
+        if (string.IsNullOrWhiteSpace(rutaCertificado))
+        {
+            Error($"No se encontro el archivo del certificado configurado en EFact: {emisor.PathCertificado}");
+            return null;
+        }
+
+        var certificadoBytes = await File.ReadAllBytesAsync(rutaCertificado);
+        if (certificadoBytes.Length <= 0 || certificadoBytes.Length > MaxAssetSize)
+        {
+            Error("El certificado configurado en EFact debe pesar maximo 5 MB.");
+            return null;
+        }
+
+        if (pdfFile!.Size + logo.Content.Length + certificadoBytes.Length > MaxRequestSize)
+        {
+            Error("El total de archivos no debe superar 15 MB.");
+            return null;
+        }
+
+        var certificado = new FirmaStampApiFile(
+            certificadoBytes,
+            Path.GetFileName(rutaCertificado),
+            "application/x-pkcs12");
+
+        return new RecursosFirma(logo, certificado, password.Trim());
+    }
+
+    private string? ResolverCertificadoPorClaveYRuc(string password)
+    {
+        var ruc = NormalizarDigitos(emisor?.Ruc);
+        var cedulaRuc = ruc?.Length >= 10 ? ruc[..10] : null;
+        var rutas = EnumerarCertificadosLocales();
+
+        foreach (var ruta in rutas)
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(ruta);
+                using var certificado = new X509Certificate2(
+                    bytes,
+                    password,
+                    X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+                var textoCertificado = $"{certificado.Subject} {certificado.Issuer}";
+
+                if ((!string.IsNullOrWhiteSpace(ruc) && textoCertificado.Contains(ruc, StringComparison.Ordinal)) ||
+                    (!string.IsNullOrWhiteSpace(cedulaRuc) && textoCertificado.Contains(cedulaRuc, StringComparison.Ordinal)))
+                {
+                    rutaCertificadoEmisor = ruta;
+                    return ruta;
+                }
+            }
+            catch
+            {
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    private IEnumerable<string> EnumerarCertificadosLocales()
+    {
+        var baseDirectory = Path.Combine(HostEnvironment.ContentRootPath, "App_Data", "certs");
+        foreach (var subDirectory in new[] { "path", "system" })
+        {
+            var directory = Path.Combine(baseDirectory, subDirectory);
+            if (!Directory.Exists(directory))
+                continue;
+
+            foreach (var file in Directory.EnumerateFiles(directory, "*.p12"))
+                yield return file;
+        }
+    }
+
+    private static string? NormalizarDigitos(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor))
+            return null;
+
+        var digitos = new string(valor.Where(char.IsDigit).ToArray());
+        return string.IsNullOrWhiteSpace(digitos) ? null : digitos;
+    }
+
+    private static string FirstFilled(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string? GetSubjectValue(X509Certificate2 certificado, string key)
+    {
+        var parts = certificado.Subject.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var prefix = $"{key}=";
+        return parts
+            .FirstOrDefault(part => part.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            ?[prefix.Length..]
+            .Trim();
+    }
+
+    private async Task CargarPreferenciaAsync()
+    {
+        var raw = await JS.InvokeAsync<string?>("localStorage.getItem", PreferenceKey);
+        preferenciaGuardada = string.IsNullOrWhiteSpace(raw)
+            ? null
+            : JsonSerializer.Deserialize<StampPreference>(raw);
+        tienePreferenciaGuardada = preferenciaGuardada is not null;
+
+        var auto = await JS.InvokeAsync<string?>("localStorage.getItem", PreferenceAutoKey);
+        usarPreferenciaSiempre = string.Equals(auto, "true", StringComparison.OrdinalIgnoreCase);
+
+        if (stampSelectorInstance is not null)
+        {
+            await stampSelectorInstance.InvokeVoidAsync(
+                "setPreferredSelection",
+                preferenciaGuardada,
+                usarPreferenciaSiempre);
+        }
+    }
+
+    private async Task GuardarPreferenciaAsync()
+    {
+        await GuardarPreferenciaInternaAsync(true, true);
+    }
+
+    private async Task GuardarPreferenciaInternaAsync(bool mostrarMensaje, bool sincronizarSelector)
+    {
+        preferenciaGuardada = new StampPreference(pagina, xMm, yMm, anchoMm);
+        tienePreferenciaGuardada = true;
+        var raw = JsonSerializer.Serialize(preferenciaGuardada);
+        await JS.InvokeVoidAsync("localStorage.setItem", PreferenceKey, raw);
+        await JS.InvokeVoidAsync("localStorage.setItem", PreferenceAutoKey, usarPreferenciaSiempre ? "true" : "false");
+        if (sincronizarSelector && stampSelectorInstance is not null)
+            await stampSelectorInstance.InvokeVoidAsync("setPreferredSelection", preferenciaGuardada, usarPreferenciaSiempre);
+
+        if (mostrarMensaje)
+            SetMensaje("Ubicacion preferida guardada.", false);
+    }
+
+    private async Task AplicarPreferenciaAsync()
+    {
+        if (preferenciaGuardada is null)
+        {
+            SetMensaje("No hay una ubicacion preferida guardada.", true);
+            return;
+        }
+
+        pagina = preferenciaGuardada.Page;
+        xMm = preferenciaGuardada.XMm;
+        yMm = preferenciaGuardada.YMm;
+        anchoMm = preferenciaGuardada.WidthMm;
+        if (stampSelectorInstance is not null)
+            await stampSelectorInstance.InvokeVoidAsync("applyPreferredSelection", preferenciaGuardada);
+    }
+
+    private async Task CambiarUsoPreferenciaAsync()
+    {
+        await JS.InvokeVoidAsync("localStorage.setItem", PreferenceAutoKey, usarPreferenciaSiempre ? "true" : "false");
+
+        if (usarPreferenciaSiempre && preferenciaGuardada is null)
+            await GuardarPreferenciaInternaAsync(false, false);
+
+        if (stampSelectorInstance is not null)
+            await stampSelectorInstance.InvokeVoidAsync("setPreferredSelection", preferenciaGuardada, usarPreferenciaSiempre);
+
+        SetMensaje(
+            usarPreferenciaSiempre
+                ? "Se usara esta ubicacion automaticamente al cargar PDF."
+                : "Uso automatico de ubicacion desactivado.",
+            false);
+    }
+
+    private static FirmaStampApiFile? CrearLogoDesdeEmisor(string? logoImagen)
+    {
+        if (string.IsNullOrWhiteSpace(logoImagen))
+            return null;
+
+        var logo = logoImagen.Trim();
+        var commaIndex = logo.IndexOf(',');
+        var mediaType = "image/png";
+        var base64 = logo;
+
+        if (commaIndex >= 0)
+        {
+            var metadata = logo[..commaIndex];
+            base64 = logo[(commaIndex + 1)..];
+            if (metadata.Contains("image/jpeg", StringComparison.OrdinalIgnoreCase) ||
+                metadata.Contains("image/jpg", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaType = "image/jpeg";
+            }
+        }
+
+        try
+        {
+            var bytes = Convert.FromBase64String(base64);
+            var extension = mediaType == "image/jpeg" ? ".jpg" : ".png";
+            return new FirmaStampApiFile(bytes, $"logo-emisor{extension}", mediaType);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
     private bool Error(string texto)
     {
         SetMensaje(texto, true);
@@ -411,6 +796,28 @@
 
     private static bool EsExtension(string fileName, string extension) =>
         string.Equals(Path.GetExtension(fileName), extension, StringComparison.OrdinalIgnoreCase);
+
+    private string PreferenceKey => $"e-rubrica:stamp-preference:{currentUserId}:{emisor?.Codigo ?? 0}";
+    private string PreferenceAutoKey => $"{PreferenceKey}:auto";
+
+    private sealed record CertificadoDatos(
+        string NombreTitular,
+        string Ruc,
+        string EstadoVigencia,
+        bool EsValida,
+        DateTime FechaEmision,
+        DateTime FechaExpiracion);
+
+    private sealed record StampPreference(
+        int Page,
+        double XMm,
+        double YMm,
+        double WidthMm);
+
+    private sealed record RecursosFirma(
+        FirmaStampApiFile Logo,
+        FirmaStampApiFile Certificado,
+        string PasswordCertificado);
 
     private sealed record ResultadoEstampado(
         string Nombre,
