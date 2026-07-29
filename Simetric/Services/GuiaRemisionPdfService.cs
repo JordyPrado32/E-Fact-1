@@ -275,6 +275,8 @@ public sealed class GuiaRemisionPdfService : IGuiaRemisionPdfService
             if (!string.IsNullOrWhiteSpace(view.Guia.Mensaje))
                 column.Item().Element(card => ComponerBloqueObservacion(card, view.Guia.Mensaje));
 
+            column.Item().Element(card => PdfInformacionAdicional.Componer(card, FuenteBase, FuenteTituloSeccion));
+
             column.Item().PaddingTop(1).Text("Documento generado por el sistema de facturacion electronica.")
                 .FontSize(FuenteEtiqueta)
                 .FontColor(Colors.Grey.Darken1);

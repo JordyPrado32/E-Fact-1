@@ -403,6 +403,7 @@ public sealed class NotaDebitoPdfService : INotaDebitoPdfService
             column.Item().Element(card => ComponerBloqueClienteA4(card, view));
             column.Item().Element(card => ComponerDetalle(card, view.Detalles));
             column.Item().AlignRight().Width(240).Element(card => ComponerBloqueResumen(card, view));
+            column.Item().Element(card => PdfInformacionAdicional.Componer(card, FuenteBasePdf, FuenteTituloPdf));
         });
     }
 

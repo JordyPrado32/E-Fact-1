@@ -173,6 +173,12 @@ public static class ThermalPdfComposer
                 column.Item().Text(model.Notas.Trim());
             }
 
+            column.Item().PaddingTop(3).Element(Divider);
+            column.Item().Text("Información adicional")
+                .SemiBold()
+                .FontColor("#284E6C");
+            column.Item().Text(PdfInformacionAdicional.LineaProveedor);
+
             column.Item().PaddingTop(4).Element(Divider);
             column.Item().AlignCenter().Text($"Generado: {DateTime.Now.ToString("dd/MM/yyyy HH:mm", Cultura)}")
                 .FontSize(6.8f)

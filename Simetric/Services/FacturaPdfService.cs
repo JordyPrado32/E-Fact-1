@@ -771,7 +771,10 @@ public sealed class FacturaPdfService : IFacturaPdfService
     {
         var factura = facturaView.Factura;
         var cliente = facturaView.Cliente;
-        var notas = new List<string>();
+        var notas = new List<string>
+        {
+            PdfInformacionAdicional.LineaProveedor
+        };
 
         if (!string.IsNullOrWhiteSpace(cliente?.Referencia))
             notas.Add(cliente.Referencia!.Trim());

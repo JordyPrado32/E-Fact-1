@@ -330,6 +330,7 @@ public sealed class RetencionPdfService : IRetencionPdfService
             column.Spacing(8);
             column.Item().Element(card => ComponerBloqueProveedorA4(card, view));
             column.Item().Element(card => ComponerDetalleA4(card, view));
+            column.Item().Element(card => PdfInformacionAdicional.Componer(card, FuenteBasePdf, FuenteTituloPdf));
         });
     }
 

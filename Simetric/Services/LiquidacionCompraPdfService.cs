@@ -284,6 +284,8 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
 
             column.Item().Element(table => ComponerDetalle(table, lineas));
 
+            column.Item().Element(card => PdfInformacionAdicional.Componer(card, FuenteBasePdf, FuenteTituloSeccionPdf));
+
             column.Item().PaddingTop(1).Text("Este documento fue generado desde el registro manual de la liquidacion de compra.")
                 .FontSize(FuenteEtiquetaPdf)
                 .FontColor(Colors.Grey.Darken1);

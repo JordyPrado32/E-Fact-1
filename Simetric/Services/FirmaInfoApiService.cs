@@ -20,16 +20,15 @@ public sealed class FirmaInfoApiService
         string passwordFirma,
         CancellationToken cancellationToken = default)
     {
-        var baseUrl = _configuration["FirmaInfoApi:BaseUrl"]?.Trim();
+        var endpointUrl = _configuration["FirmaInfoApi:Url"]?.Trim();
         var apiKey = _configuration["FirmaInfoApi:ApiKey"]?.Trim();
 
-        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
+        if (!Uri.TryCreate(endpointUrl, UriKind.Absolute, out var endpoint))
             return FirmaInfoApiResult.Error("La URL del servicio de validacion de firma no esta configurada.");
 
         if (string.IsNullOrWhiteSpace(apiKey))
             return FirmaInfoApiResult.Error("La clave del servicio de validacion de firma no esta configurada.");
 
-        var endpoint = new Uri(baseUri, "api/firma/info");
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.TryAddWithoutValidation("X-Api-Key", apiKey);
         request.Content = JsonContent.Create(new FirmaInfoApiRequest(rutaFirma, passwordFirma));

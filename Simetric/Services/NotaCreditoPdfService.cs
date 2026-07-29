@@ -403,6 +403,11 @@ public sealed class NotaCreditoPdfService : INotaCreditoPdfService
                 card, 
                 "Motivo de la nota de crédito", 
                 string.IsNullOrWhiteSpace(nota.Motivo) ? "No especificado" : nota.Motivo));
+
+            column.Item().Element(card => ComponerCajaNotas(
+                card,
+                "Información adicional",
+                [PdfInformacionAdicional.LineaProveedor]));
         });
     }
 
