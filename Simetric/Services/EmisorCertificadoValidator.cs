@@ -1,9 +1,13 @@
 using Simetric.Models;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text.RegularExpressions;
 
 namespace Simetric.Services;
 
 public sealed class EmisorCertificadoValidator
 {
+    private static readonly Regex IdentificacionRegex = new(@"\d{10,13}", RegexOptions.Compiled);
     private readonly EmisorCertificadoProtector _certificadoProtector;
     private readonly FirmaInfoApiService _firmaInfoApiService;
     private readonly FirmaPathResolver _firmaPathResolver;
@@ -70,6 +74,13 @@ public sealed class EmisorCertificadoValidator
             apiResult = await _firmaInfoApiService.ConsultarAsync(rutaFirma, clave, cancellationToken);
             if (apiResult.Success || cancellationToken.IsCancellationRequested)
                 break;
+        }
+
+        if (apiResult is { Success: false } && !cancellationToken.IsCancellationRequested)
+        {
+            var rutaLocal = _firmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
+            if (!string.IsNullOrWhiteSpace(rutaLocal))
+                apiResult = ValidarArchivoLocal(rutaLocal, clave);
         }
 
         apiResult ??= FirmaInfoApiResult.Error("No se pudo validar la ruta del archivo de firma.");
@@ -162,6 +173,79 @@ public sealed class EmisorCertificadoValidator
 
     private static int CalcularDiasRestantes(DateTime fechaExpiracion) =>
         (fechaExpiracion.Date - DateTime.Today).Days;
+
+    private static FirmaInfoApiResult ValidarArchivoLocal(string rutaFirma, string passwordFirma)
+    {
+        try
+        {
+            using var certificado = new X509Certificate2(
+                rutaFirma,
+                passwordFirma,
+                X509KeyStorageFlags.EphemeralKeySet);
+
+            var ahora = DateTime.Now;
+            var estaVigente = certificado.NotBefore <= ahora && certificado.NotAfter > ahora;
+            var aunNoVigente = certificado.NotBefore > ahora;
+            var identificaciones = ExtraerIdentificaciones(certificado);
+
+            var info = new FirmaInfoApiResponse
+            {
+                EsValida = estaVigente && certificado.HasPrivateKey,
+                EstadoVigencia = estaVigente ? "VIGENTE" : aunNoVigente ? "NO_VIGENTE" : "CADUCADA",
+                Mensaje = estaVigente
+                    ? "Firma valida."
+                    : aunNoVigente
+                        ? $"La firma electronica sera valida desde el {certificado.NotBefore:dd/MM/yyyy}."
+                        : $"La firma electronica esta caducada desde el {certificado.NotAfter:dd/MM/yyyy}.",
+                NombreTitular = certificado.GetNameInfo(X509NameType.SimpleName, forIssuer: false),
+                Ruc = identificaciones.FirstOrDefault(valor => valor.Length == 13),
+                Cedula = identificaciones.FirstOrDefault(valor => valor.Length == 10),
+                FechaEmision = certificado.NotBefore,
+                FechaExpiracion = certificado.NotAfter,
+                DiasRestantes = CalcularDiasRestantes(certificado.NotAfter),
+                TieneClavePrivada = certificado.HasPrivateKey
+            };
+
+            return FirmaInfoApiResult.Ok(info);
+        }
+        catch (CryptographicException)
+        {
+            return FirmaInfoApiResult.Error(
+                "No se pudo abrir la firma electronica. Verifica el archivo y su clave.");
+        }
+    }
+
+    private static IReadOnlyList<string> ExtraerIdentificaciones(X509Certificate2 certificado)
+    {
+        var identificaciones = new List<string>();
+        AgregarIdentificaciones(identificaciones, certificado.Subject);
+        AgregarIdentificaciones(identificaciones, certificado.SubjectName.Name);
+
+        foreach (var extension in certificado.Extensions)
+        {
+            try
+            {
+                AgregarIdentificaciones(identificaciones, extension.Format(multiLine: true));
+            }
+            catch (CryptographicException)
+            {
+            }
+        }
+
+        return identificaciones;
+    }
+
+    private static void AgregarIdentificaciones(ICollection<string> identificaciones, string? texto)
+    {
+        if (string.IsNullOrWhiteSpace(texto))
+            return;
+
+        foreach (Match coincidencia in IdentificacionRegex.Matches(texto))
+        {
+            if (!identificaciones.Contains(coincidencia.Value, StringComparer.Ordinal))
+                identificaciones.Add(coincidencia.Value);
+        }
+    }
 
     private static bool PerteneceAlRuc(string? identificacionCertificado, string? rucEmisor)
     {

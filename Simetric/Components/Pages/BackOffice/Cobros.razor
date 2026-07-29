@@ -7,6 +7,7 @@
 @using Simetric.Services
 @using System.Security.Claims
 @using System.Text.Json
+@using System.Text.Json.Nodes
 @using System.IO
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager NavManager
@@ -138,7 +139,7 @@
             @if (esAdministradorBackOffice)
             {
                 <button type="button" class="tab-btn @(activeTab == "auditoria" ? "active" : "")" @onclick='() => SetActiveTab("auditoria")'>
-                    Auditoría de cobranzas (@countAuditoriasTransferencias)
+                    Transferencias aprobadas (@countAuditoriasTransferencias)
                 </button>
             }
         </div>
@@ -287,6 +288,18 @@
                                             <span class="audit-chip @(audit.FacturaGenerada ? "success" : "warning")">
                                                 @(audit.FacturaGenerada ? (string.IsNullOrWhiteSpace(audit.NumeroFactura) ? $"#{audit.CodFactura}" : audit.NumeroFactura) : "No generada")
                                             </span>
+                                            @if (!audit.FacturaGenerada &&
+                                                audit.IdReporte > 0 &&
+                                                string.Equals(audit.Producto, "e-fact", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                <button type="button"
+                                                        class="btn-action collect mt-2"
+                                                        @onclick="() => GenerarFacturaAprobadaAsync(audit)"
+                                                        disabled="@(generandoFacturaAuditoriaId.HasValue)">
+                                                    <i class="bi bi-receipt"></i>
+                                                    @(generandoFacturaAuditoriaId == audit.IdAuditoria ? "Generando..." : "Generar factura")
+                                                </button>
+                                            }
                                         </td>
                                         <td>
                                             <span class="date-text observacion-text" title="@audit.Mensaje">@audit.Mensaje</span>
@@ -679,6 +692,7 @@
     private bool isSaving = false;
     private int? currentUserId;
     private int? aprobandoTransferenciaId;
+    private int? generandoFacturaAuditoriaId;
     private string? facturaAutorizadaPdfUrl;
     private bool mostrarConfirmacionAprobacion;
     private ReporteVentaBackOffice? ventaPendienteConfirmacion;
@@ -1701,7 +1715,8 @@
             usuario.IdUsuario,
             compra,
             $"BO-{venta.IdReporte}",
-            GetComprobanteRef(venta.Observacion));
+            GetComprobanteRef(venta.Observacion),
+            esTransferenciaBackOffice: true);
 
         compra.CodFactura = resultado.CodFactura > 0 ? resultado.CodFactura : compra.CodFactura;
         compra.NumeroFactura = !string.IsNullOrWhiteSpace(resultado.NumeroFactura)
@@ -1720,6 +1735,106 @@
         await context.SaveChangesAsync();
 
         return resultado;
+    }
+
+    private async Task GenerarFacturaAprobadaAsync(AuditoriaTransferenciaDto audit)
+    {
+        if (audit.FacturaGenerada ||
+            audit.IdReporte <= 0 ||
+            generandoFacturaAuditoriaId.HasValue)
+        {
+            return;
+        }
+
+        generandoFacturaAuditoriaId = audit.IdAuditoria;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var venta = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.IdReporte == audit.IdReporte);
+
+            if (venta is null ||
+                !string.Equals(venta.Estado, "pagada", StringComparison.OrdinalIgnoreCase) ||
+                !EsSolicitudTransferenciaDocumentos(venta))
+            {
+                ShowFeedback("No se encontró una transferencia aprobada válida para generar la factura.", false);
+                return;
+            }
+
+            var resultado = await EmitirFacturaTransferenciaAsync(venta);
+            await ActualizarResultadoAuditoriaFacturaAsync(audit.IdAuditoria, resultado);
+
+            if (resultado.Exito)
+            {
+                ShowFeedback(
+                    resultado.Autorizada
+                        ? $"Factura {resultado.NumeroFactura ?? resultado.CodFactura.ToString()} generada y autorizada correctamente."
+                        : $"Factura {resultado.NumeroFactura ?? resultado.CodFactura.ToString()} guardada en la base. Estado SRI: {resultado.EstadoSri ?? "PENDIENTE"}. {resultado.Mensaje}",
+                    resultado.Autorizada);
+            }
+            else
+            {
+                ShowFeedback($"No se pudo generar la factura: {resultado.Mensaje}", false);
+            }
+
+            await LoadAuditoriasTransferenciasAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"No se pudo generar la factura aprobada: {ex.Message}", false);
+        }
+        finally
+        {
+            generandoFacturaAuditoriaId = null;
+        }
+    }
+
+    private async Task ActualizarResultadoAuditoriaFacturaAsync(
+        int idAuditoria,
+        CompraDocumentosFacturaResultado resultado)
+    {
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var auditoria = await context.Auditorias.FirstOrDefaultAsync(a => a.IdAuditoria == idAuditoria);
+        if (auditoria is null)
+        {
+            return;
+        }
+
+        var valorNuevo = ParseJsonObject(auditoria.ValorNuevo);
+        valorNuevo["FacturaGenerada"] = resultado.Exito;
+        valorNuevo["CodFactura"] = resultado.CodFactura;
+        valorNuevo["NumeroFactura"] = resultado.NumeroFactura;
+        valorNuevo["Autorizada"] = resultado.Autorizada;
+        valorNuevo["EstadoSri"] = resultado.EstadoSri;
+        auditoria.ValorNuevo = valorNuevo.ToJsonString();
+
+        var detalles = ParseJsonObject(auditoria.Detalles);
+        detalles["Mensaje"] = resultado.Mensaje;
+        detalles["FacturaGeneradaPorUsuario"] = currentUserId;
+        detalles["FechaGeneracionFactura"] = DateTime.Now;
+        auditoria.Detalles = detalles.ToJsonString();
+
+        await context.SaveChangesAsync();
+    }
+
+    private static JsonObject ParseJsonObject(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return new JsonObject();
+        }
+
+        try
+        {
+            return JsonNode.Parse(json) as JsonObject ?? new JsonObject();
+        }
+        catch
+        {
+            return new JsonObject();
+        }
     }
 
     // Helper text parsers
@@ -1989,6 +2104,7 @@
         return new AuditoriaTransferenciaDto
         {
             IdAuditoria = auditoria.IdAuditoria,
+            IdReporte = GetJsonInt(nuevo, "IdReporte"),
             IdUsuario = auditoria.IdUsuario,
             Contador = contador,
             ContadorEmail = auditoria.Usuario?.Email ?? string.Empty,
@@ -2104,6 +2220,7 @@
     private sealed class AuditoriaTransferenciaDto
     {
         public int IdAuditoria { get; set; }
+        public int IdReporte { get; set; }
         public int? IdUsuario { get; set; }
         public string Contador { get; set; } = string.Empty;
         public string ContadorEmail { get; set; } = string.Empty;

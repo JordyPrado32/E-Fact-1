@@ -3460,9 +3460,11 @@ IF @resultado < 0
                     new XElement("dirEstablecimiento", factura.CodemisorNavigation?.DirEstablecimiento ?? factura.CodemisorNavigation?.DireccionMatriz),
                     new XElement(
                         "obligadoContabilidad",
-                        string.IsNullOrWhiteSpace(factura.CodemisorNavigation?.LlevaContabilidad)
+                        factura.CodemisorNavigation?.EsEmisorSistema == true
                             ? "NO"
-                            : factura.CodemisorNavigation.LlevaContabilidad),
+                            : string.IsNullOrWhiteSpace(factura.CodemisorNavigation?.LlevaContabilidad)
+                                ? "NO"
+                                : factura.CodemisorNavigation.LlevaContabilidad),
                     new XElement("tipoIdentificacionComprador", tipoIdentificacionComprador),
                     new XElement("razonSocialComprador",
                         !string.IsNullOrWhiteSpace(factura.CodclientesNavigation?.Nombrerazonsocial)

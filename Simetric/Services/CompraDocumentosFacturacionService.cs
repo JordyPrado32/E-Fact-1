@@ -33,7 +33,8 @@ public sealed class CompraDocumentosFacturacionService
         int idUsuario,
         CompraDocumentosHistorialItem compra,
         string? reference,
-        string? authorizationCode)
+        string? authorizationCode,
+        bool esTransferenciaBackOffice = false)
     {
         if (idUsuario <= 0)
             return CompraDocumentosFacturaResultado.Error("No se pudo identificar al usuario titular de la compra.");
@@ -97,7 +98,11 @@ public sealed class CompraDocumentosFacturacionService
 
         if (facturaExistente == null)
         {
-            var cliente = await ConstruirClienteDesdeUsuarioAsync(context, usuario, emisorOwnerId);
+            var cliente = await ConstruirClienteDesdeUsuarioAsync(
+                context,
+                usuario,
+                emisorOwnerId,
+                esTransferenciaBackOffice);
             var detalleConfigurado = await ResolverDetalleCompraAsync(context, emisorOwnerId, compra);
             var factura = ConstruirFactura(
                 emisorOwnerId,
@@ -225,7 +230,11 @@ public sealed class CompraDocumentosFacturacionService
         };
     }
 
-    private async Task<Cliente> ConstruirClienteDesdeUsuarioAsync(AppDbContext context, Usuario usuario, int ownerId)
+    private async Task<Cliente> ConstruirClienteDesdeUsuarioAsync(
+        AppDbContext context,
+        Usuario usuario,
+        int ownerId,
+        bool esTransferenciaBackOffice)
     {
         var numeroIdentificacion = NormalizarIdentificacion(usuario.Identificacion, usuario.IdTipoIdentificacion);
         var tipoIdentificacion = await ResolverCodigoIdentificacionAsync(context, usuario.IdTipoIdentificacion, numeroIdentificacion);
@@ -245,6 +254,7 @@ public sealed class CompraDocumentosFacturacionService
             TipoCliente = tipoCliente,
             Idvendedor = usuario.IdVendedor,
             Usuario = ownerId,
+            Oblgconta = esTransferenciaBackOffice ? "NO" : null,
             Estado = true
         };
     }

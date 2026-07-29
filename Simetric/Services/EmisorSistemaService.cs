@@ -82,6 +82,7 @@ public sealed class EmisorSistemaService
             return EmisorSistemaGuardadoResultado.Error("Solo los usuarios autorizados pueden configurar el emisor maestro.");
 
         NormalizarEmisor(emisorInput);
+        emisorInput.LlevaContabilidad = "NO";
         emisorInput.CodEstablecimiento = NormalizarSerie(emisorInput.CodEstablecimiento, "001");
         emisorInput.CodPuntoEmision = NormalizarSerie(emisorInput.CodPuntoEmision, "001");
         emisorInput.Retenciones = NormalizarRespuesta(emisorInput.Retenciones, "NO");
