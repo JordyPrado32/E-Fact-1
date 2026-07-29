@@ -138,6 +138,64 @@ public sealed class FirmaStampApiService
         }
     }
 
+    public async Task<PdfSignatureValidationApiResult> ValidarFirmaPdfAsync(
+        IBrowserFile pdf,
+        CancellationToken cancellationToken = default)
+    {
+        var baseUri = GetBaseUri();
+        var apiKey = GetApiKey();
+
+        if (baseUri is null)
+            return PdfSignatureValidationApiResult.Error("La URL de la API de estampado no esta configurada.");
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return PdfSignatureValidationApiResult.Error("La API key de estampado no esta configurada.");
+
+        await using var pdfStream = pdf.OpenReadStream(10 * 1024 * 1024, cancellationToken);
+        using var form = new MultipartFormDataContent();
+        using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
+
+        form.Add(pdfContent, "pdf", pdf.Name);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, "api/documentos/validar-firma"));
+        request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
+        request.Content = form;
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            var raw = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var mensaje = ExtraerMensajeError(raw)
+                    ?? $"La API de firma respondio con estado {(int)response.StatusCode}.";
+
+                return PdfSignatureValidationApiResult.Error(mensaje, raw, (int)response.StatusCode);
+            }
+
+            var validation = JsonSerializer.Deserialize<PdfSignatureValidationApiResponse>(
+                raw,
+                JsonOptions);
+
+            return validation is null
+                ? PdfSignatureValidationApiResult.Error("La API no devolvio un resultado de validacion valido.", raw, (int)response.StatusCode)
+                : PdfSignatureValidationApiResult.Ok(validation, raw, (int)response.StatusCode);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return PdfSignatureValidationApiResult.Error("La API de firma excedio el tiempo de espera.");
+        }
+        catch (HttpRequestException)
+        {
+            return PdfSignatureValidationApiResult.Error("No fue posible conectar con la API de firma.");
+        }
+        catch (JsonException)
+        {
+            return PdfSignatureValidationApiResult.Error("La API devolvio una respuesta de validacion no valida.");
+        }
+    }
+
     private static StreamContent CreateFileContent(Stream stream, string? contentType)
     {
         var content = new StreamContent(stream);
@@ -321,5 +379,49 @@ public sealed record QrValidationApiResult(
         new(true, string.Empty, verification, rawBody, httpStatusCode);
 
     public static QrValidationApiResult Error(string message, string? rawBody = null, int? httpStatusCode = null) =>
+        new(false, message, null, rawBody, httpStatusCode);
+}
+
+public sealed record PdfSignatureValidationApiResponse(
+    bool Valido,
+    int CantidadFirmas,
+    bool DocumentoCompletoCubierto,
+    IReadOnlyList<PdfSignatureDetailApiResponse> Firmas);
+
+public sealed record PdfSignatureDetailApiResponse(
+    bool Valida,
+    bool IntegridadValida,
+    bool CertificadoVigente,
+    bool CadenaConfiable,
+    bool RevocacionValida,
+    string EstadoRevocacion,
+    bool CubreDocumentoCompleto,
+    string? Firmante,
+    string? Emisor,
+    string? NumeroSerie,
+    string? HuellaDigital,
+    DateTimeOffset? FechaFirma,
+    DateTimeOffset? CertificadoDesde,
+    DateTimeOffset? CertificadoHasta,
+    string? AlgoritmoHash,
+    bool? SelloTiempoValido,
+    DateTimeOffset? FechaSelloTiempo,
+    string? AutoridadSelloTiempo,
+    string? Error);
+
+public sealed record PdfSignatureValidationApiResult(
+    bool Success,
+    string Message,
+    PdfSignatureValidationApiResponse? Validation,
+    string? RawBody = null,
+    int? HttpStatusCode = null)
+{
+    public static PdfSignatureValidationApiResult Ok(
+        PdfSignatureValidationApiResponse validation,
+        string? rawBody,
+        int? httpStatusCode) =>
+        new(true, string.Empty, validation, rawBody, httpStatusCode);
+
+    public static PdfSignatureValidationApiResult Error(string message, string? rawBody = null, int? httpStatusCode = null) =>
         new(false, message, null, rawBody, httpStatusCode);
 }

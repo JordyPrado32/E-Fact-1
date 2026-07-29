@@ -255,6 +255,91 @@
                 </details>
             }
         </section>
+
+        <section class="stamp-panel pdf-signature-panel">
+            <div class="panel-heading qr-heading">
+                <i class="bi bi-file-earmark-check"></i>
+                <div>
+                    <h2>Validar firma digital del PDF</h2>
+                    <p>Comprueba integridad, certificado, revocacion OCSP/CRL y sello de tiempo RFC 3161.</p>
+                </div>
+            </div>
+
+            <div class="file-grid">
+                <label class="stamp-file-card @(pdfValidacionFirmaFile is null ? null : "is-ready")">
+                    <InputFile class="file-input" accept="application/pdf,.pdf" OnChange="SeleccionarPdfValidacionFirma" />
+                    <i class="bi bi-file-earmark-pdf"></i>
+                    <strong>PDF firmado</strong>
+                    <span>@(pdfValidacionFirmaFile?.Name ?? "Seleccionar PDF")</span>
+                </label>
+            </div>
+
+            <div class="qr-actions">
+                <button type="button" class="qr-validate-btn" @onclick="ValidarFirmaPdfAsync" disabled="@procesandoValidacionFirmaPdf">
+                    <i class="bi @(procesandoValidacionFirmaPdf ? "bi-arrow-repeat" : "bi-shield-check")"></i>
+                    <span>@(procesandoValidacionFirmaPdf ? "Analizando..." : "Analizar firma digital")</span>
+                </button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(pdfFirmaMensaje))
+            {
+                <div class="qr-result @(pdfFirmaEsError ? "is-error" : "is-valid")" role="status">
+                    <i class="bi @(pdfFirmaEsError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                    <div>
+                        <strong>@(pdfFirmaEsError ? "Firma no valida" : "Firma valida")</strong>
+                        <span>@pdfFirmaMensaje</span>
+                    </div>
+                </div>
+            }
+
+            @if (pdfFirmaResultado is not null)
+            {
+                <dl class="qr-details pdf-signature-summary">
+                    <div>
+                        <dt>Firmas</dt>
+                        <dd>@pdfFirmaResultado.CantidadFirmas</dd>
+                    </div>
+                    <div>
+                        <dt>Documento completo</dt>
+                        <dd>@(pdfFirmaResultado.DocumentoCompletoCubierto ? "Si" : "No")</dd>
+                    </div>
+                </dl>
+
+                <div class="pdf-signature-list">
+                    @foreach (var firma in pdfFirmaResultado.Firmas)
+                    {
+                        <article class="pdf-signature-item @(firma.Valida ? "is-valid" : "is-error")">
+                            <div>
+                                <strong>@(string.IsNullOrWhiteSpace(firma.Firmante) ? "Firmante no identificado" : firma.Firmante)</strong>
+                                <span>@(firma.FechaFirma?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "Fecha de firma no disponible")</span>
+                            </div>
+                            <dl>
+                                <div>
+                                    <dt>Integridad</dt>
+                                    <dd>@(firma.IntegridadValida ? "OK" : "Error")</dd>
+                                </div>
+                                <div>
+                                    <dt>Certificado</dt>
+                                    <dd>@(firma.CertificadoVigente ? "Vigente" : "No vigente")</dd>
+                                </div>
+                                <div>
+                                    <dt>Revocacion</dt>
+                                    <dd>@firma.EstadoRevocacion</dd>
+                                </div>
+                                <div>
+                                    <dt>Sello tiempo</dt>
+                                    <dd>@TextoSelloTiempo(firma)</dd>
+                                </div>
+                            </dl>
+                            @if (!string.IsNullOrWhiteSpace(firma.Error))
+                            {
+                                <p>@firma.Error</p>
+                            }
+                        </article>
+                    }
+                </div>
+            }
+        </section>
     }
 </div>
 
@@ -265,11 +350,14 @@
     private bool cargando = true;
     private bool procesando;
     private bool procesandoValidacionQr;
+    private bool procesandoValidacionFirmaPdf;
     private bool esError;
     private bool qrEsError;
+    private bool pdfFirmaEsError;
     private int currentUserId;
     private string? mensaje;
     private string? qrMensaje;
+    private string? pdfFirmaMensaje;
     private string datos = string.Empty;
     private string qrEntrada = string.Empty;
     private string? qrDatosJson;
@@ -278,6 +366,7 @@
     private double yMm = 10;
     private double anchoMm = 80;
     private IBrowserFile? pdfFile;
+    private IBrowserFile? pdfValidacionFirmaFile;
     private Emisor? emisor;
     private bool emisorConfigurado;
     private string estadoEmisorMensaje = "Validando configuracion de EFact...";
@@ -287,6 +376,7 @@
     private StampPreference? preferenciaGuardada;
     private ResultadoEstampado? resultado;
     private QrVerificationApiResponse? qrResultado;
+    private PdfSignatureValidationApiResponse? pdfFirmaResultado;
     private DotNetObjectReference<EstamparDocumento>? dotNetRef;
     private IJSObjectReference? stampSelectorModule;
     private IJSObjectReference? stampSelectorInstance;
@@ -358,6 +448,8 @@
     private void IrAlInicio() => NavManager.NavigateTo("/e-sign");
 
     private void SeleccionarPdf(InputFileChangeEventArgs e) => pdfFile = e.File;
+
+    private void SeleccionarPdfValidacionFirma(InputFileChangeEventArgs e) => pdfValidacionFirmaFile = e.File;
 
     [JSInvokable]
     public async Task OnStampSelectionChanged(int selectedPage, double selectedX, double selectedY, double selectedWidth)
@@ -665,6 +757,56 @@
         }
     }
 
+    private async Task ValidarFirmaPdfAsync()
+    {
+        pdfFirmaMensaje = null;
+        pdfFirmaEsError = false;
+        pdfFirmaResultado = null;
+
+        if (pdfValidacionFirmaFile is null)
+        {
+            pdfFirmaEsError = true;
+            pdfFirmaMensaje = "Selecciona el PDF firmado.";
+            return;
+        }
+
+        if (pdfValidacionFirmaFile.Size <= 0 || pdfValidacionFirmaFile.Size > MaxPdfSize)
+        {
+            pdfFirmaEsError = true;
+            pdfFirmaMensaje = "El PDF debe pesar maximo 10 MB.";
+            return;
+        }
+
+        if (!EsExtension(pdfValidacionFirmaFile.Name, ".pdf"))
+        {
+            pdfFirmaEsError = true;
+            pdfFirmaMensaje = "El documento debe ser PDF.";
+            return;
+        }
+
+        procesandoValidacionFirmaPdf = true;
+        try
+        {
+            var apiResult = await FirmaStampApiService.ValidarFirmaPdfAsync(pdfValidacionFirmaFile);
+            if (!apiResult.Success || apiResult.Validation is null)
+            {
+                pdfFirmaEsError = true;
+                pdfFirmaMensaje = apiResult.Message;
+                return;
+            }
+
+            pdfFirmaResultado = apiResult.Validation;
+            pdfFirmaEsError = !pdfFirmaResultado.Valido;
+            pdfFirmaMensaje = pdfFirmaResultado.Valido
+                ? "El PDF tiene firma digital valida."
+                : "El PDF no tiene una firma digital valida.";
+        }
+        finally
+        {
+            procesandoValidacionFirmaPdf = false;
+        }
+    }
+
     private string? ResolverCertificadoPorClaveYRuc(string password)
     {
         var ruc = NormalizarDigitos(emisor?.Ruc);
@@ -723,6 +865,16 @@
 
     private static string FirstFilled(params string?[] values) =>
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string TextoSelloTiempo(PdfSignatureDetailApiResponse firma)
+    {
+        if (firma.SelloTiempoValido is null)
+            return "No aplica";
+
+        return firma.SelloTiempoValido.Value
+            ? firma.FechaSelloTiempo?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "Valido"
+            : "No valido";
+    }
 
     private static string? GetSubjectValue(X509Certificate2 certificado, string key)
     {
