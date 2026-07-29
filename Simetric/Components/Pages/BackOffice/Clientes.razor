@@ -238,6 +238,16 @@
                                                 @onclick="() => ResetearPassword(u)">
                                             <i class="bi bi-shield-lock"></i>
                                         </button>
+                                        @if (isInternal)
+                                        {
+                                            <button type="button"
+                                                    class="action-btn action-reset"
+                                                    title="Reenviar credenciales"
+                                                    disabled="@(!PuedeGestionarUsuario(u))"
+                                                    @onclick="() => ReenviarCredencialesBackOffice(u)">
+                                                <i class="bi bi-envelope-arrow-up"></i>
+                                            </button>
+                                        }
                                         <button type="button"
                                                 class="action-btn action-stats"
                                                 title="Estadísticas de uso"
@@ -1808,7 +1818,7 @@
                             tempUser.Email,
                             ObtenerNombreCompleto(tempUser),
                             GetRolBackOfficeDisplay(tempUser),
-                            NavManager.ToAbsoluteUri("/login").ToString(),
+                            "https://efact.numericasoftware.com/",
                             tempUser.Email,
                             claveInicial);
                     }
@@ -1929,6 +1939,86 @@
         {
             await LoadData();
         }
+    }
+
+    private async Task ReenviarCredencialesBackOffice(Usuario u)
+    {
+        if (!EsVistaUsuariosInternos() || u.IdTipoUsuario != 7)
+        {
+            return;
+        }
+
+        if (!PuedeGestionarUsuario(u))
+        {
+            await JS.ShowAlertAsync("Accion no permitida", "Los usuarios BackOffice bloqueados o inactivos no admiten mas acciones desde esta pantalla.", "warning");
+            return;
+        }
+
+        var confirm = await JS.InvokeAsync<bool>("confirm", $"Generar una nueva contrasena y reenviar las credenciales a {u.Email}?");
+        if (!confirm)
+        {
+            return;
+        }
+
+        var nuevaClaveTemporal = GenerarClaveBackOffice();
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuarioDb = await context.Usuarios.FindAsync(u.IdUsuario);
+
+            if (usuarioDb == null)
+            {
+                await JS.ShowAlertAsync("No se pudo completar", "No se encontro el usuario para reenviar credenciales.", "warning");
+                return;
+            }
+
+            usuarioDb.PasswordHash = Simetric.Components.Helpers.SecurityHelper.HashPassword(nuevaClaveTemporal);
+            usuarioDb.ClaveTemporal = false;
+            usuarioDb.CuentaBloqueada = false;
+            usuarioDb.IntentosFallidos = 0;
+            usuarioDb.FechaDesbloqueo = null;
+            usuarioDb.TokenRecuperacion = null;
+            usuarioDb.FechaExpiracionToken = null;
+
+            await context.SaveChangesAsync();
+
+            await EmailService.EnviarCredencialesBackOfficeAsync(
+                usuarioDb.Email,
+                ObtenerNombreCompleto(usuarioDb),
+                GetRolBackOfficeDisplay(usuarioDb),
+                "https://efact.numericasoftware.com/",
+                usuarioDb.Email,
+                nuevaClaveTemporal);
+
+            await LoadData();
+            await JS.ShowAlertAsync("Credenciales reenviadas", $"Se genero una nueva contrasena y se envio el correo a {usuarioDb.Email}.", "success");
+        }
+        catch (Exception ex)
+        {
+            await JS.ShowAlertAsync("No se pudo reenviar", $"La contrasena pudo haberse actualizado, pero no se pudo enviar el correo. Error: {ObtenerMensajeError(ex)}", "error");
+            await LoadData();
+        }
+    }
+
+    private static string GenerarClaveBackOffice()
+    {
+        const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        Span<byte> bytes = stackalloc byte[10];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+
+        var clave = new char[14];
+        clave[0] = 'N';
+        clave[1] = 'u';
+        clave[2] = 'm';
+        clave[3] = '-';
+
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            clave[i + 4] = chars[bytes[i] % chars.Length];
+        }
+
+        return new string(clave);
     }
 
     private async Task VerEstadisticas(Usuario u)
