@@ -4,7 +4,7 @@ namespace Simetric.ViewModels
 {
     public class CambioClaveModel
     {
-        [Required(ErrorMessage = "El codigo de acceso es obligatorio")]
+        [Required(ErrorMessage = "Ingresa la contrasena temporal o codigo de acceso")]
         public string ClaveActual { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "La nueva clave es obligatoria")]

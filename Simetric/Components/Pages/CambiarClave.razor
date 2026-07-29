@@ -14,6 +14,7 @@
 @inject NavigationManager Nav
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
+@inject Simetric.Services.PendingLoginFlowService PendingLoginFlow
 @rendermode InteractiveServer
 
 <PageTitle>Cambiar Clave | Numérica e-fact</PageTitle>
@@ -416,7 +417,7 @@
                     </div>
                 </div>
                 <h2 class="fw-bold text-dark mb-1">Cambiar Clave</h2>
-                <p class="text-muted small">Ingresa el código temporal y crea una nueva contraseña</p>
+                <p class="text-muted small">@(esUsuarioBackOffice ? "Crea una nueva contrasena para continuar" : "Ingresa el codigo temporal y crea una nueva contrasena")</p>
             </div>
 
             @if (!string.IsNullOrWhiteSpace(correoUsuario))
@@ -437,21 +438,24 @@
             <EditForm Model="@cambioModel" OnValidSubmit="ProcesarCambio" FormName="cambiarClaveForm">
                 <DataAnnotationsValidator />
 
-                <div class="mb-4">
-                    <label class="form-label-n">Código de Acceso</label>
-                    <div class="input-wrapper">
-                        <InputText @bind-Value="cambioModel.ClaveActual"
-                                   type="@(showCurrentPassword ? "text" : "password")"
-                                   class="input-n-premium"
-                                   placeholder="00000000"
-                                   autocomplete="one-time-code" />
-                        <i class="bi bi-123 input-icon-n"></i>
-                        <button type="button" class="btn-eye-n" @onclick="() => showCurrentPassword = !showCurrentPassword" tabindex="-1">
-                            <i class="bi @(showCurrentPassword ? "bi-eye-slash" : "bi-eye")"></i>
-                        </button>
+                @if (!esUsuarioBackOffice)
+                {
+                    <div class="mb-4">
+                        <label class="form-label-n">Codigo de Acceso</label>
+                        <div class="input-wrapper">
+                            <InputText @bind-Value="cambioModel.ClaveActual"
+                                       type="@(showCurrentPassword ? "text" : "password")"
+                                       class="input-n-premium"
+                                       placeholder="00000000"
+                                       autocomplete="one-time-code" />
+                            <i class="bi bi-123 input-icon-n"></i>
+                            <button type="button" class="btn-eye-n" @onclick="() => showCurrentPassword = !showCurrentPassword" tabindex="-1">
+                                <i class="bi @(showCurrentPassword ? "bi-eye-slash" : "bi-eye")"></i>
+                            </button>
+                        </div>
+                        <ValidationMessage For="@(() => cambioModel.ClaveActual)" class="text-danger small mt-1 d-block" />
                     </div>
-                    <ValidationMessage For="@(() => cambioModel.ClaveActual)" class="text-danger small mt-1 d-block" />
-                </div>
+                }
 
                 <div class="mb-4">
                     <label class="form-label-n">Nueva Contraseña</label>
@@ -491,16 +495,25 @@
                     @(cargando ? "PROCESANDO..." : "ACTUALIZAR Y ACCEDER")
                 </button>
 
-                <div class="text-center mt-4">
-                    @if (timerSegundos > 0)
-                    {
-                        <span class="resend-timer">Reenviar código en <strong>@timerSegundos</strong>s</span>
-                    }
-                    else
-                    {
-                        <a href="/recover-password" class="text-primary fw-bold text-decoration-none small">Generar otra clave</a>
-                    }
-                </div>
+                @if (!esUsuarioBackOffice)
+                {
+                    <div class="text-center mt-4">
+                        @if (timerSegundos > 0)
+                        {
+                            <span class="resend-timer">Reenviar codigo en <strong>@timerSegundos</strong>s</span>
+                        }
+                        else
+                        {
+                            <a href="/recover-password" class="text-primary fw-bold text-decoration-none small">Generar otra clave</a>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="text-center mt-4">
+                        <a href="/login" class="text-primary fw-bold text-decoration-none small">Volver al inicio de sesion</a>
+                    </div>
+                }
             </EditForm>
         </div>
     </div>
@@ -601,6 +614,7 @@
     ";
 
     [Parameter] public int IdUsuario { get; set; }
+    [SupplyParameterFromQuery(Name = "loginToken")] public string? LoginToken { get; set; }
 
     private CambioClaveModel cambioModel = new();
     private string? error;
@@ -610,6 +624,7 @@
     private bool showCurrentPassword;
     private bool showNewPassword;
     private bool showConfirmPassword;
+    private bool esUsuarioBackOffice;
     private int timerSegundos = 60;
     private System.Threading.Timer? _countdownTimer;
 
@@ -644,7 +659,22 @@
         }
 
         correoUsuario = usuarioDB.Email?.Trim() ?? string.Empty;
-        IniciarTimer();
+        esUsuarioBackOffice = usuarioDB.IdTipoUsuario == 7;
+        if (esUsuarioBackOffice)
+        {
+            if (!PendingLoginFlow.TryPeek(LoginToken ?? string.Empty, IdUsuario, out var pendingLogin) || pendingLogin is null)
+            {
+                navegacionInterna = true;
+                Nav.NavigateTo("/login", replace: true);
+                return;
+            }
+
+            cambioModel.ClaveActual = pendingLogin.Password;
+        }
+        else
+        {
+            IniciarTimer();
+        }
     }
 
     private async Task ProcesarCambio()
@@ -669,10 +699,22 @@
             }
 
             string codigoAcceso = cambioModel.ClaveActual?.Trim() ?? string.Empty;
+            if (usuarioDB.IdTipoUsuario == 7)
+            {
+                if (!PendingLoginFlow.TryConsume(LoginToken ?? string.Empty, IdUsuario, out var pendingLogin) || pendingLogin is null)
+                {
+                    error = "Tu sesion de cambio de clave expiro. Inicia sesion nuevamente.";
+                    return;
+                }
+
+                codigoAcceso = pendingLogin.Password?.Trim() ?? string.Empty;
+            }
 
             if (!EsCodigoAccesoValido(usuarioDB, codigoAcceso))
             {
-                error = "El codigo de acceso no es correcto. Verifica el correo e intentalo de nuevo.";
+                error = usuarioDB.IdTipoUsuario == 7
+                    ? "La contrasena temporal no es correcta. Verifica el correo e intentalo de nuevo."
+                    : "El codigo de acceso no es correcto. Verifica el correo e intentalo de nuevo.";
                 return;
             }
 
