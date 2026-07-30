@@ -5,6 +5,7 @@ using System.Xml;
 using System.Xml.Linq;
 using System.Net.Http.Headers;
 using Simetric.Models.Glogales;
+using System.Globalization;
 
 namespace Simetric.Services;
 
@@ -67,8 +68,10 @@ public sealed class SriXmlProcessorService
 
             var serializer = new XmlSerializer(typeof(mensajeSRI));
             using var reader = new StringReader(xmlRespuesta);
-            return serializer.Deserialize(reader) as mensajeSRI
+            var resultado = serializer.Deserialize(reader) as mensajeSRI
                 ?? new mensajeSRI { estado = "ERROR", mensaje = "La respuesta del SRI llego vacia." };
+
+            return NormalizarClaveAccesoRegistrada(resultado, rutaXml);
         }
         catch (OperationCanceledException ex)
         {
@@ -101,6 +104,113 @@ public sealed class SriXmlProcessorService
             ?? _configuration["SriXml:ApiKey"]?.Trim()
             ?? Environment.GetEnvironmentVariable("SRI_XML_PROCESSOR_API_KEY")?.Trim()
             ?? DefaultApiKey;
+    }
+
+    private static mensajeSRI NormalizarClaveAccesoRegistrada(mensajeSRI resultado, string rutaXml)
+    {
+        var respuestaCompleta = string.Join(
+            " ",
+            resultado.estado,
+            resultado.estadoEnvio,
+            resultado.mensaje,
+            resultado.xml);
+
+        if (!EsClaveAccesoRegistrada(respuestaCompleta))
+            return resultado;
+
+        var claveAcceso = string.IsNullOrWhiteSpace(resultado.autorizacion)
+            ? ExtraerClaveAcceso(rutaXml)
+            : resultado.autorizacion.Trim();
+
+        if (string.IsNullOrWhiteSpace(claveAcceso))
+            return resultado;
+
+        resultado.estado = DocumentoAutorizacionHelper.EstadoAutorizado;
+        resultado.estadoEnvio = DocumentoAutorizacionHelper.EstadoAutorizado;
+        resultado.autorizacion = claveAcceso;
+        resultado.fecha = string.IsNullOrWhiteSpace(resultado.fecha)
+            ? DateTime.Now.ToString("O", CultureInfo.InvariantCulture)
+            : resultado.fecha;
+        resultado.mensaje = "Clave de acceso ya registrada en el SRI; se reconoce la factura como autorizada.";
+        resultado.xml = CrearXmlAutorizadoDesdeComprobante(
+            rutaXml,
+            claveAcceso,
+            resultado.fecha);
+        return resultado;
+    }
+
+    private static bool EsClaveAccesoRegistrada(string? respuesta)
+    {
+        if (string.IsNullOrWhiteSpace(respuesta))
+            return false;
+
+        var texto = QuitarDiacriticos(respuesta).ToUpperInvariant();
+        return texto.Contains("CLAVE DE ACCESO YA REGISTRADA", StringComparison.Ordinal)
+            || texto.Contains("CLAVE DE ACCESO REGISTRADA", StringComparison.Ordinal)
+            || texto.Contains("CLAVE ACCESO YA REGISTRADA", StringComparison.Ordinal)
+            || texto.Contains("CLAVE ACCESO REGISTRADA", StringComparison.Ordinal);
+    }
+
+    private static string ExtraerClaveAcceso(string rutaXml)
+    {
+        try
+        {
+            return XDocument.Load(rutaXml)
+                .Descendants()
+                .FirstOrDefault(elemento =>
+                    string.Equals(elemento.Name.LocalName, "claveAcceso", StringComparison.OrdinalIgnoreCase))
+                ?.Value
+                ?.Trim()
+                ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string CrearXmlAutorizadoDesdeComprobante(
+        string rutaXml,
+        string numeroAutorizacion,
+        string fechaAutorizacion)
+    {
+        try
+        {
+            var comprobante = File.ReadAllText(rutaXml);
+            var documento = XDocument.Parse(comprobante);
+            var ambienteCodigo = documento
+                .Descendants()
+                .FirstOrDefault(elemento =>
+                    string.Equals(elemento.Name.LocalName, "ambiente", StringComparison.OrdinalIgnoreCase))
+                ?.Value
+                ?.Trim();
+
+            return new XDocument(
+                new XElement(
+                    "autorizacion",
+                    new XElement("estado", DocumentoAutorizacionHelper.EstadoAutorizado),
+                    new XElement("numeroAutorizacion", numeroAutorizacion),
+                    new XElement("fechaAutorizacion", fechaAutorizacion),
+                    new XElement("ambiente", ambienteCodigo == "1" ? "PRUEBAS" : "PRODUCCION"),
+                    new XElement("comprobante", new XCData(comprobante))))
+                .ToString(SaveOptions.DisableFormatting);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string QuitarDiacriticos(string valor)
+    {
+        var builder = new StringBuilder(valor.Length);
+        foreach (var caracter in valor.Normalize(NormalizationForm.FormD))
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(caracter) != UnicodeCategory.NonSpacingMark)
+                builder.Append(caracter);
+        }
+
+        return builder.ToString().Normalize(NormalizationForm.FormC);
     }
 
     private static void EliminarDetallesAdicionalesVacios(string rutaXml)

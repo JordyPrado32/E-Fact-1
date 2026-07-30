@@ -1404,7 +1404,7 @@ namespace Simetric.Services
                 // Actualizamos los campos correspondientes
                 facturaDb.Numautorizacion = numeroAutorizacion;
                 facturaDb.Fechaautosri = fechaAutorizacion;
-                facturaDb.Fchautorizacion = DateTime.Now;
+                facturaDb.Fchautorizacion = ParsearFechaAutorizacion(fechaAutorizacion) ?? DateTime.Now;
                 facturaDb.Autorizado = autorizado; // Aprovechamos para cambiar el estado a Autorizado
                 facturaDb.Mensaje = mensaje;
                 if (autorizado)
@@ -1438,6 +1438,29 @@ namespace Simetric.Services
             {
                 throw new Exception($"No se encontró la factura con el código {codFactura} para actualizar la autorización.");
             }
+        }
+
+        private static DateTime? ParsearFechaAutorizacion(string? fechaAutorizacion)
+        {
+            if (string.IsNullOrWhiteSpace(fechaAutorizacion))
+                return null;
+
+            if (DateTimeOffset.TryParse(
+                    fechaAutorizacion,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces,
+                    out var fechaConZona))
+            {
+                return fechaConZona.LocalDateTime;
+            }
+
+            return DateTime.TryParse(
+                fechaAutorizacion,
+                CultureInfo.CurrentCulture,
+                DateTimeStyles.AllowWhiteSpaces,
+                out var fechaLocal)
+                ? fechaLocal
+                : null;
         }
 
         public async Task<List<int>> GetFacturasPendientesReintentoSriAsync(int maxRegistros = 10)

@@ -10,7 +10,9 @@ internal static class ComprobanteReenvioFechaHelper
         return !texto.Contains("RECIBIDA", StringComparison.Ordinal) &&
                !texto.Contains("EN PROCESAMIENTO", StringComparison.Ordinal) &&
                !texto.Contains("PROCESANDO", StringComparison.Ordinal) &&
-               !texto.Contains("POR PROCESAR", StringComparison.Ordinal);
+               !texto.Contains("POR PROCESAR", StringComparison.Ordinal) &&
+               !texto.Contains("CLAVE DE ACCESO REGISTRADA", StringComparison.Ordinal) &&
+               !texto.Contains("CLAVE DE ACCESO YA REGISTRADA", StringComparison.Ordinal);
     }
 
     public static bool DebeActualizar(DateTime? fechaEmision, string? claveAcceso)
