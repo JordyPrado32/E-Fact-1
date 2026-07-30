@@ -98,6 +98,8 @@ public interface IEmailService
 
 public class EmailService : IEmailService
 {
+    private const string EfactInfoUrl = "https://numericasoftware.com/efact";
+
     private readonly AppDbContext _db;
     private readonly AuditService _auditService;
     private readonly ILogger<EmailService> _logger;
@@ -1761,6 +1763,7 @@ Atentamente,
         var eyebrowSafe = WebUtility.HtmlEncode(eyebrow);
         var titleSafe = title;
         var subtitleSafe = subtitle;
+        var efactInfoUrlSafe = WebUtility.HtmlEncode(EfactInfoUrl);
         var footerSafe = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(footerText)
             ? "Correo generado automáticamente por Numerica E-FACT."
             : footerText.Trim());
@@ -1768,38 +1771,73 @@ Atentamente,
         return $@"
 <!DOCTYPE html>
 <html lang='es'>
-  <body style='margin:0;padding:0;background-color:#eef3f8;'>
-    <div style='display:none;font-size:1px;color:#eef3f8;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;'>
+  <head>
+    <meta http-equiv='Content-Type' content='text/html; charset=utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <meta name='x-apple-disable-message-reformatting'>
+  </head>
+  <body style='margin:0;padding:0;background-color:#f2f6f9;'>
+    <div style='display:none;font-size:1px;color:#f2f6f9;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;'>
       {previewSafe}
     </div>
-    <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;background-color:#eef3f8;margin:0;padding:0;'>
+    <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;background-color:#f2f6f9;margin:0;padding:0;'>
       <tr>
         <td align='center' style='padding:24px 12px;'>
           <!--[if mso]>
           <table role='presentation' width='640' cellpadding='0' cellspacing='0' border='0'><tr><td>
           <![endif]-->
-          <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:640px;border-collapse:collapse;background-color:#ffffff;border:1px solid #d9e4ef;'>
+          <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:640px;border-collapse:collapse;background-color:#ffffff;border:1px solid #d8e3ec;'>
             <tr>
-              <td style='padding:24px 28px;background-color:#0f3d66;'>
-                <div style='font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#cfe4f8;'>
-                  {eyebrowSafe}
-                </div>
-                <div style='font-family:Segoe UI,Arial,sans-serif;font-size:28px;line-height:34px;font-weight:700;color:#ffffff;padding-top:8px;'>
-                  {titleSafe}
-                </div>
-                <div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:22px;color:#dbe9f7;padding-top:10px;'>
-                  {subtitleSafe}
-                </div>
+              <td style='padding:0;background-color:#ffffff;'>
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;'>
+                  <tr>
+                    <td align='center' style='padding:24px 24px 20px 24px;background-color:#ffffff;border-bottom:4px solid #1f8fd6;'>
+                      <a href='{efactInfoUrlSafe}' target='_blank' style='text-decoration:none;'>
+                        <span style='font-family:Segoe UI,Arial,sans-serif;font-size:34px;line-height:38px;font-weight:900;color:#006bb5;letter-spacing:0;'>E-FACT</span>
+                      </a>
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;color:#6b7280;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding-top:6px;'>
+                        Facturacion electronica
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align='center' style='padding:34px 28px 28px 28px;background-color:#ffffff;'>
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:18px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin:0 0 14px 0;'>
+                        {eyebrowSafe}
+                      </div>
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:26px;line-height:34px;font-weight:800;color:#374151;margin:0;'>
+                        {titleSafe}
+                      </div>
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:24px;color:#6b7280;padding-top:12px;'>
+                        {subtitleSafe}
+                      </div>
+                    </td>
+                  </tr>
+                </table>
               </td>
             </tr>
             <tr>
-              <td style='padding:28px;background-color:#ffffff;'>
+              <td style='padding:0 28px 28px 28px;background-color:#ffffff;'>
                 {bodyHtml}
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;margin-top:24px;border-top:1px solid #e5eaf0;border-bottom:1px solid #e5eaf0;'>
+                  <tr>
+                    <td align='center' style='padding:28px 12px;font-family:Segoe UI,Arial,sans-serif;'>
+                      <div style='font-size:15px;line-height:23px;color:#4b5563;margin:0 0 18px 0;'>
+                        Conoce mas sobre la emision de comprobantes en E-FACT.
+                      </div>
+                      <a href='{efactInfoUrlSafe}' target='_blank' style='display:inline-block;background-color:#2f95d8;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:18px;font-weight:800;text-decoration:none;padding:15px 28px;border-radius:28px;'>
+                        VER E-FACT
+                      </a>
+                    </td>
+                  </tr>
+                </table>
               </td>
             </tr>
             <tr>
-              <td style='padding:18px 28px;background-color:#f7fafc;border-top:1px solid #dde6ef;font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;color:#6b7c8f;'>
-                {footerSafe}
+              <td align='center' style='padding:22px 28px;background-color:#e8f1f2;font-family:Segoe UI,Arial,sans-serif;color:#4b5563;'>
+                <div style='font-size:13px;line-height:20px;font-weight:800;color:#374151;margin:0 0 4px 0;'>Numerica Software</div>
+                <div style='font-size:12px;line-height:18px;margin:0 0 12px 0;'>{footerSafe}</div>
+                <a href='{efactInfoUrlSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:underline;'>numericasoftware.com/efact</a>
               </td>
             </tr>
           </table>
