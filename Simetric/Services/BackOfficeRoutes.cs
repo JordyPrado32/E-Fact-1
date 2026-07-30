@@ -17,6 +17,7 @@ public static class BackOfficeRoutes
     public const string ReporteVendedores = "/backoffice/reportes/vendedores";
     public const string ReporteCobranzas = "/backoffice/reportes/cobranzas";
     public const string Configuracion = "/backoffice/configuracion";
+    public const string Normativa = "/backoffice/configuracion/normativa";
     public const string Perfil = "/backoffice/perfil";
 
     public static bool IsBackOfficePath(NavigationManager navigationManager, string location)

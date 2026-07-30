@@ -179,6 +179,7 @@ builder.Services.AddScoped<ICajaSerieResolver, CajaSerieResolver>();
 builder.Services.AddScoped<FacturacionService>();
 builder.Services.AddScoped<CompraDocumentosFacturacionService>();
 builder.Services.AddScoped<EmisorSistemaService>();
+builder.Services.AddScoped<NormativaLegalService>();
 builder.Services.AddScoped<FacturaStoredProcedureBootstrapService>();
 builder.Services.AddScoped<GuiaRemisionService>();
 builder.Services.AddScoped<IGuiaRemisionPdfService, GuiaRemisionPdfService>();

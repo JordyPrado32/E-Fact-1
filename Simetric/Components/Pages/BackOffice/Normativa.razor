@@ -1,0 +1,261 @@
+@page "/backoffice/configuracion/normativa"
+@using Microsoft.AspNetCore.Authorization
+@using Simetric.Models
+@using Simetric.Services
+@attribute [Authorize]
+@inject NormativaLegalService NormativaService
+
+<PageTitle>Centro normativo | BackOffice</PageTitle>
+
+<div class="bo-legal-page animate__animated animate__fadeIn">
+    <header class="bo-legal-header">
+        <div class="bo-header-copy">
+            <div class="bo-header-icon"><i class="ri-scales-3-line"></i></div>
+            <div>
+                <span>Configuración de E-Fact</span>
+                <h1>Centro normativo</h1>
+                <p>Administra las normas que los usuarios consultan desde E-Fact.</p>
+            </div>
+        </div>
+        <button type="button" class="bo-primary" @onclick="NuevaNormativa"><i class="ri-add-line"></i> Nueva normativa</button>
+    </header>
+
+    <section class="bo-summary-grid">
+        <article class="bo-summary-card">
+            <span class="bo-summary-icon"><i class="ri-book-2-line"></i></span>
+            <div><span>Total registrado</span><strong>@normativas.Count</strong><small>Documentos normativos</small></div>
+        </article>
+        <article class="bo-summary-card">
+            <span class="bo-summary-icon published"><i class="ri-eye-line"></i></span>
+            <div><span>Publicadas</span><strong>@normativas.Count(x => x.Activo)</strong><small>Visibles actualmente en E-Fact</small></div>
+        </article>
+        <article class="bo-summary-card">
+            <span class="bo-summary-icon hidden"><i class="ri-eye-off-line"></i></span>
+            <div><span>Ocultas</span><strong>@normativas.Count(x => !x.Activo)</strong><small>Disponibles solo en Backoffice</small></div>
+        </article>
+        <article class="bo-summary-card">
+            <span class="bo-summary-icon categories"><i class="ri-stack-line"></i></span>
+            <div><span>Categorías</span><strong>@normativas.Select(x => x.Categoria).Distinct(StringComparer.OrdinalIgnoreCase).Count()</strong><small>Temas organizados</small></div>
+        </article>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="bo-message @(esError ? "error" : "success")">@mensaje</div>
+    }
+
+    @if (mostrarEditor)
+    {
+        <section class="bo-editor">
+            <div class="bo-section-head">
+                <div>
+                    <span><i class="ri-edit-box-line"></i> Edición</span>
+                    <h2>@(edicion.Id == 0 ? "Nueva normativa" : "Actualizar normativa")</h2>
+                    <p>Completa los datos que se mostrarán en el Centro normativo de E-Fact.</p>
+                </div>
+                <button type="button" class="bo-icon-button" title="Cerrar" @onclick="CerrarEditor"><i class="ri-close-line"></i></button>
+            </div>
+
+            <EditForm Model="edicion" OnValidSubmit="GuardarAsync">
+                <DataAnnotationsValidator />
+                <div class="bo-form-grid">
+                    <label><span>Código normativo</span><InputText @bind-Value="edicion.Codigo" placeholder="Ej.: NAC-DGERCGC25-00000014" /></label>
+                    <label><span>Categoría</span><InputText @bind-Value="edicion.Categoria" placeholder="Ej.: Facturación electrónica" /></label>
+                    <label class="wide"><span>Título</span><InputText @bind-Value="edicion.Titulo" placeholder="Nombre visible de la normativa" /></label>
+                    <label class="wide"><span>Resumen</span><InputTextArea @bind-Value="edicion.Resumen" rows="2" placeholder="Explicación breve para la tarjeta de consulta" /></label>
+                    <label class="wide"><span>Contenido detallado</span><InputTextArea @bind-Value="edicion.Contenido" rows="9" placeholder="Artículos, disposiciones y puntos relevantes" /></label>
+                    <label class="wide"><span>URL oficial</span><div class="bo-input-icon"><i class="ri-links-line"></i><InputText @bind-Value="edicion.UrlOficial" placeholder="https://www.sri.gob.ec/..." /></div></label>
+                    <label><span>Estado de la norma</span><InputText @bind-Value="edicion.EstadoNorma" /></label>
+                    <label><span>Orden de visualización</span><InputNumber @bind-Value="edicion.Orden" /></label>
+                    <label><span>Fecha de publicación</span><InputDate @bind-Value="edicion.FechaPublicacion" /></label>
+                    <label><span>Fecha de vigencia</span><InputDate @bind-Value="edicion.FechaVigencia" /></label>
+                    <label><span>Última verificación</span><InputDate @bind-Value="edicion.FechaUltimaVerificacion" /></label>
+                    <label class="bo-check"><InputCheckbox @bind-Value="edicion.Activo" /><span><strong>Visible en E-Fact</strong><small>Los usuarios podrán consultar esta normativa.</small></span></label>
+                </div>
+                <ValidationSummary />
+                <div class="bo-form-actions">
+                    <button type="button" class="bo-secondary" @onclick="CerrarEditor">Cancelar</button>
+                    <button type="submit" class="bo-primary" disabled="@guardando">
+                        <i class="ri-save-line"></i> @(guardando ? "Guardando..." : "Guardar")
+                    </button>
+                </div>
+            </EditForm>
+        </section>
+    }
+
+    <section class="bo-list-card">
+        <div class="bo-list-heading">
+            <div>
+                <span class="bo-kicker">Biblioteca legal</span>
+                <h2>Normativas registradas</h2>
+                <p>Controla el contenido, el orden y la visibilidad de cada documento.</p>
+            </div>
+            <span class="bo-list-count"><i class="ri-file-list-3-line"></i> @NormativasFiltradas.Count() registros</span>
+        </div>
+        <div class="bo-list-toolbar">
+            <label><span><i class="ri-search-line"></i></span><input value="@busqueda" @oninput="ActualizarBusqueda" placeholder="Buscar por código, título o categoría" /></label>
+        </div>
+
+        @if (cargando)
+        {
+            <div class="bo-empty"><div class="spinner-border text-primary"></div><span>Cargando normativa...</span></div>
+        }
+        else
+        {
+            <div class="bo-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Orden</th><th>Normativa</th><th>Categoría</th><th>Estado</th><th>Visible</th><th>Acciones</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var norma in NormativasFiltradas)
+                        {
+                            <tr>
+                                <td><span class="bo-order">@norma.Orden</span></td>
+                                <td><div class="bo-rule-name"><span><i class="@IconoCategoria(norma.Categoria)"></i></span><div><strong>@norma.Titulo</strong><small>@norma.Codigo</small></div></div></td>
+                                <td><span class="bo-category">@norma.Categoria</span></td>
+                                <td><span class="bo-rule-status">@norma.EstadoNorma</span></td>
+                                <td><span class="bo-visibility @(norma.Activo ? "active" : "")">@(norma.Activo ? "Sí" : "No")</span></td>
+                                <td>
+                                    <div class="bo-actions">
+                                        <button type="button" title="Editar" @onclick="() => Editar(norma)"><i class="ri-pencil-line"></i></button>
+                                        <button type="button" title="@(norma.Activo ? "Ocultar" : "Publicar")" @onclick="() => AlternarEstadoAsync(norma)">
+                                            <i class="@(norma.Activo ? "ri-eye-off-line" : "ri-eye-line")"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private List<NormativaLegal> normativas = [];
+    private NormativaLegal edicion = new();
+    private bool cargando = true;
+    private bool guardando;
+    private bool mostrarEditor;
+    private bool esError;
+    private string mensaje = string.Empty;
+    private string busqueda = string.Empty;
+
+    private IEnumerable<NormativaLegal> NormativasFiltradas =>
+        string.IsNullOrWhiteSpace(busqueda)
+            ? normativas
+            : normativas.Where(x =>
+                x.Codigo.Contains(busqueda, StringComparison.OrdinalIgnoreCase) ||
+                x.Titulo.Contains(busqueda, StringComparison.OrdinalIgnoreCase) ||
+                x.Categoria.Contains(busqueda, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        try
+        {
+            normativas = await NormativaService.ObtenerTodasAsync();
+        }
+        catch (Exception ex)
+        {
+            MostrarMensaje(ex.Message, true);
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private void NuevaNormativa()
+    {
+        edicion = new NormativaLegal
+        {
+            Activo = true,
+            EstadoNorma = "Vigente",
+            Orden = normativas.Count == 0 ? 1 : normativas.Max(x => x.Orden) + 1,
+            FechaUltimaVerificacion = DateTime.Today
+        };
+        mostrarEditor = true;
+        mensaje = string.Empty;
+    }
+
+    private void Editar(NormativaLegal norma)
+    {
+        edicion = new NormativaLegal
+        {
+            Id = norma.Id,
+            Codigo = norma.Codigo,
+            Titulo = norma.Titulo,
+            Categoria = norma.Categoria,
+            Resumen = norma.Resumen,
+            Contenido = norma.Contenido,
+            UrlOficial = norma.UrlOficial,
+            EstadoNorma = norma.EstadoNorma,
+            FechaPublicacion = norma.FechaPublicacion,
+            FechaVigencia = norma.FechaVigencia,
+            FechaUltimaVerificacion = norma.FechaUltimaVerificacion,
+            Activo = norma.Activo,
+            Orden = norma.Orden,
+            FechaCreacion = norma.FechaCreacion,
+            FechaActualizacion = norma.FechaActualizacion
+        };
+        mostrarEditor = true;
+        mensaje = string.Empty;
+    }
+
+    private async Task GuardarAsync()
+    {
+        guardando = true;
+        try
+        {
+            await NormativaService.GuardarAsync(edicion);
+            mostrarEditor = false;
+            MostrarMensaje("Normativa guardada correctamente.", false);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            MostrarMensaje(ex.Message, true);
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task AlternarEstadoAsync(NormativaLegal norma)
+    {
+        try
+        {
+            await NormativaService.AlternarEstadoAsync(norma.Id);
+            MostrarMensaje(norma.Activo ? "La normativa se ocultó de E-Fact." : "La normativa se publicó en E-Fact.", false);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            MostrarMensaje(ex.Message, true);
+        }
+    }
+
+    private void CerrarEditor() => mostrarEditor = false;
+    private void ActualizarBusqueda(ChangeEventArgs args) => busqueda = args.Value?.ToString() ?? string.Empty;
+
+    private void MostrarMensaje(string texto, bool error)
+    {
+        mensaje = texto;
+        esError = error;
+    }
+
+    private static string IconoCategoria(string valor) => valor.ToLowerInvariant() switch
+    {
+        var x when x.Contains("factura") => "ri-file-list-3-line",
+        var x when x.Contains("crédito") => "ri-refund-2-line",
+        var x when x.Contains("débito") => "ri-bill-line",
+        var x when x.Contains("entrega") => "ri-send-plane-line",
+        _ => "ri-book-open-line"
+    };
+}
