@@ -195,69 +195,8 @@ namespace Simetric.Services.ESign
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 14)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (14, 12, 'Usuarios', 1, '/e-sign/administracion/usuarios', 'ri-user-shared-line');
 
-                IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 15)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (15, 6, 'Firma, clave y logo', 1, '/e-sign/configuracion/firma', 'ri-shield-keyhole-line');
-
-                IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 16)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (16, 3, 'Estampar PDF', 1, '/e-sign/documentos/estampar', 'ri-file-edit-line');
-
                 SET IDENTITY_INSERT [dbo].[ESIGN_MENUS] OFF;";
                 await db.ExecuteAsync(seedMenus);
-
-                const string ensureFirmaConfigMenu = @"
-                DECLARE @ConfiguracionId INT = (
-                    SELECT TOP 1 [IDMENU]
-                    FROM [dbo].[ESIGN_MENUS]
-                    WHERE [RUTAMENU] = ''
-                      AND [NOMBREMENU] IN ('Configuracion', N'Configuración')
-                    ORDER BY [IDMENU]
-                );
-
-                IF @ConfiguracionId IS NULL
-                    SET @ConfiguracionId = 6;
-
-                IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [RUTAMENU] = '/e-sign/configuracion/firma')
-                BEGIN
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU])
-                    VALUES (@ConfiguracionId, 'Firma, clave y logo', 1, '/e-sign/configuracion/firma', 'ri-shield-keyhole-line');
-                END
-                ELSE
-                BEGIN
-                    UPDATE [dbo].[ESIGN_MENUS]
-                    SET [IDMENUPADRE] = @ConfiguracionId,
-                        [NOMBREMENU] = 'Firma, clave y logo',
-                        [ESTADOMENU] = 1,
-                        [ICONOMENU] = 'ri-shield-keyhole-line'
-                    WHERE [RUTAMENU] = '/e-sign/configuracion/firma';
-                END";
-                await db.ExecuteAsync(ensureFirmaConfigMenu);
-
-                const string ensureEstamparPdfMenu = @"
-                DECLARE @ERubricaId INT = (
-                    SELECT TOP 1 [IDMENU]
-                    FROM [dbo].[ESIGN_MENUS]
-                    WHERE [NOMBREMENU] IN (N'E-RÃºbrica', 'E-Sign', 'e-sign', 'ESign')
-                    ORDER BY [IDMENU]
-                );
-
-                IF @ERubricaId IS NULL
-                    SET @ERubricaId = 3;
-
-                IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [RUTAMENU] = '/e-sign/documentos/estampar')
-                BEGIN
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU])
-                    VALUES (@ERubricaId, 'Estampar PDF', 1, '/e-sign/documentos/estampar', 'ri-file-edit-line');
-                END
-                ELSE
-                BEGIN
-                    UPDATE [dbo].[ESIGN_MENUS]
-                    SET [IDMENUPADRE] = @ERubricaId,
-                        [NOMBREMENU] = 'Estampar PDF',
-                        [ESTADOMENU] = 1,
-                        [ICONOMENU] = 'ri-file-edit-line'
-                    WHERE [RUTAMENU] = '/e-sign/documentos/estampar';
-                END";
-                await db.ExecuteAsync(ensureEstamparPdfMenu);
 
                 // Asegurar que Soporte quede fuera de Configuración a nivel raíz
                 await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [IDMENUPADRE] = NULL WHERE [IDMENU] = 7;");
@@ -269,7 +208,7 @@ namespace Simetric.Services.ESign
                 await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [ICONOMENU] = 'ri-settings-3-line' WHERE [IDMENU] = 12;");
 
                 // Asegurar que Nueva Solicitud (ID 4) y el menú principal de Mis Firmas (ID 10) estén activos
-                await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [ESTADOMENU] = 1 WHERE [IDMENU] IN (4, 10) OR [RUTAMENU] IN ('/e-sign/configuracion/firma', '/e-sign/documentos/estampar');");
+                await db.ExecuteAsync("UPDATE [dbo].[ESIGN_MENUS] SET [ESTADOMENU] = 1 WHERE [IDMENU] IN (4, 10);");
 
                 // Restablecer mapeos para menús reactivados (4 y 10) a todos los roles
                 const string restoreMapping = @"
@@ -277,8 +216,7 @@ namespace Simetric.Services.ESign
                 SELECT r.[IDROL], m.[IDMENU]
                 FROM [dbo].[ESIGN_ROLES] r
                 CROSS JOIN [dbo].[ESIGN_MENUS] m
-                WHERE (m.[IDMENU] IN (4, 10)
-                   OR m.[RUTAMENU] IN ('/e-sign/configuracion/firma', '/e-sign/documentos/estampar'))
+                WHERE m.[IDMENU] IN (4, 10)
                 AND NOT EXISTS (
                     SELECT 1 FROM [dbo].[ESIGN_ROL_MENU] rm
                     WHERE rm.[IDROL] = r.[IDROL] AND rm.[IDMENU] = m.[IDMENU]
@@ -297,6 +235,7 @@ namespace Simetric.Services.ESign
                 FROM [dbo].[ESIGN_ROLES] r
                 CROSS JOIN [dbo].[ESIGN_MENUS] m
                 WHERE m.[IDMENU] NOT IN (12, 13, 14)
+                AND ISNULL(m.[RUTAMENU], '') <> '/e-sign/documentos/estampar'
                 AND NOT EXISTS (
                     SELECT 1 FROM [dbo].[ESIGN_ROL_MENU] rm
                     WHERE rm.[IDROL] = r.[IDROL] AND rm.[IDMENU] = m.[IDMENU]
@@ -378,6 +317,17 @@ namespace Simetric.Services.ESign
                 WHERE IDMENU = @idMenu";
 
             return await db.QuerySingleOrDefaultAsync<Menu>(sql, new { idMenu }, trans);
+        }
+
+        private static async Task<Menu?> ObtenerMenuPorRutaAsync(IDbConnection db, string rutaMenu, IDbTransaction? trans = null)
+        {
+            const string sql = @"
+                SELECT TOP 1 IDMENU, IDMENUPADRE, NOMBREMENU, ESTADOMENU, RUTAMENU, ICONOMENU
+                FROM ESIGN_MENUS
+                WHERE RUTAMENU = @rutaMenu
+                ORDER BY ESTADOMENU DESC, IDMENU";
+
+            return await db.QuerySingleOrDefaultAsync<Menu>(sql, new { rutaMenu }, trans);
         }
 
         private static async Task<List<Menu>> ObtenerMenusRelacionadosAsync(IDbConnection db, int idMenu, IDbTransaction? trans = null)
@@ -693,6 +643,19 @@ namespace Simetric.Services.ESign
                 ? await ObtenerMenuPorIdAsync(db, menu.IdMenu)
                 : null;
 
+            if (menuPrevio is null && menu.IdMenu == 0 && !string.IsNullOrWhiteSpace(menu.RutaMenu))
+            {
+                menuPrevio = await ObtenerMenuPorRutaAsync(db, menu.RutaMenu.Trim());
+                if (menuPrevio is not null)
+                {
+                    menu.IdMenu = menuPrevio.IdMenu;
+                    if (await EsMenuProtegido(db, menu.IdMenu))
+                    {
+                        return false;
+                    }
+                }
+            }
+
             if (menuPrevio is not null)
             {
                 const string sqlUpdate = @"
@@ -700,7 +663,8 @@ namespace Simetric.Services.ESign
                     SET NOMBREMENU = @NombreMenu,
                         RUTAMENU = @RutaMenu,
                         ICONOMENU = @IconoMenu,
-                        IDMENUPADRE = @idPadre
+                        IDMENUPADRE = @idPadre,
+                        ESTADOMENU = 1
                     WHERE IDMENU = @IdMenu";
 
                 var actualizado = await db.ExecuteAsync(sqlUpdate, new
