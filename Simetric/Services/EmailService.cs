@@ -78,6 +78,14 @@ public interface IEmailService
         decimal montoTotal,
         string? reference,
         string? authorizationCode);
+    Task EnviarAvisoCobroPendienteAsync(
+        string emailDestino,
+        string? nombreCliente,
+        string? producto,
+        string? planPaquete,
+        decimal montoTotal,
+        string? formaPago,
+        string? referencia);
     Task EnviarNotificacionPagoFirmaElectronicaAsync(
         string? nombreSolicitante,
         string? identificacion,
@@ -1138,6 +1146,54 @@ public class EmailService : IEmailService
         };
 
         mensaje.Body = bodyBuilder.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoCobroPendienteAsync(
+        string emailDestino,
+        string? nombreCliente,
+        string? producto,
+        string? planPaquete,
+        decimal montoTotal,
+        string? formaPago,
+        string? referencia)
+    {
+        emailDestino = NormalizarEmail(emailDestino);
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Cliente" : nombreCliente.Trim());
+        var productoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(producto) ? "Servicio" : producto.Trim());
+        var planSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(planPaquete) ? "Servicio contratado" : planPaquete.Trim());
+        var formaPagoSegura = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(formaPago) ? "Pendiente de confirmar" : formaPago.Trim());
+        var referenciaSegura = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(referencia) ? "Sin referencia registrada" : referencia.Trim());
+        var totalTexto = montoTotal.ToString("N2", CultureInfo.GetCultureInfo("es-EC"));
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(emailDestino));
+
+        foreach (var correoNotificacion in ObtenerDestinatariosNotificacionPagos(emailDestino))
+            mensaje.Bcc.Add(MailboxAddress.Parse(correoNotificacion));
+
+        mensaje.Subject = "Tienes un cobro pendiente | E-FACT";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = BuildOutlookEmailShell(
+                "Tienes un cobro pendiente por revisar en E-FACT.",
+                "E-FACT",
+                "Cobro pendiente",
+                $"Hola <strong>{clienteSeguro}</strong>, registramos un cobro pendiente asociado a tu cuenta.",
+                $@"
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border:1px solid #e5e7eb;border-collapse:collapse;Margin:18px 0;font-family:Segoe UI,Arial,sans-serif;'>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Servicio:</strong> {productoSeguro}</td></tr>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Detalle:</strong> {planSeguro}</td></tr>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Monto pendiente:</strong> ${totalTexto}</td></tr>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Forma de pago:</strong> {formaPagoSegura}</td></tr>
+                  <tr><td style='padding:14px 16px;'><strong>Referencia:</strong> {referenciaSegura}</td></tr>
+                </table>
+                <p style='Margin:18px 0 0 0;font-size:14px;line-height:22px;color:#4b5563;'>
+                  Puedes revisar el estado de tu pago desde tu cuenta. Si ya realizaste la transferencia, nuestro equipo validara el comprobante y actualizara el estado del cobro.
+                </p>")
+        }.ToMessageBody();
 
         await SendMessageAsync(mensaje);
     }
