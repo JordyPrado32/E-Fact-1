@@ -11,7 +11,7 @@ export async function init(options, dotNetRef) {
     const pageCountLabel = document.getElementById(options.pageCountLabelId);
     const selectionStatus = document.getElementById(options.selectionStatusId);
 
-    if (!pdfInput || !canvas || !stage || !resizeHandle) {
+    if (!pdfInput || !canvas || !stage || !footprint || !resizeHandle) {
         return null;
     }
 
@@ -26,6 +26,7 @@ export async function init(options, dotNetRef) {
     let selectedPosition = null;
     let drawingStart = null;
     let resizeStart = null;
+    let dragStart = null;
     let pointerMoved = false;
     let pageNumber = 1;
     let preferredSelection = null;
@@ -158,7 +159,7 @@ export async function init(options, dotNetRef) {
             canvas.hidden = false;
             selectedPosition = pageNumber === selectedPosition?.page ? selectedPosition : null;
             updateFootprint();
-        setStatus("Haz clic para ubicar el sello. El ancho se mantiene fijo en 60 mm.");
+            setStatus("Haz clic o arrastra el recuadro para ubicar el sello. El ancho se mantiene fijo en 60 mm.");
             await dotNetRef.invokeMethodAsync("OnStampPageChanged", pageNumber);
             if (!selectedPosition && autoApplyPreferred && preferredSelection?.page === pageNumber) {
                 await applySelection(
@@ -240,7 +241,7 @@ export async function init(options, dotNetRef) {
             return;
         }
 
-        await applySelection(drawingStart.xMm, drawingStart.yMm, fixedStampWidthMm);
+        await applySelection(point.xMm, point.yMm, fixedStampWidthMm);
     };
 
     const finishDrawing = event => {
@@ -254,6 +255,52 @@ export async function init(options, dotNetRef) {
 
         drawingStart = null;
         stage.classList.remove("is-drawing");
+    };
+
+    const onFootprintPointerDown = event => {
+        if (!selectedPosition || event.button !== 0) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const point = getPagePoint(event);
+        dragStart = {
+            pointerId: event.pointerId,
+            offsetXMm: point.xMm - selectedPosition.xMm,
+            offsetYMm: point.yMm - selectedPosition.yMm
+        };
+
+        footprint.setPointerCapture(event.pointerId);
+        stage.classList.add("is-dragging");
+        setStatus("Arrastra el recuadro para ajustar la ubicacion del sello.");
+    };
+
+    const onFootprintPointerMove = async event => {
+        if (!dragStart || dragStart.pointerId !== event.pointerId) {
+            return;
+        }
+
+        event.preventDefault();
+        const point = getPagePoint(event);
+        await applySelection(
+            point.xMm - dragStart.offsetXMm,
+            point.yMm - dragStart.offsetYMm,
+            fixedStampWidthMm);
+    };
+
+    const finishDragging = event => {
+        if (!dragStart || dragStart.pointerId !== event.pointerId) {
+            return;
+        }
+
+        if (footprint.hasPointerCapture(event.pointerId)) {
+            footprint.releasePointerCapture(event.pointerId);
+        }
+
+        dragStart = null;
+        stage.classList.remove("is-dragging");
     };
 
     const onResizePointerDown = event => {
@@ -305,6 +352,10 @@ export async function init(options, dotNetRef) {
     canvas.addEventListener("pointermove", onCanvasPointerMove);
     canvas.addEventListener("pointerup", finishDrawing);
     canvas.addEventListener("pointercancel", finishDrawing);
+    footprint.addEventListener("pointerdown", onFootprintPointerDown);
+    footprint.addEventListener("pointermove", onFootprintPointerMove);
+    footprint.addEventListener("pointerup", finishDragging);
+    footprint.addEventListener("pointercancel", finishDragging);
     resizeHandle.addEventListener("pointerdown", onResizePointerDown);
     window.addEventListener("pointermove", onWindowPointerMove);
     window.addEventListener("pointerup", finishResize);
@@ -345,6 +396,10 @@ export async function init(options, dotNetRef) {
             canvas.removeEventListener("pointermove", onCanvasPointerMove);
             canvas.removeEventListener("pointerup", finishDrawing);
             canvas.removeEventListener("pointercancel", finishDrawing);
+            footprint.removeEventListener("pointerdown", onFootprintPointerDown);
+            footprint.removeEventListener("pointermove", onFootprintPointerMove);
+            footprint.removeEventListener("pointerup", finishDragging);
+            footprint.removeEventListener("pointercancel", finishDragging);
             resizeHandle.removeEventListener("pointerdown", onResizePointerDown);
             window.removeEventListener("pointermove", onWindowPointerMove);
             window.removeEventListener("pointerup", finishResize);
