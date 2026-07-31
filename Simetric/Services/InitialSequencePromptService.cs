@@ -605,7 +605,7 @@ END";
 
     private static string BuildSaveStateSql()
         => @"
-MERGE [dbo].[CAJA_SECUENCIA] AS target
+    MERGE [dbo].[CAJA_SECUENCIA] WITH (HOLDLOCK) AS target
 USING (SELECT @p0 AS cajaSec, @p1 AS documentKey, @p2 AS seriesKey) AS source
 ON target.[cajaSec] = source.cajaSec
    AND target.[documentKey] = source.documentKey
@@ -620,7 +620,7 @@ WHEN NOT MATCHED THEN
 
     private static string BuildUpdateLastSequenceSql()
         => @"
-MERGE [dbo].[CAJA_SECUENCIA] AS target
+    MERGE [dbo].[CAJA_SECUENCIA] WITH (HOLDLOCK) AS target
 USING (SELECT @p0 AS cajaSec, @p1 AS documentKey, @p2 AS seriesKey) AS source
 ON target.[cajaSec] = source.cajaSec
    AND target.[documentKey] = source.documentKey
@@ -635,7 +635,7 @@ WHEN NOT MATCHED THEN
 
     private static string BuildSavePreferredSeriesSql()
         => @"
-MERGE [dbo].[CAJA_SECUENCIA_PREFERENCIA] AS target
+    MERGE [dbo].[CAJA_SECUENCIA_PREFERENCIA] WITH (HOLDLOCK) AS target
 USING (SELECT @p0 AS titularUserId, @p1 AS documentKey) AS source
 ON target.[titularUserId] = source.titularUserId
    AND target.[documentKey] = source.documentKey
@@ -828,7 +828,7 @@ INSERT INTO [dbo].[CAJA_SECUENCIA] ([cajaSec], [documentKey], [seriesKey], [init
 SELECT @sec, @documentKey, @seriesKey, @initialized, @lastSequence
 WHERE NOT EXISTS (
     SELECT 1
-    FROM [dbo].[CAJA_SECUENCIA]
+    FROM [dbo].[CAJA_SECUENCIA] WITH (UPDLOCK, HOLDLOCK)
     WHERE [cajaSec] = @sec
       AND [documentKey] = @documentKey
       AND [seriesKey] = @seriesKey

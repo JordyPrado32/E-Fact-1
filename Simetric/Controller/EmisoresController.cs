@@ -91,8 +91,13 @@ namespace Simetric.Controllers
 
             var estadoVigencia = resultado.IsValid
                 ? "VIGENTE"
-                : resultado.Message.Contains("caducada", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(resultado.EstadoVigencia, "CADUCADA", StringComparison.OrdinalIgnoreCase) ||
+                  resultado.Message.Contains("caducada", StringComparison.OrdinalIgnoreCase) ||
+                  resultado.Message.Contains("caducó", StringComparison.OrdinalIgnoreCase)
                     ? "CADUCADA"
+                    : string.Equals(resultado.EstadoVigencia, "NO_VIGENTE", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(resultado.EstadoVigencia, "AUN_NO_VIGENTE", StringComparison.OrdinalIgnoreCase)
+                        ? "NO_VIGENTE"
                     : "INVALIDA";
             var logGuardado = await RegistrarValidacionFirmaAsync(
                 idUsuario.Value,

@@ -41,7 +41,7 @@ public sealed class FirmaInfoApiService
             if (!response.IsSuccessStatusCode)
             {
                 var mensaje = ExtraerMensaje(rawBody)
-                    ?? $"El servicio de firma respondio con estado {(int)response.StatusCode}.";
+                    ?? $"El servicio de validación de firma respondió con estado {(int)response.StatusCode} y no indicó la causa.";
                 return FirmaInfoApiResult.Error(mensaje, rawBody, (int)response.StatusCode);
             }
 
@@ -55,15 +55,15 @@ public sealed class FirmaInfoApiService
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return FirmaInfoApiResult.Error("El servicio de validacion de firma excedio el tiempo de espera.");
+            return FirmaInfoApiResult.Error("La validación de la firma excedió el tiempo de espera. Intenta nuevamente.");
         }
         catch (HttpRequestException)
         {
-            return FirmaInfoApiResult.Error("No fue posible conectar con el servicio de validacion de firma.");
+            return FirmaInfoApiResult.Error("No fue posible conectar con el servicio de validación de firma. Intenta nuevamente.");
         }
         catch (JsonException)
         {
-            return FirmaInfoApiResult.Error("El servicio de firma devolvio una respuesta no valida.");
+            return FirmaInfoApiResult.Error("El servicio de validación devolvió una respuesta que no se pudo interpretar.");
         }
     }
 
@@ -75,21 +75,70 @@ public sealed class FirmaInfoApiService
         try
         {
             using var document = JsonDocument.Parse(rawBody);
-            var root = document.RootElement;
-            foreach (var nombre in new[] { "mensaje", "message", "title" })
-            {
-                if (root.TryGetProperty(nombre, out var property) &&
-                    property.ValueKind == JsonValueKind.String)
-                {
-                    return property.GetString();
-                }
-            }
+            return ExtraerMensaje(document.RootElement);
         }
         catch (JsonException)
         {
         }
 
         return null;
+    }
+
+    private static string? ExtraerMensaje(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+            return LimpiarMensaje(element.GetString());
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var mensajes = element.EnumerateArray()
+                .Select(ExtraerMensaje)
+                .Where(mensaje => !string.IsNullOrWhiteSpace(mensaje))
+                .Take(3);
+            return UnirMensajes(mensajes);
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var nombre in new[] { "mensaje", "message", "detalle", "detail", "error_description", "error", "errors", "title" })
+        {
+            var property = element.EnumerateObject()
+                .FirstOrDefault(item => string.Equals(item.Name, nombre, StringComparison.OrdinalIgnoreCase));
+            if (property.Value.ValueKind == JsonValueKind.Undefined)
+                continue;
+
+            var mensaje = ExtraerMensaje(property.Value);
+            if (!string.IsNullOrWhiteSpace(mensaje))
+                return mensaje;
+        }
+
+        var mensajesHijos = element.EnumerateObject()
+            .Select(property => ExtraerMensaje(property.Value))
+            .Where(mensaje => !string.IsNullOrWhiteSpace(mensaje))
+            .Take(3);
+        return UnirMensajes(mensajesHijos);
+    }
+
+    private static string? UnirMensajes(IEnumerable<string?> mensajes)
+    {
+        var valores = mensajes
+            .Where(mensaje => !string.IsNullOrWhiteSpace(mensaje))
+            .Select(mensaje => mensaje!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return valores.Length == 0 ? null : string.Join(" ", valores);
+    }
+
+    private static string? LimpiarMensaje(string? mensaje)
+    {
+        if (string.IsNullOrWhiteSpace(mensaje))
+            return null;
+
+        var limpio = mensaje.Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+        return limpio.Length <= 500 ? limpio : $"{limpio[..497]}...";
     }
 
     private sealed record FirmaInfoApiRequest(

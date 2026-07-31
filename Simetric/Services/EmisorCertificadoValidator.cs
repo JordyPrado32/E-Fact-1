@@ -92,18 +92,23 @@ public sealed class EmisorCertificadoValidator
                 apiSuccess: apiResult.Success);
 
         var info = apiResult.Info;
-        if (!info.EsValida)
+        if (!info.TieneClavePrivada)
             return CertificadoEmisorValidationResult.Fail(
-                string.IsNullOrWhiteSpace(info.Mensaje) ? "Firma no valida." : info.Mensaje,
+                "El archivo no contiene la clave privada requerida para firmar. Verifica que hayas cargado el archivo .p12 correcto.",
                 nombreTitular: info.NombreTitular,
                 estadoVigencia: info.EstadoVigencia,
                 apiResponseJson: apiResult.RawJson,
                 apiHttpStatusCode: apiResult.HttpStatusCode,
                 apiSuccess: apiResult.Success);
 
-        if (!info.TieneClavePrivada)
+        if (!info.EsValida)
             return CertificadoEmisorValidationResult.Fail(
-                "La firma no contiene una clave privada valida.",
+                ConstruirMensajeFirmaInvalida(info),
+                fechaExpiracion: info.FechaExpiracion?.LocalDateTime,
+                identificacionExtraida: FirstFilled(info.Ruc, info.Cedula),
+                diasRestantes: info.FechaExpiracion is null
+                    ? null
+                    : CalcularDiasRestantes(info.FechaExpiracion.Value.LocalDateTime),
                 nombreTitular: info.NombreTitular,
                 estadoVigencia: info.EstadoVigencia,
                 apiResponseJson: apiResult.RawJson,
@@ -176,6 +181,13 @@ public sealed class EmisorCertificadoValidator
 
     private static FirmaInfoApiResult ValidarArchivoLocal(string rutaFirma, string passwordFirma)
     {
+        var archivo = new FileInfo(rutaFirma);
+        if (!archivo.Exists)
+            return FirmaInfoApiResult.Error("No se encontró el archivo .p12 configurado.");
+
+        if (archivo.Length == 0)
+            return FirmaInfoApiResult.Error("El archivo .p12 está vacío. Carga nuevamente la firma electrónica.");
+
         try
         {
             using var certificado = new X509Certificate2(
@@ -208,11 +220,63 @@ public sealed class EmisorCertificadoValidator
 
             return FirmaInfoApiResult.Ok(info);
         }
-        catch (CryptographicException)
+        catch (CryptographicException ex)
         {
-            return FirmaInfoApiResult.Error(
-                "No se pudo abrir la firma electronica. Verifica el archivo y su clave.");
+            return FirmaInfoApiResult.Error(ObtenerMensajeErrorCertificado(ex));
         }
+    }
+
+    private static string ConstruirMensajeFirmaInvalida(FirmaInfoApiResponse info)
+    {
+        var estado = info.EstadoVigencia?.Trim();
+        if (string.Equals(estado, "CADUCADA", StringComparison.OrdinalIgnoreCase) &&
+            info.FechaExpiracion is not null)
+        {
+            return $"La firma electrónica caducó el {info.FechaExpiracion.Value:dd/MM/yyyy}. Debes cargar una firma vigente.";
+        }
+
+        if ((string.Equals(estado, "NO_VIGENTE", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(estado, "AUN_NO_VIGENTE", StringComparison.OrdinalIgnoreCase)) &&
+            info.FechaEmision is not null)
+        {
+            return $"La firma electrónica todavía no está vigente. Será válida desde el {info.FechaEmision.Value:dd/MM/yyyy}.";
+        }
+
+        if (!EsMensajeGenerico(info.Mensaje))
+            return info.Mensaje!.Trim();
+
+        return "No se pudo validar la firma. Verifica que la clave corresponda al archivo .p12 y que el archivo no esté dañado.";
+    }
+
+    private static bool EsMensajeGenerico(string? mensaje)
+    {
+        if (string.IsNullOrWhiteSpace(mensaje))
+            return true;
+
+        var normalizado = mensaje.Trim().TrimEnd('.');
+        return string.Equals(normalizado, "Firma no valida", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalizado, "Firma inválida", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalizado, "Firma invalida", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ObtenerMensajeErrorCertificado(CryptographicException exception)
+    {
+        var detalle = exception.Message;
+        if (detalle.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+            detalle.Contains("contraseña", StringComparison.OrdinalIgnoreCase))
+        {
+            return "La clave ingresada no corresponde al archivo .p12. Verifica la clave e intenta nuevamente.";
+        }
+
+        if (detalle.Contains("ASN1", StringComparison.OrdinalIgnoreCase) ||
+            detalle.Contains("bad data", StringComparison.OrdinalIgnoreCase) ||
+            detalle.Contains("datos no válidos", StringComparison.OrdinalIgnoreCase) ||
+            detalle.Contains("decode", StringComparison.OrdinalIgnoreCase))
+        {
+            return "El archivo no tiene un formato .p12 válido o está dañado. Carga nuevamente el archivo original.";
+        }
+
+        return "No se pudo abrir la firma electrónica. La clave no corresponde al archivo o el archivo .p12 está dañado.";
     }
 
     private static IReadOnlyList<string> ExtraerIdentificaciones(X509Certificate2 certificado)

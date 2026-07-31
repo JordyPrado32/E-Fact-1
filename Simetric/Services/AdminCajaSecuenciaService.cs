@@ -331,7 +331,7 @@ WHERE [sec] = @cajaSec;
             const string mergeSequenceSql = """
 DECLARE @oldSeriesRaw VARCHAR(6) = RIGHT(REPLACE(ISNULL(@oldSeries, ''), '-', ''), 6);
 
-MERGE [dbo].[CAJA_SECUENCIA] AS target
+MERGE [dbo].[CAJA_SECUENCIA] WITH (HOLDLOCK) AS target
 USING (
     SELECT DISTINCT
         @cajaSec AS cajaSec,
@@ -377,19 +377,36 @@ WHEN NOT MATCHED THEN
             var rawSeries = model.Serie.Replace("-", string.Empty, StringComparison.Ordinal);
             foreach (var sequence in model.Secuencias)
             {
-                await connection.ExecuteAsync(
-                    mergeSequenceSql,
-                    new
-                    {
-                        cajaSec = model.CajaSec,
-                        previous.IdUsuario,
-                        oldSeries = previous.Serie,
-                        documentKey = sequence.DocumentKey,
-                        seriesKey = rawSeries,
-                        initialized = sequence.Initialized,
-                        lastSequence = sequence.LastSequence
-                    },
-                    transaction);
+                var parameters = new
+                {
+                    cajaSec = model.CajaSec,
+                    previous.IdUsuario,
+                    oldSeries = previous.Serie,
+                    documentKey = sequence.DocumentKey,
+                    seriesKey = rawSeries,
+                    initialized = sequence.Initialized,
+                    lastSequence = sequence.LastSequence
+                };
+
+                try
+                {
+                    await connection.ExecuteAsync(mergeSequenceSql, parameters, transaction);
+                }
+                catch (SqlException ex) when (ex.Number is 2601 or 2627)
+                {
+                    const string recoverDuplicateSql = """
+UPDATE [dbo].[CAJA_SECUENCIA]
+SET [initialized] = @initialized,
+    [lastSequence] = @lastSequence,
+    [updatedAt] = SYSUTCDATETIME()
+WHERE [cajaSec] = @cajaSec
+  AND [documentKey] = @documentKey
+  AND [seriesKey] = @seriesKey;
+""";
+                    var updated = await connection.ExecuteAsync(recoverDuplicateSql, parameters, transaction);
+                    if (updated == 0)
+                        throw;
+                }
             }
 
             await transaction.CommitAsync();
