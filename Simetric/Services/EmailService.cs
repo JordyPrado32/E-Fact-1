@@ -109,6 +109,7 @@ public class EmailService : IEmailService
     private const string EfactInfoUrl = "https://numericasoftware.com/";
     private const string EfactInfoDisplayUrl = "numericasoftware.com";
     private const string EfactContactPhone = "+593 98 413 0238";
+    private const string EfactLogoUrl = "https://efact.numericasoftware.com/images/services/efact.png";
 
     private readonly AppDbContext _db;
     private readonly AuditService _auditService;
@@ -1417,10 +1418,19 @@ Atentamente,
         await SendMessageAsync(mensaje);
     }
 
+    private static string BuildEfactLogoHtml(string linkUrl, int width = 220)
+    {
+        var logoSafe = WebUtility.HtmlEncode(EfactLogoUrl);
+        return $@"
+<a href='{linkUrl}' target='_blank' style='display:inline-block;text-decoration:none;'>
+  <img src='{logoSafe}' width='{width}' alt='Numerica e-fact' style='display:block;width:{width}px;max-width:{width}px;height:auto;border:0;outline:none;text-decoration:none;margin:0 auto;'>
+  <span style='display:none;font-family:Segoe UI,Arial,sans-serif;font-size:42px;line-height:44px;font-weight:900;color:#006bb5;'>Numerica e-fact</span>
+</a>";
+    }
+
     private static string BuildOutlookEmailShell(string preheader, string brand, string title, string introHtml, string contentHtml)
     {
         var preheaderSeguro = WebUtility.HtmlEncode(preheader);
-        var brandSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(brand) ? "Numerica e-fact" : brand.Trim());
         var titleSeguro = title;
         var websiteSafe = WebUtility.HtmlEncode(EfactInfoUrl);
         var websiteDisplaySafe = WebUtility.HtmlEncode(EfactInfoDisplayUrl);
@@ -1443,21 +1453,25 @@ Atentamente,
       <td align='center' style='padding:24px 12px;'>
         <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:640px;border-collapse:collapse;background-color:#ffffff;border:1px solid #d8e3ec;'>
           <tr>
-            <td align='center' style='padding:24px 24px 20px 24px;background-color:#ffffff;border-bottom:4px solid #1f8fd6;font-family:Segoe UI,Arial,sans-serif;'>
-              <a href='{websiteSafe}' target='_blank' style='text-decoration:none;'>
-                <span style='display:block;font-size:13px;line-height:18px;color:#174ea6;font-weight:800;'>Numerica</span>
-                <span style='display:block;font-size:42px;line-height:44px;font-weight:900;color:#006bb5;letter-spacing:0;'>e-fact</span>
-              </a>
-              <div style='font-size:11px;line-height:16px;color:#1f3f7a;font-weight:800;text-transform:uppercase;letter-spacing:2px;padding-top:4px;'>
+            <td align='center' style='padding:22px 24px 18px 24px;background-color:#ffffff;border-bottom:2px solid #86b7e4;font-family:Segoe UI,Arial,sans-serif;'>
+              {BuildEfactLogoHtml(websiteSafe)}
+              <div style='font-size:11px;line-height:16px;color:#1f3f7a;font-weight:800;text-transform:uppercase;letter-spacing:2px;padding-top:8px;'>
                 Facturacion electronica
               </div>
             </td>
           </tr>
           <tr>
-            <td align='center' style='padding:28px 30px 24px 30px;background-color:#ffffff;font-family:Segoe UI,Arial,sans-serif;'>
-              <div style='font-size:12px;line-height:18px;text-transform:uppercase;letter-spacing:1.4px;color:#1f8f45;font-weight:800;margin:0 0 8px 0;'>{brandSeguro}</div>
-              <h1 style='margin:0;font-size:24px;line-height:31px;color:#14213d;font-weight:850;'>{titleSeguro}</h1>
-              <p style='margin:14px 0 0 0;font-size:15px;line-height:24px;color:#5f718c;'>{introHtml}</p>
+            <td align='center' style='padding:22px 30px 18px 30px;background-color:#ffffff;font-family:Segoe UI,Arial,sans-serif;'>
+              <h1 style='margin:0;font-size:18px;line-height:25px;color:#14213d;font-weight:850;'>{titleSeguro}</h1>
+              <div style='padding:16px 0 10px 0;'>
+                <table role='presentation' cellpadding='0' cellspacing='0' border='0' align='center' style='border-collapse:collapse;'>
+                  <tr>
+                    <td align='center' valign='middle' style='width:64px;height:52px;border:2px solid #2f74c0;color:#2f74c0;font-size:28px;line-height:48px;font-weight:700;'>✉</td>
+                    <td align='center' valign='middle' bgcolor='#2f74c0' style='width:28px;height:28px;border-radius:14px;background-color:#2f74c0;color:#ffffff;font-size:16px;line-height:28px;font-weight:800;'>✓</td>
+                  </tr>
+                </table>
+              </div>
+              <p style='margin:0;font-size:15px;line-height:24px;color:#5f718c;'>{introHtml}</p>
             </td>
           </tr>
           <tr>
@@ -1467,7 +1481,9 @@ Atentamente,
           </tr>
           <tr>
             <td align='center' style='padding:20px 28px;background-color:#e8f1f2;font-family:Segoe UI,Arial,sans-serif;color:#4b5563;'>
-              <div style='font-size:13px;line-height:20px;font-weight:800;color:#374151;margin:0 0 8px 0;'>Emitido mediante Numerica e-fact</div>
+              <div style='font-size:13px;line-height:20px;color:#374151;margin:0 0 4px 0;'>Emitido mediante</div>
+              {BuildEfactLogoHtml(websiteSafe, 140)}
+              <div style='line-height:8px;height:8px;font-size:8px;'>&nbsp;</div>
               <a href='{websiteSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:none;font-weight:800;'>{websiteDisplaySafe}</a>
               <span style='display:inline-block;color:#9aa8b6;padding:0 12px;'>|</span>
               <span style='font-size:12px;line-height:18px;color:#334155;font-weight:800;'>{phoneSafe}</span>
@@ -1799,8 +1815,6 @@ Atentamente,
         string? footerText = null)
     {
         var previewSafe = WebUtility.HtmlEncode(previewText);
-        var eyebrowSafe = WebUtility.HtmlEncode(eyebrow);
-        var titleSafe = title;
         var subtitleSafe = subtitle;
         var efactInfoUrlSafe = WebUtility.HtmlEncode(EfactInfoUrl);
         var efactInfoDisplayUrlSafe = WebUtility.HtmlEncode(EfactInfoDisplayUrl);
@@ -1832,25 +1846,27 @@ Atentamente,
               <td style='padding:0;background-color:#ffffff;'>
                 <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;'>
                   <tr>
-                    <td align='center' style='padding:24px 24px 20px 24px;background-color:#ffffff;border-bottom:2px solid #86b7e4;'>
-                      <a href='{efactInfoUrlSafe}' target='_blank' style='text-decoration:none;'>
-                        <span style='display:block;font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:18px;font-weight:800;color:#174ea6;'>Numerica</span>
-                        <span style='display:block;font-family:Segoe UI,Arial,sans-serif;font-size:48px;line-height:50px;font-weight:900;color:#006bb5;letter-spacing:0;'>e-fact</span>
-                      </a>
+                    <td align='center' style='padding:22px 24px 18px 24px;background-color:#ffffff;border-bottom:2px solid #86b7e4;'>
+                      {BuildEfactLogoHtml(efactInfoUrlSafe)}
                       <div style='font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;color:#6b7280;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding-top:6px;'>
                         Facturacion electronica
                       </div>
                     </td>
                   </tr>
                   <tr>
-                    <td align='center' style='padding:24px 28px 22px 28px;background-color:#ffffff;'>
-                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:18px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin:0 0 14px 0;'>
-                        {eyebrowSafe}
+                    <td align='center' style='padding:22px 28px 18px 28px;background-color:#ffffff;'>
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:18px;line-height:25px;font-weight:850;color:#14213d;margin:0;'>
+                        Has recibido un comprobante electronico
                       </div>
-                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:26px;line-height:34px;font-weight:800;color:#374151;margin:0;'>
-                        {titleSafe}
+                      <div style='padding:16px 0 10px 0;'>
+                        <table role='presentation' cellpadding='0' cellspacing='0' border='0' align='center' style='border-collapse:collapse;'>
+                          <tr>
+                            <td align='center' valign='middle' style='width:64px;height:52px;border:2px solid #2f74c0;color:#2f74c0;font-family:Segoe UI,Arial,sans-serif;font-size:28px;line-height:48px;font-weight:700;'>✉</td>
+                            <td align='center' valign='middle' bgcolor='#2f74c0' style='width:28px;height:28px;border-radius:14px;background-color:#2f74c0;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:16px;line-height:28px;font-weight:800;'>✓</td>
+                          </tr>
+                        </table>
                       </div>
-                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:24px;color:#6b7280;padding-top:12px;'>
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:24px;color:#6b7280;'>
                         {subtitleSafe}
                       </div>
                     </td>
@@ -1861,24 +1877,13 @@ Atentamente,
             <tr>
               <td style='padding:0 28px 28px 28px;background-color:#ffffff;'>
                 {bodyHtml}
-                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;margin-top:24px;border-top:1px solid #e5eaf0;border-bottom:1px solid #e5eaf0;'>
-                  <tr>
-                    <td align='center' style='padding:28px 12px;font-family:Segoe UI,Arial,sans-serif;'>
-                      <div style='font-size:15px;line-height:23px;color:#4b5563;margin:0 0 18px 0;'>
-                        Conoce mas sobre Numerica e-fact.
-                      </div>
-                      <a href='{efactInfoUrlSafe}' target='_blank' style='display:inline-block;background-color:#2f95d8;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:18px;font-weight:800;text-decoration:none;padding:15px 28px;border-radius:28px;'>
-                        Visitar sitio web
-                      </a>
-                    </td>
-                  </tr>
-                </table>
               </td>
             </tr>
             <tr>
               <td align='center' style='padding:22px 28px;background-color:#e8f1f2;font-family:Segoe UI,Arial,sans-serif;color:#4b5563;'>
-                <div style='font-size:13px;line-height:20px;font-weight:800;color:#374151;margin:0 0 4px 0;'>Emitido mediante Numerica e-fact</div>
-                <div style='font-size:12px;line-height:18px;margin:0 0 12px 0;'>{footerSafe}</div>
+                <div style='font-size:13px;line-height:20px;color:#374151;margin:0 0 4px 0;'>Emitido mediante</div>
+                {BuildEfactLogoHtml(efactInfoUrlSafe, 140)}
+                <div style='font-size:12px;line-height:18px;margin:8px 0 12px 0;'>{footerSafe}</div>
                 <a href='{efactInfoUrlSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:none;font-weight:800;'>{efactInfoDisplayUrlSafe}</a>
                 <span style='display:inline-block;color:#9aa8b6;padding:0 12px;'>|</span>
                 <span style='font-size:12px;line-height:18px;color:#334155;font-weight:800;'>{efactContactPhoneSafe}</span>
@@ -1911,18 +1916,22 @@ Atentamente,
     private static string BuildInfoTable(params (string Label, string Value)[] rows)
     {
         var builder = new System.Text.StringBuilder();
-        builder.Append("<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;border:1px solid #dbe5ef;background-color:#f8fbff;margin:0 0 18px 0;'>");
+        builder.Append("<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:separate;border-spacing:0;border:1px solid #dbe5ef;background-color:#ffffff;margin:0 0 18px 0;border-radius:12px;overflow:hidden;'>");
 
         for (var i = 0; i < rows.Length; i++)
         {
             var (label, value) = rows[i];
             var borderStyle = i == rows.Length - 1 ? string.Empty : "border-bottom:1px solid #e5edf5;";
+            var icon = GetEmailRowIcon(label);
             builder.Append($@"
 <tr>
-  <td style='width:38%;padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;font-weight:700;color:#1e3a5f;background-color:#f1f7fd;vertical-align:top;'>
+  <td width='44' align='center' valign='middle' style='width:44px;padding:11px 8px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:17px;line-height:20px;font-weight:800;color:#174ea6;background-color:#f5f9ff;'>
+    {icon}
+  </td>
+  <td style='width:34%;padding:12px 14px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;font-weight:800;color:#1e3a5f;background-color:#f5f9ff;vertical-align:middle;'>
     {WebUtility.HtmlEncode(label)}
   </td>
-  <td style='padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#334155;vertical-align:top;'>
+  <td style='padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#334155;vertical-align:middle;'>
     {value}
   </td>
 </tr>");
@@ -1930,5 +1939,22 @@ Atentamente,
 
         builder.Append("</table>");
         return builder.ToString();
+    }
+
+    private static string GetEmailRowIcon(string label)
+    {
+        var texto = label.ToLowerInvariant();
+        if (texto.Contains("fecha"))
+            return "▦";
+        if (texto.Contains("cliente") || texto.Contains("proveedor") || texto.Contains("destinatario"))
+            return "○";
+        if (texto.Contains("total") || texto.Contains("monto") || texto.Contains("retenido"))
+            return "$";
+        if (texto.Contains("archivo"))
+            return "⌁";
+        if (texto.Contains("documento") || texto.Contains("factura") || texto.Contains("nota") || texto.Contains("guia") || texto.Contains("liquidacion") || texto.Contains("retencion"))
+            return "▤";
+
+        return "•";
     }
 }
