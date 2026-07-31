@@ -22,7 +22,10 @@ public sealed class FirmaStampApiService
     public async Task<FirmaStampApiResult> EstamparAsync(
         IBrowserFile pdf,
         FirmaStampApiFile logo,
-        string datos,
+        FirmaStampApiFile certificado,
+        string clave,
+        string? razon,
+        string? ubicacion,
         int pagina,
         double xMm,
         double yMm,
@@ -40,14 +43,21 @@ public sealed class FirmaStampApiService
 
         await using var pdfStream = pdf.OpenReadStream(MaxFileBytes, cancellationToken);
         await using var logoStream = new MemoryStream(logo.Content, writable: false);
+        await using var certificadoStream = new MemoryStream(certificado.Content, writable: false);
 
         using var form = new MultipartFormDataContent();
         using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
         using var logoContent = CreateFileContent(logoStream, logo.ContentType);
+        using var certificadoContent = CreateFileContent(certificadoStream, certificado.ContentType);
 
         form.Add(pdfContent, "pdf", pdf.Name);
         form.Add(logoContent, "logo", logo.FileName);
-        form.Add(new StringContent(datos), "datos");
+        form.Add(certificadoContent, "certificado", certificado.FileName);
+        form.Add(new StringContent(clave), "clave");
+        if (!string.IsNullOrWhiteSpace(razon))
+            form.Add(new StringContent(razon.Trim()), "razon");
+        if (!string.IsNullOrWhiteSpace(ubicacion))
+            form.Add(new StringContent(ubicacion.Trim()), "ubicacion");
         form.Add(new StringContent(pagina.ToString(CultureInfo.InvariantCulture)), "pagina");
         form.Add(new StringContent(xMm.ToString(CultureInfo.InvariantCulture)), "xMm");
         form.Add(new StringContent(yMm.ToString(CultureInfo.InvariantCulture)), "yMm");
@@ -84,6 +94,66 @@ public sealed class FirmaStampApiService
         catch (HttpRequestException)
         {
             return FirmaStampApiResult.Error("No fue posible conectar con la API de firma.");
+        }
+    }
+
+    public async Task<FirmaDetalleApiResult> ObtenerDetallesFirmaAsync(
+        FirmaStampApiFile certificado,
+        string clave,
+        CancellationToken cancellationToken = default)
+    {
+        var baseUri = GetBaseUri();
+        var apiKey = GetApiKey();
+
+        if (baseUri is null)
+            return FirmaDetalleApiResult.Error("La URL de la API de estampado no esta configurada.");
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return FirmaDetalleApiResult.Error("La API key de estampado no esta configurada.");
+
+        await using var certificadoStream = new MemoryStream(certificado.Content, writable: false);
+        using var form = new MultipartFormDataContent();
+        using var certificadoContent = CreateFileContent(certificadoStream, certificado.ContentType);
+
+        form.Add(certificadoContent, "certificado", certificado.FileName);
+        form.Add(new StringContent(clave), "clave");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, "api/documentos/detalles-firma"));
+        request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
+        request.Content = form;
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            var raw = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var mensaje = ExtraerMensajeError(raw)
+                    ?? $"La API de firma respondio con estado {(int)response.StatusCode}.";
+
+                return FirmaDetalleApiResult.Error(mensaje, raw, (int)response.StatusCode);
+            }
+
+            var detalle = JsonSerializer.Deserialize<FirmaDetalleApiResponse>(
+                raw,
+                JsonOptions);
+
+            return detalle is null
+                ? FirmaDetalleApiResult.Error("La API no devolvio un detalle de firma valido.", raw, (int)response.StatusCode)
+                : FirmaDetalleApiResult.Ok(detalle, raw, (int)response.StatusCode);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return FirmaDetalleApiResult.Error("La API de firma excedio el tiempo de espera.");
+        }
+        catch (HttpRequestException)
+        {
+            return FirmaDetalleApiResult.Error("No fue posible conectar con la API de firma.");
+        }
+        catch (JsonException)
+        {
+            return FirmaDetalleApiResult.Error("La API devolvio un detalle de firma no valido.");
         }
     }
 
@@ -423,5 +493,33 @@ public sealed record PdfSignatureValidationApiResult(
         new(true, string.Empty, validation, rawBody, httpStatusCode);
 
     public static PdfSignatureValidationApiResult Error(string message, string? rawBody = null, int? httpStatusCode = null) =>
+        new(false, message, null, rawBody, httpStatusCode);
+}
+
+public sealed record FirmaDetalleApiResponse(
+    bool EsValida,
+    string? EstadoVigencia,
+    string? NombreTitular,
+    string? Ruc,
+    string? Emisor,
+    string? NumeroSerie,
+    string? HuellaDigital,
+    DateTimeOffset? FechaEmision,
+    DateTimeOffset? FechaExpiracion);
+
+public sealed record FirmaDetalleApiResult(
+    bool Success,
+    string Message,
+    FirmaDetalleApiResponse? Detalle,
+    string? RawBody = null,
+    int? HttpStatusCode = null)
+{
+    public static FirmaDetalleApiResult Ok(
+        FirmaDetalleApiResponse detalle,
+        string? rawBody,
+        int? httpStatusCode) =>
+        new(true, string.Empty, detalle, rawBody, httpStatusCode);
+
+    public static FirmaDetalleApiResult Error(string message, string? rawBody = null, int? httpStatusCode = null) =>
         new(false, message, null, rawBody, httpStatusCode);
 }
