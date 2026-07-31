@@ -490,7 +490,10 @@
             var apiResult = await FirmaStampApiService.EstamparAsync(
                 pdfFile!,
                 recursosFirma.Logo,
-                datos.Trim(),
+                recursosFirma.Certificado,
+                recursosFirma.Clave,
+                "Firma digital del documento",
+                null,
                 pagina,
                 xMm,
                 yMm,
@@ -625,8 +628,33 @@
 
     private async Task RegenerarDatosJsonAsync()
     {
-        await ActualizarDatosJsonDesdeConfiguracionAsync();
-        SetMensaje("Datos del certificado cargados en el JSON.", false);
+        mensaje = null;
+        esError = false;
+        procesando = true;
+
+        try
+        {
+            var recursosFirma = await ResolverRecursosFirmaAsync();
+            if (recursosFirma is null)
+                return;
+
+            var apiResult = await FirmaStampApiService.ObtenerDetallesFirmaAsync(
+                recursosFirma.Certificado,
+                recursosFirma.Clave);
+
+            if (!apiResult.Success || apiResult.Detalle is null)
+            {
+                SetMensaje(apiResult.Message, true);
+                return;
+            }
+
+            datos = CrearDatosJson(apiResult.Detalle);
+            SetMensaje("Detalles de la firma cargados desde la API.", false);
+        }
+        finally
+        {
+            procesando = false;
+        }
     }
 
     private async Task ActualizarDatosJsonDesdeConfiguracionAsync()
@@ -717,14 +745,71 @@
             return null;
         }
 
-        if (pdfFile!.Size + logo.Content.Length > MaxAssetSize + MaxPdfSize)
+        var certificado = CrearCertificadoDesdeEmisor();
+        if (certificado is null)
+        {
+            Error("No se encontro el certificado configurado en EFact.");
+            return null;
+        }
+
+        if (certificado.Content.Length <= 0 || certificado.Content.Length > 1024 * 1024)
+        {
+            Error("El certificado configurado en EFact debe pesar maximo 1 MB.");
+            return null;
+        }
+
+        var clave = ObtenerClaveCertificado();
+        if (string.IsNullOrWhiteSpace(clave))
+        {
+            Error("El emisor no tiene clave de certificado configurada en EFact.");
+            return null;
+        }
+
+        if (pdfFile is not null && pdfFile.Size + logo.Content.Length > MaxAssetSize + MaxPdfSize)
         {
             Error("El total de archivos no debe superar 15 MB.");
             return null;
         }
 
         await Task.CompletedTask;
-        return new RecursosFirma(logo);
+        return new RecursosFirma(logo, certificado, clave);
+    }
+
+    private FirmaStampApiFile? CrearCertificadoDesdeEmisor()
+    {
+        if (emisor is null)
+            return null;
+
+        var rutaCertificado = rutaCertificadoEmisor ?? FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
+        if (string.IsNullOrWhiteSpace(rutaCertificado))
+        {
+            var clave = ObtenerClaveCertificado();
+            if (!string.IsNullOrWhiteSpace(clave))
+                rutaCertificado = ResolverCertificadoPorClaveYRuc(clave);
+        }
+
+        if (string.IsNullOrWhiteSpace(rutaCertificado) || !File.Exists(rutaCertificado))
+            return null;
+
+        var extension = Path.GetExtension(rutaCertificado);
+        var contentType = string.Equals(extension, ".pfx", StringComparison.OrdinalIgnoreCase)
+            ? "application/x-pkcs12"
+            : "application/x-pkcs12";
+        return new FirmaStampApiFile(
+            File.ReadAllBytes(rutaCertificado),
+            $"certificado{extension}",
+            contentType);
+    }
+
+    private string? ObtenerClaveCertificado()
+    {
+        if (emisor is null)
+            return null;
+
+        var password = CertificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
+        return string.IsNullOrWhiteSpace(password)
+            ? emisor.ClaveCertificado?.Trim()
+            : password;
     }
 
     private async Task ValidarQrAsync()
@@ -865,6 +950,24 @@
 
     private static string FirstFilled(params string?[] values) =>
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string CrearDatosJson(FirmaDetalleApiResponse detalle)
+    {
+        var info = new SortedDictionary<string, object?>
+        {
+            ["EsValida"] = detalle.EsValida,
+            ["EstadoVigencia"] = detalle.EstadoVigencia,
+            ["NombreTitular"] = detalle.NombreTitular,
+            ["Ruc"] = detalle.Ruc,
+            ["Emisor"] = detalle.Emisor,
+            ["NumeroSerie"] = detalle.NumeroSerie,
+            ["HuellaDigital"] = detalle.HuellaDigital,
+            ["FechaEmision"] = detalle.FechaEmision,
+            ["FechaExpiracion"] = detalle.FechaExpiracion
+        };
+
+        return JsonSerializer.Serialize(info, new JsonSerializerOptions { WriteIndented = true });
+    }
 
     private static string TextoSelloTiempo(PdfSignatureDetailApiResponse firma)
     {
@@ -1023,7 +1126,10 @@
         double YMm,
         double WidthMm);
 
-    private sealed record RecursosFirma(FirmaStampApiFile Logo);
+    private sealed record RecursosFirma(
+        FirmaStampApiFile Logo,
+        FirmaStampApiFile Certificado,
+        string Clave);
 
     private sealed record ResultadoEstampado(
         string Nombre,
