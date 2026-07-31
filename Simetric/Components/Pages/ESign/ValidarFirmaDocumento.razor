@@ -1,0 +1,229 @@
+@page "/e-sign/documentos/validar-firma"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Security.Claims
+@using Simetric.Services
+@using Simetric.Services.ESign
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject FirmaStampApiService FirmaStampApiService
+
+<PageTitle>Validar firma digital | E-Rubrica</PageTitle>
+
+<div class="validation-page">
+    @if (cargando)
+    {
+        <section class="esign-state">
+            <span class="spinner-border" role="status"></span>
+            <h3>Cargando validacion</h3>
+        </section>
+    }
+    else
+    {
+        <header class="validation-header">
+            <div class="header-icon">
+                <i class="bi bi-file-earmark-check"></i>
+            </div>
+            <div>
+                <span class="header-kicker">E-Rubrica</span>
+                <h1>Validar firma digital del PDF</h1>
+                <p>Comprueba integridad, certificado, revocacion OCSP/CRL y sello de tiempo RFC 3161.</p>
+            </div>
+            <button type="button" class="btn-back" @onclick="VolverDocumentos">
+                <i class="bi bi-arrow-left"></i>
+                <span>Volver a documentos</span>
+            </button>
+        </header>
+
+        <section class="validation-panel">
+            <div class="file-grid">
+                <label class="signature-file-card @(pdfValidacionFirmaFile is null ? null : "is-ready")">
+                    <InputFile class="file-input" accept="application/pdf,.pdf" OnChange="SeleccionarPdfValidacionFirma" />
+                    <i class="bi bi-file-earmark-pdf"></i>
+                    <strong>PDF firmado</strong>
+                    <span>@(pdfValidacionFirmaFile?.Name ?? "Seleccionar PDF")</span>
+                </label>
+            </div>
+
+            <div class="validation-actions">
+                <button type="button" class="validation-btn" @onclick="ValidarFirmaPdfAsync" disabled="@procesandoValidacionFirmaPdf">
+                    <i class="bi @(procesandoValidacionFirmaPdf ? "bi-arrow-repeat" : "bi-shield-check")"></i>
+                    <span>@(procesandoValidacionFirmaPdf ? "Analizando..." : "Analizar firma digital")</span>
+                </button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(pdfFirmaMensaje))
+            {
+                <div class="validation-result @(pdfFirmaEsError ? "is-error" : "is-valid")" role="status">
+                    <i class="bi @(pdfFirmaEsError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                    <div>
+                        <strong>@(pdfFirmaEsError ? "Firma no valida" : "Firma valida")</strong>
+                        <span>@pdfFirmaMensaje</span>
+                    </div>
+                </div>
+            }
+
+            @if (pdfFirmaResultado is not null)
+            {
+                <dl class="validation-details pdf-signature-summary">
+                    <div>
+                        <dt>Firmas</dt>
+                        <dd>@pdfFirmaResultado.CantidadFirmas</dd>
+                    </div>
+                    <div>
+                        <dt>Documento completo</dt>
+                        <dd>@(pdfFirmaResultado.DocumentoCompletoCubierto ? "Si" : "No")</dd>
+                    </div>
+                </dl>
+
+                <div class="pdf-signature-list">
+                    @foreach (var firma in pdfFirmaResultado.Firmas)
+                    {
+                        <article class="pdf-signature-item @(firma.Valida ? "is-valid" : "is-error")">
+                            <div>
+                                <strong>@(string.IsNullOrWhiteSpace(firma.Firmante) ? "Firmante no identificado" : firma.Firmante)</strong>
+                                <span>@(firma.FechaFirma?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "Fecha de firma no disponible")</span>
+                            </div>
+                            <dl>
+                                <div>
+                                    <dt>Integridad</dt>
+                                    <dd>@(firma.IntegridadValida ? "OK" : "Error")</dd>
+                                </div>
+                                <div>
+                                    <dt>Certificado</dt>
+                                    <dd>@(firma.CertificadoVigente ? "Vigente" : "No vigente")</dd>
+                                </div>
+                                <div>
+                                    <dt>Revocacion</dt>
+                                    <dd>@firma.EstadoRevocacion</dd>
+                                </div>
+                                <div>
+                                    <dt>Sello tiempo</dt>
+                                    <dd>@TextoSelloTiempo(firma)</dd>
+                                </div>
+                            </dl>
+                            @if (!string.IsNullOrWhiteSpace(firma.Error))
+                            {
+                                <p>@firma.Error</p>
+                            }
+                        </article>
+                    }
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private const long MaxPdfSize = 10 * 1024 * 1024;
+
+    private bool cargando = true;
+    private bool procesandoValidacionFirmaPdf;
+    private bool pdfFirmaEsError;
+    private string? pdfFirmaMensaje;
+    private IBrowserFile? pdfValidacionFirmaFile;
+    private PdfSignatureValidationApiResponse? pdfFirmaResultado;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var currentUserId) || currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(currentUserId, ESignRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        cargando = false;
+    }
+
+    private void VolverDocumentos() => NavManager.NavigateTo("/e-sign/documentos");
+
+    private void SeleccionarPdfValidacionFirma(InputFileChangeEventArgs e) => pdfValidacionFirmaFile = e.File;
+
+    private async Task ValidarFirmaPdfAsync()
+    {
+        pdfFirmaMensaje = null;
+        pdfFirmaEsError = false;
+        pdfFirmaResultado = null;
+
+        if (pdfValidacionFirmaFile is null)
+        {
+            pdfFirmaEsError = true;
+            pdfFirmaMensaje = "Selecciona el PDF firmado.";
+            return;
+        }
+
+        if (pdfValidacionFirmaFile.Size <= 0 || pdfValidacionFirmaFile.Size > MaxPdfSize)
+        {
+            pdfFirmaEsError = true;
+            pdfFirmaMensaje = "El PDF debe pesar maximo 10 MB.";
+            return;
+        }
+
+        if (!EsExtension(pdfValidacionFirmaFile.Name, ".pdf"))
+        {
+            pdfFirmaEsError = true;
+            pdfFirmaMensaje = "El documento debe ser PDF.";
+            return;
+        }
+
+        procesandoValidacionFirmaPdf = true;
+        try
+        {
+            var apiResult = await FirmaStampApiService.ValidarFirmaPdfAsync(pdfValidacionFirmaFile);
+            if (!apiResult.Success || apiResult.Validation is null)
+            {
+                pdfFirmaEsError = true;
+                pdfFirmaMensaje = apiResult.Message;
+                return;
+            }
+
+            pdfFirmaResultado = apiResult.Validation;
+            pdfFirmaEsError = !pdfFirmaResultado.Valido;
+            pdfFirmaMensaje = pdfFirmaResultado.Valido
+                ? "El PDF tiene firma digital valida."
+                : "El PDF no tiene una firma digital valida.";
+        }
+        finally
+        {
+            procesandoValidacionFirmaPdf = false;
+        }
+    }
+
+    private static string TextoSelloTiempo(PdfSignatureDetailApiResponse firma)
+    {
+        if (firma.SelloTiempoValido is null)
+            return "No aplica";
+
+        return firma.SelloTiempoValido.Value
+            ? firma.FechaSelloTiempo?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "Valido"
+            : "No valido";
+    }
+
+    private static bool EsExtension(string fileName, string extension) =>
+        string.Equals(Path.GetExtension(fileName), extension, StringComparison.OrdinalIgnoreCase);
+}

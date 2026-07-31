@@ -31,8 +31,7 @@ export async function init(options, dotNetRef) {
     let preferredSelection = null;
     let autoApplyPreferred = false;
 
-    const minimumStampWidthMm = 55;
-    const maximumStampWidthMm = 120;
+    const fixedStampWidthMm = 60;
 
     const normalizeSelection = selection => {
         if (!selection) {
@@ -43,7 +42,7 @@ export async function init(options, dotNetRef) {
             page: Number(selection.page ?? selection.Page ?? 1),
             xMm: Number(selection.xMm ?? selection.XMm ?? 0),
             yMm: Number(selection.yMm ?? selection.YMm ?? 0),
-            widthMm: Number(selection.widthMm ?? selection.WidthMm ?? 80)
+            widthMm: fixedStampWidthMm
         };
     };
 
@@ -98,10 +97,9 @@ export async function init(options, dotNetRef) {
 
     const applySelection = async (rawX, rawY, requestedWidth, shouldNotify = true) => {
         const widthMm = Math.min(
-            maximumStampWidthMm,
+            fixedStampWidthMm,
             pageWidthMm,
-            pageHeightMm / 0.4,
-            Math.max(minimumStampWidthMm, requestedWidth));
+            pageHeightMm / 0.4);
         const xMm = Math.max(0, Math.min(rawX, pageWidthMm - widthMm));
         const yMm = Math.max(0, Math.min(rawY, pageHeightMm - (widthMm * 0.4)));
 
@@ -113,7 +111,7 @@ export async function init(options, dotNetRef) {
         };
 
         updateFootprint();
-        setStatus(`Posicion: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm - Ancho ${widthMm.toFixed(2)} mm`);
+        setStatus(`Posicion: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm - Ancho 60.00 mm`);
 
         if (shouldNotify) {
             await notifySelection();
@@ -160,7 +158,7 @@ export async function init(options, dotNetRef) {
             canvas.hidden = false;
             selectedPosition = pageNumber === selectedPosition?.page ? selectedPosition : null;
             updateFootprint();
-            setStatus("Haz clic para ubicar o arrastra hacia abajo y a la derecha para dibujar el sello.");
+        setStatus("Haz clic para ubicar el sello. El ancho se mantiene fijo en 60 mm.");
             await dotNetRef.invokeMethodAsync("OnStampPageChanged", pageNumber);
             if (!selectedPosition && autoApplyPreferred && preferredSelection?.page === pageNumber) {
                 await applySelection(
@@ -214,7 +212,7 @@ export async function init(options, dotNetRef) {
 
         event.preventDefault();
         const point = getPagePoint(event);
-        const currentWidth = selectedPosition?.widthMm || 80;
+        const currentWidth = fixedStampWidthMm;
         await applySelection(point.xMm, point.yMm, currentWidth);
         drawingStart = {
             pointerId: event.pointerId,
@@ -242,11 +240,7 @@ export async function init(options, dotNetRef) {
             return;
         }
 
-        const requestedWidth = Math.max(
-            minimumStampWidthMm,
-            point.xMm - drawingStart.xMm,
-            (point.yMm - drawingStart.yMm) / 0.4);
-        await applySelection(drawingStart.xMm, drawingStart.yMm, requestedWidth);
+        await applySelection(drawingStart.xMm, drawingStart.yMm, fixedStampWidthMm);
     };
 
     const finishDrawing = event => {
@@ -275,7 +269,7 @@ export async function init(options, dotNetRef) {
             yMm: selectedPosition.yMm
         };
         stage.classList.add("is-resizing");
-        setStatus("Arrastra la esquina para cambiar el tamano.");
+        setStatus("El ancho del sello se mantiene fijo en 60 mm.");
     };
 
     const onWindowPointerMove = async event => {
@@ -284,12 +278,7 @@ export async function init(options, dotNetRef) {
         }
 
         event.preventDefault();
-        const point = getPagePoint(event);
-        const requestedWidth = Math.max(
-            minimumStampWidthMm,
-            point.xMm - resizeStart.xMm,
-            (point.yMm - resizeStart.yMm) / 0.4);
-        await applySelection(resizeStart.xMm, resizeStart.yMm, requestedWidth);
+        await applySelection(resizeStart.xMm, resizeStart.yMm, fixedStampWidthMm);
     };
 
     const finishResize = event => {
