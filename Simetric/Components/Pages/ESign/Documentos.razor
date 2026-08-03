@@ -2,7 +2,9 @@
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Hosting
+@using Microsoft.EntityFrameworkCore
 @using System.Security.Claims
+@using Simetric.Data
 @using Simetric.Services
 @using Simetric.Services.ESign
 @inject AuthenticationStateProvider AuthStateProvider
@@ -10,23 +12,20 @@
 @inject NavigationManager NavManager
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IDbContextFactory<AppDbContext> DbFactory
 
 <PageTitle>Documentos firmados | E-Rubrica</PageTitle>
 
 <div class="esign-page">
     @if (cargando)
     {
-        <div class="esign-state">
-            <span class="spinner-border" role="status"></span>
-            <h3>Cargando documentos</h3>
-        </div>
+        <ESignLoadingState
+            Title="Cargando documentos"
+            Description="Estamos preparando el historial de PDF firmados y sus estados de validacion." />
     }
     else
     {
         <header class="esign-header-section">
-            <div class="header-icon">
-                <i class="bi bi-file-earmark-check"></i>
-            </div>
             <div class="header-content">
                 <span class="header-kicker">E-Rubrica</span>
                 <h1>Historial de documentos firmados</h1>
@@ -41,37 +40,41 @@
         </header>
 
         <section class="stats-grid">
-            <article class="stat-card">
-                <span class="stat-icon is-green"><i class="bi bi-file-earmark-check"></i></span>
+            <article class="stat-card stat-teal">
+                <span class="stat-icon is-green"><i class="ri-file-shield-2-line"></i></span>
                 <div>
+                    <span class="stat-label">Documentos firmados</span>
                     <strong>@documentos.Count</strong>
-                    <span>Documentos firmados</span>
                     <small>Total en tu cuenta</small>
                 </div>
+                <span class="stat-progress"></span>
             </article>
-            <article class="stat-card">
-                <span class="stat-icon is-blue"><i class="bi bi-calendar3"></i></span>
+            <article class="stat-card stat-blue">
+                <span class="stat-icon is-blue"><i class="ri-calendar-check-line"></i></span>
                 <div>
+                    <span class="stat-label">Firmados este mes</span>
                     <strong>@DocumentosMesActual</strong>
-                    <span>Firmados este mes</span>
                     <small>@DateTime.Now.ToString("MMMM yyyy")</small>
                 </div>
+                <span class="stat-progress"></span>
             </article>
-            <article class="stat-card">
-                <span class="stat-icon is-purple"><i class="bi bi-download"></i></span>
+            <article class="stat-card stat-purple">
+                <span class="stat-icon is-purple"><i class="ri-download-cloud-2-line"></i></span>
                 <div>
+                    <span class="stat-label">Descargas disponibles</span>
                     <strong>@documentos.Count</strong>
-                    <span>Descargas disponibles</span>
                     <small>Total acumulado</small>
                 </div>
+                <span class="stat-progress"></span>
             </article>
-            <article class="stat-card">
-                <span class="stat-icon is-gold"><i class="bi bi-shield-check"></i></span>
+            <article class="stat-card stat-gold">
+                <span class="stat-icon is-gold"><i class="ri-verified-badge-line"></i></span>
                 <div>
+                    <span class="stat-label">Documentos validos</span>
                     <strong>@PorcentajeValidos%</strong>
-                    <span>Documentos validos</span>
                     <small>Sin incidencias</small>
                 </div>
+                <span class="stat-progress"></span>
             </article>
         </section>
 
@@ -152,7 +155,16 @@
                                     </td>
                                     <td>
                                         <div class="signer-cell">
-                                            <span class="avatar">@InicialesUsuario</span>
+                                            <span class="avatar">
+                                                @if (!string.IsNullOrWhiteSpace(currentUserAvatarUrl))
+                                                {
+                                                    <img src="@currentUserAvatarUrl" alt="Foto de perfil de @doc.Firmante" />
+                                                }
+                                                else
+                                                {
+                                                    @InicialesUsuario
+                                                }
+                                            </span>
                                             <div>
                                                 <strong>@doc.Firmante</strong>
                                                 <span>@currentUserEmail</span>
@@ -203,6 +215,7 @@
     private bool cargando = true;
     private string currentUserName = "Usuario";
     private string currentUserEmail = "correo no disponible";
+    private string? currentUserAvatarUrl;
     private string busqueda = string.Empty;
     private DateTime? fechaFiltro;
     private string estadoFiltro = string.Empty;
@@ -279,6 +292,8 @@
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
         currentUserName = user.FindFirst(ClaimTypes.Name)?.Value ?? user.Identity?.Name ?? currentUserName;
         currentUserEmail = user.FindFirst(ClaimTypes.Email)?.Value ?? user.FindFirst("Email")?.Value ?? currentUserEmail;
+        currentUserAvatarUrl = ResolverAvatarUrl(user.FindFirst("AvatarUrl")?.Value);
+        await CargarPerfilUsuarioAsync();
         CargarHistorialDocumentos();
         cargando = false;
     }
@@ -323,6 +338,29 @@
         }
     }
 
+    private async Task CargarPerfilUsuarioAsync()
+    {
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios
+            .AsNoTracking()
+            .Where(u => u.IdUsuario == currentUserId)
+            .Select(u => new { u.Nombres, u.Apellidos, u.Email, u.AvatarUrl })
+            .FirstOrDefaultAsync();
+
+        if (usuario is null)
+            return;
+
+        currentUserName = string.Join(" ", new[] { usuario.Nombres, usuario.Apellidos }
+            .Where(valor => !string.IsNullOrWhiteSpace(valor))).Trim();
+        if (string.IsNullOrWhiteSpace(currentUserName))
+            currentUserName = "Usuario";
+
+        if (!string.IsNullOrWhiteSpace(usuario.Email))
+            currentUserEmail = usuario.Email;
+
+        currentUserAvatarUrl = ResolverAvatarUrl(usuario.AvatarUrl) ?? currentUserAvatarUrl;
+    }
+
     private static string CrearDescripcion(string fileName)
     {
         var nombre = Path.GetFileNameWithoutExtension(fileName);
@@ -365,6 +403,22 @@
         bytes >= 1024 * 1024
             ? $"{bytes / 1024d / 1024d:0.##} MB"
             : $"{Math.Max(1, bytes / 1024d):0.##} KB";
+
+    private static string? ResolverAvatarUrl(string? avatarUrl)
+    {
+        if (string.IsNullOrWhiteSpace(avatarUrl))
+            return null;
+
+        var valor = avatarUrl.Trim().Replace('\\', '/');
+        if (valor.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            valor.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            valor.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+            return valor;
+
+        return valor.StartsWith("/", StringComparison.Ordinal)
+            ? valor
+            : "/" + valor.TrimStart('/');
+    }
 
     private sealed record DocumentoFirmadoItem(string Nombre, string NombreArchivo, string Descripcion, string Tamano, DateTime Fecha, string Firmante, string Estado, string Url);
 }

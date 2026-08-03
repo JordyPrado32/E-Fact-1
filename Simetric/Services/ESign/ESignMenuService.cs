@@ -174,9 +174,6 @@ namespace Simetric.Services.ESign
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 7)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (7, NULL, 'Soporte', 1, '/e-sign/soporte', 'ri-customer-service-2-line');
 
-                IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 8)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (8, 6, 'Perfil', 1, '/e-sign/configuracion/perfil', 'ri-user-settings-line');
-
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 9)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (9, 6, 'Plan disponible', 1, '/e-sign/configuracion/plan', 'ri-bill-line');
 
@@ -235,7 +232,6 @@ namespace Simetric.Services.ESign
                 FROM [dbo].[ESIGN_ROLES] r
                 CROSS JOIN [dbo].[ESIGN_MENUS] m
                 WHERE m.[IDMENU] NOT IN (12, 13, 14)
-                AND ISNULL(m.[RUTAMENU], '') <> '/e-sign/documentos/estampar'
                 AND NOT EXISTS (
                     SELECT 1 FROM [dbo].[ESIGN_ROL_MENU] rm
                     WHERE rm.[IDROL] = r.[IDROL] AND rm.[IDMENU] = m.[IDMENU]

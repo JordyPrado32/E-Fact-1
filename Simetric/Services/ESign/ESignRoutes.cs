@@ -7,10 +7,8 @@ public static class ESignRoutes
     public const string ServiceKey = "e-sign";
     public const string Root = "/e-sign";
     public const string Dashboard = "/e-sign";
-    public const string Profile = "/e-sign/configuracion/perfil";
     public const string Firmas = "/e-sign/firmas";
     public const string Documentos = "/e-sign/documentos";
-    public const string EstamparDocumento = "/e-sign/documentos/estampar";
     public const string Soporte = "/e-sign/soporte";
 
     public static bool IsESignPath(NavigationManager navigationManager, string location)
