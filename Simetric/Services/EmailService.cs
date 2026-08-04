@@ -110,6 +110,7 @@ public class EmailService : IEmailService
     private const string EfactInfoDisplayUrl = "numericasoftware.com";
     private const string EfactContactPhone = "+593 98 413 0238";
     private const string EfactLogoUrl = "https://efact.numericasoftware.com/images/services/efact.png";
+    private const string ContabilidadNotificacionPagos = "contabilidad@numericasoftware.com";
 
     private readonly AppDbContext _db;
     private readonly AuditService _auditService;
@@ -180,7 +181,8 @@ public class EmailService : IEmailService
             (configuration.GetSection("EmailComprobantes:NotificacionPagosDestinatarios").Get<string[]>() ?? Array.Empty<string>())
                 .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:NotificacionPagosCorreo"]))
                 .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:ContabilidadCorreo"]))
-                .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:ContabilidadDestinatarios"])));
+                .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:ContabilidadDestinatarios"]))
+                .Append(ContabilidadNotificacionPagos));
 
         _logger.LogInformation(
             "SMTP configurado para {Host}:{Puerto} con seguridad {Seguridad} y remitente {Remitente}.",
@@ -1091,7 +1093,7 @@ public class EmailService : IEmailService
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
         mensaje.To.Add(MailboxAddress.Parse(emailDestino));
 
-        foreach (var correoNotificacion in ObtenerDestinatariosNotificacionPagos(emailDestino))
+        foreach (var correoNotificacion in await ObtenerDestinatariosNotificacionPagosAsync(emailDestino))
             mensaje.Bcc.Add(MailboxAddress.Parse(correoNotificacion));
 
         mensaje.Subject = "Confirmacion de recarga de documentos | E-FACT";
@@ -1141,7 +1143,7 @@ public class EmailService : IEmailService
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
         mensaje.To.Add(MailboxAddress.Parse(emailDestino));
 
-        foreach (var correoNotificacion in ObtenerDestinatariosNotificacionPagos(emailDestino))
+        foreach (var correoNotificacion in await ObtenerDestinatariosNotificacionPagosAsync(emailDestino))
             mensaje.Bcc.Add(MailboxAddress.Parse(correoNotificacion));
 
         mensaje.Subject = "Tienes un cobro pendiente | E-FACT";
@@ -1744,6 +1746,40 @@ Atentamente,
             StringComparer.OrdinalIgnoreCase);
 
         return _notificacionPagosDestinatarios
+            .Where(correo => !excluidos.Contains(correo))
+            .ToList();
+    }
+
+    private async Task<List<string>> ObtenerDestinatariosNotificacionPagosAsync(params string?[] excluirCorreos)
+    {
+        var destinatarios = ObtenerDestinatariosNotificacionPagos(excluirCorreos);
+
+        try
+        {
+            var correosBackOffice = await _db.Usuarios
+                .AsNoTracking()
+                .Where(u =>
+                    u.Estado == true &&
+                    !string.IsNullOrWhiteSpace(u.Email) &&
+                    (u.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId ||
+                     (u.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId &&
+                        (u.TipoCliente == BackOfficePermissionHelper.AdministradorBackOfficeTipoCliente ||
+                         u.TipoCliente == BackOfficePermissionHelper.CobranzasBackOfficeTipoCliente))))
+                .Select(u => u.Email)
+                .ToListAsync();
+
+            destinatarios = NormalizarListaCorreos(destinatarios.Concat(correosBackOffice));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudieron cargar destinatarios BackOffice para notificacion de cobro pendiente.");
+        }
+
+        var excluidos = new HashSet<string>(
+            NormalizarListaCorreos(excluirCorreos),
+            StringComparer.OrdinalIgnoreCase);
+
+        return destinatarios
             .Where(correo => !excluidos.Contains(correo))
             .ToList();
     }
