@@ -567,6 +567,7 @@ namespace Simetric.Services
                     f.Coddocumento == 1 &&
                     f.Idusuario.HasValue &&
                     usuarios.Contains(f.Idusuario.Value) &&
+                    (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)) &&
                     (f.Serie ?? string.Empty).Replace("-", string.Empty) == serie);
 
             if (codEmisor is > 0)
