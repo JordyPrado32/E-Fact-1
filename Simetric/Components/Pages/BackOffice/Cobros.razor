@@ -1576,7 +1576,7 @@
             {
                 var newItem = new CompraDocumentosHistorialItem
                 {
-                    Id = Guid.NewGuid().ToString("N"),
+                    Id = string.IsNullOrWhiteSpace(compraId) ? Guid.NewGuid().ToString("N") : compraId,
                     Fecha = DateTime.Now,
                     Documentos = docsCount,
                     MontoTotal = venta.Valor,
@@ -1664,7 +1664,7 @@
         }
 
         var historial = LeerHistorial(usuario.HistorialComprasDocumentosJson);
-        var compra = historial.FirstOrDefault(x => string.Equals(x.Id, compraId, StringComparison.OrdinalIgnoreCase));
+        var compra = BuscarCompraAprobadaEnHistorial(historial, compraId, venta);
         if (compra is null)
         {
             return CompraDocumentosFacturaResultado.Error("No se encontró la compra aprobada en el historial.");
@@ -2009,6 +2009,48 @@
             ? obs.Substring(contentStart, endIdx - contentStart).Trim()
             : string.Empty;
     }
+
+    private CompraDocumentosHistorialItem? BuscarCompraAprobadaEnHistorial(
+        IEnumerable<CompraDocumentosHistorialItem> historial,
+        string compraId,
+        ReporteVentaBackOffice venta)
+    {
+        var items = historial.ToList();
+        var compra = items.FirstOrDefault(x => string.Equals(x.Id, compraId, StringComparison.OrdinalIgnoreCase));
+        if (compra is not null)
+        {
+            return compra;
+        }
+
+        var referenciaBackOffice = $"BO-{venta.IdReporte}";
+        compra = items.FirstOrDefault(x => string.Equals(x.Reference, referenciaBackOffice, StringComparison.OrdinalIgnoreCase));
+        if (compra is not null)
+        {
+            return compra;
+        }
+
+        var comprobante = GetComprobanteRef(venta.Observacion);
+        if (!string.IsNullOrWhiteSpace(comprobante))
+        {
+            compra = items.FirstOrDefault(x => string.Equals(x.AuthorizationCode, comprobante, StringComparison.OrdinalIgnoreCase));
+            if (compra is not null)
+            {
+                return compra;
+            }
+        }
+
+        var candidatos = items
+            .Where(x => EsEstadoCompraAprobada(x.Estado) && Math.Abs(x.MontoTotal - venta.Valor) < 0.01m)
+            .OrderByDescending(x => x.Fecha)
+            .ToList();
+
+        return candidatos.Count == 1 ? candidatos[0] : null;
+    }
+
+    private static bool EsEstadoCompraAprobada(string? estado) =>
+        string.Equals(estado, "Aprobado", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(estado, "Aprobada", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(estado, "Pagado", StringComparison.OrdinalIgnoreCase);
 
     private async Task ActualizarHistorialCompraDocumentosAsync(ReporteVentaBackOffice venta, bool aprobado)
     {
