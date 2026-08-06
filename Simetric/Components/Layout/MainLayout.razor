@@ -16,6 +16,7 @@
 @inject FirmaRenovacionService FirmaRenovacionService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
+@inject AppAccessService AppAccessService
 @inject ILogger<MainLayout> Logger
 
 @if (!ShouldRenderShell)
@@ -32,28 +33,80 @@ else
     <main class="workspace">
         <header class="workspace-header">
             <div class="workspace-intro workspace-brand @(IsEContaxContext ? "workspace-brand-econtax" : (IsESignContext ? "workspace-brand-esign" : string.Empty))">
-                @if (IsEContaxContext)
+                <img src="@CurrentServiceMark" alt="Numerica" class="workspace-brand-image workspace-brand-image-numerica" />
+
+                @if (PuedeCambiarServicioHeader && !IsDemoContext)
                 {
-                    <img src="/images/LogoNumerica.svg" alt="Logo Numerica" class="workspace-brand-image workspace-brand-image-numerica" />
-                    <img src="/images/econtax/LogoEContax.png" alt="Logo E-Contax" class="workspace-brand-image workspace-brand-logo-econtax" />
-                }
-                else if (IsEDeclaraContext)
-                {
-                    <img src="/images/LogoNumerica.svg" alt="Logo Numerica" class="workspace-brand-image workspace-brand-image-numerica" />
-                    <div class="workspace-brand-copy">
-                        <span>Numerica software</span>
-                        <strong>E-Declara</strong>
+                    <div class="service-switcher">
+                        <button type="button"
+                                class="service-switcher-trigger"
+                                aria-haspopup="menu"
+                                aria-expanded="@_mostrarMenuServicios"
+                                @onclick="ToggleServicesMenu">
+                            <span>Servicios</span>
+                            <i class="ri-arrow-down-s-line"></i>
+                        </button>
+
+                        @if (_mostrarMenuServicios)
+                        {
+                            <div class="service-switcher-dropdown" role="menu">
+                                @if (_cargandoServiciosHeader)
+                                {
+                                    <div class="service-switcher-empty">
+                                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                                        <span>Cargando servicios...</span>
+                                    </div>
+                                }
+                                else if (!_serviciosHeader.Any())
+                                {
+                                    <button type="button" role="menuitem" @onclick="IrAPortalServicios">
+                                        <i class="ri-apps-2-line"></i>
+                                        <span>Ver portal de servicios</span>
+                                    </button>
+                                }
+                                else
+                                {
+                                    @foreach (var servicio in _serviciosHeader)
+                                    {
+                                        var activo = EsServicioActivo(servicio);
+                                        <button type="button"
+                                                role="menuitem"
+                                                class="service-switcher-item @(activo ? "is-active" : string.Empty)"
+                                                @onclick="() => IrAlServicioHeaderAsync(servicio)">
+                                            <img src="@ResolveServiceMark(servicio.Clave)" alt="" aria-hidden="true" />
+                                            <span>@GetServiceDisplayName(servicio)</span>
+                                            @if (activo)
+                                            {
+                                                <i class="ri-check-line"></i>
+                                            }
+                                        </button>
+                                    }
+                                }
+                            </div>
+                        }
                     </div>
-                }
-                else if (IsESignContext)
-                {
-                    <img src="/images/LogoNumerica.svg" alt="Logo Numerica" class="workspace-brand-image workspace-brand-image-numerica" />
-                    <img src="/images/esign/erubrica.png" alt="Logo eRubrica" class="workspace-brand-image" style="width: auto; max-width: 140px; height: 50px; object-fit: contain; object-position: left center;" />
                 }
                 else
                 {
-                    <img src="/images/LogoNumerica.svg" alt="Logo Numerica" class="workspace-brand-image workspace-brand-image-numerica" />
-                    <img src="/images/logo.png" alt="Logo E-FACT" class="workspace-brand-image workspace-brand-image-efact" />
+                    @if (IsEContaxContext)
+                    {
+                        <img src="/images/econtax/LogoEContax.png" alt="Logo E-Contax" class="workspace-brand-image workspace-brand-logo-econtax" />
+                    }
+                    else if (IsEDeclaraContext)
+                    {
+                        <div class="workspace-brand-copy">
+                            <span>Numerica software</span>
+                            <strong>E-Declara</strong>
+                        </div>
+                    }
+                    else if (IsESignContext)
+                    {
+                        <img src="/images/esign/erubrica.png" alt="Logo eRubrica" class="workspace-brand-image" style="width: auto; max-width: 140px; height: 50px; object-fit: contain; object-position: left center;" />
+                    }
+                    else
+                    {
+                        <img src="/images/logo.png" alt="Logo E-FACT" class="workspace-brand-image workspace-brand-image-efact" />
+                    }
                 }
             </div>
 
@@ -863,10 +916,14 @@ else
     private string? _welcomeStorageKey;
     private EmisionEstado? _emisionEstado;
     private FirmaRenovacionInfo? _firmaRenovacion;
+    private readonly List<AppServiceCatalogItem> _serviciosHeader = new();
     private int _saldoDocumentosHeader;
     private bool _resaltarSaldoDocumentos;
     private int _saldoHighlightVersion;
     private bool _mostrarMenuSesion;
+    private bool _mostrarMenuServicios;
+    private bool _cargandoServiciosHeader;
+    private bool _puedeCambiarServicioHeader;
     private bool _cuentaListaParaFacturar;
     private bool _ocultarConfirmacionCuentaLista;
     private bool _tieneClientesActivos;
@@ -880,6 +937,7 @@ else
     private bool IsEContaxContext => IsEContaxPath(NavManager.Uri);
     private bool IsEDeclaraContext => IsEDeclaraPath(NavManager.Uri);
     private bool IsESignContext => IsESignPath(NavManager.Uri);
+    private bool IsEPeopleContext => CurrentRoutePath.StartsWith("servicios/e-people", StringComparison.OrdinalIgnoreCase);
     private bool IsDemoContext => IsDemoPath(NavManager.Uri);
     private string CurrentRoutePath =>
         NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].Trim('/');
@@ -900,6 +958,7 @@ else
         !IsEContaxContext && !IsEDeclaraContext && !IsDemoContext &&
         _cuentaListaParaFacturar && _emisionEstado?.MostrarAviso != true && !_ocultarConfirmacionCuentaLista;
     private bool HasFloatingWidgets => ShouldShowTutorialLauncher || ShouldShowAsistenteFacturacion;
+    private bool PuedeCambiarServicioHeader => _layoutUserAuthenticated && _puedeCambiarServicioHeader;
     private string SaldoDocumentosHeaderCaption => "Documentos";
     private string SaldoDocumentosHeaderLabel =>
         _emisionEstado?.PlanIlimitadoActivo == true
@@ -950,6 +1009,13 @@ else
         IsESignContext ? "Numerica eRúbrica" :
                             "Numerica e-fact IA";
 
+    private string CurrentServiceMark =>
+        IsEContaxContext ? "/images/services/n-econtax.png" :
+        IsEDeclaraContext ? "/images/services/n-edeclara.png" :
+        IsESignContext ? "/images/LogoNumerica.svg" :
+        IsEPeopleContext ? "/images/services/n-epeople.png" :
+                              "/images/LogoNumerica.svg";
+
     protected override async Task OnParametersSetAsync()
     {
         if (LayoutAuthenticationStateTask is null)
@@ -962,6 +1028,7 @@ else
         var authState = await LayoutAuthenticationStateTask;
         _layoutAuthResolved = true;
         _layoutUserAuthenticated = authState.User.Identity?.IsAuthenticated == true;
+        _puedeCambiarServicioHeader = EsAdministradorNumerica(authState.User);
     }
 
     protected override void OnInitialized()
@@ -996,6 +1063,8 @@ else
         var user = authState.User;
 
         if (user.Identity?.IsAuthenticated != true) return;
+
+        await CargarServiciosHeaderAsync(user);
 
         if (!IsEContaxContext && !IsEDeclaraContext && !IsESignContext)
         {
@@ -1071,6 +1140,7 @@ else
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         _mostrarMenuSesion = false;
+        _mostrarMenuServicios = false;
         _ = InvokeAsync(async () =>
         {
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -1078,6 +1148,8 @@ else
 
             if (user.Identity?.IsAuthenticated == true)
             {
+                await CargarServiciosHeaderAsync(user);
+
                 var idTipoUsuario = user.FindFirst("IdTipoUsuario")?.Value;
                 if (string.Equals(idTipoUsuario, "7", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1294,6 +1366,106 @@ else
     }
 
     private void ToggleSessionMenu() => _mostrarMenuSesion = !_mostrarMenuSesion;
+
+    private void ToggleServicesMenu()
+    {
+        _mostrarMenuServicios = !_mostrarMenuServicios;
+        if (_mostrarMenuServicios)
+            _mostrarMenuSesion = false;
+    }
+
+    private async Task CargarServiciosHeaderAsync(ClaimsPrincipal user)
+    {
+        if (_cargandoServiciosHeader)
+            return;
+
+        var userId = ObtenerIdUsuario(user);
+        if (userId is null or <= 0)
+            return;
+
+        var esSuperAdmin = EsAdministradorNumerica(user);
+        _puedeCambiarServicioHeader = esSuperAdmin;
+        if (!esSuperAdmin)
+        {
+            _serviciosHeader.Clear();
+            return;
+        }
+
+        _cargandoServiciosHeader = true;
+        try
+        {
+            var catalogo = await AppAccessService.GetCatalogForUserAsync(userId.Value, esSuperAdmin);
+            _serviciosHeader.Clear();
+            _serviciosHeader.AddRange(catalogo.Where(ServicioVisibleEnHeader));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "No se pudo cargar el selector de servicios del header.");
+        }
+        finally
+        {
+            _cargandoServiciosHeader = false;
+        }
+    }
+
+    private async Task IrAlServicioHeaderAsync(AppServiceCatalogItem item)
+    {
+        _mostrarMenuServicios = false;
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(item.Clave);
+
+        if (!item.TieneAcceso)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(item.Clave)}", forceLoad: true);
+            return;
+        }
+
+        var destino = string.IsNullOrWhiteSpace(item.RutaAcceso) ? "/portal-servicios" : item.RutaAcceso;
+        NavManager.NavigateToIfNeeded(destino);
+    }
+
+    private void IrAPortalServicios()
+    {
+        _mostrarMenuServicios = false;
+        NavManager.NavigateTo("/portal-servicios", forceLoad: true);
+    }
+
+    private bool EsServicioActivo(AppServiceCatalogItem item) => item.Clave?.ToLowerInvariant() switch
+    {
+        AppAccessService.FreeServiceKey => !IsEContaxContext && !IsEDeclaraContext && !IsESignContext,
+        AppAccessService.EContaxServiceKey or "e-contax" or "econtax" => IsEContaxContext,
+        AppAccessService.EDeclaraServiceKey or "edeclara" => IsEDeclaraContext,
+        "e-people" or "epeople" => IsEPeopleContext,
+        "e-sign" or "esign" => IsESignContext,
+        _ => false
+    };
+
+    private static bool ServicioVisibleEnHeader(AppServiceCatalogItem item) =>
+        !string.Equals(item.Clave, "backoffice", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsAdministradorNumerica(ClaimsPrincipal user) =>
+        user.Identity?.IsAuthenticated == true &&
+        string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveServiceMark(string? clave) => clave?.ToLowerInvariant() switch
+    {
+        "e-conta" or "e-contax" or "econtax" => "/images/services/n-econtax.png",
+        "e-declara" or "edeclara" => "/images/services/n-edeclara.png",
+        "e-people" or "epeople" => "/images/services/n-epeople.png",
+        _ => "/images/LogoNumerica.svg"
+    };
+
+    private static string GetServiceDisplayName(AppServiceCatalogItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Nombre))
+            return "Servicio";
+
+        return item.Nombre
+            .Replace("E-RÃºbrica", "eRúbrica", StringComparison.OrdinalIgnoreCase)
+            .Trim();
+    }
 
     private void AbrirPerfil()
     {

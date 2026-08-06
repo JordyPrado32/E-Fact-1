@@ -18,14 +18,17 @@ public static class LogoImageProcessor
         if (original.Width <= 0 || original.Height <= 0)
             throw new InvalidOperationException("No se pudieron determinar las dimensiones del logo.");
 
-        var cropWidth = Math.Min(original.Width, MaxWidth);
-        var cropHeight = Math.Min(original.Height, MaxHeight);
-        var finalWidth = Math.Max(cropWidth, MinWidth);
-        var finalHeight = Math.Max(cropHeight, MinHeight);
-        var requiresAdjustment = cropWidth != original.Width ||
-                                 cropHeight != original.Height ||
-                                 finalWidth != cropWidth ||
-                                 finalHeight != cropHeight;
+        var scale = Math.Min(
+            1d,
+            Math.Min((double)MaxWidth / original.Width, (double)MaxHeight / original.Height));
+        var contentWidth = Math.Max(1, (int)Math.Round(original.Width * scale));
+        var contentHeight = Math.Max(1, (int)Math.Round(original.Height * scale));
+        var finalWidth = Math.Max(contentWidth, MinWidth);
+        var finalHeight = Math.Max(contentHeight, MinHeight);
+        var requiresAdjustment = contentWidth != original.Width ||
+                                 contentHeight != original.Height ||
+                                 finalWidth != contentWidth ||
+                                 finalHeight != contentHeight;
 
         if (!requiresAdjustment)
             return new LogoImageResult(bytes, contentType, original.Width, original.Height, false);
@@ -35,19 +38,17 @@ public static class LogoImageProcessor
         {
             canvas.Clear(SKColors.Transparent);
 
-            var sourceX = Math.Max((original.Width - cropWidth) / 2, 0);
-            var sourceY = Math.Max((original.Height - cropHeight) / 2, 0);
-            var destinationX = (finalWidth - cropWidth) / 2;
-            var destinationY = (finalHeight - cropHeight) / 2;
+            var destinationX = (finalWidth - contentWidth) / 2;
+            var destinationY = (finalHeight - contentHeight) / 2;
 
             canvas.DrawBitmap(
                 original,
-                new SKRect(sourceX, sourceY, sourceX + cropWidth, sourceY + cropHeight),
+                new SKRect(0, 0, original.Width, original.Height),
                 new SKRect(
                     destinationX,
                     destinationY,
-                    destinationX + cropWidth,
-                    destinationY + cropHeight));
+                    destinationX + contentWidth,
+                    destinationY + contentHeight));
             canvas.Flush();
         }
 
