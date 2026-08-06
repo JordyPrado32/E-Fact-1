@@ -1667,7 +1667,8 @@
         var compra = BuscarCompraAprobadaEnHistorial(historial, compraId, venta);
         if (compra is null)
         {
-            return CompraDocumentosFacturaResultado.Error("No se encontró la compra aprobada en el historial.");
+            compra = CrearCompraAprobadaDesdeTransferencia(venta, compraId);
+            historial.Insert(0, compra);
         }
 
         var saldoYaAplicado = compra.SaldoAplicado;
@@ -2051,6 +2052,35 @@
         string.Equals(estado, "Aprobado", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(estado, "Aprobada", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(estado, "Pagado", StringComparison.OrdinalIgnoreCase);
+
+    private CompraDocumentosHistorialItem CrearCompraAprobadaDesdeTransferencia(
+        ReporteVentaBackOffice venta,
+        string compraId)
+    {
+        var esIlimitado = venta.PlanPaquete.Contains("Ilimitado", StringComparison.OrdinalIgnoreCase);
+        var documentos = 0;
+        if (!esIlimitado)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(venta.PlanPaquete, @"\d+");
+            documentos = match.Success ? int.Parse(match.Value) : 0;
+        }
+
+        return new CompraDocumentosHistorialItem
+        {
+            Id = string.IsNullOrWhiteSpace(compraId) ? Guid.NewGuid().ToString("N") : compraId,
+            Fecha = venta.Fecha == default ? DateTime.Now : venta.Fecha,
+            Documentos = documentos,
+            MontoTotal = venta.Valor,
+            Estado = "Aprobado",
+            Descripcion = $"Transferencia aprobada: {venta.PlanPaquete}",
+            SaldoAplicado = true,
+            EsIlimitado = esIlimitado,
+            EsPermanente = esIlimitado,
+            VigenciaHasta = null,
+            Reference = $"BO-{venta.IdReporte}",
+            AuthorizationCode = GetComprobanteRef(venta.Observacion)
+        };
+    }
 
     private async Task ActualizarHistorialCompraDocumentosAsync(ReporteVentaBackOffice venta, bool aprobado)
     {
