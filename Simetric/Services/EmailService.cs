@@ -106,8 +106,8 @@ public interface IEmailService
 
 public class EmailService : IEmailService
 {
-    private const string EfactInfoUrl = "https://numericasoftware.com/";
-    private const string EfactInfoDisplayUrl = "numericasoftware.com";
+    private const string EfactInfoUrl = "https://www.numericasoftware.com/efact";
+    private const string EfactInfoDisplayUrl = "www.numericasoftware.com/efact";
     private const string EfactContactPhone = "+593 98 413 0238";
     private const string EfactLogoUrl = "https://efact.numericasoftware.com/images/services/efact.png";
     private const string ContabilidadNotificacionPagos = "contabilidad@numericasoftware.com";
