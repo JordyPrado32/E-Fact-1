@@ -13,13 +13,16 @@ namespace Simetric.Controllers
     {
         private readonly AppDbContext _context;
         private readonly EmisorCertificadoValidator _emisorCertificadoValidator;
+        private readonly IWebHostEnvironment _hostEnvironment;
 
         public EmisoresController(
             AppDbContext context,
-            EmisorCertificadoValidator emisorCertificadoValidator)
+            EmisorCertificadoValidator emisorCertificadoValidator,
+            IWebHostEnvironment hostEnvironment)
         {
             _context = context;
             _emisorCertificadoValidator = emisorCertificadoValidator;
+            _hostEnvironment = hostEnvironment;
         }
 
         [HttpGet]
@@ -117,6 +120,8 @@ namespace Simetric.Controllers
                 logGuardado
             });
         }
+
+        private const long MaxCertificadoSize = 5 * 1024 * 1024;
 
         private async Task<bool> RegistrarValidacionFirmaAsync(
             int idUsuario,
@@ -303,6 +308,67 @@ namespace Simetric.Controllers
             return Ok();
         }
 
+        [HttpPost("{id:int}/firma/archivo")]
+        [RequestSizeLimit(MaxCertificadoSize)]
+        public async Task<IActionResult> UploadFirmaArchivo(int id, [FromQuery] int? idUsuario, [FromForm] IFormFile? archivo)
+        {
+            if (idUsuario == null || idUsuario <= 0)
+                return BadRequest("Id de usuario requerido.");
+
+            var idCuenta = await ObtenerIdCuentaEmisor(idUsuario.Value);
+            if (idCuenta is null)
+                return NotFound("Usuario no encontrado.");
+
+            var existeEmisor = await _context.Emisores
+                .AsNoTracking()
+                .AnyAsync(e => e.Codigo == id && e.IdUsuario == idCuenta.Value && !e.EsEmisorSistema);
+
+            if (!existeEmisor)
+                return NotFound();
+
+            if (archivo is null || archivo.Length <= 0)
+                return BadRequest("Debes seleccionar un archivo .p12.");
+
+            if (archivo.Length > MaxCertificadoSize)
+                return BadRequest("El archivo de firma excede el tamano maximo de 5 MB.");
+
+            if (!string.Equals(Path.GetExtension(archivo.FileName), ".p12", StringComparison.OrdinalIgnoreCase))
+                return BadRequest("Solo se permiten archivos .p12.");
+
+            var contentType = (archivo.ContentType ?? string.Empty).Trim().ToLowerInvariant();
+            var tiposPermitidos = new[]
+            {
+                string.Empty,
+                "application/x-pkcs12",
+                "application/pkcs12",
+                "application/x-pkcs-12",
+                "application/octet-stream"
+            };
+
+            if (!tiposPermitidos.Contains(contentType))
+                return BadRequest("El archivo seleccionado no es un certificado .p12 valido.");
+
+            var relativePath = $"certs/path/{Guid.NewGuid():N}.p12";
+            var physicalPath = Path.Combine(
+                _hostEnvironment.ContentRootPath,
+                "App_Data",
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+            var directory = Path.GetDirectoryName(physicalPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+
+            await using (var stream = System.IO.File.Create(physicalPath))
+            {
+                await archivo.CopyToAsync(stream, HttpContext.RequestAborted);
+            }
+
+            return Ok(new
+            {
+                pathCertificado = relativePath,
+                nombreArchivo = Path.GetFileName(archivo.FileName)
+            });
+        }
         [HttpPut("{id:int}/desactivar")]
         public async Task<IActionResult> Desactivar(int id, [FromQuery] int? idUsuario)
         {
@@ -500,3 +566,4 @@ namespace Simetric.Controllers
         }
     }
 }
+
