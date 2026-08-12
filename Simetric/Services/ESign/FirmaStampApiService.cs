@@ -21,7 +21,6 @@ public sealed class FirmaStampApiService
 
     public async Task<FirmaStampApiResult> EstamparAsync(
         IBrowserFile pdf,
-        FirmaStampApiFile logo,
         FirmaStampApiFile certificado,
         string clave,
         string? razon,
@@ -42,16 +41,13 @@ public sealed class FirmaStampApiService
             return FirmaStampApiResult.Error("La API key de estampado no esta configurada.");
 
         await using var pdfStream = pdf.OpenReadStream(MaxFileBytes, cancellationToken);
-        await using var logoStream = new MemoryStream(logo.Content, writable: false);
         await using var certificadoStream = new MemoryStream(certificado.Content, writable: false);
 
         using var form = new MultipartFormDataContent();
         using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
-        using var logoContent = CreateFileContent(logoStream, logo.ContentType);
         using var certificadoContent = CreateFileContent(certificadoStream, certificado.ContentType);
 
         form.Add(pdfContent, "pdf", pdf.Name);
-        form.Add(logoContent, "logo", logo.FileName);
         form.Add(certificadoContent, "certificado", certificado.FileName);
         form.Add(new StringContent(clave), "clave");
         if (!string.IsNullOrWhiteSpace(razon))

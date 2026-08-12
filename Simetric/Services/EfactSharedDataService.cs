@@ -28,11 +28,12 @@ public sealed class EfactSharedDataService
         if (ownerId is null)
             throw new InvalidOperationException("No se encontro el usuario.");
 
-        await _clienteService.EnsureConsumidorFinalAsync(ownerId.Value);
+        await _clienteService.EnsureConsumidorFinalAsync(userId);
 
         var clientesQuery = context.Clientes
             .AsNoTracking()
-            .Where(cliente => cliente.Usuario == ownerId.Value);
+            .ExcluirClientesExclusivosBackOffice()
+            .Where(cliente => cliente.Usuario == userId);
 
         var productosQuery = context.Productos
             .AsNoTracking()

@@ -39,7 +39,7 @@
             <div>
                 <span class="header-kicker">Documentos Electrónicos</span>
                 <h1>Firmar PDF</h1>
-                <p>Carga un PDF, revisa el logo del emisor y elige donde se colocará el sello.</p>
+                <p>Carga un PDF y elige donde se colocará el sello.</p>
             </div>
             <div class="header-actions">
                 <span class="esign-hero-chip"><i class="bi bi-file-earmark-lock"></i> Firma segura</span>
@@ -63,8 +63,8 @@
                 </div>
 
                 <div class="file-grid">
-                    <label class="stamp-file-card @(pdfFile is null ? null : "is-ready")">
-                        <InputFile id="stampPdfInput" class="file-input" accept="application/pdf,.pdf" OnChange="SeleccionarPdf" />
+                    <InputFile id="stampPdfInput" class="file-input" accept=".pdf,application/pdf" OnChange="SeleccionarPdf" />
+                    <label for="stampPdfInput" class="stamp-file-card @(pdfFile is null ? null : "is-ready")">
                         <i class="bi bi-file-earmark-pdf"></i>
                         <strong>PDF</strong>
                         <span>@(pdfFile?.Name ?? "Seleccionar o arrastrar PDF")</span>
@@ -75,19 +75,12 @@
             <article class="stamp-panel issuer-panel">
                 <div class="panel-heading">
                     <span class="header-kicker">Emisor</span>
-                    <h2>Firma, clave y logo</h2>
+                    <h2>Firma y clave</h2>
                     <p>Configura aquí los datos que se usarán para estampar este PDF.</p>
                 </div>
                 <div class="issuer-summary @(emisorConfigurado ? "is-ready" : "is-missing")">
-                    <div class="issuer-logo">
-                        @if (!string.IsNullOrWhiteSpace(LogoEmisorSrc))
-                        {
-                            <img src="@LogoEmisorSrc" alt="Logo del emisor" />
-                        }
-                        else
-                        {
-                            <i class="bi bi-image"></i>
-                        }
+                    <div class="issuer-icon">
+                        <i class="bi bi-file-earmark-lock"></i>
                     </div>
                     <div>
                         <strong>@(emisor?.RazonSocial ?? "Emisor E-Rúbrica")</strong>
@@ -95,9 +88,27 @@
                     </div>
                 </div>
 
+                @if (emisoresCuenta.Count > 1)
+                {
+                    <div class="issuer-selector">
+                        <label for="stampIssuerSelect">Firma disponible</label>
+                        <div class="issuer-select-control">
+                            <i class="bi bi-building-check"></i>
+                            <select id="stampIssuerSelect" value="@emisor?.Codigo" @onchange="CambiarEmisor">
+                                @foreach (var item in emisoresCuenta)
+                                {
+                                    <option value="@item.Codigo">@ObtenerEtiquetaEmisor(item)</option>
+                                }
+                            </select>
+                            <i class="bi bi-chevron-down"></i>
+                        </div>
+                        <small>Se muestran únicamente las firmas de los emisores de esta cuenta.</small>
+                    </div>
+                }
+
                 <div class="stamp-config-grid">
-                    <label class="stamp-config-card @(TieneCertificadoDisponible ? "is-ready" : "is-missing")">
-                        <InputFile class="file-input" accept=".p12" OnChange="SubirP12Async" />
+                    <InputFile id="stampP12Input" class="file-input" accept=".p12,application/x-pkcs12,application/pkcs12" OnChange="SubirP12Async" />
+                    <label for="stampP12Input" class="stamp-config-card @(TieneCertificadoDisponible ? "is-ready" : "is-missing")">
                         <span class="config-card-icon"><i class="bi bi-file-earmark-lock"></i></span>
                         <span class="config-card-copy">
                             <strong>Firma .p12</strong>
@@ -105,25 +116,17 @@
                         </span>
                     </label>
 
-                    <label class="stamp-config-card @(TieneClaveDisponible ? "is-ready" : "is-missing")">
+                    <div class="stamp-config-card stamp-config-input @(TieneClaveDisponible ? "is-ready" : "is-missing")">
                         <span class="config-card-icon"><i class="bi bi-key"></i></span>
                         <span class="config-card-copy">
-                            <strong>Clave</strong>
+                            <label for="stampCertificatePassword">Clave</label>
                             <input type="password"
+                                   id="stampCertificatePassword"
                                    @bind="claveCertificadoInput"
                                    placeholder="Clave de la firma"
                                    autocomplete="new-password" />
                         </span>
-                    </label>
-
-                    <label class="stamp-config-card @(TieneLogoDisponible ? "is-ready" : "is-missing")">
-                        <InputFile class="file-input" accept="image/jpeg,image/png,.jpg,.jpeg,.png" OnChange="SubirLogoAsync" />
-                        <span class="config-card-icon"><i class="bi bi-image"></i></span>
-                        <span class="config-card-copy">
-                            <strong>Logo</strong>
-                            <small>@NombreLogoConfiguracion</small>
-                        </span>
-                    </label>
+                    </div>
                 </div>
 
                 <div class="issuer-actions">
@@ -218,8 +221,6 @@
 
 @code {
     private const long MaxPdfSize = 10 * 1024 * 1024;
-    private const long MaxAssetSize = 5 * 1024 * 1024;
-    private const long MaxLogoSize = 2 * 1024 * 1024;
     private const long MaxCertificadoSize = 5 * 1024 * 1024;
     private const double StampWidthMm = 60;
 
@@ -235,14 +236,13 @@
     private double anchoMm = StampWidthMm;
     private IBrowserFile? pdfFile;
     private Emisor? emisor;
+    private List<Emisor> emisoresCuenta = [];
     private bool emisorConfigurado;
     private string estadoEmisorMensaje = "Validando configuración de E-Rúbrica...";
     private string? rutaCertificadoEmisor;
     private string? certificadoSeleccionado;
-    private string? logoSeleccionado;
     private string? claveCertificadoInput;
     private string? pathCertificadoPendiente;
-    private string? logoImagenPendiente;
     private bool usarPreferenciaSiempre;
     private bool tienePreferenciaGuardada;
     private StampPreference? preferenciaGuardada;
@@ -326,17 +326,9 @@
         !string.IsNullOrWhiteSpace(claveCertificadoInput) ||
         !string.IsNullOrWhiteSpace(emisor?.ClaveCertificado);
 
-    private bool TieneLogoDisponible =>
-        !string.IsNullOrWhiteSpace(logoImagenPendiente) ||
-        !string.IsNullOrWhiteSpace(emisor?.LogoImagen);
-
     private string NombreCertificadoConfiguracion =>
         certificadoSeleccionado
         ?? (TieneCertificadoDisponible ? "Firma disponible" : "Seleccionar .p12");
-
-    private string NombreLogoConfiguracion =>
-        logoSeleccionado
-        ?? (TieneLogoDisponible ? "Logo disponible" : "Seleccionar logo");
 
     [JSInvokable]
     public async Task OnStampSelectionChanged(int selectedPage, double selectedX, double selectedY, double selectedWidth)
@@ -376,7 +368,6 @@
 
             var apiResult = await FirmaStampApiService.EstamparAsync(
                 pdfFile!,
-                recursosFirma.Logo,
                 recursosFirma.Certificado,
                 recursosFirma.Clave,
                 "Firma digital del documento",
@@ -452,23 +443,55 @@
             ? usuario.idJefe.Value
             : currentUserId;
 
-        var emisoresCuenta = await context.Emisores
+        emisoresCuenta = await context.Emisores
             .AsNoTracking()
             .Where(item => item.IdUsuario == idUsuarioEmisor && item.Estado && !item.EsEmisorSistema)
             .OrderByDescending(item => item.Codigo)
             .ToListAsync();
 
-        emisor = emisoresCuenta.FirstOrDefault(item =>
+        var codigoSeleccionado = emisor?.Codigo;
+        emisor = emisoresCuenta.FirstOrDefault(item => item.Codigo == codigoSeleccionado)
+            ?? emisoresCuenta.FirstOrDefault(item =>
         {
             var ruta = FirmaPathResolver.ResolverRutaExistente(item.PathCertificado);
-            return !string.IsNullOrWhiteSpace(item.LogoImagen) &&
-                !string.IsNullOrWhiteSpace(item.ClaveCertificado) &&
+            return !string.IsNullOrWhiteSpace(item.ClaveCertificado) &&
                 !string.IsNullOrWhiteSpace(ruta);
         }) ?? emisoresCuenta.FirstOrDefault();
 
         emisorConfigurado = ValidarConfiguracionEmisor(out var estado);
         estadoEmisorMensaje = estado;
         await Task.CompletedTask;
+    }
+
+    private void CambiarEmisor(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var codigo))
+            return;
+
+        var emisorSeleccionado = emisoresCuenta.FirstOrDefault(item => item.Codigo == codigo);
+        if (emisorSeleccionado is null)
+            return;
+
+        emisor = emisorSeleccionado;
+        certificadoSeleccionado = null;
+        claveCertificadoInput = null;
+        pathCertificadoPendiente = null;
+        emisorConfigurado = ValidarConfiguracionEmisor(out var estado);
+        estadoEmisorMensaje = estado;
+        mensaje = null;
+    }
+
+    private string ObtenerEtiquetaEmisor(Emisor item)
+    {
+        var nombre = string.IsNullOrWhiteSpace(item.RazonSocial)
+            ? item.NomComercial
+            : item.RazonSocial;
+        var estado = FirmaPathResolver.ResolverRutaExistente(item.PathCertificado) is not null &&
+            !string.IsNullOrWhiteSpace(item.ClaveCertificado)
+                ? "lista"
+                : "incompleta";
+
+        return $"{nombre ?? "Emisor"} · {item.Ruc} · {estado}";
     }
 
     private async Task SubirP12Async(InputFileChangeEventArgs e)
@@ -535,74 +558,15 @@
         }
     }
 
-    private async Task SubirLogoAsync(InputFileChangeEventArgs e)
-    {
-        try
-        {
-            if (e.FileCount != 1 || e.File is null)
-            {
-                SetMensaje("Selecciona un solo logo.", true);
-                return;
-            }
-
-            var file = e.File;
-            var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
-            if (extension is not ".jpg" and not ".jpeg" and not ".png")
-            {
-                SetMensaje("Solo se permiten logos JPG, JPEG o PNG.", true);
-                return;
-            }
-
-            var contentType = (file.ContentType ?? string.Empty).Trim().ToLowerInvariant();
-            if (contentType is not "image/jpeg" and not "image/png")
-            {
-                SetMensaje("El logo seleccionado no tiene un formato valido.", true);
-                return;
-            }
-
-            if (file.Size <= 0)
-            {
-                SetMensaje("El archivo de logo esta vacio.", true);
-                return;
-            }
-
-            if (file.Size > MaxLogoSize)
-            {
-                SetMensaje("El logo excede el tamano maximo de 2 MB.", true);
-                return;
-            }
-
-            await using var stream = file.OpenReadStream(MaxLogoSize);
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer);
-            var bytes = buffer.ToArray();
-            if (bytes.Length == 0)
-            {
-                SetMensaje("No se pudo leer el logo seleccionado.", true);
-                return;
-            }
-
-            var result = LogoImageProcessor.Normalize(bytes, contentType);
-            logoImagenPendiente = $"data:{result.ContentType};base64,{Convert.ToBase64String(result.Bytes)}";
-            logoSeleccionado = file.Name;
-            SetMensaje("Logo cargado. Guarda para usarlo al estampar.", false);
-        }
-        catch (Exception ex)
-        {
-            SetMensaje(FormatearMensajeError(ex.Message), true);
-        }
-    }
-
     private async Task GuardarConfiguracionFirmaAsync()
     {
         if (emisor is null)
         {
-            SetMensaje("No se encontró un emisor activo para guardar la firma, clave y logo.", true);
+            SetMensaje("No se encontró un emisor activo para guardar la firma y clave.", true);
             return;
         }
 
         var pathCertificado = pathCertificadoPendiente ?? emisor.PathCertificado;
-        var logoImagen = logoImagenPendiente ?? emisor.LogoImagen;
         var claveNueva = claveCertificadoInput?.Trim();
 
         if (string.IsNullOrWhiteSpace(pathCertificado))
@@ -614,12 +578,6 @@
         if (string.IsNullOrWhiteSpace(claveNueva) && string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
         {
             SetMensaje("Ingresa la clave de la firma antes de guardar.", true);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(logoImagen))
-        {
-            SetMensaje("Sube el logo antes de guardar.", true);
             return;
         }
 
@@ -635,20 +593,17 @@
             }
 
             emisorDb.PathCertificado = pathCertificado.Trim();
-            emisorDb.LogoImagen = logoImagen.Trim();
             if (!string.IsNullOrWhiteSpace(claveNueva))
                 emisorDb.ClaveCertificado = CertificadoProtector.ProtegerClave(claveNueva);
 
             await context.SaveChangesAsync();
 
             certificadoSeleccionado = null;
-            logoSeleccionado = null;
             claveCertificadoInput = null;
             pathCertificadoPendiente = null;
-            logoImagenPendiente = null;
 
             await CargarEmisorAsync();
-            SetMensaje("Firma, clave y logo guardados. Ya puedes estampar el PDF.", false);
+            SetMensaje("Firma y clave guardadas. Ya puedes estampar el PDF.", false);
         }
         catch (Exception ex)
         {
@@ -666,13 +621,7 @@
 
         if (emisor is null)
         {
-            estado = "No se encontró un emisor activo para E-Rúbrica. Configura un emisor, logo, firma .p12 y clave.";
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(emisor.LogoImagen))
-        {
-            estado = "Falta el logo del emisor. Sube o selecciona un logo para estampar documentos.";
+            estado = "No se encontró un emisor activo para E-Rúbrica. Configura un emisor, firma .p12 y clave.";
             return false;
         }
 
@@ -695,7 +644,7 @@
             return false;
         }
 
-        estado = $"RUC {emisor.Ruc} | logo, firma y clave listos para E-Rúbrica.";
+        estado = $"RUC {emisor.Ruc} | firma y clave listas para E-Rúbrica.";
         return true;
     }
 
@@ -703,19 +652,6 @@
     {
         if (emisor is null)
             return null;
-
-        var logo = CrearLogoDesdeEmisor(emisor.LogoImagen);
-        if (logo is null)
-        {
-            Error("El logo configurado en EFact no tiene un formato valido.");
-            return null;
-        }
-
-        if (logo.Content.Length <= 0 || logo.Content.Length > MaxAssetSize)
-        {
-            Error("El logo configurado en EFact debe pesar maximo 5 MB.");
-            return null;
-        }
 
         var certificado = CrearCertificadoDesdeEmisor();
         if (certificado is null)
@@ -737,14 +673,8 @@
             return null;
         }
 
-        if (pdfFile is not null && pdfFile.Size + logo.Content.Length > MaxAssetSize + MaxPdfSize)
-        {
-            Error("El total de archivos no debe superar 15 MB.");
-            return null;
-        }
-
         await Task.CompletedTask;
-        return new RecursosFirma(logo, certificado, clave);
+        return new RecursosFirma(certificado, clave);
     }
 
     private FirmaStampApiFile? CrearCertificadoDesdeEmisor()
@@ -916,39 +846,6 @@
             false);
     }
 
-    private static FirmaStampApiFile? CrearLogoDesdeEmisor(string? logoImagen)
-    {
-        if (string.IsNullOrWhiteSpace(logoImagen))
-            return null;
-
-        var logo = logoImagen.Trim();
-        var commaIndex = logo.IndexOf(',');
-        var mediaType = "image/png";
-        var base64 = logo;
-
-        if (commaIndex >= 0)
-        {
-            var metadata = logo[..commaIndex];
-            base64 = logo[(commaIndex + 1)..];
-            if (metadata.Contains("image/jpeg", StringComparison.OrdinalIgnoreCase) ||
-                metadata.Contains("image/jpg", StringComparison.OrdinalIgnoreCase))
-            {
-                mediaType = "image/jpeg";
-            }
-        }
-
-        try
-        {
-            var bytes = Convert.FromBase64String(base64);
-            var extension = mediaType == "image/jpeg" ? ".jpg" : ".png";
-            return new FirmaStampApiFile(bytes, $"logo-emisor{extension}", mediaType);
-        }
-        catch (FormatException)
-        {
-            return null;
-        }
-    }
-
     private bool Error(string texto)
     {
         SetMensaje(texto, true);
@@ -995,26 +892,6 @@
         return $"{baseName}_firmado.pdf";
     }
 
-    private string? LogoEmisorSrc
-    {
-        get
-        {
-            if (string.IsNullOrWhiteSpace(emisor?.LogoImagen))
-                return null;
-
-            var logo = emisor.LogoImagen.Trim();
-            if (logo.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
-                return logo;
-
-            if (logo.StartsWith("/", StringComparison.Ordinal) ||
-                logo.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                logo.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                return logo;
-
-            return $"data:image/png;base64,{logo}";
-        }
-    }
-
     private string PreferenceKey => $"e-rubrica:stamp-preference:{currentUserId}:{emisor?.Codigo ?? 0}";
     private string PreferenceAutoKey => $"{PreferenceKey}:auto";
 
@@ -1025,7 +902,6 @@
         double WidthMm);
 
     private sealed record RecursosFirma(
-        FirmaStampApiFile Logo,
         FirmaStampApiFile Certificado,
         string Clave);
 
@@ -1038,17 +914,24 @@
 
     public async ValueTask DisposeAsync()
     {
-        if (stampSelectorInstance is not null)
+        try
         {
-            await stampSelectorInstance.InvokeVoidAsync("dispose");
-            await stampSelectorInstance.DisposeAsync();
-        }
+            if (stampSelectorInstance is not null)
+            {
+                await stampSelectorInstance.InvokeVoidAsync("dispose");
+                await stampSelectorInstance.DisposeAsync();
+            }
 
-        if (stampSelectorModule is not null)
+            if (stampSelectorModule is not null)
+                await stampSelectorModule.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
         {
-            await stampSelectorModule.DisposeAsync();
+            // El circuito ya no permite ejecutar JavaScript durante la desconexión.
         }
-
-        dotNetRef?.Dispose();
+        finally
+        {
+            dotNetRef?.Dispose();
+        }
     }
 }

@@ -17,7 +17,18 @@ public sealed class FirmaPathResolver
 
     public string? ResolverRutaExistente(string? rutaFirma)
     {
-        return CrearCandidatos(rutaFirma).FirstOrDefault(File.Exists);
+        var rutaDirecta = CrearCandidatos(rutaFirma).FirstOrDefault(File.Exists);
+        if (!string.IsNullOrWhiteSpace(rutaDirecta))
+            return rutaDirecta;
+
+        var nombreArchivo = Path.GetFileName(NormalizarRutaRelativa(rutaFirma));
+        if (string.IsNullOrWhiteSpace(nombreArchivo))
+            return null;
+
+        return EnumerarDirectoriosCertificados()
+            .Where(Directory.Exists)
+            .Select(directorio => Path.Combine(directorio, nombreArchivo))
+            .FirstOrDefault(File.Exists);
     }
 
     public string? ResolverRutaParaApi(string? rutaFirma)
@@ -28,7 +39,7 @@ public sealed class FirmaPathResolver
     public IReadOnlyList<string> ResolverRutasParaApi(string? rutaFirma)
     {
         var candidatos = new List<string>();
-        var rutaPublicadaBase = _configuration["FirmaInfoApi:RutaFirmasBase"]?.Trim();
+        var rutaPublicadaBase = ObtenerRutaPublicadaBase();
         var rutaRelativa = NormalizarRutaRelativa(rutaFirma);
         if (!string.IsNullOrWhiteSpace(rutaPublicadaBase) && !string.IsNullOrWhiteSpace(rutaRelativa))
         {
@@ -61,11 +72,21 @@ public sealed class FirmaPathResolver
         if (string.IsNullOrWhiteSpace(rutaFirma))
             return null;
 
-        var ruta = rutaFirma.Trim().Replace('\\', '/');
+        var valorOriginal = rutaFirma.Trim();
+        var ruta = valorOriginal.Replace('\\', '/');
+        var esRutaHttp = false;
+
+        if (Uri.TryCreate(valorOriginal, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps || uri.IsFile))
+        {
+            esRutaHttp = uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+            ruta = Uri.UnescapeDataString(uri.LocalPath).Replace('\\', '/');
+        }
+
         var posicionAppData = ruta.IndexOf("App_Data/", StringComparison.OrdinalIgnoreCase);
         if (posicionAppData >= 0)
             ruta = ruta[(posicionAppData + "App_Data/".Length)..];
-        else if (Path.IsPathRooted(rutaFirma.Trim()))
+        else if (!esRutaHttp && Path.IsPathRooted(ruta))
             ruta = Path.GetFileName(ruta);
         else
             ruta = ruta.TrimStart('~', '/');
@@ -87,7 +108,7 @@ public sealed class FirmaPathResolver
         var webRoot = string.IsNullOrWhiteSpace(_hostEnvironment.WebRootPath)
             ? Path.Combine(contentRoot, "wwwroot")
             : _hostEnvironment.WebRootPath;
-        var rutaPublicadaBase = _configuration["FirmaInfoApi:RutaFirmasBase"]?.Trim();
+        var rutaPublicadaBase = ObtenerRutaPublicadaBase();
         var nombreArchivo = Path.GetFileName(rutaRelativa);
         var candidatos = new List<string>();
 
@@ -111,6 +132,37 @@ public sealed class FirmaPathResolver
         return candidatos
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private IEnumerable<string> EnumerarDirectoriosCertificados()
+    {
+        var contentRoot = _hostEnvironment.ContentRootPath;
+        var webRoot = string.IsNullOrWhiteSpace(_hostEnvironment.WebRootPath)
+            ? Path.Combine(contentRoot, "wwwroot")
+            : _hostEnvironment.WebRootPath;
+        var rutaPublicadaBase = ObtenerRutaPublicadaBase();
+
+        foreach (var basePath in new[]
+        {
+            Path.Combine(contentRoot, "App_Data"),
+            Path.Combine(webRoot, "App_Data"),
+            rutaPublicadaBase
+        }.Where(path => !string.IsNullOrWhiteSpace(path)))
+        {
+            yield return Path.Combine(basePath!, "certs", "path");
+            yield return Path.Combine(basePath!, "certs", "system");
+        }
+    }
+
+    private string? ObtenerRutaPublicadaBase()
+    {
+        var ruta = _configuration["FirmaInfoApi:RutaFirmasBase"]?.Trim();
+        if (string.IsNullOrWhiteSpace(ruta))
+            return null;
+
+        return Path.GetFullPath(Path.IsPathRooted(ruta)
+            ? ruta
+            : Path.Combine(_hostEnvironment.ContentRootPath, ruta));
     }
 
     private static void Agregar(ICollection<string> candidatos, string? basePath, string rutaRelativa)

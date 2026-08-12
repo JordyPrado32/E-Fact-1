@@ -78,25 +78,18 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
         await EnsureDiasCreditoColumnAsync();
 
-        // 1. Identificamos la jerarquía del usuario
-        var usuarioInfo = await _context.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
+        var usuarioExiste = await _context.Usuarios
+            .AnyAsync(u => u.IdUsuario == userId);
 
-        if (usuarioInfo == null)
+        if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
-        // 2. Determinamos el ID del "dueño" de la cartera de clientes.
-        // Si el usuario tiene un jefe asignado, usamos el ID del jefe.
-        int ownerId = usuarioInfo.idJefe ?? usuarioInfo.IdUsuario;
+        await _clienteService.EnsureConsumidorFinalAsync(userId);
 
-        await _clienteService.EnsureConsumidorFinalAsync(ownerId);
-
-        // 3. Filtramos los clientes por el ID del propietario (Jefe)
         var query = _context.Clientes
             .AsNoTracking()
-            .Where(c => c.Usuario == ownerId); // ✅ Filtro jerárquico
+            .ExcluirClientesExclusivosBackOffice()
+            .Where(c => c.Usuario == userId);
 
         if (!incluirInactivos)
             query = query.Where(c => c.Estado == true);
@@ -147,23 +140,18 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
         await EnsureDiasCreditoColumnAsync();
 
-        // 1. Identificar al dueño de la cartera
-        var usuarioInfo = await _context.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
+        var usuarioExiste = await _context.Usuarios
+            .AnyAsync(u => u.IdUsuario == userId);
 
-        if (usuarioInfo == null)
+        if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
-        int ownerId = usuarioInfo.idJefe ?? usuarioInfo.IdUsuario;
+        await _clienteService.EnsureConsumidorFinalAsync(userId);
 
-        await _clienteService.EnsureConsumidorFinalAsync(ownerId);
-
-        // 2. Buscar por ownerId en lugar de userId
         var c = await _context.Clientes
             .AsNoTracking()
-            .Where(x => x.Codcliente == id && x.Usuario == ownerId) // ✅ Corregido
+            .ExcluirClientesExclusivosBackOffice()
+            .Where(x => x.Codcliente == id && x.Usuario == userId)
             .Select(x => new
             {
                 x.Codcliente,
@@ -216,21 +204,15 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
         await EnsureDiasCreditoColumnAsync();
 
-        // 1. Identificar quién es el "dueño" (Jefe) de la cuenta
-        var usuarioInfo = await _context.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
+        var usuarioExiste = await _context.Usuarios
+            .AnyAsync(u => u.IdUsuario == userId);
 
-        if (usuarioInfo == null)
+        if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
-
-        // El cliente siempre se asigna al Jefe (o al usuario mismo si ya es el jefe)
-        int ownerId = usuarioInfo.idJefe ?? usuarioInfo.IdUsuario;
 
         await ResolverUbicacionEcuadorQuemada(dto, null, null);
 
-        var error = await ValidarCliente(dto, ownerId);
+        var error = await ValidarCliente(dto, userId);
         if (error is not null)
             return BadRequest(error);
 
@@ -268,7 +250,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
             Provincia = dto.Provincia,
             Ciudad = dto.Ciudad,
             Tipoidentificacion = codigoReal,
-            Usuario = ownerId // ✅ CAMBIO: Se guarda el ID del Jefe para que sea compartido
+            Usuario = userId
         };
 
         _context.Clientes.Add(entity);
@@ -307,15 +289,11 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
         await EnsureDiasCreditoColumnAsync();
 
-        var usuarioInfo = await _context.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
+        var usuarioExiste = await _context.Usuarios
+            .AnyAsync(u => u.IdUsuario == userId);
 
-        if (usuarioInfo == null)
+        if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
-
-        int ownerId = usuarioInfo.idJefe ?? usuarioInfo.IdUsuario;
 
         var result = new BulkImportResultDto();
         if (models == null || !models.Any())
@@ -325,7 +303,8 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
         // Load existing identifications and names to prevent duplicates
         var existingClients = await _context.Clientes
-            .Where(c => c.Usuario == ownerId && c.Estado == true)
+            .ExcluirClientesExclusivosBackOffice()
+            .Where(c => c.Usuario == userId && c.Estado == true)
             .Select(c => new { c.Numeroidentificacion, c.Apellidos, c.Nombres, c.Nombrerazonsocial, c.Correo })
             .ToListAsync();
 
@@ -450,7 +429,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
                 Provincia = dto.Provincia,
                 Ciudad = dto.Ciudad,
                 Tipoidentificacion = codigoReal,
-                Usuario = ownerId
+                Usuario = userId
             };
 
             _context.Clientes.Add(entity);
@@ -518,28 +497,22 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
         await EnsureDiasCreditoColumnAsync();
 
-        // 1. Identificar la jerarquía del usuario actual
-        var usuarioInfo = await _context.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
+        var usuarioExiste = await _context.Usuarios
+            .AnyAsync(u => u.IdUsuario == userId);
 
-        if (usuarioInfo == null)
+        if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
-        // El "dueño" de los datos siempre es el Jefe
-        int ownerId = usuarioInfo.idJefe ?? usuarioInfo.IdUsuario;
-
-        // 2. Buscar el cliente asegurando que pertenezca al grupo (ownerId)
         var cliente = await _context.Clientes
-            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId); // ✅ Filtro por ownerId
+            .ExcluirClientesExclusivosBackOffice()
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
 
         if (cliente is null)
-            return NotFound("El cliente no existe o no pertenece a su grupo de trabajo.");
+            return NotFound("El cliente no existe o no pertenece a su cuenta.");
 
         await ResolverUbicacionEcuadorQuemada(dto, null, null);
 
-        var error = await ValidarCliente(dto, ownerId, clienteIdExistente: id);
+        var error = await ValidarCliente(dto, userId, clienteIdExistente: id);
         if (error is not null)
             return BadRequest(error);
 
@@ -579,9 +552,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         if (dto.Estado is not null)
             cliente.Estado = dto.Estado;
 
-        // ✅ IMPORTANTE: Mantener el cliente asignado al ownerId (Jefe)
-        // No lo cambies al userId del asociado que edita, para que no se pierda el acceso grupal.
-        cliente.Usuario = ownerId;
+        cliente.Usuario = userId;
 
         // Manejo de correos adicionales (borrón y cuenta nueva)
         var correosExistentes = await _context.ClientesCorreos
@@ -612,30 +583,23 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
-        var ownerId = await GetOwnerIdInternal(userId); // Ver método auxiliar abajo
-        var c = await _context.Clientes.FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId);
+        var c = await _context.Clientes
+            .ExcluirClientesExclusivosBackOffice()
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
 
         if (c is null) return NotFound();
         c.Estado = false;
         await _context.SaveChangesAsync();
         return Ok();
     }
-    private async Task<int> GetOwnerIdInternal(int userId)
-    {
-        var info = await _context.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
-
-        return info?.idJefe ?? userId;
-    }
     [HttpPut("{id:int}/activar")]
     public async Task<IActionResult> Activar(int id, [FromQuery] int userId)
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
-        var ownerId = await GetOwnerIdInternal(userId);
-        var c = await _context.Clientes.FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId);
+        var c = await _context.Clientes
+            .ExcluirClientesExclusivosBackOffice()
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
 
         if (c is null) return NotFound();
         c.Estado = true;
@@ -648,8 +612,9 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
-        var ownerId = await GetOwnerIdInternal(userId);
-        var c = await _context.Clientes.FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId);
+        var c = await _context.Clientes
+            .ExcluirClientesExclusivosBackOffice()
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
 
         if (c is null) return NotFound();
         _context.Clientes.Remove(c);
@@ -827,7 +792,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         }
     }
 
-    private async Task<string?> ValidarCliente(ClienteUpsertDto dto, int ownerId, int? clienteIdExistente = null, bool checkDuplicatesInDb = true)
+    private async Task<string?> ValidarCliente(ClienteUpsertDto dto, int userId, int? clienteIdExistente = null, bool checkDuplicatesInDb = true)
     {
         if (dto is null)
             return "Datos no válidos.";
@@ -1011,7 +976,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
             {
                 var idBuscado = dto.Numeroidentificacion.Trim().ToLowerInvariant();
                 var duplicateId = await _context.Clientes
-                    .AnyAsync(c => c.Usuario == ownerId &&
+                    .AnyAsync(c => c.Usuario == userId &&
                                    c.Estado == true &&
                                    c.Numeroidentificacion != null &&
                                    c.Numeroidentificacion.Trim().ToLower() == idBuscado &&
@@ -1027,7 +992,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
             {
                 var correoBuscado = dto.Correo.Trim().ToLowerInvariant();
                 var duplicateEmail = await _context.Clientes
-                    .AnyAsync(c => c.Usuario == ownerId &&
+                    .AnyAsync(c => c.Usuario == userId &&
                                    c.Estado == true &&
                                    c.Correo != null &&
                                    c.Correo.Trim().ToLower() == correoBuscado &&

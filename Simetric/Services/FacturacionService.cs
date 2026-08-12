@@ -376,6 +376,7 @@ namespace Simetric.Services
 
             return await context.Clientes
                 .AsNoTracking()
+                .ExcluirClientesExclusivosBackOffice()
                 .Where(c =>
                     c.Usuario == idUsuarioTitular &&
                     c.Numeroidentificacion != null &&
@@ -394,6 +395,7 @@ namespace Simetric.Services
 
             var query = context.Clientes
                 .AsNoTracking()
+                .ExcluirClientesExclusivosBackOffice()
                 .Where(c =>
                     c.Usuario == idUsuarioTitular &&
                     (c.Estado == null || c.Estado == true));
@@ -430,6 +432,7 @@ namespace Simetric.Services
 
             var perteneceAlUsuario = await context.Clientes
                 .AsNoTracking()
+                .ExcluirClientesExclusivosBackOffice()
                 .AnyAsync(c => c.Codcliente == codCliente && c.Usuario == idUsuarioTitular);
 
             if (!perteneceAlUsuario)

@@ -75,8 +75,7 @@ public sealed class DashboardService
         var clientes = await ExecuteSafeAsync(
             async () => await db.Clientes
                 .AsNoTracking()
-                .Where(c => c.Usuario.HasValue
-                            && usuariosCuentaIds.Contains(c.Usuario.Value)
+                .Where(c => c.Usuario == currentUserId
                             && (c.Estado == null || c.Estado == true)
                             && c.Numeroidentificacion != ConsumidorFinalIdentificacion
                             && (!db.Facturas.Any(f => f.Codclientes == c.Codcliente
@@ -239,8 +238,8 @@ public sealed class DashboardService
 
         return await db.Clientes
             .AsNoTracking()
-            .AnyAsync(c => c.Usuario.HasValue
-                           && usuariosCuentaIds.Contains(c.Usuario.Value)
+            .ExcluirClientesExclusivosBackOffice()
+            .AnyAsync(c => c.Usuario == currentUserId
                            && (c.Estado == null || c.Estado == true)
                            && c.Numeroidentificacion != ConsumidorFinalIdentificacion);
     }
