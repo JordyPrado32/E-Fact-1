@@ -166,6 +166,7 @@ namespace Simetric.Services
         private sealed class FacturaCorreoMetadata
         {
             public List<string> Destinatarios { get; set; } = new();
+            public List<string> CopiasOcultas { get; set; } = new();
             public bool CorreoEnviado { get; set; }
             public DateTime? FechaEnvioCorreo { get; set; }
             public string? UltimoErrorCorreo { get; set; }
@@ -3770,7 +3771,12 @@ IF @resultado < 0
             }
         }
 
-        public async Task<FacturaCorreoEnvioResultadoDto> IntentarEnviarFacturaPorCorreoAsync(int idFactura, string? rutaXmlExistente = null, mensajeSRI? m = null, bool forzarReenvio = false)
+        public async Task<FacturaCorreoEnvioResultadoDto> IntentarEnviarFacturaPorCorreoAsync(
+            int idFactura,
+            string? rutaXmlExistente = null,
+            mensajeSRI? m = null,
+            bool forzarReenvio = false,
+            IEnumerable<string>? correosCopia = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
@@ -3814,6 +3820,8 @@ IF @resultado < 0
                 idFactura);
 
             var metadata = LeerFacturaCorreoMetadata(factura.Detalleextra);
+            metadata.CopiasOcultas = ComprobanteCorreoDestinatariosHelper.NormalizarCorreos(
+                (metadata.CopiasOcultas ?? new List<string>()).Concat(correosCopia ?? Array.Empty<string>()));
             var destinatariosBase = await ComprobanteCorreoDestinatariosHelper.ConstruirDestinatariosClienteAsync(
                 context,
                 factura.Idusuario,
@@ -3873,6 +3881,8 @@ IF @resultado < 0
 
             if (factura.Autorizado != true)
             {
+                factura.Detalleextra = EscribirFacturaCorreoMetadata(metadata);
+                await context.SaveChangesAsync();
                 await _comprobanteCorreoEstadoService.RegistrarPendienteAsync(
                     ComprobanteCorreoEstadoService.TipoFactura,
                     idFactura);
@@ -3958,7 +3968,8 @@ IF @resultado < 0
                     ObtenerNombreClienteFactura(factura),
                     factura.Valortotal,
                     rutaXml,
-                    rutaPdf);
+                    rutaPdf,
+                    metadata.CopiasOcultas);
 
                 metadata.Destinatarios = destinatarios;
                 metadata.CorreoEnviado = true;

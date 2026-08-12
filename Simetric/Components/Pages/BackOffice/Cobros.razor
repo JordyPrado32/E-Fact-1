@@ -17,6 +17,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject AuditService AuditService
 @inject IJSRuntime JS
+@inject ILogger<Cobros> Logger
 
 <PageTitle>Cobros y Caja - BackOffice | Numerica</PageTitle>
 
@@ -1690,6 +1691,32 @@
             GetComprobanteRef(venta.Observacion),
             esTransferenciaBackOffice: true);
 
+        if (resultado.CodFactura > 0)
+        {
+            try
+            {
+                var correosAdmins = await ObtenerCorreosAdminsBackOfficeAsync(context);
+                var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(
+                    resultado.CodFactura,
+                    correosCopia: correosAdmins);
+
+                if (resultadoCorreo.Error || resultadoCorreo.SinDestinatarios)
+                {
+                    Logger.LogWarning(
+                        "No se pudo enviar por correo la factura {CodFactura} generada desde Cobros: {Mensaje}",
+                        resultado.CodFactura,
+                        resultadoCorreo.Mensaje);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(
+                    ex,
+                    "Fallo el envio por correo de la factura {CodFactura} generada desde Cobros.",
+                    resultado.CodFactura);
+            }
+        }
+
         compra.CodFactura = resultado.CodFactura > 0 ? resultado.CodFactura : compra.CodFactura;
         compra.NumeroFactura = !string.IsNullOrWhiteSpace(resultado.NumeroFactura)
             ? resultado.NumeroFactura
@@ -1707,6 +1734,16 @@
         await context.SaveChangesAsync();
 
         return resultado;
+    }
+
+    private static Task<List<string>> ObtenerCorreosAdminsBackOfficeAsync(AppDbContext context)
+    {
+        return context.Usuarios
+            .AsNoTracking()
+            .Where(u => u.IdTipoUsuario == 2 && u.Estado == true && !string.IsNullOrWhiteSpace(u.Email))
+            .Select(u => u.Email.Trim())
+            .Distinct()
+            .ToListAsync();
     }
 
     private async Task GenerarFacturaAprobadaAsync(AuditoriaTransferenciaDto audit)

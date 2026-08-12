@@ -26,7 +26,8 @@ public interface IEmailService
         string? nombreCliente,
         decimal? totalFactura,
         string rutaXmlAdjunto,
-        string? rutaPdfAdjunto);
+        string? rutaPdfAdjunto,
+        IEnumerable<string>? copiasOcultas = null);
     Task EnviarNotaCreditoAsync(
         string numeroNotaCredito,
         string numeroDocumentoModificado,
@@ -636,11 +637,18 @@ public class EmailService : IEmailService
         string? nombreCliente,
         decimal? totalFactura,
         string rutaXmlAdjunto,
-        string? rutaPdfAdjunto)
+        string? rutaPdfAdjunto,
+        IEnumerable<string>? copiasOcultas = null)
     {
         var destinatariosNormalizados = destinatarios
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var copiasNormalizadas = (copiasOcultas ?? Array.Empty<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Where(x => !destinatariosNormalizados.Contains(x, StringComparer.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -680,6 +688,9 @@ public class EmailService : IEmailService
 
         foreach (var correo in destinatariosNormalizados)
             mensaje.To.Add(MailboxAddress.Parse(correo));
+
+        foreach (var correo in copiasNormalizadas)
+            mensaje.Bcc.Add(MailboxAddress.Parse(correo));
 
         mensaje.Subject = asunto;
 
