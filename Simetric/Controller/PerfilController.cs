@@ -11,10 +11,12 @@ namespace Simetric.Controllers;
 public class PerfilController : ControllerBase
 {
     private readonly AppDbContext _context;
+    private readonly IWebHostEnvironment _environment;
 
-    public PerfilController(AppDbContext context)
+    public PerfilController(AppDbContext context, IWebHostEnvironment environment)
     {
         _context = context;
+        _environment = environment;
     }
 
     [HttpGet]
@@ -110,6 +112,46 @@ public class PerfilController : ControllerBase
 
         await _context.SaveChangesAsync();
         return Ok();
+    }
+
+    [HttpPost("{id:int}/avatar")]
+    [RequestSizeLimit(2 * 1024 * 1024)]
+    public async Task<IActionResult> UploadAvatar(int id, [FromQuery] int? idUsuario, IFormFile? file)
+    {
+        if (idUsuario is null or <= 0 || id != idUsuario.Value)
+            return BadRequest("Id de usuario inválido.");
+
+        if (file is null || file.Length == 0)
+            return BadRequest("Archivo requerido.");
+
+        if (file.Length > 2 * 1024 * 1024)
+            return BadRequest("La imagen no puede superar 2 MB.");
+
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        var allowedExtensions = new[] { ".jpg", ".jpeg", ".png" };
+        if (!allowedExtensions.Contains(extension))
+            return BadRequest("Formato no permitido. Usa JPG, JPEG o PNG.");
+
+        var usuario = await _context.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == idUsuario.Value);
+        if (usuario is null)
+            return NotFound("Usuario no encontrado.");
+
+        var avatarsPath = Path.Combine(_environment.WebRootPath, "images", "Avatars");
+        Directory.CreateDirectory(avatarsPath);
+
+        var fileName = $"avatar_{Guid.NewGuid()}{extension}";
+        var fullPath = Path.Combine(avatarsPath, fileName);
+
+        await using (var stream = System.IO.File.Create(fullPath))
+        {
+            await file.CopyToAsync(stream);
+        }
+
+        var avatarUrl = $"images/Avatars/{fileName}";
+        usuario.AvatarUrl = avatarUrl;
+        await _context.SaveChangesAsync();
+
+        return Ok(new { avatarUrl });
     }
 
     private static string NormalizarTexto(string? texto) =>
