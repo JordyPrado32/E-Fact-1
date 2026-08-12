@@ -79,6 +79,14 @@ public interface IEmailService
         decimal montoTotal,
         string? reference,
         string? authorizationCode);
+    Task EnviarAvisoCobroPendienteAsync(
+        string emailDestino,
+        string? nombreCliente,
+        string? producto,
+        string? planPaquete,
+        decimal montoTotal,
+        string? formaPago,
+        string? referencia);
     Task EnviarNotificacionPagoFirmaElectronicaAsync(
         string? nombreSolicitante,
         string? identificacion,
@@ -99,7 +107,11 @@ public interface IEmailService
 
 public class EmailService : IEmailService
 {
-    private const string EfactInfoUrl = "https://numericasoftware.com/efact";
+    private const string EfactInfoUrl = "https://numericasoftware.com/";
+    private const string EfactInfoDisplayUrl = "numericasoftware.com";
+    private const string EfactContactPhone = "+593 98 413 0238";
+    private const string EfactLogoUrl = "https://efact.numericasoftware.com/images/services/efact.png";
+    private const string ContabilidadNotificacionPagos = "contabilidad@numericasoftware.com";
 
     private readonly AppDbContext _db;
     private readonly AuditService _auditService;
@@ -170,7 +182,8 @@ public class EmailService : IEmailService
             (configuration.GetSection("EmailComprobantes:NotificacionPagosDestinatarios").Get<string[]>() ?? Array.Empty<string>())
                 .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:NotificacionPagosCorreo"]))
                 .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:ContabilidadCorreo"]))
-                .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:ContabilidadDestinatarios"])));
+                .Concat(ParseCorreosConfigurados(configuration["EmailComprobantes:ContabilidadDestinatarios"]))
+                .Append(ContabilidadNotificacionPagos));
 
         _logger.LogInformation(
             "SMTP configurado para {Host}:{Puerto} con seguridad {Seguridad} y remitente {Remitente}.",
@@ -266,7 +279,7 @@ public class EmailService : IEmailService
 
                 <div style='padding:0 28px 24px 28px;'>
                   <div style='background:#eff6fc;border:1px solid #d8e7f4;border-radius:18px;padding:14px 16px;font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:1.7;color:#5d7891;'>
-                    Correo generado automaticamente por <span style='color:#004a7c;font-weight:800;'>Numerica E-FACT</span>.
+                    Numerica Software · <a href='https://numericasoftware.com/' target='_blank' style='color:#006bb5;font-weight:800;text-decoration:none;'>numericasoftware.com</a> · +593 98 413 0238
                   </div>
                 </div>
               </div>
@@ -423,7 +436,7 @@ public class EmailService : IEmailService
 
                 <div style='padding:0 28px 24px 28px;'>
                   <div style='background:#eff6fc;border:1px solid #d8e7f4;border-radius:18px;padding:14px 16px;font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:1.7;color:#5d7891;'>
-                    Correo generado automaticamente por <span style='color:#004a7c;font-weight:800;'>Numerica E-FACT</span>.
+                    Numerica Software · <a href='https://numericasoftware.com/' target='_blank' style='color:#006bb5;font-weight:800;text-decoration:none;'>numericasoftware.com</a> · +593 98 413 0238
                   </div>
                 </div>
               </div>
@@ -700,7 +713,7 @@ public class EmailService : IEmailService
                 previewText: $"Factura electrónica {numeroFactura} disponible en PDF y XML.",
                 eyebrow: "Comprobante electrónico",
                 title: $"Factura electrónica {WebUtility.HtmlEncode(numeroFactura)}",
-                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con un formato compatible con Outlook.",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT.",
                 bodyHtml: $@"
 {BuildBodyParagraph("Estimado cliente,")}
 {BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la factura electrónica <strong>{WebUtility.HtmlEncode(numeroFactura)}</strong> emitida para <strong>{clienteSeguro}</strong>.")}
@@ -771,7 +784,7 @@ public class EmailService : IEmailService
                 previewText: $"Nota de crédito electrónica {numeroNotaCredito} disponible en PDF y XML.",
                 eyebrow: "Comprobante electrónico",
                 title: $"Nota de crédito {WebUtility.HtmlEncode(numeroNotaCredito)}",
-                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con una estructura estable para Outlook.",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT.",
                 bodyHtml: $@"
 {BuildBodyParagraph("Estimado cliente,")}
 {BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la nota de crédito electrónica <strong>{WebUtility.HtmlEncode(numeroNotaCredito)}</strong> emitida para <strong>{clienteSeguro}</strong>.")}
@@ -843,7 +856,7 @@ public class EmailService : IEmailService
                 previewText: $"Nota de débito electrónica {numeroNotaDebito} disponible en PDF y XML.",
                 eyebrow: "Comprobante electrónico",
                 title: $"Nota de débito {WebUtility.HtmlEncode(numeroNotaDebito)}",
-                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con una maquetación estable para Outlook.",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT.",
                 bodyHtml: $@"
 {BuildBodyParagraph("Estimado cliente,")}
 {BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la nota de débito electrónica <strong>{WebUtility.HtmlEncode(numeroNotaDebito)}</strong> emitida para <strong>{clienteSeguro}</strong>.")}
@@ -912,7 +925,7 @@ public class EmailService : IEmailService
                 previewText: $"Guía de remisión electrónica {numeroGuiaRemision} disponible en PDF y XML.",
                 eyebrow: "Comprobante electrónico",
                 title: $"Guía de remisión {WebUtility.HtmlEncode(numeroGuiaRemision)}",
-                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con compatibilidad reforzada para Outlook.",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT.",
                 bodyHtml: $@"
 {BuildBodyParagraph("Estimado cliente,")}
 {BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la guía de remisión electrónica <strong>{WebUtility.HtmlEncode(numeroGuiaRemision)}</strong> emitida para <strong>{destinatarioSeguro}</strong>.")}
@@ -978,7 +991,7 @@ public class EmailService : IEmailService
                 previewText: $"Liquidación de compra electrónica {numeroLiquidacion} disponible en PDF y XML.",
                 eyebrow: "Comprobante electrónico",
                 title: $"Liquidación de compra {WebUtility.HtmlEncode(numeroLiquidacion)}",
-                subtitle: "Adjuntamos el comprobante emitido desde E-FACT usando tablas y estilos inline compatibles con Outlook.",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT.",
                 bodyHtml: $@"
 {BuildBodyParagraph("Estimado proveedor,")}
 {BuildBodyParagraph($"Adjuntamos los archivos correspondientes a la liquidación de compra electrónica <strong>{WebUtility.HtmlEncode(numeroLiquidacion)}</strong> emitida para <strong>{proveedorSeguro}</strong>.")}
@@ -1050,7 +1063,7 @@ public class EmailService : IEmailService
                 previewText: $"Comprobante de retención electrónico {numeroRetencion} disponible en PDF y XML.",
                 eyebrow: "Comprobante electrónico",
                 title: $"Comprobante de retención {WebUtility.HtmlEncode(numeroRetencion)}",
-                subtitle: "Adjuntamos el comprobante emitido desde E-FACT con una estructura apta para Outlook.",
+                subtitle: "Adjuntamos el comprobante emitido desde E-FACT.",
                 bodyHtml: $@"
 {BuildBodyParagraph("Estimado proveedor,")}
 {BuildBodyParagraph($"Adjuntamos los archivos correspondientes al comprobante de retención electrónico <strong>{WebUtility.HtmlEncode(numeroRetencion)}</strong> emitido para <strong>{proveedorSeguro}</strong>.")}
@@ -1091,64 +1104,79 @@ public class EmailService : IEmailService
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
         mensaje.To.Add(MailboxAddress.Parse(emailDestino));
 
-        foreach (var correoNotificacion in ObtenerDestinatariosNotificacionPagos(emailDestino))
+        foreach (var correoNotificacion in await ObtenerDestinatariosNotificacionPagosAsync(emailDestino))
             mensaje.Bcc.Add(MailboxAddress.Parse(correoNotificacion));
 
         mensaje.Subject = "Confirmacion de recarga de documentos | E-FACT";
 
         var bodyBuilder = new BodyBuilder
         {
-            HtmlBody = $@"
-<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;background:#eef4fb;margin:0;padding:24px 0;font-family:Segoe UI,Arial,sans-serif;color:#16324f;'>
-  <tr>
-    <td align='center'>
-      <table role='presentation' width='640' cellpadding='0' cellspacing='0' border='0' style='width:640px;max-width:640px;background:#ffffff;border:1px solid #dce8f6;border-collapse:separate;'>
-        <tr>
-          <td style='padding:28px 30px;background:#0b5ed7;color:#ffffff;'>
-            <div style='font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;'>Pago aprobado</div>
-            <div style='font-size:30px;font-weight:800;line-height:1.1;margin-top:10px;'>Recarga acreditada con exito</div>
-            <div style='font-size:14px;line-height:1.6;margin-top:10px;color:#dcecff;'>
-              Tu compra de documentos ya fue procesada y el saldo se actualizo en tu cuenta.
-            </div>
-          </td>
-        </tr>
-        <tr>
-          <td style='padding:28px 30px 32px 30px;'>
-            <p style='margin:0 0 18px 0;font-size:15px;line-height:1.6;'>
-              Hola <b>{clienteSeguro}</b>, este es el resumen de tu recarga en E-FACT.
-            </p>
-            <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:separate;'>
-              <tr>
-                <td style='background:#f8fbff;border:1px solid #e2edf9;padding:16px 18px;'>
-                  <div style='font-size:13px;color:#6782a0;'>Documentos acreditados</div>
-                  <div style='font-size:28px;font-weight:800;color:#0b5ed7;margin-top:4px;'>{documentosComprados}</div>
-                </td>
-              </tr>
-              <tr><td style='height:12px;line-height:12px;font-size:12px;'>&nbsp;</td></tr>
-              <tr>
-                <td style='background:#f8fbff;border:1px solid #e2edf9;padding:16px 18px;'>
-                  <div style='font-size:13px;color:#6782a0;'>Saldo actual disponible</div>
-                  <div style='font-size:28px;font-weight:800;color:#16324f;margin-top:4px;'>{saldoActual} documentos</div>
-                </td>
-              </tr>
-            </table>
-            <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;margin-top:18px;border:1px solid #e6edf5;font-size:14px;line-height:1.8;'>
-              <tr><td style='padding:16px 18px;'><b>Monto pagado:</b> ${totalTexto}</td></tr>
-              <tr><td style='padding:0 18px 8px 18px;'><b>Referencia:</b> {referenceSegura}</td></tr>
-              <tr><td style='padding:0 18px 16px 18px;'><b>Autorizacion:</b> {autorizacionSegura}</td></tr>
-            </table>
-            <p style='margin:18px 0 0 0;font-size:13px;line-height:1.7;color:#5e738a;'>
-              Si no reconoces esta operacion, por favor contacta al equipo de soporte de inmediato.
-            </p>
-          </td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>"
+            HtmlBody = BuildOutlookEmailShell(
+                "Tu recarga de documentos fue acreditada en E-FACT.",
+                "Pago aprobado",
+                "Recarga acreditada con exito",
+                $"Hola <strong>{clienteSeguro}</strong>, tu compra de documentos ya fue procesada y el saldo se actualizo en tu cuenta.",
+                $@"
+                {BuildInfoTable(
+                    ("Documentos acreditados", documentosComprados.ToString(CultureInfo.InvariantCulture)),
+                    ("Saldo actual disponible", $"{saldoActual} documentos"),
+                    ("Monto pagado", $"${totalTexto}"),
+                    ("Referencia", referenceSegura),
+                    ("Autorizacion", autorizacionSegura))}
+                <p style='margin:18px 0 0 0;font-size:13px;line-height:1.7;color:#5e738a;'>
+                  Si no reconoces esta operacion, por favor contacta al equipo de soporte de inmediato.
+                </p>")
         };
 
         mensaje.Body = bodyBuilder.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoCobroPendienteAsync(
+        string emailDestino,
+        string? nombreCliente,
+        string? producto,
+        string? planPaquete,
+        decimal montoTotal,
+        string? formaPago,
+        string? referencia)
+    {
+        emailDestino = NormalizarEmail(emailDestino);
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Cliente" : nombreCliente.Trim());
+        var productoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(producto) ? "Servicio" : producto.Trim());
+        var planSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(planPaquete) ? "Servicio contratado" : planPaquete.Trim());
+        var formaPagoSegura = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(formaPago) ? "Pendiente de confirmar" : formaPago.Trim());
+        var referenciaSegura = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(referencia) ? "Sin referencia registrada" : referencia.Trim());
+        var totalTexto = montoTotal.ToString("N2", CultureInfo.GetCultureInfo("es-EC"));
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(emailDestino));
+
+        foreach (var correoNotificacion in await ObtenerDestinatariosNotificacionPagosAsync(emailDestino))
+            mensaje.Bcc.Add(MailboxAddress.Parse(correoNotificacion));
+
+        mensaje.Subject = "Tienes un cobro pendiente | E-FACT";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = BuildOutlookEmailShell(
+                "Tienes un cobro pendiente por revisar en E-FACT.",
+                "E-FACT",
+                "Cobro pendiente",
+                $"Hola <strong>{clienteSeguro}</strong>, registramos un cobro pendiente asociado a tu cuenta.",
+                $@"
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border:1px solid #e5e7eb;border-collapse:collapse;Margin:18px 0;font-family:Segoe UI,Arial,sans-serif;'>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Servicio:</strong> {productoSeguro}</td></tr>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Detalle:</strong> {planSeguro}</td></tr>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Monto pendiente:</strong> ${totalTexto}</td></tr>
+                  <tr><td style='padding:14px 16px;border-bottom:1px solid #e5e7eb;'><strong>Forma de pago:</strong> {formaPagoSegura}</td></tr>
+                  <tr><td style='padding:14px 16px;'><strong>Referencia:</strong> {referenciaSegura}</td></tr>
+                </table>
+                <p style='Margin:18px 0 0 0;font-size:14px;line-height:22px;color:#4b5563;'>
+                  Puedes revisar el estado de tu pago desde tu cuenta. Si ya realizaste la transferencia, nuestro equipo validara el comprobante y actualizara el estado del cobro.
+                </p>")
+        }.ToMessageBody();
 
         await SendMessageAsync(mensaje);
     }
@@ -1340,7 +1368,7 @@ Atentamente,
               <tr><td style='padding:0 18px 16px 18px;'><b>Autorizacion:</b> {autorizacionSegura}</td></tr>
             </table>
             <p style='margin:18px 0 0 0;font-size:13px;line-height:1.7;color:#5e738a;'>
-              Este correo fue generado automaticamente por E-FACT para facilitar el registro posterior en el sistema contable.
+              Numerica Software | numericasoftware.com | +593 98 413 0238
             </p>
           </td>
         </tr>
@@ -1403,46 +1431,76 @@ Atentamente,
         await SendMessageAsync(mensaje);
     }
 
+    private static string BuildEfactLogoHtml(string linkUrl, int width = 220)
+    {
+        var logoSafe = WebUtility.HtmlEncode(EfactLogoUrl);
+        return $@"
+<a href='{linkUrl}' target='_blank' style='display:inline-block;text-decoration:none;'>
+  <img src='{logoSafe}' width='{width}' alt='Numerica e-fact' style='display:block;width:{width}px;max-width:{width}px;height:auto;border:0;outline:none;text-decoration:none;margin:0 auto;'>
+  <span style='display:none;font-family:Segoe UI,Arial,sans-serif;font-size:42px;line-height:44px;font-weight:900;color:#006bb5;'>Numerica e-fact</span>
+</a>";
+    }
+
+    private static string BuildEmailReceiptIcon()
+        => @"
+              <div style='padding:14px 0 10px 0;'>
+                <table role='presentation' cellpadding='0' cellspacing='0' border='0' align='center' style='border-collapse:collapse;'>
+                  <tr>
+                    <td align='center' valign='middle' style='width:58px;height:46px;border:2px solid #2f74c0;color:#2f74c0;font-family:Segoe UI,Arial,sans-serif;font-size:26px;line-height:42px;font-weight:700;'>&#9993;</td>
+                    <td align='center' valign='middle' bgcolor='#2f74c0' style='width:26px;height:26px;border-radius:13px;background-color:#2f74c0;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:26px;font-weight:800;'>&#10003;</td>
+                  </tr>
+                </table>
+              </div>";
+
     private static string BuildOutlookEmailShell(string preheader, string brand, string title, string introHtml, string contentHtml)
     {
         var preheaderSeguro = WebUtility.HtmlEncode(preheader);
+        var titleSeguro = title;
+        var websiteSafe = WebUtility.HtmlEncode(EfactInfoUrl);
+        var websiteDisplaySafe = WebUtility.HtmlEncode(EfactInfoDisplayUrl);
+        var phoneSafe = WebUtility.HtmlEncode(EfactContactPhone);
 
         return $@"
 <!doctype html>
-<html>
+<html lang='es'>
 <head>
   <meta http-equiv='Content-Type' content='text/html; charset=utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1.0'>
   <meta name='x-apple-disable-message-reformatting'>
-  <!--[if mso]>
-  <style type='text/css'>
-    body, table, td, p, a, span {{ font-family: Arial, sans-serif !important; }}
-  </style>
-  <![endif]-->
 </head>
-<body style='Margin:0;padding:0;background-color:#f4f6f8;'>
-  <div style='display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;color:#f4f6f8;mso-hide:all;'>
+<body style='margin:0;padding:0;background-color:#f2f6f9;'>
+  <div style='display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;color:#f2f6f9;'>
     {preheaderSeguro}
   </div>
-  <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' bgcolor='#f4f6f8' style='width:100%;background-color:#f4f6f8;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;'>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' bgcolor='#f2f6f9' style='width:100%;background-color:#f2f6f9;border-collapse:collapse;'>
     <tr>
-      <td align='center' style='padding:28px 12px;'>
-        <table role='presentation' width='640' cellpadding='0' cellspacing='0' border='0' style='width:640px;max-width:640px;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;'>
+      <td align='center' style='padding:24px 12px;'>
+        <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:640px;border-collapse:collapse;background-color:#ffffff;border:1px solid #d8e3ec;'>
           <tr>
-            <td bgcolor='#111827' style='background-color:#111827;padding:26px 30px 24px 30px;font-family:Segoe UI,Arial,sans-serif;color:#ffffff;'>
-              <p style='Margin:0 0 8px 0;font-size:12px;line-height:16px;text-transform:uppercase;letter-spacing:2px;color:#cbd5e1;font-weight:700;'>{brand}</p>
-              <h1 style='Margin:0;font-size:24px;line-height:31px;color:#ffffff;font-weight:800;'>{title}</h1>
+            <td align='center' style='padding:22px 24px 14px 24px;background-color:#ffffff;border-bottom:2px solid #86b7e4;font-family:Segoe UI,Arial,sans-serif;'>
+              {BuildEfactLogoHtml(websiteSafe)}
             </td>
           </tr>
           <tr>
-            <td bgcolor='#ffffff' style='background-color:#ffffff;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;padding:28px 30px 30px 30px;font-family:Segoe UI,Arial,sans-serif;color:#111827;'>
-              <p style='Margin:0 0 18px 0;font-size:15px;line-height:24px;color:#374151;'>{introHtml}</p>
+            <td align='center' style='padding:18px 30px 22px 30px;background-color:#ffffff;font-family:Segoe UI,Arial,sans-serif;'>
+              <h1 style='margin:0;font-size:18px;line-height:25px;color:#14213d;font-weight:850;'>{titleSeguro}</h1>
+              {BuildEmailReceiptIcon()}
+              <p style='margin:0;font-size:15px;line-height:24px;color:#5f718c;'>{introHtml}</p>
+            </td>
+          </tr>
+          <tr>
+            <td bgcolor='#ffffff' style='background-color:#ffffff;padding:0 30px 30px 30px;font-family:Segoe UI,Arial,sans-serif;color:#111827;'>
               {contentHtml}
             </td>
           </tr>
           <tr>
-            <td align='center' style='padding:16px 8px 0 8px;font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;color:#6b7280;'>
-              Correo generado automaticamente por Numerica Software.
+            <td align='center' style='padding:20px 28px;background-color:#e8f1f2;font-family:Segoe UI,Arial,sans-serif;color:#4b5563;'>
+              <div style='font-size:12px;line-height:18px;color:#4b5563;margin:0 0 4px 0;'>Emitido mediante</div>
+              {BuildEfactLogoHtml(websiteSafe, 140)}
+              <div style='line-height:8px;height:8px;font-size:8px;'>&nbsp;</div>
+              <a href='{websiteSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:none;font-weight:800;'>{websiteDisplaySafe}</a>
+              <span style='display:inline-block;color:#9aa8b6;padding:0 12px;'>|</span>
+              <span style='font-size:12px;line-height:18px;color:#334155;font-weight:800;'>{phoneSafe}</span>
             </td>
           </tr>
         </table>
@@ -1704,6 +1762,40 @@ Atentamente,
             .ToList();
     }
 
+    private async Task<List<string>> ObtenerDestinatariosNotificacionPagosAsync(params string?[] excluirCorreos)
+    {
+        var destinatarios = ObtenerDestinatariosNotificacionPagos(excluirCorreos);
+
+        try
+        {
+            var correosBackOffice = await _db.Usuarios
+                .AsNoTracking()
+                .Where(u =>
+                    u.Estado == true &&
+                    !string.IsNullOrWhiteSpace(u.Email) &&
+                    (u.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId ||
+                     (u.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId &&
+                        (u.TipoCliente == BackOfficePermissionHelper.AdministradorBackOfficeTipoCliente ||
+                         u.TipoCliente == BackOfficePermissionHelper.CobranzasBackOfficeTipoCliente))))
+                .Select(u => u.Email)
+                .ToListAsync();
+
+            destinatarios = NormalizarListaCorreos(destinatarios.Concat(correosBackOffice));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudieron cargar destinatarios BackOffice para notificacion de cobro pendiente.");
+        }
+
+        var excluidos = new HashSet<string>(
+            NormalizarListaCorreos(excluirCorreos),
+            StringComparer.OrdinalIgnoreCase);
+
+        return destinatarios
+            .Where(correo => !excluidos.Contains(correo))
+            .ToList();
+    }
+
     private static IEnumerable<string> ParseCorreosConfigurados(string? valor)
     {
         if (string.IsNullOrWhiteSpace(valor))
@@ -1771,12 +1863,12 @@ Atentamente,
         string? footerText = null)
     {
         var previewSafe = WebUtility.HtmlEncode(previewText);
-        var eyebrowSafe = WebUtility.HtmlEncode(eyebrow);
-        var titleSafe = title;
         var subtitleSafe = subtitle;
         var efactInfoUrlSafe = WebUtility.HtmlEncode(EfactInfoUrl);
+        var efactInfoDisplayUrlSafe = WebUtility.HtmlEncode(EfactInfoDisplayUrl);
+        var efactContactPhoneSafe = WebUtility.HtmlEncode(EfactContactPhone);
         var footerSafe = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(footerText)
-            ? "Correo generado automáticamente por Numerica E-FACT."
+            ? "Numerica Software"
             : footerText.Trim());
 
         return $@"
@@ -1802,24 +1894,17 @@ Atentamente,
               <td style='padding:0;background-color:#ffffff;'>
                 <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;'>
                   <tr>
-                    <td align='center' style='padding:24px 24px 20px 24px;background-color:#ffffff;border-bottom:4px solid #1f8fd6;'>
-                      <a href='{efactInfoUrlSafe}' target='_blank' style='text-decoration:none;'>
-                        <span style='font-family:Segoe UI,Arial,sans-serif;font-size:34px;line-height:38px;font-weight:900;color:#006bb5;letter-spacing:0;'>E-FACT</span>
-                      </a>
-                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:12px;line-height:18px;color:#6b7280;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding-top:6px;'>
-                        Facturacion electronica
-                      </div>
+                    <td align='center' style='padding:22px 24px 14px 24px;background-color:#ffffff;border-bottom:2px solid #86b7e4;'>
+                      {BuildEfactLogoHtml(efactInfoUrlSafe)}
                     </td>
                   </tr>
                   <tr>
-                    <td align='center' style='padding:34px 28px 28px 28px;background-color:#ffffff;'>
-                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:18px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin:0 0 14px 0;'>
-                        {eyebrowSafe}
+                    <td align='center' style='padding:18px 28px 22px 28px;background-color:#ffffff;'>
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:20px;font-weight:850;color:#14213d;margin:0;'>
+                        Has recibido un comprobante electr&oacute;nico
                       </div>
-                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:26px;line-height:34px;font-weight:800;color:#374151;margin:0;'>
-                        {titleSafe}
-                      </div>
-                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:24px;color:#6b7280;padding-top:12px;'>
+                      {BuildEmailReceiptIcon()}
+                      <div style='font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:24px;color:#6b7280;'>
                         {subtitleSafe}
                       </div>
                     </td>
@@ -1830,25 +1915,16 @@ Atentamente,
             <tr>
               <td style='padding:0 28px 28px 28px;background-color:#ffffff;'>
                 {bodyHtml}
-                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;margin-top:24px;border-top:1px solid #e5eaf0;border-bottom:1px solid #e5eaf0;'>
-                  <tr>
-                    <td align='center' style='padding:28px 12px;font-family:Segoe UI,Arial,sans-serif;'>
-                      <div style='font-size:15px;line-height:23px;color:#4b5563;margin:0 0 18px 0;'>
-                        Conoce mas sobre la emision de comprobantes en E-FACT.
-                      </div>
-                      <a href='{efactInfoUrlSafe}' target='_blank' style='display:inline-block;background-color:#2f95d8;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:18px;font-weight:800;text-decoration:none;padding:15px 28px;border-radius:28px;'>
-                        VER E-FACT
-                      </a>
-                    </td>
-                  </tr>
-                </table>
               </td>
             </tr>
             <tr>
               <td align='center' style='padding:22px 28px;background-color:#e8f1f2;font-family:Segoe UI,Arial,sans-serif;color:#4b5563;'>
-                <div style='font-size:13px;line-height:20px;font-weight:800;color:#374151;margin:0 0 4px 0;'>Numerica Software</div>
-                <div style='font-size:12px;line-height:18px;margin:0 0 12px 0;'>{footerSafe}</div>
-                <a href='{efactInfoUrlSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:underline;'>numericasoftware.com/efact</a>
+                <div style='font-size:12px;line-height:18px;color:#4b5563;margin:0 0 4px 0;'>Emitido mediante</div>
+                {BuildEfactLogoHtml(efactInfoUrlSafe, 140)}
+                <div style='font-size:12px;line-height:18px;margin:8px 0 12px 0;'>{footerSafe}</div>
+                <a href='{efactInfoUrlSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:none;font-weight:800;'>{efactInfoDisplayUrlSafe}</a>
+                <span style='display:inline-block;color:#9aa8b6;padding:0 12px;'>|</span>
+                <span style='font-size:12px;line-height:18px;color:#334155;font-weight:800;'>{efactContactPhoneSafe}</span>
               </td>
             </tr>
           </table>
@@ -1878,18 +1954,22 @@ Atentamente,
     private static string BuildInfoTable(params (string Label, string Value)[] rows)
     {
         var builder = new System.Text.StringBuilder();
-        builder.Append("<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;border:1px solid #dbe5ef;background-color:#f8fbff;margin:0 0 18px 0;'>");
+        builder.Append("<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:separate;border-spacing:0;border:1px solid #dbe5ef;background-color:#ffffff;margin:0 0 18px 0;border-radius:12px;overflow:hidden;'>");
 
         for (var i = 0; i < rows.Length; i++)
         {
             var (label, value) = rows[i];
             var borderStyle = i == rows.Length - 1 ? string.Empty : "border-bottom:1px solid #e5edf5;";
+            var icon = GetEmailRowIcon(label);
             builder.Append($@"
 <tr>
-  <td style='width:38%;padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;font-weight:700;color:#1e3a5f;background-color:#f1f7fd;vertical-align:top;'>
+  <td width='44' align='center' valign='middle' style='width:44px;padding:11px 8px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:17px;line-height:20px;font-weight:800;color:#174ea6;background-color:#f5f9ff;'>
+    {icon}
+  </td>
+  <td style='width:34%;padding:12px 14px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;font-weight:800;color:#1e3a5f;background-color:#f5f9ff;vertical-align:middle;'>
     {WebUtility.HtmlEncode(label)}
   </td>
-  <td style='padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#334155;vertical-align:top;'>
+  <td style='padding:12px 16px;{borderStyle}font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:20px;color:#334155;vertical-align:middle;'>
     {value}
   </td>
 </tr>");
@@ -1897,5 +1977,22 @@ Atentamente,
 
         builder.Append("</table>");
         return builder.ToString();
+    }
+
+    private static string GetEmailRowIcon(string label)
+    {
+        var texto = label.ToLowerInvariant();
+        if (texto.Contains("fecha"))
+            return "&#128197;";
+        if (texto.Contains("cliente") || texto.Contains("proveedor") || texto.Contains("destinatario"))
+            return "&#128100;";
+        if (texto.Contains("total") || texto.Contains("monto") || texto.Contains("retenido"))
+            return "&#36;";
+        if (texto.Contains("archivo"))
+            return "&#128206;";
+        if (texto.Contains("documento") || texto.Contains("factura") || texto.Contains("nota") || texto.Contains("guia") || texto.Contains("liquidacion") || texto.Contains("retencion"))
+            return "&#128196;";
+
+        return "&#8226;";
     }
 }

@@ -15,6 +15,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
 @inject Simetric.Services.VendedorBackOfficeService VendedorBackOfficeService
+@inject IEmailService EmailService
 
 <PageTitle>Registro y Control de Ventas - BackOffice</PageTitle>
 
@@ -1685,6 +1686,8 @@
 
             using var context = await DbFactory.CreateDbContextAsync();
             bool triggerActivation = false;
+            bool debeNotificarCobroPendiente = false;
+            ReporteVentaBackOffice? ventaParaNotificar = null;
 
             if (editandoVentaId.HasValue)
             {
@@ -1695,6 +1698,11 @@
                     if (dbVenta.Estado != "pagada" && modalVenta.Estado == "pagada")
                     {
                         triggerActivation = true;
+                    }
+                    if (!string.Equals(dbVenta.Estado, "pendiente", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(modalVenta.Estado, "pendiente", StringComparison.OrdinalIgnoreCase))
+                    {
+                        debeNotificarCobroPendiente = true;
                     }
 
                     // Copy new values with truncation
@@ -1724,6 +1732,7 @@
                     dbVenta.Observacion = TruncateStr($"{compTag} {cleanObs}".Trim(), 500);
 
                     await context.SaveChangesAsync();
+                    ventaParaNotificar = dbVenta;
                 }
             }
             else
@@ -1751,9 +1760,14 @@
                 {
                     triggerActivation = true;
                 }
+                else if (string.Equals(modalVenta.Estado, "pendiente", StringComparison.OrdinalIgnoreCase))
+                {
+                    debeNotificarCobroPendiente = true;
+                }
 
                 context.ReporteVentasBackOffice.Add(modalVenta);
                 await context.SaveChangesAsync();
+                ventaParaNotificar = modalVenta;
             }
 
             // License Activation if applicable
@@ -1762,8 +1776,20 @@
                 await ActivarLicenciaUsuario(modalVenta);
             }
 
-            modalSuccess = "¡Venta registrada exitosamente!";
-            ShowFeedback("Venta guardada correctamente.", true);
+            var correoPendienteEnviado = true;
+            if (debeNotificarCobroPendiente && ventaParaNotificar is not null)
+            {
+                correoPendienteEnviado = await EnviarAvisoCobroPendienteAsync(ventaParaNotificar);
+            }
+
+            modalSuccess = correoPendienteEnviado
+                ? "¡Venta registrada exitosamente!"
+                : "Venta registrada. No se pudo enviar el correo de cobro pendiente.";
+            ShowFeedback(
+                correoPendienteEnviado
+                    ? "Venta guardada correctamente."
+                    : "Venta guardada correctamente, pero falló el envío del correo de cobro pendiente.",
+                correoPendienteEnviado);
 
             // Reload data in background
             await LoadVentasData();
@@ -2143,6 +2169,42 @@
         }
 
         return parts[1].Trim();
+    }
+
+    private async Task<bool> EnviarAvisoCobroPendienteAsync(ReporteVentaBackOffice venta)
+    {
+        var email = ExtraerEmailClienteReporte(venta.Cliente);
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return false;
+        }
+
+        try
+        {
+            await EmailService.EnviarAvisoCobroPendienteAsync(
+                email,
+                ExtraerNombreClienteReporte(venta.Cliente),
+                venta.Producto,
+                venta.PlanPaquete,
+                venta.Valor,
+                venta.FormaPago,
+                GetComprobanteRef(venta.Observacion));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ExtraerNombreClienteReporte(string? cliente)
+    {
+        if (string.IsNullOrWhiteSpace(cliente))
+        {
+            return "Cliente";
+        }
+
+        return cliente.Split('|')[0].Trim();
     }
 
     public class VendedorClienteDto

@@ -9,6 +9,7 @@ namespace Simetric.ViewModels
         public string NombreEmpresa { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "La dirección es obligatoria")]
+        [StringLength(100, ErrorMessage = "La dirección no puede superar los 100 caracteres")]
         public string DireccionEmpresa { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "Ingrese sus nombres")]

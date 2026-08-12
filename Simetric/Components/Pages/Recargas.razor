@@ -19,6 +19,7 @@
 @inject EmisionControlService EmisionControlService
 @inject EmisorOnboardingService EmisorOnboardingService
 @inject FacturacionService FacturacionService
+@inject IEmailService EmailService
 @inject IJSRuntime JS
 
 <PageTitle>Compra de documentos | Numerica e-fact</PageTitle>
@@ -461,10 +462,10 @@
                                            @bind:get="transferNumeroComprobante"
                                            @bind:set="OnTransferNumeroComprobanteChanged"
                                            @bind:event="oninput"
-                                           maxlength="12"
+                                           maxlength="@MaxTransferNumeroComprobanteLength"
                                            inputmode="text"
                                            disabled="@enviandoPago"
-                                           placeholder="Hasta 12 letras o numeros" />
+                                           placeholder="Letras o numeros del comprobante" />
                                 </label>
                             </div>
 
@@ -499,7 +500,7 @@
                             <dl>
                                 <div><dt>Banco:</dt><dd>Banco Pichincha</dd></div>
                                 <div><dt>Tipo de cuenta:</dt><dd>Cuenta corriente</dd></div>
-                                <div><dt>Numero de cuenta:</dt><dd>22100346647</dd></div>
+                                <div><dt>Numero de cuenta:</dt><dd>2100346647</dd></div>
                                 <div><dt>RUC:</dt><dd>1793233799001</dd></div>
                                 <div><dt>Nombre:</dt><dd>NUMERICASOFTWARE S.A.S.</dd></div>
                                 <div><dt>e-mail:</dt><dd>contabilidad@numericasoftware.com</dd></div>
@@ -587,6 +588,7 @@
     private string? transferComprobantePreviewUrl;
     private string? transferComprobanteMensaje;
     private const long MaxTransferUploadBytes = 5 * 1024 * 1024;
+    private const int MaxTransferNumeroComprobanteLength = 50;
     private const int TransferPreviewMaxWidth = 1600;
     private const int TransferPreviewMaxHeight = 1600;
     private static readonly string[] BancosTransferencia =
@@ -949,7 +951,7 @@
     private void OnTransferNumeroComprobanteChanged(string? value)
     {
         var valor = value ?? string.Empty;
-        transferNumeroComprobante = new string(valor.Where(char.IsLetterOrDigit).Take(12).ToArray()).ToUpperInvariant();
+        transferNumeroComprobante = new string(valor.Where(char.IsLetterOrDigit).Take(MaxTransferNumeroComprobanteLength).ToArray()).ToUpperInvariant();
     }
 
     private async Task RegistrarTransferenciaDocumentosAsync()
@@ -1003,8 +1005,13 @@
 
             context.ReporteVentasBackOffice.Add(solicitud);
             await context.SaveChangesAsync();
+            var correoPendienteEnviado = await EnviarAvisoCobroPendienteAsync(solicitud);
 
             mensajePago = "Tu transferencia fue registrada. La transaccion sera revisada y aprobada o rechazada dentro de 24 horas; veras el estado en tu historial de compras.";
+            if (!correoPendienteEnviado)
+            {
+                mensajePago += " No se pudo enviar el correo de cobro pendiente, pero tu solicitud quedo registrada.";
+            }
             await CargarUsuarioActualAsync();
             LimpiarFormularioTransferencia();
             MostrarResultadoPago(mensajePago, exitoso: true);
@@ -1021,6 +1028,26 @@
         finally
         {
             enviandoPago = false;
+        }
+    }
+
+    private async Task<bool> EnviarAvisoCobroPendienteAsync(ReporteVentaBackOffice solicitud)
+    {
+        try
+        {
+            await EmailService.EnviarAvisoCobroPendienteAsync(
+                ObtenerCorreoPagador(),
+                ObtenerNombrePagador(),
+                solicitud.Producto,
+                solicitud.PlanPaquete,
+                solicitud.Valor,
+                solicitud.FormaPago,
+                transferNumeroComprobante);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -1052,9 +1079,9 @@
             return false;
         }
 
-        if (numeroComprobante.Length > 12 || !numeroComprobante.All(char.IsLetterOrDigit))
+        if (numeroComprobante.Length > MaxTransferNumeroComprobanteLength || !numeroComprobante.All(char.IsLetterOrDigit))
         {
-            error = "El numero de comprobante debe tener maximo 12 caracteres alfanumericos.";
+            error = $"El numero de comprobante debe tener maximo {MaxTransferNumeroComprobanteLength} caracteres alfanumericos.";
             return false;
         }
 

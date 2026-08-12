@@ -244,7 +244,7 @@
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         usuarioIdActual = ObtenerUsuarioId(authState.User);
-        esUsuarioBackOffice = EsBackOffice(authState.User);
+        esUsuarioBackOffice = await PuedeAprobarTransferenciasBackOfficeAsync(authState.User);
 
         await CargarNotificacionesAsync();
         await CargarRecargasDocumentosAsync();
@@ -665,11 +665,27 @@
         return int.TryParse(idClaim, out var parsedId) ? parsedId : 0;
     }
 
-    private static bool EsBackOffice(ClaimsPrincipal user)
+    private async Task<bool> PuedeAprobarTransferenciasBackOfficeAsync(ClaimsPrincipal user)
     {
         var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(ClaimTypes.Role)?.Value;
-        return string.Equals(role, "2", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(role, "7", StringComparison.OrdinalIgnoreCase);
+        var tipoClienteRaw = user.FindFirst("TipoCliente")?.Value;
+        int? idTipoUsuario = int.TryParse(role, out var roleId) ? roleId : null;
+        int? tipoCliente = int.TryParse(tipoClienteRaw, out var tipo) ? tipo : null;
+
+        if (usuarioIdActual > 0)
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuario = await context.Usuarios
+                .AsNoTracking()
+                .Where(item => item.IdUsuario == usuarioIdActual)
+                .Select(item => new { item.IdTipoUsuario, item.TipoCliente })
+                .FirstOrDefaultAsync();
+
+            idTipoUsuario = usuario?.IdTipoUsuario ?? idTipoUsuario;
+            tipoCliente = usuario?.TipoCliente ?? tipoCliente;
+        }
+
+        return BackOfficePermissionHelper.PuedeAprobarTransferencias(idTipoUsuario, tipoCliente);
     }
 
     private static string GetSolicitudDocumentosDetalle(ReporteVentaBackOffice solicitud)

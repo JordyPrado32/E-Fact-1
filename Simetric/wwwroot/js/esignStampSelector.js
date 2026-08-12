@@ -11,7 +11,7 @@ export async function init(options, dotNetRef) {
     const pageCountLabel = document.getElementById(options.pageCountLabelId);
     const selectionStatus = document.getElementById(options.selectionStatusId);
 
-    if (!pdfInput || !canvas || !stage || !resizeHandle) {
+    if (!pdfInput || !canvas || !stage || !footprint || !resizeHandle) {
         return null;
     }
 
@@ -26,13 +26,13 @@ export async function init(options, dotNetRef) {
     let selectedPosition = null;
     let drawingStart = null;
     let resizeStart = null;
+    let dragStart = null;
     let pointerMoved = false;
     let pageNumber = 1;
     let preferredSelection = null;
     let autoApplyPreferred = false;
 
-    const minimumStampWidthMm = 55;
-    const maximumStampWidthMm = 120;
+    const fixedStampWidthMm = 60;
 
     const normalizeSelection = selection => {
         if (!selection) {
@@ -43,7 +43,7 @@ export async function init(options, dotNetRef) {
             page: Number(selection.page ?? selection.Page ?? 1),
             xMm: Number(selection.xMm ?? selection.XMm ?? 0),
             yMm: Number(selection.yMm ?? selection.YMm ?? 0),
-            widthMm: Number(selection.widthMm ?? selection.WidthMm ?? 80)
+            widthMm: fixedStampWidthMm
         };
     };
 
@@ -98,10 +98,9 @@ export async function init(options, dotNetRef) {
 
     const applySelection = async (rawX, rawY, requestedWidth, shouldNotify = true) => {
         const widthMm = Math.min(
-            maximumStampWidthMm,
+            fixedStampWidthMm,
             pageWidthMm,
-            pageHeightMm / 0.4,
-            Math.max(minimumStampWidthMm, requestedWidth));
+            pageHeightMm / 0.4);
         const xMm = Math.max(0, Math.min(rawX, pageWidthMm - widthMm));
         const yMm = Math.max(0, Math.min(rawY, pageHeightMm - (widthMm * 0.4)));
 
@@ -113,7 +112,7 @@ export async function init(options, dotNetRef) {
         };
 
         updateFootprint();
-        setStatus(`Posicion: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm - Ancho ${widthMm.toFixed(2)} mm`);
+        setStatus(`Posicion: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm - Ancho 60.00 mm`);
 
         if (shouldNotify) {
             await notifySelection();
@@ -160,7 +159,7 @@ export async function init(options, dotNetRef) {
             canvas.hidden = false;
             selectedPosition = pageNumber === selectedPosition?.page ? selectedPosition : null;
             updateFootprint();
-            setStatus("Haz clic para ubicar o arrastra hacia abajo y a la derecha para dibujar el sello.");
+            setStatus("Haz clic o arrastra el recuadro para ubicar el sello. El ancho se mantiene fijo en 60 mm.");
             await dotNetRef.invokeMethodAsync("OnStampPageChanged", pageNumber);
             if (!selectedPosition && autoApplyPreferred && preferredSelection?.page === pageNumber) {
                 await applySelection(
@@ -214,7 +213,7 @@ export async function init(options, dotNetRef) {
 
         event.preventDefault();
         const point = getPagePoint(event);
-        const currentWidth = selectedPosition?.widthMm || 80;
+        const currentWidth = fixedStampWidthMm;
         await applySelection(point.xMm, point.yMm, currentWidth);
         drawingStart = {
             pointerId: event.pointerId,
@@ -242,11 +241,7 @@ export async function init(options, dotNetRef) {
             return;
         }
 
-        const requestedWidth = Math.max(
-            minimumStampWidthMm,
-            point.xMm - drawingStart.xMm,
-            (point.yMm - drawingStart.yMm) / 0.4);
-        await applySelection(drawingStart.xMm, drawingStart.yMm, requestedWidth);
+        await applySelection(point.xMm, point.yMm, fixedStampWidthMm);
     };
 
     const finishDrawing = event => {
@@ -262,6 +257,52 @@ export async function init(options, dotNetRef) {
         stage.classList.remove("is-drawing");
     };
 
+    const onFootprintPointerDown = event => {
+        if (!selectedPosition || event.button !== 0) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const point = getPagePoint(event);
+        dragStart = {
+            pointerId: event.pointerId,
+            offsetXMm: point.xMm - selectedPosition.xMm,
+            offsetYMm: point.yMm - selectedPosition.yMm
+        };
+
+        footprint.setPointerCapture(event.pointerId);
+        stage.classList.add("is-dragging");
+        setStatus("Arrastra el recuadro para ajustar la ubicacion del sello.");
+    };
+
+    const onFootprintPointerMove = async event => {
+        if (!dragStart || dragStart.pointerId !== event.pointerId) {
+            return;
+        }
+
+        event.preventDefault();
+        const point = getPagePoint(event);
+        await applySelection(
+            point.xMm - dragStart.offsetXMm,
+            point.yMm - dragStart.offsetYMm,
+            fixedStampWidthMm);
+    };
+
+    const finishDragging = event => {
+        if (!dragStart || dragStart.pointerId !== event.pointerId) {
+            return;
+        }
+
+        if (footprint.hasPointerCapture(event.pointerId)) {
+            footprint.releasePointerCapture(event.pointerId);
+        }
+
+        dragStart = null;
+        stage.classList.remove("is-dragging");
+    };
+
     const onResizePointerDown = event => {
         if (!selectedPosition || event.button !== 0) {
             return;
@@ -275,7 +316,7 @@ export async function init(options, dotNetRef) {
             yMm: selectedPosition.yMm
         };
         stage.classList.add("is-resizing");
-        setStatus("Arrastra la esquina para cambiar el tamano.");
+        setStatus("El ancho del sello se mantiene fijo en 60 mm.");
     };
 
     const onWindowPointerMove = async event => {
@@ -284,12 +325,7 @@ export async function init(options, dotNetRef) {
         }
 
         event.preventDefault();
-        const point = getPagePoint(event);
-        const requestedWidth = Math.max(
-            minimumStampWidthMm,
-            point.xMm - resizeStart.xMm,
-            (point.yMm - resizeStart.yMm) / 0.4);
-        await applySelection(resizeStart.xMm, resizeStart.yMm, requestedWidth);
+        await applySelection(resizeStart.xMm, resizeStart.yMm, fixedStampWidthMm);
     };
 
     const finishResize = event => {
@@ -316,6 +352,10 @@ export async function init(options, dotNetRef) {
     canvas.addEventListener("pointermove", onCanvasPointerMove);
     canvas.addEventListener("pointerup", finishDrawing);
     canvas.addEventListener("pointercancel", finishDrawing);
+    footprint.addEventListener("pointerdown", onFootprintPointerDown);
+    footprint.addEventListener("pointermove", onFootprintPointerMove);
+    footprint.addEventListener("pointerup", finishDragging);
+    footprint.addEventListener("pointercancel", finishDragging);
     resizeHandle.addEventListener("pointerdown", onResizePointerDown);
     window.addEventListener("pointermove", onWindowPointerMove);
     window.addEventListener("pointerup", finishResize);
@@ -356,6 +396,10 @@ export async function init(options, dotNetRef) {
             canvas.removeEventListener("pointermove", onCanvasPointerMove);
             canvas.removeEventListener("pointerup", finishDrawing);
             canvas.removeEventListener("pointercancel", finishDrawing);
+            footprint.removeEventListener("pointerdown", onFootprintPointerDown);
+            footprint.removeEventListener("pointermove", onFootprintPointerMove);
+            footprint.removeEventListener("pointerup", finishDragging);
+            footprint.removeEventListener("pointercancel", finishDragging);
             resizeHandle.removeEventListener("pointerdown", onResizePointerDown);
             window.removeEventListener("pointermove", onWindowPointerMove);
             window.removeEventListener("pointerup", finishResize);

@@ -267,10 +267,11 @@ public sealed class FacturaPdfService : IFacturaPdfService
                 {
                     column.Item()
                         .AlignCenter()
+                        .MaxHeight(78)
                         .MaxWidth(92)
                         .PaddingBottom(4)
                         .Image(logoSistema)
-                        .FitWidth();
+                        .FitArea();
                 }
                 else
                 {

@@ -59,11 +59,17 @@ public sealed class FirmaStampApiService
         if (!string.IsNullOrWhiteSpace(ubicacion))
             form.Add(new StringContent(ubicacion.Trim()), "ubicacion");
         form.Add(new StringContent(pagina.ToString(CultureInfo.InvariantCulture)), "pagina");
+        form.Add(new StringContent(pagina.ToString(CultureInfo.InvariantCulture)), "page");
         form.Add(new StringContent(xMm.ToString(CultureInfo.InvariantCulture)), "xMm");
+        form.Add(new StringContent(xMm.ToString(CultureInfo.InvariantCulture)), "x_mm");
         form.Add(new StringContent(yMm.ToString(CultureInfo.InvariantCulture)), "yMm");
+        form.Add(new StringContent(yMm.ToString(CultureInfo.InvariantCulture)), "y_mm");
         form.Add(new StringContent(anchoMm.ToString(CultureInfo.InvariantCulture)), "anchoMm");
+        form.Add(new StringContent(anchoMm.ToString(CultureInfo.InvariantCulture)), "width_mm");
+        form.Add(new StringContent(BuildStampDesignJson(pagina, xMm, yMm, anchoMm)), "disenoEstampado");
+        form.Add(new StringContent(BuildStampDesignJson(pagina, xMm, yMm, anchoMm)), "stampDesign");
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, "api/documentos/estampar"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, BuildEndpointUri(baseUri, "EstamparPath", "api/documentos/estampar"));
         request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
         request.Content = form;
 
@@ -118,7 +124,7 @@ public sealed class FirmaStampApiService
         form.Add(certificadoContent, "certificado", certificado.FileName);
         form.Add(new StringContent(clave), "clave");
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, "api/documentos/detalles-firma"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, BuildEndpointUri(baseUri, "DetallesFirmaPath", "api/documentos/detalles-firma"));
         request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
         request.Content = form;
 
@@ -135,9 +141,7 @@ public sealed class FirmaStampApiService
                 return FirmaDetalleApiResult.Error(mensaje, raw, (int)response.StatusCode);
             }
 
-            var detalle = JsonSerializer.Deserialize<FirmaDetalleApiResponse>(
-                raw,
-                JsonOptions);
+            var detalle = ParseFirmaDetalle(raw);
 
             return detalle is null
                 ? FirmaDetalleApiResult.Error("La API no devolvio un detalle de firma valido.", raw, (int)response.StatusCode)
@@ -170,7 +174,10 @@ public sealed class FirmaStampApiService
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            new Uri(baseUri, $"api/verificaciones/qr?token={Uri.EscapeDataString(token)}"));
+            BuildEndpointUri(baseUri, "QrValidationPath", "api/verificaciones/qr", new Dictionary<string, string?>
+            {
+                ["token"] = token
+            }));
 
         try
         {
@@ -227,7 +234,7 @@ public sealed class FirmaStampApiService
 
         form.Add(pdfContent, "pdf", pdf.Name);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, "api/documentos/validar-firma"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, BuildEndpointUri(baseUri, "ValidarFirmaPath", "api/documentos/validar-firma"));
         request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
         request.Content = form;
 
@@ -244,9 +251,7 @@ public sealed class FirmaStampApiService
                 return PdfSignatureValidationApiResult.Error(mensaje, raw, (int)response.StatusCode);
             }
 
-            var validation = JsonSerializer.Deserialize<PdfSignatureValidationApiResponse>(
-                raw,
-                JsonOptions);
+            var validation = ParsePdfSignatureValidation(raw);
 
             return validation is null
                 ? PdfSignatureValidationApiResult.Error("La API no devolvio un resultado de validacion valido.", raw, (int)response.StatusCode)
@@ -303,9 +308,205 @@ public sealed class FirmaStampApiService
             Environment.GetEnvironmentVariable("ApiFirma__ApiKey"),
             Environment.GetEnvironmentVariable("ApiSecurity__ApiKey"));
 
+    private Uri BuildEndpointUri(Uri baseUri, string configKey, string defaultPath, IDictionary<string, string?>? query = null)
+    {
+        var configuredPath = FirstNonEmpty(
+            _configuration[$"FirmaStampApi:{configKey}"],
+            _configuration[$"ApiFirma:{configKey}"]);
+
+        var path = configuredPath ?? defaultPath;
+        var uri = Uri.TryCreate(path, UriKind.Absolute, out var absoluteUri)
+            ? absoluteUri
+            : new Uri(baseUri, path);
+
+        return query is null
+            ? uri
+            : new Uri(QueryHelpers.AddQueryString(uri.ToString(), query));
+    }
+
+    private static string BuildStampDesignJson(int pagina, double xMm, double yMm, double anchoMm) =>
+        JsonSerializer.Serialize(new
+        {
+            pagina,
+            page = pagina,
+            posicion = new
+            {
+                xMm,
+                yMm,
+                anchoMm,
+                x_mm = xMm,
+                y_mm = yMm,
+                width_mm = anchoMm
+            }
+        }, JsonOptions);
+
     private static string? TryGetHeader(HttpResponseMessage response, string name) =>
         response.Headers.TryGetValues(name, out var values)
             ? values.FirstOrDefault()
+            : null;
+
+    private static FirmaDetalleApiResponse? ParseFirmaDetalle(string raw)
+    {
+        using var document = JsonDocument.Parse(raw);
+        var root = UnwrapPayload(document.RootElement);
+
+        return new FirmaDetalleApiResponse(
+            GetBool(root, false, "esValida", "valido", "valid", "isValid"),
+            GetString(root, "estadoVigencia", "estado", "status", "vigencia"),
+            GetString(root, "nombreTitular", "titular", "subjectName", "commonName", "firmante"),
+            GetString(root, "ruc", "identificacion", "identification", "documentNumber"),
+            GetString(root, "emisor", "issuer", "issuerName"),
+            GetString(root, "numeroSerie", "serialNumber", "serie"),
+            GetString(root, "huellaDigital", "thumbprint", "fingerprint"),
+            GetDate(root, "fechaEmision", "validFrom", "certificadoDesde", "notBefore"),
+            GetDate(root, "fechaExpiracion", "validTo", "certificadoHasta", "notAfter"));
+    }
+
+    private static PdfSignatureValidationApiResponse? ParsePdfSignatureValidation(string raw)
+    {
+        using var document = JsonDocument.Parse(raw);
+        var root = UnwrapPayload(document.RootElement);
+
+        var firmas = new List<PdfSignatureDetailApiResponse>();
+        if (TryGetProperty(root, out var firmasElement, "firmas", "signatures", "detalles", "signatureDetails") &&
+            firmasElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var firma in firmasElement.EnumerateArray())
+            {
+                firmas.Add(ParsePdfSignatureDetail(firma));
+            }
+        }
+
+        var cantidadFirmas = GetInt(root, firmas.Count, "cantidadFirmas", "signatureCount", "numeroFirmas", "totalFirmas");
+
+        return new PdfSignatureValidationApiResponse(
+            GetBool(root, false, "valido", "valid", "isValid", "esValida"),
+            cantidadFirmas,
+            GetBool(root, false, "documentoCompletoCubierto", "documentoCompleto", "documentCoverageValid", "coversWholeDocument"),
+            firmas);
+    }
+
+    private static PdfSignatureDetailApiResponse ParsePdfSignatureDetail(JsonElement root)
+    {
+        var certificado = GetNestedObject(root, "certificado", "certificate", "cert");
+
+        return new(
+            GetBool(root, false, "valida", "valido", "valid", "isValid"),
+            GetBool(root, false, "integridadValida", "integrityValid", "integridad", "documentIntegrityValid"),
+            GetBool(root, false, "certificadoVigente", "certificateValid", "certificateInValidityPeriod", "certificadoValido") ||
+                GetBool(certificado, false, "vigente", "valid", "isValid", "certificateValid"),
+            GetBool(root, false, "cadenaConfiable", "chainTrusted", "cadenaValida", "trustedChain"),
+            GetBool(root, false, "revocacionValida", "revocationValid", "revocationCheckValid"),
+            GetString(root, "estadoRevocacion", "revocationStatus", "estadoRevocacionTexto") ?? "No disponible",
+            GetBool(root, false, "cubreDocumentoCompleto", "coversWholeDocument", "documentoCompletoCubierto"),
+            GetString(root, "firmante", "signer", "subjectName", "nombreTitular") ??
+                GetString(certificado, "firmante", "subjectName", "nombreTitular", "commonName"),
+            GetString(root, "emisor", "issuer", "issuerName") ??
+                GetString(certificado, "emisor", "issuer", "issuerName"),
+            GetString(root, "numeroSerie", "serialNumber", "serie") ??
+                GetString(certificado, "numeroSerie", "serialNumber", "serie"),
+            GetString(root, "huellaDigital", "thumbprint", "fingerprint") ??
+                GetString(certificado, "huellaDigital", "thumbprint", "fingerprint"),
+            GetDate(root, "fechaFirma", "signingTime", "signedAt", "fechaFirmado"),
+            GetDate(root, "certificadoDesde", "validFrom", "notBefore", "fechaEmision", "fechaInicioVigencia") ??
+                GetDate(certificado, "certificadoDesde", "validFrom", "notBefore", "fechaEmision", "fechaInicioVigencia", "desde"),
+            GetDate(root, "certificadoHasta", "validTo", "notAfter", "fechaExpiracion", "fechaVencimiento", "fechaFinVigencia") ??
+                GetDate(certificado, "certificadoHasta", "validTo", "notAfter", "fechaExpiracion", "fechaVencimiento", "fechaFinVigencia", "hasta"),
+            GetString(root, "algoritmoHash", "hashAlgorithm", "digestAlgorithm"),
+            GetNullableBool(root, "selloTiempoValido", "timestampValid", "timeStampValid"),
+            GetDate(root, "fechaSelloTiempo", "timestampTime", "timeStampDate"),
+            GetString(root, "autoridadSelloTiempo", "timestampAuthority", "tsa"),
+            GetString(root, "error", "message", "mensaje"));
+    }
+
+    private static JsonElement UnwrapPayload(JsonElement root)
+    {
+        foreach (var name in new[] { "data", "datos", "result", "resultado", "payload" })
+        {
+            if (TryGetProperty(root, out var payload, name) && payload.ValueKind == JsonValueKind.Object)
+                return payload;
+        }
+
+        return root;
+    }
+
+    private static bool TryGetProperty(JsonElement element, out JsonElement value, params string[] names)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (names.Any(name => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static string? GetString(JsonElement element, params string[] names)
+    {
+        if (!TryGetProperty(element, out var value, names))
+            return null;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => value.ToString(),
+            _ => null
+        };
+    }
+
+    private static string? GetString(JsonElement? element, params string[] names) =>
+        element is JsonElement value ? GetString(value, names) : null;
+
+    private static bool GetBool(JsonElement element, bool defaultValue, params string[] names) =>
+        GetNullableBool(element, names) ?? defaultValue;
+
+    private static bool GetBool(JsonElement? element, bool defaultValue, params string[] names) =>
+        element is JsonElement value ? GetBool(value, defaultValue, names) : defaultValue;
+
+    private static bool? GetNullableBool(JsonElement element, params string[] names)
+    {
+        if (!TryGetProperty(element, out var value, names))
+            return null;
+
+        if (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False)
+            return value.GetBoolean();
+
+        return value.ValueKind == JsonValueKind.String && bool.TryParse(value.GetString(), out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static int GetInt(JsonElement element, int defaultValue, params string[] names)
+    {
+        if (!TryGetProperty(element, out var value, names))
+            return defaultValue;
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsed))
+            return parsed;
+
+        return value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed)
+            ? parsed
+            : defaultValue;
+    }
+
+    private static DateTimeOffset? GetDate(JsonElement element, params string[] names)
+    {
+        var value = GetString(element, names);
+        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static DateTimeOffset? GetDate(JsonElement? element, params string[] names) =>
+        element is JsonElement value ? GetDate(value, names) : null;
+
+    private static JsonElement? GetNestedObject(JsonElement element, params string[] names) =>
+        TryGetProperty(element, out var value, names) && value.ValueKind == JsonValueKind.Object
+            ? value
             : null;
 
     private static string? ExtraerMensajeError(string rawBody)

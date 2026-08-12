@@ -48,7 +48,7 @@
                 </div>
                 <div class="modal-footer-n modal-footer-approve">
                     <button type="button" class="btn btn-light" @onclick="CancelarConfirmacionAprobacion" disabled="@isSaving">Cancelar</button>
-                    <button type="button" class="btn btn-primary" @onclick="ConfirmarYAprobarSolicitudDocumentosAsync" disabled="@isSaving">Si, aprobar</button>
+                    <button type="button" class="btn btn-primary" @onclick="ConfirmarYAprobarSolicitudDocumentosAsync" disabled="@(isSaving || !puedeAprobarTransferencias)">Si, aprobar</button>
                 </div>
             </div>
         </div>
@@ -179,7 +179,7 @@
                 @if (activeTab == "auditoria")
                 {
                     <h3>Auditoría de aprobaciones por transferencia</h3>
-                    <p>Registro de usuarios de cobranzas que aprobaron transferencias, con fecha, hora, cliente, comprobante y resultado de factura.</p>
+                    <p>Registro de usuarios autorizados que aprobaron transferencias, con fecha, hora, cliente, comprobante y resultado de factura.</p>
                 }
                 else
                 {
@@ -361,9 +361,12 @@
                                                             <i class="bi bi-image"></i> Ver
                                                         </button>
                                                     }
-                                                    <button type="button" class="btn-action collect" @onclick="() => AprobarSolicitudDocumentosAsync(row)" disabled="@isSaving">
-                                                        <i class="bi bi-check-circle"></i> @(aprobandoTransferenciaId == row.IdReporte ? "Emitiendo..." : "Aprobar")
-                                                    </button>
+                                                    @if (puedeAprobarTransferencias)
+                                                    {
+                                                        <button type="button" class="btn-action collect" @onclick="() => AprobarSolicitudDocumentosAsync(row)" disabled="@isSaving">
+                                                            <i class="bi bi-check-circle"></i> @(aprobandoTransferenciaId == row.IdReporte ? "Emitiendo..." : "Aprobar")
+                                                        </button>
+                                                    }
                                                     <button type="button" class="btn-action void" @onclick="() => ConfirmAnularVenta(row)">
                                                         <i class="bi bi-x-circle"></i> Rechazar
                                                     </button>
@@ -695,6 +698,7 @@
     private ReporteVentaBackOffice? ventaPendienteConfirmacion;
     private string mensajeConfirmacionAprobacion = string.Empty;
     private bool kpisLoaded;
+    private bool puedeAprobarTransferencias;
 
     // Feedback notifications
     private string? feedbackMessage;
@@ -712,6 +716,25 @@
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
         var idRaw = auth.User.FindFirst("IdUsuario")?.Value ?? auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         currentUserId = int.TryParse(idRaw, out var id) && id > 0 ? id : null;
+        var roleRaw = auth.User.FindFirst("IdTipoUsuario")?.Value ?? auth.User.FindFirst(ClaimTypes.Role)?.Value;
+        var tipoClienteRaw = auth.User.FindFirst("TipoCliente")?.Value;
+        int? idTipoUsuario = int.TryParse(roleRaw, out var role) ? role : null;
+        int? tipoCliente = int.TryParse(tipoClienteRaw, out var tipo) ? tipo : null;
+
+        if (currentUserId is > 0)
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuario = await context.Usuarios
+                .AsNoTracking()
+                .Where(u => u.IdUsuario == currentUserId.Value)
+                .Select(u => new { u.IdTipoUsuario, u.TipoCliente })
+                .FirstOrDefaultAsync();
+
+            idTipoUsuario = usuario?.IdTipoUsuario ?? idTipoUsuario;
+            tipoCliente = usuario?.TipoCliente ?? tipoCliente;
+        }
+
+        puedeAprobarTransferencias = BackOfficePermissionHelper.PuedeAprobarTransferencias(idTipoUsuario, tipoCliente);
     }
 
     private async Task LoadVentasData()
@@ -1225,6 +1248,12 @@
 
     private async Task AprobarSolicitudDocumentosAsync(ReporteVentaBackOffice venta)
     {
+        if (!puedeAprobarTransferencias)
+        {
+            ShowFeedback("Solo administradores BackOffice, cobranzas y super administradores pueden aprobar transferencias.", false);
+            return;
+        }
+
         if (!EsSolicitudTransferenciaDocumentos(venta) || isSaving)
         {
             return;
@@ -1241,6 +1270,13 @@
     {
         if (ventaPendienteConfirmacion is null || isSaving)
         {
+            return;
+        }
+
+        if (!puedeAprobarTransferencias)
+        {
+            ShowFeedback("Solo administradores BackOffice, cobranzas y super administradores pueden aprobar transferencias.", false);
+            CancelarConfirmacionAprobacion();
             return;
         }
 
@@ -1541,7 +1577,7 @@
             {
                 var newItem = new CompraDocumentosHistorialItem
                 {
-                    Id = Guid.NewGuid().ToString("N"),
+                    Id = string.IsNullOrWhiteSpace(compraId) ? Guid.NewGuid().ToString("N") : compraId,
                     Fecha = DateTime.Now,
                     Documentos = docsCount,
                     MontoTotal = venta.Valor,
@@ -1629,10 +1665,11 @@
         }
 
         var historial = LeerHistorial(usuario.HistorialComprasDocumentosJson);
-        var compra = historial.FirstOrDefault(x => string.Equals(x.Id, compraId, StringComparison.OrdinalIgnoreCase));
+        var compra = BuscarCompraAprobadaEnHistorial(historial, compraId, venta);
         if (compra is null)
         {
-            return CompraDocumentosFacturaResultado.Error("No se encontró la compra aprobada en el historial.");
+            compra = CrearCompraAprobadaDesdeTransferencia(venta, compraId);
+            historial.Insert(0, compra);
         }
 
         var saldoYaAplicado = compra.SaldoAplicado;
@@ -2009,6 +2046,77 @@
         return endIdx > contentStart
             ? obs.Substring(contentStart, endIdx - contentStart).Trim()
             : string.Empty;
+    }
+
+    private CompraDocumentosHistorialItem? BuscarCompraAprobadaEnHistorial(
+        IEnumerable<CompraDocumentosHistorialItem> historial,
+        string compraId,
+        ReporteVentaBackOffice venta)
+    {
+        var items = historial.ToList();
+        var compra = items.FirstOrDefault(x => string.Equals(x.Id, compraId, StringComparison.OrdinalIgnoreCase));
+        if (compra is not null)
+        {
+            return compra;
+        }
+
+        var referenciaBackOffice = $"BO-{venta.IdReporte}";
+        compra = items.FirstOrDefault(x => string.Equals(x.Reference, referenciaBackOffice, StringComparison.OrdinalIgnoreCase));
+        if (compra is not null)
+        {
+            return compra;
+        }
+
+        var comprobante = GetComprobanteRef(venta.Observacion);
+        if (!string.IsNullOrWhiteSpace(comprobante))
+        {
+            compra = items.FirstOrDefault(x => string.Equals(x.AuthorizationCode, comprobante, StringComparison.OrdinalIgnoreCase));
+            if (compra is not null)
+            {
+                return compra;
+            }
+        }
+
+        var candidatos = items
+            .Where(x => EsEstadoCompraAprobada(x.Estado) && Math.Abs(x.MontoTotal - venta.Valor) < 0.01m)
+            .OrderByDescending(x => x.Fecha)
+            .ToList();
+
+        return candidatos.Count == 1 ? candidatos[0] : null;
+    }
+
+    private static bool EsEstadoCompraAprobada(string? estado) =>
+        string.Equals(estado, "Aprobado", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(estado, "Aprobada", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(estado, "Pagado", StringComparison.OrdinalIgnoreCase);
+
+    private CompraDocumentosHistorialItem CrearCompraAprobadaDesdeTransferencia(
+        ReporteVentaBackOffice venta,
+        string compraId)
+    {
+        var esIlimitado = venta.PlanPaquete.Contains("Ilimitado", StringComparison.OrdinalIgnoreCase);
+        var documentos = 0;
+        if (!esIlimitado)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(venta.PlanPaquete, @"\d+");
+            documentos = match.Success ? int.Parse(match.Value) : 0;
+        }
+
+        return new CompraDocumentosHistorialItem
+        {
+            Id = string.IsNullOrWhiteSpace(compraId) ? Guid.NewGuid().ToString("N") : compraId,
+            Fecha = venta.Fecha == default ? DateTime.Now : venta.Fecha,
+            Documentos = documentos,
+            MontoTotal = venta.Valor,
+            Estado = "Aprobado",
+            Descripcion = $"Transferencia aprobada: {venta.PlanPaquete}",
+            SaldoAplicado = true,
+            EsIlimitado = esIlimitado,
+            EsPermanente = esIlimitado,
+            VigenciaHasta = null,
+            Reference = $"BO-{venta.IdReporte}",
+            AuthorizationCode = GetComprobanteRef(venta.Observacion)
+        };
     }
 
     private async Task ActualizarHistorialCompraDocumentosAsync(ReporteVentaBackOffice venta, bool aprobado)

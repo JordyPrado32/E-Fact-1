@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -300,14 +300,20 @@ public sealed class BesPrecompraService
 
     private static string ObtenerVigenciaTextoBusqueda(string? vigencia)
     {
-        var normalized = (vigencia ?? string.Empty).Trim().ToUpperInvariant();
+        var normalized = (vigencia ?? string.Empty)
+            .Trim()
+            .ToUpperInvariant()
+            .Replace("Ñ", "N", StringComparison.OrdinalIgnoreCase);
+
         return normalized switch
         {
+            "7 DIAS" => "7",
             "30 DIAS" => "30",
-            "1 AÑO" or "1 AÃ‘O" => "1 año",
-            "2 AÑOS" or "2 AÃ‘OS" => "2 años",
-            "3 AÑOS" or "3 AÃ‘OS" => "3 años",
-            "4 AÑOS" or "4 AÃ‘OS" => "4 años",
+            "1 ANO" or "1 ANIO" => "1 año",
+            "2 ANOS" or "2 ANIOS" => "2 años",
+            "3 ANOS" or "3 ANIOS" => "3 años",
+            "4 ANOS" or "4 ANIOS" => "4 años",
+            "5 ANOS" or "5 ANIOS" => "5 años",
             _ => normalized
         };
     }

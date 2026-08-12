@@ -161,10 +161,11 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
                 {
                     column.Item()
                         .AlignCenter()
+                        .MaxHeight(78)
                         .MaxWidth(92)
                         .PaddingBottom(4)
                         .Image(logoEmisor)
-                        .FitWidth();
+                        .FitArea();
                 }
                 else
                 {

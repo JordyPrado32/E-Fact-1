@@ -190,10 +190,11 @@ public sealed class EmisorCertificadoValidator
 
         try
         {
+            // 1. Usa la bandera MachineKeySet para que el usuario IWPD_ no dependa de un perfil cargado.
             using var certificado = new X509Certificate2(
                 rutaFirma,
                 passwordFirma,
-                X509KeyStorageFlags.EphemeralKeySet);
+                X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.Exportable);
 
             var ahora = DateTime.Now;
             var estaVigente = certificado.NotBefore <= ahora && certificado.NotAfter > ahora;
