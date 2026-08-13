@@ -3,10 +3,12 @@
 @using System.Security.Claims
 @using Microsoft.JSInterop
 @using Simetric.Extensions
+@using Simetric.Data
 @using Simetric.Services
 @using Simetric.Services.EContax
 @using Simetric.Services.EDeclara
 @using Simetric.Services.ESign
+@using Microsoft.EntityFrameworkCore
 @implements IDisposable
 @inject NavigationManager NavManager
 @inject IJSRuntime JS
@@ -17,6 +19,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject AppAccessService AppAccessService
+@inject IDbContextFactory<AppDbContext> DbFactory
 @inject ILogger<MainLayout> Logger
 
 @if (!ShouldRenderShell)
@@ -230,7 +233,7 @@ else
                                     <span class="session-label">Sesion activa</span>
                                     <span class="user-name">@GetDisplayName(context.User)</span>
                                 </div>
-                                <img src="@GetUserAvatar(context.User)" class="user-avatar" alt="Avatar del usuario" />
+                                <img src="@GetUserAvatar(context.User, _avatarUrlActual)" class="user-avatar" alt="Avatar del usuario" />
                                 <i class="bi bi-gear session-profile-chevron"></i>
                             </button>
 
@@ -930,6 +933,8 @@ else
     private bool _tieneProductosActivos;
     private bool _layoutAuthResolved;
     private bool _layoutUserAuthenticated;
+    private int? _avatarUsuarioActual;
+    private string? _avatarUrlActual;
     private string? _readyConfirmationStorageKey;
     private string? _onboardingBotSessionStorageKey;
     private string? _onboardingBotDismissedStepKey;
@@ -1046,6 +1051,7 @@ else
         _layoutAuthResolved = true;
         _layoutUserAuthenticated = authState.User.Identity?.IsAuthenticated == true;
         _puedeCambiarServicioHeader = EsAdministradorNumerica(authState.User);
+        await CargarAvatarActualAsync(authState.User);
     }
 
     protected override void OnInitialized()
@@ -1696,8 +1702,39 @@ else
             : value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    private static string GetUserAvatar(ClaimsPrincipal user)
-        => ResolveAvatarUrl(user.FindFirst("AvatarUrl")?.Value);
+    private async Task CargarAvatarActualAsync(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            _avatarUsuarioActual = null;
+            _avatarUrlActual = null;
+            return;
+        }
+
+        var idUsuario = ObtenerIdUsuario(user);
+        if (idUsuario is null)
+        {
+            _avatarUsuarioActual = null;
+            _avatarUrlActual = null;
+            return;
+        }
+
+        if (_avatarUsuarioActual == idUsuario && !string.IsNullOrWhiteSpace(_avatarUrlActual))
+            return;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        _avatarUrlActual = await context.Usuarios
+            .AsNoTracking()
+            .Where(u => u.IdUsuario == idUsuario.Value)
+            .Select(u => u.AvatarUrl)
+            .FirstOrDefaultAsync();
+        _avatarUsuarioActual = idUsuario;
+    }
+
+    private static string GetUserAvatar(ClaimsPrincipal user, string? avatarUrlActual)
+        => ResolveAvatarUrl(!string.IsNullOrWhiteSpace(avatarUrlActual)
+            ? avatarUrlActual
+            : user.FindFirst("AvatarUrl")?.Value);
 
     private static string ResolveAvatarUrl(string? avatarUrl)
     {
