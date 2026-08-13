@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Components.Helpers;
 using Simetric.Data;
@@ -136,10 +136,17 @@ public class PerfilController : ControllerBase
         if (usuario is null)
             return NotFound("Usuario no encontrado.");
 
-        var avatarsPath = Path.Combine(_environment.WebRootPath, "images", "Avatars");
+        var avatarsPath = Path.Combine(_environment.WebRootPath, "images", "Avatars", "uploads");
         Directory.CreateDirectory(avatarsPath);
 
-        var fileName = $"avatar_{Guid.NewGuid()}{extension}";
+        if (!string.IsNullOrWhiteSpace(usuario.AvatarUrl) && usuario.AvatarUrl.Contains("images/Avatars/uploads/", StringComparison.OrdinalIgnoreCase))
+        {
+            var oldPath = Path.Combine(_environment.WebRootPath, usuario.AvatarUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            if (System.IO.File.Exists(oldPath))
+                System.IO.File.Delete(oldPath);
+        }
+
+        var fileName = $"avatar_user_{idUsuario.Value}_{Guid.NewGuid()}{extension}";
         var fullPath = Path.Combine(avatarsPath, fileName);
 
         await using (var stream = System.IO.File.Create(fullPath))
@@ -147,7 +154,7 @@ public class PerfilController : ControllerBase
             await file.CopyToAsync(stream);
         }
 
-        var avatarUrl = $"images/Avatars/{fileName}";
+        var avatarUrl = $"images/Avatars/uploads/{fileName}";
         usuario.AvatarUrl = avatarUrl;
         await _context.SaveChangesAsync();
 
