@@ -8,6 +8,7 @@ namespace Simetric.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/centro-normativo")]
+[Route("api/configuracion/centro-normativo")]
 public class CentroNormativoController : ControllerBase
 {
     private readonly NormativaLegalService _normativaService;
