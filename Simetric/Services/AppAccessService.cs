@@ -10,6 +10,7 @@ public sealed class AppAccessService
 {
     public const string AdminRoleId = "2";
     public const string FreeServiceKey = "e-fact";
+    public const string ESignFreeServiceKey = "e-sign";
     public const string EContaxServiceKey = EContaxRoutes.ServiceKey;
     public const string EContaxRoute = EContaxRoutes.Root;
     public const string EDeclaraServiceKey = EDeclaraRoutes.ServiceKey;
@@ -132,7 +133,8 @@ public sealed class AppAccessService
         await using var context = await _dbFactory.CreateDbContextAsync();
         var services = await context.AppServicios
             .AsNoTracking()
-            .Where(x => x.Estado && x.RequiereSuscripcion && x.Clave != FreeServiceKey)
+            .Where(x => x.Estado && x.RequiereSuscripcion &&
+                        x.Clave != FreeServiceKey && x.Clave != ESignFreeServiceKey)
             .OrderBy(x => x.OrdenVisual)
             .ThenBy(x => x.Nombre)
             .ToListAsync();
@@ -168,7 +170,7 @@ public sealed class AppAccessService
         var service = await context.AppServicios
             .FirstOrDefaultAsync(x => x.Estado && x.Clave == normalizedKey);
 
-        if (service is null || !service.RequiereSuscripcion || service.Clave == FreeServiceKey)
+        if (service is null || !service.RequiereSuscripcion || IsFreeServiceKey(service.Clave))
             return;
 
         var existing = await context.UsuarioServicioSuscripciones
@@ -214,7 +216,8 @@ public sealed class AppAccessService
         await using var context = await _dbFactory.CreateDbContextAsync();
         return await context.AppServicios
             .AsNoTracking()
-            .Where(x => x.Estado && x.RequiereSuscripcion && x.Clave != FreeServiceKey)
+            .Where(x => x.Estado && x.RequiereSuscripcion &&
+                        x.Clave != FreeServiceKey && x.Clave != ESignFreeServiceKey)
             .OrderBy(x => x.OrdenVisual)
             .ThenBy(x => x.Nombre)
             .ToListAsync();
@@ -253,8 +256,7 @@ public sealed class AppAccessService
             };
         }
 
-        if (!service.RequiereSuscripcion ||
-            string.Equals(service.Clave, FreeServiceKey, StringComparison.OrdinalIgnoreCase))
+        if (!service.RequiereSuscripcion || IsFreeServiceKey(service.Clave))
         {
             return new AppServiceAccessDecision
             {
@@ -445,6 +447,10 @@ public sealed class AppAccessService
             StatusText = "Suscripcion requerida"
         };
     }
+
+    private static bool IsFreeServiceKey(string? serviceKey) =>
+        string.Equals(serviceKey, FreeServiceKey, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(serviceKey, ESignFreeServiceKey, StringComparison.OrdinalIgnoreCase);
 
     // ── ÚNICO método BuildEnsureSchemaStatements, completo y correcto ──────────
     private static IEnumerable<string> BuildEnsureSchemaStatements()

@@ -235,9 +235,9 @@
                 <div class="panel-header">
                     <div>
                         <h3>Novedades importantes de clientes</h3>
-                        <span>Firmas por caducar y usuarios con 1 documento</span>
+                        <span>Solicitudes pagadas por gestionar y usuarios con bajo saldo</span>
                     </div>
-                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver clientes</button>
+                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/solicitudes-firmas")'>Ver solicitudes</button>
                 </div>
                 <div class="activity-feed">
                     @foreach (var act in importantAlerts)
@@ -324,7 +324,7 @@
     private int ventasDiaCount;
     private int ventasMesCount;
     private int licenciasEFactActivas;
-    private int firmasESignActivas;
+    private int solicitudesFirmaPendientes;
     private int cobrosPendientesCount;
     private decimal totalCanales;
     private decimal totalProductos;
@@ -487,28 +487,23 @@
             // 4. Ingresos del mes (sin baseline)
             ingresosMesVal = ventasMes;
 
-            // 5. Suscripciones y firmas próximas a vencer (excluyendo administradores)
+            // 5. Suscripciones próximas a vencer y solicitudes de firma pendientes de traspaso.
             var suscripcionesPorVencerList = suscripcionesActivas
                 .Where(s => s.FechaFin.HasValue && s.FechaFin.Value.Date >= DateTime.Today && s.FechaFin.Value.Date <= finVencimiento)
                 .ToList();
 
             var solicitudesFirma = await context.Set<UsuSolicitudFirma>()
                 .AsNoTracking()
-                .Where(s => (s.SolActivo || s.SolIdEstadoNumerica == 3) && activeUserIds.Contains(s.SolIdUsuarioCliente))
+                .Where(s => s.SolActivo && activeUserIds.Contains(s.SolIdUsuarioCliente))
                 .ToListAsync();
 
-            var firmasVigentes = solicitudesFirma
-                .Select(s => new { Solicitud = s, Vence = CalcularExpiracion(s) })
-                .Where(s => s.Vence.Date >= DateTime.Today)
+            var solicitudesFirmaPorGestionar = solicitudesFirma
+                .Where(s => s.SolPagoExitoso == true && s.SolIdEstadoNumerica != 3 && s.SolIdEstadoNumerica != 4)
+                .OrderBy(s => s.SolFechaPago ?? s.SolFechaSolicitud)
                 .ToList();
 
-            var firmasPorVencer = firmasVigentes
-                .Where(s => s.Vence.Date <= finVencimiento)
-                .ToList();
-
-            firmasESignActivas = firmasVigentes.Count;
-            var suscripcionesPorVencer = suscripcionesPorVencerList.Count + firmasPorVencer.Count;
-            renovacionesProximasVal = suscripcionesPorVencer;
+            solicitudesFirmaPendientes = solicitudesFirmaPorGestionar.Count;
+            renovacionesProximasVal = suscripcionesPorVencerList.Count;
 
             // 6. Suscripciones vencidas (sin baseline)
             var expiredCount = suscripciones.Count(s => s.Estado == "VENCIDA" || (s.FechaFin.HasValue && s.FechaFin.Value.Date < DateTime.Today));
@@ -543,11 +538,6 @@
                     "e-fact",
                     s.PlanActual ?? "Plan general",
                     s.FechaFin!.Value))
-                .Concat(firmasPorVencer.Select(f => new RenovacionDashboardDto(
-                    NombreFirma(f.Solicitud),
-                    "e-sign",
-                    f.Solicitud.SolVigencia,
-                    f.Vence)))
                 .OrderBy(r => r.FechaVence)
                 .Take(6)
                 .ToList();
@@ -900,15 +890,14 @@
                     DateTime.Today.AddMinutes(-usuario.IdUsuario)));
             }
 
-            foreach (var firma in firmasPorVencer.OrderBy(f => f.Vence))
+            foreach (var solicitudFirma in solicitudesFirmaPorGestionar)
             {
-                var diasRestantes = Math.Max(0, (firma.Vence.Date - DateTime.Today).Days);
                 alertasImportantes.Add(new ActivityDto(
-                    "ri-shield-keyhole-line",
-                    diasRestantes <= 7 ? "red" : "yellow",
-                    $"{NombreFirma(firma.Solicitud)} tiene su firma por caducar en {diasRestantes} día(s).",
-                    firma.Vence.ToString("dd/MM/yyyy"),
-                    firma.Vence));
+                    "ri-send-plane-line",
+                    "yellow",
+                    $"Solicitud #{solicitudFirma.SolId} de {NombreFirma(solicitudFirma)} pagada y pendiente de gestión en Uanataca.",
+                    (solicitudFirma.SolFechaPago ?? solicitudFirma.SolFechaSolicitud).ToString("dd/MM/yyyy"),
+                    solicitudFirma.SolFechaPago ?? solicitudFirma.SolFechaSolicitud));
             }
 
             if (!alertasImportantes.Any())
@@ -916,7 +905,7 @@
                 alertasImportantes.Add(new ActivityDto(
                     "ri-checkbox-circle-line",
                     "green",
-                    "No hay usuarios con 0 o 1 documento ni firmas por caducar.",
+                    "No hay solicitudes pagadas pendientes ni usuarios con bajo saldo.",
                     "Actualizado hoy",
                     DateTime.Now));
             }
@@ -1224,7 +1213,7 @@
         new KpiDashboardDto("ri-group-line", "green", "Clientes activos", $"e-fact {clientesActivosVal.ToString("N0", CultureInfo.InvariantCulture)}\neRúbrica 0 clientes", false, "", false, "", ""),
         new KpiDashboardDto("ri-file-list-3-line", "purple", "Documentos emitidos hoy", documentosHoyVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", ""),
         new KpiDashboardDto("ri-money-dollar-circle-line", "orange", "Ingresos del mes", Money(ingresosMesVal), false, "", false, "", ""),
-        new KpiDashboardDto("ri-calendar-event-line", "blue", "Renovaciones próximas", renovacionesProximasVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", "", "(30 días)"),
+        new KpiDashboardDto("ri-send-plane-line", "blue", "Solicitudes por gestionar", solicitudesFirmaPendientes.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", "", "Pagadas · Uanataca"),
         new KpiDashboardDto("ri-alert-line", "red", "Suscripciones vencidas", suscripcionesVencidasVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", "")
     ];
 

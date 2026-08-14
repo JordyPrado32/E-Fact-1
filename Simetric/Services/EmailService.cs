@@ -97,6 +97,10 @@ public interface IEmailService
         string? reference,
         string? authorizationCode,
         int solicitudId);
+    Task EnviarSolicitudFirmaProcesadaAsync(
+        string emailDestino,
+        string? nombreCliente,
+        int solicitudId);
     Task EnviarAvisoRenovacionFirmaAsync(
         string emailDestino,
         string? nombreCliente,
@@ -126,6 +130,7 @@ public class EmailService : IEmailService
     private readonly List<string> _notificacionPagosDestinatarios;
     private readonly string _urlAccesoPlataforma;
     private readonly string _urlSoportePlataforma;
+    private readonly string _urlConfiguracionFirma;
     private readonly string _asesoraComercial;
     private readonly string _telefonoAsesoraComercial;
 
@@ -163,6 +168,7 @@ public class EmailService : IEmailService
         var appBaseUrl = configuration["AppBaseUrl"] ?? "https://efact.numericasoftware.com/";
         _urlAccesoPlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "login").ToString();
         _urlSoportePlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "soporte").ToString();
+        _urlConfiguracionFirma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "e-sign/configuracion/firma").ToString();
         _asesoraComercial = configuration["WhatsAppCloudApi:CommercialAdvisorName"]?.Trim() ?? "Brigitte";
         _telefonoAsesoraComercial = new string(
             (configuration["WhatsAppCloudApi:CommercialAdvisorPhoneNumber"] ?? string.Empty)
@@ -1379,6 +1385,54 @@ Atentamente,
         };
 
         mensaje.Body = bodyBuilder.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarSolicitudFirmaProcesadaAsync(
+        string emailDestino,
+        string? nombreCliente,
+        int solicitudId)
+    {
+        if (string.IsNullOrWhiteSpace(emailDestino))
+            throw new ArgumentException("La solicitud procesada no tiene un correo de destino.", nameof(emailDestino));
+
+        var destinatario = MailboxAddress.Parse(emailDestino.Trim());
+        var clienteSeguro = WebUtility.HtmlEncode(
+            string.IsNullOrWhiteSpace(nombreCliente) ? "Estimado cliente" : nombreCliente.Trim());
+        var urlFirmaSegura = WebUtility.HtmlEncode(_urlConfiguracionFirma);
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(destinatario);
+        mensaje.Subject = $"Tu solicitud #{solicitudId} fue procesada | E-Rubrica";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = $@"
+<!doctype html>
+<html lang='es'>
+<body style='margin:0;padding:0;background:#f1f7f2;font-family:Segoe UI,Arial,sans-serif;color:#173524;'>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;background:#f1f7f2;'>
+    <tr><td align='center' style='padding:28px 12px;'>
+      <table role='presentation' width='620' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:620px;background:#ffffff;border:1px solid #cfe4d2;'>
+        <tr><td style='padding:28px 32px;background:#237a35;color:#ffffff;'>
+          <div style='font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;'>Numerica E-Rubrica</div>
+          <div style='margin-top:8px;font-size:26px;font-weight:850;'>Tu solicitud fue procesada</div>
+        </td></tr>
+        <tr><td style='padding:30px 32px;font-size:15px;line-height:1.7;color:#405748;'>
+          <p style='margin:0 0 16px;'>Hola <strong>{clienteSeguro}</strong>, la solicitud <strong>#{solicitudId}</strong> ya se encuentra procesada.</p>
+          <p style='margin:0 0 20px;'>Ingresa a E-Rubrica para revisarla. No olvides cargar tu archivo de firma <strong>.p12</strong> y su clave en <strong>Configurar firma</strong>; este paso es necesario para firmar tus documentos PDF.</p>
+          <table role='presentation' cellpadding='0' cellspacing='0' border='0'><tr><td bgcolor='#237a35' style='border-radius:7px;'>
+            <a href='{urlFirmaSegura}' target='_blank' style='display:inline-block;padding:13px 22px;color:#ffffff;text-decoration:none;font-weight:800;'>Revisar y cargar mi firma</a>
+          </td></tr></table>
+          <p style='margin:22px 0 0;font-size:13px;color:#64766a;'>Por seguridad, no compartas la clave de tu certificado con otras personas.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"
+        }.ToMessageBody();
 
         await SendMessageAsync(mensaje);
     }

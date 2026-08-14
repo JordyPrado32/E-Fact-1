@@ -4,9 +4,13 @@
 @using Simetric.Models
 @using Simetric.Services
 @using System.Security.Claims
+@using System.Text
+@using System.Text.Json
+@using Microsoft.JSInterop
 @inject SolicitudService SolicitudService
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
 
 <div class="solicitud-detalle-shell">
     <button type="button" class="solicitud-back" @onclick="Volver">
@@ -46,6 +50,50 @@
                 <span class="solicitud-chip @GetPagoClass(solicitud)">
                     @GetEstadoPago(solicitud)
                 </span>
+            </div>
+        </section>
+
+        <section class="solicitud-uanataca-panel">
+            <div class="solicitud-uanataca-head">
+                <div>
+                    <span class="solicitud-kicker">Traspaso operativo</span>
+                    <h4>Ficha lista para Uanataca</h4>
+                    <p>Copia un dato, una columna completa o dos filas para pegarlas directamente en Excel.</p>
+                </div>
+                <div class="solicitud-copy-actions">
+                    <button type="button" @onclick='() => CopiarFichaAsync("columna")'>
+                        <i class="bi bi-layout-text-sidebar"></i> Etiqueta y valor
+                    </button>
+                    <button type="button" @onclick='() => CopiarFichaAsync("fila")'>
+                        <i class="bi bi-table"></i> Filas para Excel
+                    </button>
+                    <button type="button" @onclick='() => CopiarFichaAsync("valores")'>
+                        <i class="bi bi-text-paragraph"></i> Solo valores
+                    </button>
+                    <button type="button" @onclick='() => CopiarFichaAsync("json")'>
+                        <i class="bi bi-braces"></i> JSON
+                    </button>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(mensajeCopiado))
+            {
+                <div class="solicitud-copy-feedback"><i class="bi bi-check2-circle"></i> @mensajeCopiado</div>
+            }
+
+            <div class="solicitud-uanataca-grid">
+                @foreach (var dato in DatosUanataca)
+                {
+                    <article class="solicitud-uanataca-field">
+                        <div>
+                            <small>@dato.Etiqueta</small>
+                            <strong>@Valor(dato.Valor)</strong>
+                        </div>
+                        <button type="button" title="Copiar @dato.Etiqueta" @onclick="() => CopiarDatoAsync(dato)">
+                            <i class="bi bi-copy"></i>
+                        </button>
+                    </article>
+                }
             </div>
         </section>
 
@@ -224,6 +272,46 @@
                         <dd>@(solicitud.SolFechaPago is null ? "Sin fecha" : solicitud.SolFechaPago.Value.ToString("dd/MM/yyyy HH:mm"))</dd>
                     </div>
                 </dl>
+            </section>
+
+            <section class="solicitud-detalle-panel solicitud-detalle-panel-wide solicitud-procesamiento-panel">
+                <div>
+                    <span class="solicitud-kicker">Cierre de solicitud</span>
+                    <h4>@(solicitud.SolIdEstadoNumerica == 3 ? "Solicitud procesada" : "Marcar como procesada")</h4>
+                    <p class="solicitud-panel-help">
+                        @(solicitud.SolIdEstadoNumerica == 3
+                            ? "El cliente ya puede revisar el resultado y configurar su firma en E-Rubrica."
+                            : "Al confirmar, se actualizara el estado y se enviara al cliente un correo para revisar la solicitud y cargar su firma en E-Rubrica.")
+                    </p>
+                </div>
+
+                @if (solicitud.SolIdEstadoNumerica != 3)
+                {
+                    <button type="button"
+                            class="solicitud-save-state solicitud-process-button"
+                            disabled="@(procesandoSolicitud || solicitud.SolPagoExitoso != true)"
+                            @onclick="MarcarProcesadaAsync">
+                        @if (procesandoSolicitud)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status"></span>
+                            <span>Procesando</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-check2-circle"></i>
+                            <span>Marcar procesada y notificar</span>
+                        }
+                    </button>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(mensajeProcesamiento))
+                {
+                    <div class="solicitud-status-message is-success"><i class="bi bi-check-circle"></i><span>@mensajeProcesamiento</span></div>
+                }
+                @if (!string.IsNullOrWhiteSpace(errorProcesamiento))
+                {
+                    <div class="solicitud-status-message is-error"><i class="bi bi-exclamation-triangle"></i><span>@errorProcesamiento</span></div>
+                }
             </section>
 
             <section class="solicitud-detalle-panel solicitud-detalle-panel-wide solicitud-correccion-panel">
@@ -474,7 +562,15 @@
     private string? errorSolicitudUsuario;
     private string detalleCorreccion = "Por favor revisa los datos marcados y vuelve a ingresarlos correctamente.";
     private bool guardandoCorreccion;
+    private bool procesandoSolicitud;
+    private string? mensajeProcesamiento;
+    private string? errorProcesamiento;
+    private string? mensajeCopiado;
     private readonly HashSet<string> camposSeleccionados = new(StringComparer.OrdinalIgnoreCase);
+
+    private IReadOnlyList<DatoUanataca> DatosUanataca => solicitud is null
+        ? Array.Empty<DatoUanataca>()
+        : ConstruirDatosUanataca(solicitud);
 
     private IEnumerable<CampoCorregible> CamposCorregibles =>
         solicitud is null
@@ -579,6 +675,85 @@
     }
 
     private void Volver() => Navigation.NavigateTo(RutaRetorno);
+
+    private async Task CopiarDatoAsync(DatoUanataca dato)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", LimpiarParaCopiar(dato.Valor));
+        mensajeCopiado = $"{dato.Etiqueta} copiado.";
+    }
+
+    private async Task CopiarFichaAsync(string formato)
+    {
+        var datos = DatosUanataca;
+        if (datos.Count == 0)
+            return;
+
+        var texto = formato switch
+        {
+            "fila" => string.Join('\t', datos.Select(d => LimpiarParaCopiar(d.Etiqueta))) + Environment.NewLine +
+                      string.Join('\t', datos.Select(d => LimpiarParaCopiar(d.Valor))),
+            "valores" => string.Join(Environment.NewLine, datos.Select(d => LimpiarParaCopiar(d.Valor))),
+            "json" => JsonSerializer.Serialize(
+                datos.ToDictionary(d => d.Clave, d => LimpiarParaCopiar(d.Valor)),
+                new JsonSerializerOptions { WriteIndented = true }),
+            _ => string.Join(Environment.NewLine, datos.Select(d => $"{LimpiarParaCopiar(d.Etiqueta)}\t{LimpiarParaCopiar(d.Valor)}"))
+        };
+
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", texto);
+        mensajeCopiado = formato switch
+        {
+            "fila" => "Encabezados y valores copiados para Excel.",
+            "valores" => "Valores copiados en columna.",
+            "json" => "Ficha JSON copiada.",
+            _ => "Ficha completa copiada."
+        };
+    }
+
+    private static IReadOnlyList<DatoUanataca> ConstruirDatosUanataca(UsuSolicitudFirma sol)
+    {
+        var datos = new List<DatoUanataca>
+        {
+            new("tipoPersona", "Tipo de persona", GetTipoPersonaLabel(sol.SolTipoPersona)),
+            new("tipoIdentificacion", "Tipo de identificación", GetTipoIdentificacionLabel(sol.SolTipoIdentificacion)),
+            new("identificacion", "Identificación", sol.SolIdentificacion),
+            new("codigoDactilar", "Código dactilar", sol.SolCodigoDactilar),
+            new("nombres", "Nombres", sol.SolNombres),
+            new("primerApellido", "Primer apellido", sol.SolPrimerApellido),
+            new("segundoApellido", "Segundo apellido", sol.SolSegundoApellido),
+            new("fechaNacimiento", "Fecha de nacimiento", sol.SolFechaNacimiento.ToString("yyyy-MM-dd")),
+            new("sexo", "Sexo", GetSexoLabel(sol.SolSexo)),
+            new("nacionalidad", "Nacionalidad", sol.SolNacionalidad),
+            new("ruc", "RUC", sol.SolNroRuc),
+            new("celular", "Celular", sol.SolTelefono1),
+            new("telefonoSecundario", "Teléfono secundario", sol.SolTelefono2),
+            new("correo", "Correo principal", sol.SolCorreo1),
+            new("correoSecundario", "Correo secundario", sol.SolCorreo2),
+            new("provincia", "Provincia", sol.SolProvincia),
+            new("canton", "Cantón", sol.SolCanton),
+            new("direccion", "Dirección", sol.SolDireccion),
+            new("formatoFirma", "Formato de firma", GetFormatoFirma(sol.SolFormatoFirma)),
+            new("vigencia", "Vigencia", sol.SolVigencia)
+        };
+
+        if (string.Equals(sol.SolTipoPersona, "JURIDICA", StringComparison.OrdinalIgnoreCase))
+        {
+            datos.AddRange([
+                new("razonSocial", "Razón social", sol.SolCompanyName),
+                new("departamento", "Departamento", sol.SolDepartment),
+                new("cargo", "Cargo del titular", sol.SolPosition),
+                new("motivo", "Motivo de firma", sol.SolReason),
+                new("tipoIdentificacionRepresentante", "Tipo de identificación del representante", sol.SolIdentificationTypeManager),
+                new("identificacionRepresentante", "Identificación del representante", sol.SolIdentificationManager),
+                new("nombresRepresentante", "Nombres del representante", sol.SolNamesManager),
+                new("apellidosRepresentante", "Apellidos del representante", sol.SolLastNameManager)
+            ]);
+        }
+
+        return datos.Where(d => !string.IsNullOrWhiteSpace(d.Valor)).ToArray();
+    }
+
+    private static string LimpiarParaCopiar(string? valor) =>
+        (valor ?? string.Empty).Replace('\t', ' ').Replace("\r", " ").Replace("\n", " ").Trim();
 
     private async Task EnviarCorreccionCamposAsync()
     {
@@ -686,6 +861,46 @@
             ?? authState.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
         return int.TryParse(idClaim, out var usuarioSoporteId) ? usuarioSoporteId : 0;
+    }
+
+    private async Task MarcarProcesadaAsync()
+    {
+        if (solicitud is null || procesandoSolicitud || solicitud.SolPagoExitoso != true)
+            return;
+
+        procesandoSolicitud = true;
+        mensajeProcesamiento = null;
+        errorProcesamiento = null;
+
+        try
+        {
+            var usuarioSoporteId = await ObtenerUsuarioSoporteIdAsync();
+            var actualizado = await SolicitudService.ActualizarEstadoAsync(
+                solicitud.SolId,
+                3,
+                "Solicitud procesada en BackOffice. Se notifico al cliente para revisar y configurar su firma en E-Rubrica.",
+                usuarioSoporteId);
+
+            if (!actualizado)
+            {
+                errorProcesamiento = SolicitudService.UltimoErrorActualizarEstado ?? "No se pudo procesar la solicitud.";
+                return;
+            }
+
+            await RecargarSolicitudAsync();
+            if (SolicitudService.UltimoCorreoProcesadaEnviado)
+            {
+                mensajeProcesamiento = "Solicitud procesada y correo enviado al cliente correctamente.";
+            }
+            else
+            {
+                errorProcesamiento = SolicitudService.UltimoErrorActualizarEstado ?? "La solicitud se proceso, pero el correo no fue enviado.";
+            }
+        }
+        finally
+        {
+            procesandoSolicitud = false;
+        }
     }
 
     private async Task RecargarSolicitudAsync()
@@ -999,4 +1214,6 @@
         string Nombre,
         string Ayuda,
         IReadOnlyList<CampoCorregible> Campos);
+
+    private sealed record DatoUanataca(string Clave, string Etiqueta, string? Valor);
 }

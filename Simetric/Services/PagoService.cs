@@ -57,6 +57,12 @@ namespace Simetric.Services
             decimal total = Math.Round(subtotal + iva, 2);
             var esignBearerToken = _configuration["Pagomedios:ESignBearerToken"];
 
+            if (string.IsNullOrWhiteSpace(esignBearerToken))
+            {
+                _logger.LogError("No se puede generar el pago de E-Rubrica: falta Pagomedios:ESignBearerToken.");
+                return null;
+            }
+
             var request = new
             {
                 integration = true,
@@ -73,7 +79,7 @@ namespace Simetric.Services
                         : "Individual"
                 },
                 generate_invoice = 0,
-                description = "Pago de Firma Electronica E-FACT",
+                description = $"Pago de Firma Electronica E-Rubrica - Solicitud #{sol.SolId}",
                 amount = total,
                 amount_with_tax = subtotal,
                 amount_without_tax = 0m,

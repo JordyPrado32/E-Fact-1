@@ -1050,7 +1050,7 @@ else
         var authState = await LayoutAuthenticationStateTask;
         _layoutAuthResolved = true;
         _layoutUserAuthenticated = authState.User.Identity?.IsAuthenticated == true;
-        _puedeCambiarServicioHeader = EsAdministradorNumerica(authState.User);
+        _puedeCambiarServicioHeader = _layoutUserAuthenticated;
         await CargarAvatarActualAsync(authState.User);
     }
 
@@ -1088,6 +1088,7 @@ else
         if (user.Identity?.IsAuthenticated != true) return;
 
         await CargarServiciosHeaderAsync(user);
+        await RecordarModuloActualAsync(user, NavManager.Uri);
 
         if (!IsEContaxContext && !IsEDeclaraContext && !IsESignContext)
         {
@@ -1172,6 +1173,7 @@ else
             if (user.Identity?.IsAuthenticated == true)
             {
                 await CargarServiciosHeaderAsync(user);
+                await RecordarModuloActualAsync(user, e.Location);
 
                 var idTipoUsuario = user.FindFirst("IdTipoUsuario")?.Value;
                 if (string.Equals(idTipoUsuario, "7", StringComparison.OrdinalIgnoreCase))
@@ -1407,19 +1409,15 @@ else
             return;
 
         var esSuperAdmin = EsAdministradorNumerica(user);
-        _puedeCambiarServicioHeader = esSuperAdmin;
-        if (!esSuperAdmin)
-        {
-            _serviciosHeader.Clear();
-            return;
-        }
+        _puedeCambiarServicioHeader = true;
 
         _cargandoServiciosHeader = true;
         try
         {
             var catalogo = await AppAccessService.GetCatalogForUserAsync(userId.Value, esSuperAdmin);
             _serviciosHeader.Clear();
-            _serviciosHeader.AddRange(catalogo.Where(ServicioVisibleEnHeader));
+            _serviciosHeader.AddRange(catalogo.Where(item =>
+                ServicioVisibleEnHeader(item) && (esSuperAdmin || item.TieneAcceso)));
         }
         catch (Exception ex)
         {
@@ -1434,7 +1432,9 @@ else
     private async Task IrAlServicioHeaderAsync(AppServiceCatalogItem item)
     {
         _mostrarMenuServicios = false;
-        await SelectedAppServiceState.SetCurrentServiceKeyAsync(item.Clave);
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userId = ObtenerIdUsuario(authState.User);
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(item.Clave, userId);
 
         if (!item.TieneAcceso)
         {
@@ -1444,6 +1444,35 @@ else
 
         var destino = string.IsNullOrWhiteSpace(item.RutaAcceso) ? "/portal-servicios" : item.RutaAcceso;
         NavManager.NavigateToIfNeeded(destino);
+    }
+
+    private async Task RecordarModuloActualAsync(ClaimsPrincipal user, string location)
+    {
+        var userId = ObtenerIdUsuario(user);
+        if (userId is null or <= 0 || BackOfficeRoutes.IsBackOfficePath(NavManager, location) || IsDemoPath(location))
+            return;
+
+        string? serviceKey = null;
+        if (IsESignPath(location))
+            serviceKey = AppAccessService.ESignFreeServiceKey;
+        else if (IsEContaxPath(location))
+            serviceKey = AppAccessService.EContaxServiceKey;
+        else if (IsEDeclaraPath(location))
+            serviceKey = AppAccessService.EDeclaraServiceKey;
+        else
+        {
+            var relative = NavManager.ToBaseRelativePath(location).Split('?', '#')[0].Trim('/');
+            if (!string.IsNullOrWhiteSpace(relative) &&
+                !relative.StartsWith("portal-servicios", StringComparison.OrdinalIgnoreCase) &&
+                !relative.StartsWith("suscripciones", StringComparison.OrdinalIgnoreCase) &&
+                !relative.StartsWith("servicios/", StringComparison.OrdinalIgnoreCase))
+            {
+                serviceKey = AppAccessService.FreeServiceKey;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(serviceKey))
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(serviceKey, userId);
     }
 
     private void IrAPortalServicios()

@@ -38,20 +38,28 @@ namespace Simetric.Services
         private readonly IDataProtector _firmaProtector;
         private readonly BesPrecompraService _besPrecompraService;
         private readonly IConfiguration _configuration;
+        private readonly IEmailService _emailService;
+        private readonly ILogger<SolicitudService> _logger;
         public string? UltimoErrorCrearSolicitud { get; private set; }
+        public bool UltimoCorreoProcesadaEnviado { get; private set; }
+        public string? UltimoErrorActualizarEstado { get; private set; }
 
         public SolicitudService(
             IDbContextFactory<AppDbContext> contextFactory,
             IWebHostEnvironment env,
             IDataProtectionProvider dataProtectionProvider,
             BesPrecompraService besPrecompraService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IEmailService emailService,
+            ILogger<SolicitudService> logger)
         {
             _contextFactory = contextFactory;
             _env = env;
             _firmaProtector = dataProtectionProvider.CreateProtector("Simetric.SolicitudFirma.P12.v1");
             _besPrecompraService = besPrecompraService;
             _configuration = configuration;
+            _emailService = emailService;
+            _logger = logger;
         }
 
         // --- MÉTODOS PARA EL USUARIO (CLIENTE) ---
@@ -1928,6 +1936,8 @@ namespace Simetric.Services
 
         public async Task<bool> ActualizarEstadoAsync(int solId, int nuevoEstadoId, string comentario, int usuarioSoporteId)
         {
+            UltimoCorreoProcesadaEnviado = false;
+            UltimoErrorActualizarEstado = null;
             await using var strategyContext = await _contextFactory.CreateDbContextAsync();
             var strategy = strategyContext.Database.CreateExecutionStrategy();
 
@@ -1942,6 +1952,7 @@ namespace Simetric.Services
                     if (solicitud == null) return false;
 
                     int? anteriorEstado = solicitud.SolIdEstadoNumerica;
+                    var debeNotificarProcesada = nuevoEstadoId == 3 && anteriorEstado != 3;
 
                     solicitud.SolIdEstadoNumerica = nuevoEstadoId;
                     solicitud.SolFechaActualizacion = DateTime.Now;
@@ -1963,11 +1974,38 @@ namespace Simetric.Services
 
                     await context.SaveChangesAsync();
                     await transaction.CommitAsync();
+
+                    if (debeNotificarProcesada)
+                    {
+                        try
+                        {
+                            var nombreCliente = string.Join(" ", new[]
+                            {
+                                solicitud.SolNombres,
+                                solicitud.SolPrimerApellido,
+                                solicitud.SolSegundoApellido
+                            }.Where(valor => !string.IsNullOrWhiteSpace(valor)));
+
+                            await _emailService.EnviarSolicitudFirmaProcesadaAsync(
+                                solicitud.SolCorreo1,
+                                nombreCliente,
+                                solicitud.SolId);
+                            UltimoCorreoProcesadaEnviado = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            UltimoErrorActualizarEstado = "La solicitud quedo procesada, pero no se pudo enviar el correo al cliente.";
+                            _logger.LogError(ex, "No se pudo notificar por correo la solicitud procesada {SolId}.", solicitud.SolId);
+                        }
+                    }
+
                     return true;
                 }
-                catch
+                catch (Exception ex)
                 {
                     await transaction.RollbackAsync();
+                    UltimoErrorActualizarEstado = "No se pudo actualizar el estado de la solicitud.";
+                    _logger.LogError(ex, "No se pudo actualizar el estado de la solicitud {SolId}.", solId);
                     return false;
                 }
             });

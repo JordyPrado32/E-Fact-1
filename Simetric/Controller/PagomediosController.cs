@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text;
+using System.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,7 +19,6 @@ namespace Simetric.Controllers
     {
         private readonly IDbContextFactory<AppDbContext> _dbFactory;
         private readonly IEmailService _emailService;
-        private readonly SolicitudService _solicitudService;
         private readonly CompraDocumentosFacturacionService _compraDocumentosFacturacionService;
         private readonly ILogger<PagomediosController> _logger;
         private static readonly JsonSerializerOptions HistorialJsonOptions = new()
@@ -30,13 +30,11 @@ namespace Simetric.Controllers
         public PagomediosController(
             IDbContextFactory<AppDbContext> dbFactory,
             IEmailService emailService,
-            SolicitudService solicitudService,
             CompraDocumentosFacturacionService compraDocumentosFacturacionService,
             ILogger<PagomediosController> logger)
         {
             _dbFactory = dbFactory;
             _emailService = emailService;
-            _solicitudService = solicitudService;
             _compraDocumentosFacturacionService = compraDocumentosFacturacionService;
             _logger = logger;
         }
@@ -79,22 +77,24 @@ namespace Simetric.Controllers
 
         private async Task<IActionResult> ProcesarNotificacionAsync(Dictionary<string, string> data)
         {
-            var solIdValue = ObtenerValor(data, "customValue", "custom_value", "customvalue");
-            var status = ObtenerValor(data, "status");
-            var reference = ObtenerValor(data, "reference");
-            var authorizationCode = ObtenerValor(data, "authorizationCode", "authorization_code");
+            var solIdValue = ObtenerValor(data, "customValue", "custom_value", "customvalue", "merchantData", "merchant_data");
+            var status = ObtenerValor(data, "status", "paymentStatus", "payment_status", "transactionStatus", "transaction_status", "state");
+            var reference = ObtenerValor(data, "reference", "transactionReference", "transaction_reference");
+            var authorizationCode = ObtenerValor(data, "authorizationCode", "authorization_code", "authorization");
             var cardBrand = ObtenerValor(data, "cardBrand", "card_brand");
-            var cardNumber = ObtenerValor(data, "cardNumber", "card_number");
 
             if (!int.TryParse(solIdValue, out var solId) || solId <= 0)
             {
-                _logger.LogWarning("Pagomedios retorno sin customValue valido. Datos: {Datos}", JsonSerializer.Serialize(data));
+                _logger.LogWarning(
+                    "Pagomedios retorno sin identificador valido para E-Rubrica. Campos recibidos: {Campos}",
+                    string.Join(", ", data.Keys));
                 return Redirect("/solicitud/pago/resultado?estado=sin-solicitud");
             }
 
             var pagoAprobado = EsPagoAprobado(status);
 
             await using var context = await _dbFactory.CreateDbContextAsync();
+            await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
             var solicitud = await context.UsuSolicitudFirma.FirstOrDefaultAsync(item => item.SolId == solId);
 
             if (solicitud is null)
@@ -103,10 +103,20 @@ namespace Simetric.Controllers
                 return Redirect($"/solicitud/pago/resultado?solId={solId}&estado=no-encontrada");
             }
 
-            var pagoAprobadoRecien = pagoAprobado && solicitud.SolPagoExitoso != true;
+            var pagoYaAprobado = solicitud.SolPagoExitoso == true;
+            var pagoAprobadoRecien = pagoAprobado && !pagoYaAprobado;
 
-            solicitud.SolPagoExitoso = pagoAprobado;
-            solicitud.SolIdTransaccionPago = FirstNonEmpty(reference, authorizationCode, solicitud.SolIdTransaccionPago);
+            // Un callback tardio, duplicado o pendiente nunca debe revertir un pago aprobado.
+            if (pagoAprobado)
+            {
+                solicitud.SolPagoExitoso = true;
+                solicitud.SolIdTransaccionPago = FirstNonEmpty(reference, authorizationCode, solicitud.SolIdTransaccionPago);
+            }
+            else if (!pagoYaAprobado)
+            {
+                solicitud.SolPagoExitoso = false;
+                solicitud.SolIdTransaccionPago = FirstNonEmpty(reference, authorizationCode, solicitud.SolIdTransaccionPago);
+            }
 
             if (pagoAprobado)
             {
@@ -140,6 +150,7 @@ namespace Simetric.Controllers
             }
 
             await context.SaveChangesAsync();
+            await transaction.CommitAsync();
 
             if (pagoAprobadoRecien)
             {
@@ -164,37 +175,18 @@ namespace Simetric.Controllers
                         solicitud.SolId);
                 }
 
-                try
-                {
-                    var besResult = await _solicitudService.SincronizarSolicitudBesAsync(solicitud.SolId);
-                    if (!besResult.Success)
-                    {
-                        _logger.LogWarning(
-                            "La solicitud {SolId} fue pagada pero no se pudo sincronizar con BES. Mensaje: {Mensaje}. Estado: {Estado}.",
-                            solicitud.SolId,
-                            besResult.Message,
-                            besResult.ProviderStatus);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "El pago de firma electronica {SolId} fue aprobado pero fallo el envio automatico a BES.",
-                        solicitud.SolId);
-                }
             }
 
             _logger.LogInformation(
-                "Pago Pagomedios recibido. SolId: {SolId}. Status: {Status}. Reference: {Reference}. Auth: {Authorization}. Brand: {Brand}. Card: {Card}",
+                "Pago E-Rubrica recibido. SolId: {SolId}. Status: {Status}. Aprobado almacenado: {Aprobado}. Reference: {Reference}. Auth: {Authorization}. Brand: {Brand}",
                 solId,
                 status,
+                solicitud.SolPagoExitoso == true,
                 reference,
                 authorizationCode,
-                cardBrand,
-                cardNumber);
+                cardBrand);
 
-            var estado = pagoAprobado ? "aprobado" : "pendiente";
+            var estado = solicitud.SolPagoExitoso == true ? "aprobado" : "pendiente";
             return Redirect($"/solicitud/pago/resultado?solId={solId}&estado={estado}&reference={Uri.EscapeDataString(reference ?? string.Empty)}&authorization={Uri.EscapeDataString(authorizationCode ?? string.Empty)}");
         }
 

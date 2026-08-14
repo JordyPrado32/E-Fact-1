@@ -8,15 +8,18 @@ public sealed class LoginDestinationService
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly SelectedAppServiceStateService _selectedAppServiceState;
     private readonly EmisorOnboardingService _emisorOnboardingService;
+    private readonly AppAccessService _appAccessService;
 
     public LoginDestinationService(
         IDbContextFactory<AppDbContext> dbFactory,
         SelectedAppServiceStateService selectedAppServiceState,
-        EmisorOnboardingService emisorOnboardingService)
+        EmisorOnboardingService emisorOnboardingService,
+        AppAccessService appAccessService)
     {
         _dbFactory = dbFactory;
         _selectedAppServiceState = selectedAppServiceState;
         _emisorOnboardingService = emisorOnboardingService;
+        _appAccessService = appAccessService;
     }
 
     public async Task<string> PrepareDestinationAsync(int userId, int? roleId = null, string? returnUrl = null)
@@ -68,7 +71,17 @@ public sealed class LoginDestinationService
             return "/portal-servicios";
         }
 
-        await _selectedAppServiceState.SetCurrentServiceKeyAsync(AppAccessService.FreeServiceKey);
+        var ultimoServicio = await _selectedAppServiceState.GetCurrentServiceKeyAsync(userId);
+        if (!string.IsNullOrWhiteSpace(ultimoServicio))
+        {
+            var acceso = await _appAccessService.CanAccessAsync(userId, ultimoServicio, false);
+            if (acceso.HasAccess && !string.IsNullOrWhiteSpace(acceso.Route))
+            {
+                return acceso.Route;
+            }
+        }
+
+        await _selectedAppServiceState.SetCurrentServiceKeyAsync(AppAccessService.FreeServiceKey, userId);
         return "/dashboard";
     }
 
