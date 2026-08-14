@@ -53,6 +53,12 @@ public sealed class EmisionControlService
         public int? SaldoDocumentos { get; init; }
         public DateTime? FechaUltimaRecargaDocumentos { get; init; }
         public string? HistorialComprasDocumentosJson { get; init; }
+        public string? Nombres { get; init; }
+        public string? Apellidos { get; init; }
+        public string? NombreEmpresa { get; init; }
+        public string? Email { get; init; }
+        public string? Identificacion { get; init; }
+        public string? Celular { get; init; }
 
         public int IdUsuarioTitularCuenta =>
             EsAsociado && IdJefe is > 0
@@ -66,22 +72,26 @@ public sealed class EmisionControlService
     public const string MensajeSaldoAgotado =
         "Ya no tienes documentos disponibles. Para emitir mas comprobantes, realiza una nueva compra de documentos.";
     public const string RutaCompraDocumentos = "/compra-documentos";
+    private const string AccionAvisoSaldoAgotado = "AvisoSaldoAgotadoEfact";
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly AuditService _auditService;
     private readonly AuditActorResolver _auditActorResolver;
     private readonly EmisorCertificadoValidator _emisorCertificadoValidator;
+    private readonly IEmailService _emailService;
 
     public EmisionControlService(
         IDbContextFactory<AppDbContext> dbFactory,
         AuditService auditService,
         AuditActorResolver auditActorResolver,
-        EmisorCertificadoValidator emisorCertificadoValidator)
+        EmisorCertificadoValidator emisorCertificadoValidator,
+        IEmailService emailService)
     {
         _dbFactory = dbFactory;
         _auditService = auditService;
         _auditActorResolver = auditActorResolver;
         _emisorCertificadoValidator = emisorCertificadoValidator;
+        _emailService = emailService;
     }
 
     public event Action? Changed;
@@ -192,6 +202,11 @@ public sealed class EmisionControlService
                 saldoPrevio,
                 saldoNuevo,
                 detalle);
+        }
+
+        if (saldoNuevo?.SaldoDocumentos == 0)
+        {
+            await EnviarAvisoSaldoAgotadoSiCorrespondeAsync(context, usuarioInfo, idUsuarioSaldo);
         }
     }
 
@@ -331,6 +346,117 @@ public sealed class EmisionControlService
         return Math.Max(usuarioInfo.SaldoDocumentos ?? 0, 0);
     }
 
+    private async Task EnviarAvisoSaldoAgotadoSiCorrespondeAsync(
+        AppDbContext context,
+        UsuarioEmisionInfo usuarioInfo,
+        int idUsuarioSaldo)
+    {
+        var key = GetAvisoSaldoAgotadoKey(idUsuarioSaldo, usuarioInfo);
+        var avisoRegistrado = await context.Auditorias
+            .AsNoTracking()
+            .AnyAsync(a => a.IdUsuario == idUsuarioSaldo &&
+                           a.Accion == AccionAvisoSaldoAgotado &&
+                           a.ValorNuevo == key);
+
+        if (avisoRegistrado)
+            return;
+
+        var nombreCliente = ObtenerNombreCliente(usuarioInfo);
+        var paqueteAnterior = ObtenerUltimoPaqueteAdquirido(usuarioInfo.HistorialComprasDocumentosJson);
+        var clienteAvisado = false;
+        var administrativoAvisado = false;
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(usuarioInfo.Email))
+            {
+                await _emailService.EnviarAvisoDocumentosAgotadosClienteAsync(usuarioInfo.Email, nombreCliente);
+                clienteAvisado = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"No se pudo enviar aviso de documentos agotados al cliente {idUsuarioSaldo}: {ex.Message}");
+        }
+
+        try
+        {
+            await _emailService.EnviarAvisoDocumentosAgotadosAdministrativoAsync(
+                nombreCliente,
+                usuarioInfo.Identificacion,
+                usuarioInfo.Email,
+                usuarioInfo.Celular,
+                usuarioInfo.FechaUltimaRecargaDocumentos,
+                paqueteAnterior,
+                DateTime.Now);
+            administrativoAvisado = true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"No se pudo enviar aviso administrativo de documentos agotados para {idUsuarioSaldo}: {ex.Message}");
+        }
+
+        if (!clienteAvisado && !administrativoAvisado)
+            return;
+
+        context.Auditorias.Add(new Auditoria
+        {
+            IdUsuario = idUsuarioSaldo,
+            Fecha = DateTime.Now,
+            Accion = AccionAvisoSaldoAgotado,
+            ValoresPrevios = "0",
+            ValorNuevo = key,
+            Detalles = $"Aviso automatico por documentos agotados. Cliente: {clienteAvisado}. Administrativo: {administrativoAvisado}."
+        });
+
+        await context.SaveChangesAsync();
+    }
+
+    private static string GetAvisoSaldoAgotadoKey(int idUsuarioSaldo, UsuarioEmisionInfo usuarioInfo)
+    {
+        var fechaReferencia = usuarioInfo.FechaUltimaRecargaDocumentos ?? DateTime.MinValue;
+        return $"{idUsuarioSaldo}:{fechaReferencia:yyyyMMddHHmmss}:saldo-agotado";
+    }
+
+    private static string ObtenerNombreCliente(UsuarioEmisionInfo usuarioInfo)
+    {
+        if (!string.IsNullOrWhiteSpace(usuarioInfo.NombreEmpresa))
+            return usuarioInfo.NombreEmpresa.Trim();
+
+        var nombre = $"{usuarioInfo.Nombres} {usuarioInfo.Apellidos}".Trim();
+        return string.IsNullOrWhiteSpace(nombre) ? "Cliente" : nombre;
+    }
+
+    private static string ObtenerUltimoPaqueteAdquirido(string? historialJson)
+    {
+        if (string.IsNullOrWhiteSpace(historialJson))
+            return "No registrado";
+
+        try
+        {
+            var ultimaCompra = JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(
+                    historialJson,
+                    HistorialJsonOptions)?
+                .Where(item => item.SaldoAplicado)
+                .OrderByDescending(item => item.Fecha)
+                .FirstOrDefault();
+
+            if (ultimaCompra is null)
+                return "No registrado";
+
+            if (!string.IsNullOrWhiteSpace(ultimaCompra.Descripcion))
+                return ultimaCompra.Descripcion;
+
+            return ultimaCompra.EsIlimitado
+                ? "Paquete ilimitado"
+                : $"{ultimaCompra.Documentos} documentos";
+        }
+        catch (JsonException)
+        {
+            return "No registrado";
+        }
+    }
+
     private static async Task<UsuarioEmisionInfo> ObtenerUsuarioEmisionInfoAsync(AppDbContext context, int idUsuario)
     {
         if (idUsuario <= 0)
@@ -368,7 +494,13 @@ public sealed class EmisionControlService
                 IdJefe = identidad.idJefe,
                 SaldoDocumentos = u.SaldoDocumentos,
                 FechaUltimaRecargaDocumentos = u.FechaUltimaRecargaDocumentos,
-                HistorialComprasDocumentosJson = u.HistorialComprasDocumentosJson
+                HistorialComprasDocumentosJson = u.HistorialComprasDocumentosJson,
+                Nombres = u.Nombres,
+                Apellidos = u.Apellidos,
+                NombreEmpresa = u.NombreEmpresa,
+                Email = u.Email,
+                Identificacion = u.Identificacion,
+                Celular = u.Celular
             })
             .FirstOrDefaultAsync();
 

@@ -6,8 +6,10 @@
 @using Simetric.Models
 @using Simetric.DTOs
 @using System.Text.Json
+@using System.Net.Mail
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
+@inject IEmailService EmailService
 
 <PageTitle>Suscripciones y Licencias - BackOffice | Numerica</PageTitle>
 
@@ -165,6 +167,15 @@
                                     <option value="sin saldo">Sin Saldo</option>
                                 </select>
                             </div>
+                            <div class="filter-size-wrap">
+                                <span>Mostrar</span>
+                                <select class="filter-select filter-page-size" @bind="pageSize" @bind:after="OnPageSizeChanged">
+                                    @foreach (var size in pageSizeOptions)
+                                    {
+                                        <option value="@size">@size</option>
+                                    }
+                                </select>
+                            </div>
                         </div>
                     </div>
 
@@ -201,7 +212,6 @@
                                             <td>
                                                 <div class="client-cell">
                                                     <span class="client-name">@row.Cliente</span>
-                                                    <span class="client-email">@row.Email</span>
                                                 </div>
                                             </td>
                                             <td>
@@ -219,12 +229,24 @@
                                                 <span class="value-bold">@row.DocumentosConsumidos</span>
                                             </td>
                                             <td>
-                                                <span class="value-bold @(row.SaldoDisponible <= 0 && !row.PaqueteContratado.ToLower().Contains("ilimitad") ? "danger-red" : "")">
-                                                    @(row.PaqueteContratado.ToLower().Contains("ilimitad") ? "Ilimitado" : row.SaldoDisponible.ToString())
-                                                </span>
+                                                <div class="saldo-cell">
+                                                    <span class="value-bold @(row.SaldoDisponible <= 0 && !row.PaqueteContratado.ToLower().Contains("ilimitad") ? "danger-red" : "")">
+                                                        @(row.PaqueteContratado.ToLower().Contains("ilimitad") ? "Ilimitado" : row.SaldoDisponible.ToString())
+                                                    </span>
+                                                    @if (row.SaldoDisponible <= 0 && !row.PaqueteContratado.ToLower().Contains("ilimitad"))
+                                                    {
+                                                        <button type="button"
+                                                                class="saldo-mail-btn"
+                                                                title="Enviar aviso de documentos agotados"
+                                                                disabled="@enviandoAvisoSaldoIds.Contains(row.IdUsuario)"
+                                                                @onclick="() => EnviarAvisoSaldoAgotadoAsync(row)">
+                                                            <i class="bi @(enviandoAvisoSaldoIds.Contains(row.IdUsuario) ? "bi-hourglass-split" : "bi-envelope-paper-fill")"></i>
+                                                        </button>
+                                                    }
+                                                </div>
                                             </td>
                                             <td>
-                                                <span class="date-text">@row.FechaCompra.ToString("dd/MM/yyyy HH:mm")</span>
+                                                <span class="date-text">@row.FechaCompra.ToString("dd/MM/yyyy")</span>
                                             </td>
                                             <td>
                                                 <span class="status-badge @row.Estado">
@@ -238,6 +260,12 @@
                             </tbody>
                         </table>
                     </div>
+                    @if (!string.IsNullOrWhiteSpace(avisoSaldoMensaje))
+                    {
+                        <div class="saldo-mail-feedback @(avisoSaldoEsError ? "is-error" : "is-ok")">
+                            @avisoSaldoMensaje
+                        </div>
+                    }
 
                     <!-- Pagination -->
                     @if (totalEFactPages > 1)
@@ -298,6 +326,15 @@
                                     <option value="vigente">Vigente</option>
                                     <option value="por vencer">Por Vencer</option>
                                     <option value="vencida">Vencida</option>
+                                </select>
+                            </div>
+                            <div class="filter-size-wrap">
+                                <span>Mostrar</span>
+                                <select class="filter-select filter-page-size" @bind="pageSize" @bind:after="OnPageSizeChanged">
+                                    @foreach (var size in pageSizeOptions)
+                                    {
+                                        <option value="@size">@size</option>
+                                    }
                                 </select>
                             </div>
                         </div>
@@ -401,6 +438,7 @@
 </div>
 
 @code {
+    private const string AccionAvisoSaldoAgotado = "AvisoSaldoAgotadoEfact";
     private bool isLoading = true;
 
     // e-Fact Data Lists
@@ -439,6 +477,11 @@
     private int totalESignPages = 0;
 
     private int pageSize = 5;
+    private readonly int[] pageSizeOptions = new[] { 5, 10, 20, 50, 100 };
+    private readonly HashSet<int> enviandoAvisoSaldoIds = new();
+    private readonly HashSet<int> avisosAutomaticosProcesadosIds = new();
+    private string? avisoSaldoMensaje;
+    private bool avisoSaldoEsError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -565,12 +608,15 @@
                         IdUsuario = u.IdUsuario,
                         Cliente = $"{u.Nombres} {u.Apellidos}".Trim(),
                         Email = u.Email,
+                        Identificacion = u.Identificacion,
+                        Telefono = u.Celular,
                         PaqueteContratado = package,
                         Vendedor = vendedor,
                         DocumentosComprados = purchased,
                         DocumentosConsumidos = totalConsumed,
                         SaldoDisponible = u.SaldoDocumentos,
                         FechaCompra = purchaseDate,
+                        FechaUltimaRecarga = u.FechaUltimaRecargaDocumentos ?? lastApprovedPurchase?.Fecha,
                         Estado = status
                     });
                 }
@@ -753,6 +799,128 @@
         PaginateEFact();
     }
 
+    private void OnPageSizeChanged()
+    {
+        currentEFactPage = 1;
+        currentESignPage = 1;
+        ApplyEFactFilters();
+        ApplyESignFilters();
+    }
+
+    private async Task EnviarAvisoSaldoAgotadoAsync(EFactSubscriptionRow row)
+        => await EnviarAvisoSaldoAgotadoAsync(row, esAutomatico: false);
+
+    private async Task EnviarAvisoSaldoAgotadoAsync(EFactSubscriptionRow row, bool esAutomatico)
+    {
+        if (!EsCorreoValido(row.Email))
+        {
+            avisoSaldoEsError = true;
+            avisoSaldoMensaje = $"No se pudo enviar el aviso: el cliente {row.Cliente} no tiene un correo valido registrado.";
+            return;
+        }
+
+        if (enviandoAvisoSaldoIds.Contains(row.IdUsuario))
+            return;
+
+        avisoSaldoMensaje = null;
+        avisoSaldoEsError = false;
+        enviandoAvisoSaldoIds.Add(row.IdUsuario);
+
+        try
+        {
+            await EmailService.EnviarAvisoDocumentosAgotadosClienteAsync(row.Email, row.Cliente);
+
+            await EmailService.EnviarAvisoDocumentosAgotadosAdministrativoAsync(
+                row.Cliente,
+                row.Identificacion,
+                row.Email,
+                row.Telefono,
+                row.FechaUltimaRecarga,
+                row.PaqueteContratado,
+                DateTime.Now);
+
+            if (esAutomatico)
+            {
+                await RegistrarAvisoSaldoAgotadoAsync(row);
+            }
+
+            avisoSaldoMensaje = esAutomatico
+                ? $"Aviso automático enviado a {row.Email} y administrativo@numericasoftware.com."
+                : $"Aviso enviado a {row.Email} y administrativo@numericasoftware.com.";
+        }
+        catch (Exception ex)
+        {
+            avisoSaldoEsError = true;
+            avisoSaldoMensaje = $"No se pudo enviar el aviso: {ex.Message}";
+        }
+        finally
+        {
+            enviandoAvisoSaldoIds.Remove(row.IdUsuario);
+        }
+    }
+
+    private async Task ProcesarAvisosSaldoAgotadoAutomaticosAsync()
+    {
+        foreach (var row in efactAllRows.Where(DebeEnviarAvisoSaldoAgotado))
+        {
+            if (avisosAutomaticosProcesadosIds.Contains(row.IdUsuario))
+                continue;
+
+            avisosAutomaticosProcesadosIds.Add(row.IdUsuario);
+
+            if (await AvisoSaldoAgotadoYaRegistradoAsync(row))
+                continue;
+
+            await EnviarAvisoSaldoAgotadoAsync(row, esAutomatico: true);
+        }
+    }
+
+    private static bool DebeEnviarAvisoSaldoAgotado(EFactSubscriptionRow row) =>
+        row.SaldoDisponible <= 0 &&
+        !row.PaqueteContratado.Contains("ilimitad", StringComparison.OrdinalIgnoreCase) &&
+        EsCorreoValido(row.Email);
+
+    private static bool EsCorreoValido(string? email)
+    {
+        var emailLimpio = email?.Trim();
+        return !string.IsNullOrWhiteSpace(emailLimpio) &&
+               MailAddress.TryCreate(emailLimpio, out var address) &&
+               string.Equals(address.Address, emailLimpio, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string GetAvisoSaldoAgotadoKey(EFactSubscriptionRow row)
+    {
+        var fechaReferencia = row.FechaUltimaRecarga ?? row.FechaCompra;
+        return $"{row.IdUsuario}:{fechaReferencia:yyyyMMddHHmmss}:{row.PaqueteContratado}";
+    }
+
+    private async Task<bool> AvisoSaldoAgotadoYaRegistradoAsync(EFactSubscriptionRow row)
+    {
+        var key = GetAvisoSaldoAgotadoKey(row);
+        using var context = await DbFactory.CreateDbContextAsync();
+        return await context.Auditorias
+            .AsNoTracking()
+            .AnyAsync(a => a.IdUsuario == row.IdUsuario &&
+                           a.Accion == AccionAvisoSaldoAgotado &&
+                           a.ValorNuevo == key);
+    }
+
+    private async Task RegistrarAvisoSaldoAgotadoAsync(EFactSubscriptionRow row)
+    {
+        var key = GetAvisoSaldoAgotadoKey(row);
+        using var context = await DbFactory.CreateDbContextAsync();
+        context.Auditorias.Add(new Auditoria
+        {
+            IdUsuario = row.IdUsuario,
+            Fecha = DateTime.Now,
+            Accion = AccionAvisoSaldoAgotado,
+            ValoresPrevios = row.SaldoDisponible.ToString(),
+            ValorNuevo = key,
+            Detalles = $"Aviso automatico por documentos agotados enviado a {row.Email} y administrativo@numericasoftware.com."
+        });
+        await context.SaveChangesAsync();
+    }
+
     // eRúbrica Filter & Pagination Logic
     private void OnSearchESignChanged()
     {
@@ -855,12 +1023,15 @@
         public int IdUsuario { get; set; }
         public string Cliente { get; set; } = "";
         public string Email { get; set; } = "";
+        public string? Identificacion { get; set; }
+        public string? Telefono { get; set; }
         public string PaqueteContratado { get; set; } = "";
         public string Vendedor { get; set; } = "Sistema";
         public int DocumentosComprados { get; set; }
         public int DocumentosConsumidos { get; set; }
         public int SaldoDisponible { get; set; }
         public DateTime FechaCompra { get; set; }
+        public DateTime? FechaUltimaRecarga { get; set; }
         public string Estado { get; set; } = ""; // "activo", "sin saldo"
     }
 
