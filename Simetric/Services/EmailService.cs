@@ -1248,23 +1248,23 @@ public class EmailService : IEmailService
                     </td>
                   </tr>
                 </table>" + $@"
-                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;background:#eef6ff;border:1px solid #dbeafe;border-radius:12px;'>
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' bgcolor='#eef6ff' style='width:100%;border-collapse:collapse;background:#eef6ff;border:1px solid #dbeafe;'>
                   <tr>
-                    <td valign='middle' width='82' style='width:82px;padding:18px 12px 18px 18px;font-family:Segoe UI,Arial,sans-serif;'>
+                    <td valign='middle' width='72' style='width:72px;padding:18px 10px 18px 18px;font-family:Segoe UI,Arial,sans-serif;'>
                       <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;'>
                         <tr>
-                          <td align='center' valign='middle' bgcolor='#dceeff' style='width:56px;height:56px;border-radius:28px;background:#dceeff;color:#006bb5;font-size:28px;line-height:56px;font-weight:900;'>&#127911;</td>
+                          <td align='center' valign='middle' bgcolor='#dceeff' style='width:54px;height:54px;border-radius:27px;background:#dceeff;color:#006bb5;font-size:22px;line-height:54px;font-weight:900;'>?</td>
                         </tr>
                       </table>
                     </td>
-                    <td valign='middle' style='padding:18px 18px 18px 0;font-family:Segoe UI,Arial,sans-serif;'>
+                    <td valign='middle' style='padding:18px 16px 18px 0;font-family:Segoe UI,Arial,sans-serif;'>
                       <div style='font-size:15px;line-height:20px;font-weight:900;color:#0054a6;margin:0 0 4px 0;'>&iquest;Necesitas ayuda?</div>
                       <div style='font-size:12px;line-height:18px;color:#14213d;'>Nuestro equipo de soporte est&aacute; disponible para asistirte.</div>
                     </td>
-                    <td valign='middle' style='padding:18px;border-left:1px solid #bfd7ef;font-family:Segoe UI,Arial,sans-serif;color:#14213d;'>
-                      <div style='font-size:12px;line-height:20px;margin:0 0 2px 0;'>&#9742;&nbsp; {WebUtility.HtmlEncode(EfactContactPhone)}</div>
-                      <div style='font-size:12px;line-height:20px;margin:0 0 2px 0;'>&#9993;&nbsp; soporte@numericasoftware.com</div>
-                      <div style='font-size:12px;line-height:20px;margin:0;'>&#9719;&nbsp; Lunes a Viernes 08h00 - 18h00</div>
+                    <td valign='middle' width='230' style='width:230px;padding:18px;border-left:1px solid #bfd7ef;font-family:Segoe UI,Arial,sans-serif;color:#14213d;'>
+                      <div style='font-size:12px;line-height:20px;margin:0 0 3px 0;white-space:nowrap;color:#14213d;text-decoration:none;'>&#9742;&nbsp; {WebUtility.HtmlEncode(EfactContactPhone)}</div>
+                      <div style='font-size:12px;line-height:20px;margin:0 0 3px 0;white-space:nowrap;color:#14213d;text-decoration:none;'>&#9993;&nbsp; soporte&#8203;&#64;numericasoftware.com</div>
+                      <div style='font-size:12px;line-height:20px;margin:0;white-space:nowrap;color:#14213d;text-decoration:none;'>&#9719;&nbsp; Lunes a Viernes 08h00 - 18h00</div>
                     </td>
                   </tr>
                 </table>",
