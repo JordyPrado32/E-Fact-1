@@ -1,4 +1,5 @@
 using Simetric.Models;
+using Simetric.Services.ESign;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.RegularExpressions;
@@ -9,16 +10,16 @@ public sealed class EmisorCertificadoValidator
 {
     private static readonly Regex IdentificacionRegex = new(@"\d{10,13}", RegexOptions.Compiled);
     private readonly EmisorCertificadoProtector _certificadoProtector;
-    private readonly FirmaInfoApiService _firmaInfoApiService;
+    private readonly FirmaStampApiService _firmaStampApiService;
     private readonly FirmaPathResolver _firmaPathResolver;
 
     public EmisorCertificadoValidator(
         EmisorCertificadoProtector certificadoProtector,
-        FirmaInfoApiService firmaInfoApiService,
+        FirmaStampApiService firmaStampApiService,
         FirmaPathResolver firmaPathResolver)
     {
         _certificadoProtector = certificadoProtector;
-        _firmaInfoApiService = firmaInfoApiService;
+        _firmaStampApiService = firmaStampApiService;
         _firmaPathResolver = firmaPathResolver;
     }
 
@@ -60,30 +61,33 @@ public sealed class EmisorCertificadoValidator
         if (!validacionConfiguracion.IsValid)
             return validacionConfiguracion;
 
-        var rutasFirma = _firmaPathResolver.ResolverRutasParaApi(emisor!.PathCertificado);
-        if (rutasFirma.Count == 0)
+        var rutaLocal = _firmaPathResolver.ResolverRutaExistente(emisor!.PathCertificado);
+        if (string.IsNullOrWhiteSpace(rutaLocal))
             return CertificadoEmisorValidationResult.Fail("No se encontro el archivo .p12 configurado para el emisor.");
 
         var clave = _certificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
         if (string.IsNullOrWhiteSpace(clave))
             return CertificadoEmisorValidationResult.Fail("No se pudo obtener la clave de la firma electronica.");
 
-        FirmaInfoApiResult? apiResult = null;
-        foreach (var rutaFirma in rutasFirma)
+        FirmaInfoApiResult apiResult;
+        try
         {
-            apiResult = await _firmaInfoApiService.ConsultarAsync(rutaFirma, clave, cancellationToken);
-            if (apiResult.Success || cancellationToken.IsCancellationRequested)
-                break;
+            var contenido = await File.ReadAllBytesAsync(rutaLocal, cancellationToken);
+            var detalleResult = await _firmaStampApiService.ObtenerDetallesFirmaAsync(
+                new FirmaStampApiFile(contenido, Path.GetFileName(rutaLocal), "application/x-pkcs12"),
+                clave,
+                cancellationToken);
+
+            apiResult = ConvertirResultadoApi(detalleResult);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            apiResult = FirmaInfoApiResult.Error("No se pudo leer el archivo .p12 configurado para enviarlo a la API de firma.");
         }
 
-        if (apiResult is { Success: false } && !cancellationToken.IsCancellationRequested)
-        {
-            var rutaLocal = _firmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
-            if (!string.IsNullOrWhiteSpace(rutaLocal))
-                apiResult = ValidarArchivoLocal(rutaLocal, clave);
-        }
+        if (!apiResult.Success && !cancellationToken.IsCancellationRequested)
+            apiResult = ValidarArchivoLocal(rutaLocal, clave);
 
-        apiResult ??= FirmaInfoApiResult.Error("No se pudo validar la ruta del archivo de firma.");
         if (!apiResult.Success || apiResult.Info is null)
             return CertificadoEmisorValidationResult.Fail(
                 string.IsNullOrWhiteSpace(apiResult.Message) ? "Firma no valida." : apiResult.Message,
@@ -173,11 +177,43 @@ public sealed class EmisorCertificadoValidator
             info.EstadoVigencia,
             apiResult.RawJson,
             apiResult.HttpStatusCode,
-            apiResult.Success);
+            apiResult.Success,
+            info.FechaEmision?.LocalDateTime,
+            info.EmisorCertificado,
+            info.NumeroSerie,
+            info.HuellaDigital);
     }
 
     private static int CalcularDiasRestantes(DateTime fechaExpiracion) =>
         (fechaExpiracion.Date - DateTime.Today).Days;
+
+    private static FirmaInfoApiResult ConvertirResultadoApi(FirmaDetalleApiResult resultado)
+    {
+        if (!resultado.Success || resultado.Detalle is null)
+            return FirmaInfoApiResult.Error(resultado.Message, resultado.RawBody, resultado.HttpStatusCode);
+
+        var detalle = resultado.Detalle;
+        return FirmaInfoApiResult.Ok(
+            new FirmaInfoApiResponse
+            {
+                EsValida = detalle.EsValida,
+                EstadoVigencia = detalle.EstadoVigencia,
+                Mensaje = resultado.Message,
+                NombreTitular = detalle.NombreTitular,
+                Ruc = detalle.Ruc,
+                FechaEmision = detalle.FechaEmision,
+                FechaExpiracion = detalle.FechaExpiracion,
+                DiasRestantes = detalle.FechaExpiracion is null
+                    ? 0
+                    : (detalle.FechaExpiracion.Value.Date - DateTimeOffset.Now.Date).Days,
+                TieneClavePrivada = true,
+                EmisorCertificado = detalle.Emisor,
+                NumeroSerie = detalle.NumeroSerie,
+                HuellaDigital = detalle.HuellaDigital
+            },
+            resultado.RawBody,
+            resultado.HttpStatusCode);
+    }
 
     private static FirmaInfoApiResult ValidarArchivoLocal(string rutaFirma, string passwordFirma)
     {
@@ -216,7 +252,10 @@ public sealed class EmisorCertificadoValidator
                 FechaEmision = certificado.NotBefore,
                 FechaExpiracion = certificado.NotAfter,
                 DiasRestantes = CalcularDiasRestantes(certificado.NotAfter),
-                TieneClavePrivada = certificado.HasPrivateKey
+                TieneClavePrivada = certificado.HasPrivateKey,
+                EmisorCertificado = certificado.Issuer,
+                NumeroSerie = certificado.SerialNumber,
+                HuellaDigital = certificado.Thumbprint
             };
 
             return FirmaInfoApiResult.Ok(info);
@@ -375,7 +414,11 @@ public sealed record CertificadoEmisorValidationResult(
     string? EstadoVigencia = null,
     string? ApiResponseJson = null,
     int? ApiHttpStatusCode = null,
-    bool? ApiSuccess = null)
+    bool? ApiSuccess = null,
+    DateTime? FechaEmision = null,
+    string? EmisorCertificado = null,
+    string? NumeroSerie = null,
+    string? HuellaDigital = null)
 {
     public static CertificadoEmisorValidationResult Ok(
         DateTime? fechaExpiracion,
@@ -385,7 +428,11 @@ public sealed record CertificadoEmisorValidationResult(
         string? estadoVigencia = null,
         string? apiResponseJson = null,
         int? apiHttpStatusCode = null,
-        bool? apiSuccess = null) =>
+        bool? apiSuccess = null,
+        DateTime? fechaEmision = null,
+        string? emisorCertificado = null,
+        string? numeroSerie = null,
+        string? huellaDigital = null) =>
         new(
             true,
             true,
@@ -397,7 +444,11 @@ public sealed record CertificadoEmisorValidationResult(
             estadoVigencia,
             apiResponseJson,
             apiHttpStatusCode,
-            apiSuccess);
+            apiSuccess,
+            fechaEmision,
+            emisorCertificado,
+            numeroSerie,
+            huellaDigital);
 
     public static CertificadoEmisorValidationResult NoConfigurado() =>
         new(false, false, EmisionControlService.MensajeFirmaRequerida);

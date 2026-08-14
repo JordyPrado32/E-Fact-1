@@ -867,8 +867,10 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         bool esRuc = string.Equals(codigoReal, "04", StringComparison.OrdinalIgnoreCase) ||
                       descReal.Contains("RUC", StringComparison.OrdinalIgnoreCase);
 
-        bool esPasaporte = string.Equals(codigoReal, "06", StringComparison.OrdinalIgnoreCase) ||
-                            descReal.Contains("pasaporte", StringComparison.OrdinalIgnoreCase);
+        bool esDocumentoAlfanumerico = string.Equals(codigoReal, "06", StringComparison.OrdinalIgnoreCase) ||
+                                       string.Equals(codigoReal, "08", StringComparison.OrdinalIgnoreCase) ||
+                                       descReal.Contains("pasaporte", StringComparison.OrdinalIgnoreCase) ||
+                                       descReal.Contains("exterior", StringComparison.OrdinalIgnoreCase);
 
         if (!string.IsNullOrWhiteSpace(dto.Numeroidentificacion) && dto.Numeroidentificacion.All(char.IsDigit))
         {
@@ -949,16 +951,16 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
             if (!ValidarRucEcuatoriano(dto.Numeroidentificacion))
                 return "RUC inválido. No supera el algoritmo de validación del dígito verificador del SRI.";
         }
-        else if (esPasaporte)
+        else if (esDocumentoAlfanumerico)
         {
             if (string.IsNullOrWhiteSpace(dto.Numeroidentificacion))
-                return "La identificación (Pasaporte) es obligatoria.";
+                return "La identificación es obligatoria.";
 
             if (!dto.Numeroidentificacion.All(char.IsLetterOrDigit))
-                return "El pasaporte debe contener únicamente caracteres alfanuméricos (letras y números).";
+                return "La identificación debe contener únicamente caracteres alfanuméricos (letras y números).";
 
             if (dto.Numeroidentificacion.Length < 3 || dto.Numeroidentificacion.Length > 20)
-                return $"El pasaporte debe tener una longitud de entre 3 y 20 caracteres (se recibieron {dto.Numeroidentificacion.Length} caracteres).";
+                return $"La identificación debe tener una longitud de entre 3 y 20 caracteres (se recibieron {dto.Numeroidentificacion.Length} caracteres).";
         }
         else
         {
@@ -1280,8 +1282,10 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         bool esRuc = string.Equals(codigoReal, "04", StringComparison.OrdinalIgnoreCase) ||
                       descReal.Contains("RUC", StringComparison.OrdinalIgnoreCase);
 
-        bool esPasaporte = string.Equals(codigoReal, "06", StringComparison.OrdinalIgnoreCase) ||
-                            descReal.Contains("pasaporte", StringComparison.OrdinalIgnoreCase);
+        bool esDocumentoAlfanumerico = string.Equals(codigoReal, "06", StringComparison.OrdinalIgnoreCase) ||
+                                       string.Equals(codigoReal, "08", StringComparison.OrdinalIgnoreCase) ||
+                                       descReal.Contains("pasaporte", StringComparison.OrdinalIgnoreCase) ||
+                                       descReal.Contains("exterior", StringComparison.OrdinalIgnoreCase);
 
         if (!string.IsNullOrWhiteSpace(dto.Numeroidentificacion) && dto.Numeroidentificacion.All(char.IsDigit))
         {
@@ -1362,16 +1366,16 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
             if (!ValidarRucEcuatoriano(dto.Numeroidentificacion))
                 return "RUC inválido. No supera el algoritmo de validación del dígito verificador del SRI.";
         }
-        else if (esPasaporte)
+        else if (esDocumentoAlfanumerico)
         {
             if (string.IsNullOrWhiteSpace(dto.Numeroidentificacion))
-                return "La identificación (Pasaporte) es obligatoria.";
+                return "La identificación es obligatoria.";
 
             if (!dto.Numeroidentificacion.All(char.IsLetterOrDigit))
-                return "El pasaporte debe contener únicamente caracteres alfanuméricos (letras y números).";
+                return "La identificación debe contener únicamente caracteres alfanuméricos (letras y números).";
 
             if (dto.Numeroidentificacion.Length < 3 || dto.Numeroidentificacion.Length > 20)
-                return $"El pasaporte debe tener una longitud de entre 3 y 20 caracteres (se recibieron {dto.Numeroidentificacion.Length} caracteres).";
+                return $"La identificación debe tener una longitud de entre 3 y 20 caracteres (se recibieron {dto.Numeroidentificacion.Length} caracteres).";
         }
         else
         {

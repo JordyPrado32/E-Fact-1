@@ -172,4 +172,7 @@ public sealed class FirmaInfoApiResponse
     public DateTimeOffset? FechaExpiracion { get; set; }
     public int DiasRestantes { get; set; }
     public bool TieneClavePrivada { get; set; }
+    public string? EmisorCertificado { get; set; }
+    public string? NumeroSerie { get; set; }
+    public string? HuellaDigital { get; set; }
 }

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.Models;
 using Simetric.Services;
+using Simetric.Services.ESign;
 using System.Text.RegularExpressions;
 
 namespace Simetric.Controllers
@@ -13,15 +14,18 @@ namespace Simetric.Controllers
     {
         private readonly AppDbContext _context;
         private readonly EmisorCertificadoValidator _emisorCertificadoValidator;
+        private readonly FirmaStampApiService _firmaStampApiService;
         private readonly IWebHostEnvironment _hostEnvironment;
 
         public EmisoresController(
             AppDbContext context,
             EmisorCertificadoValidator emisorCertificadoValidator,
+            FirmaStampApiService firmaStampApiService,
             IWebHostEnvironment hostEnvironment)
         {
             _context = context;
             _emisorCertificadoValidator = emisorCertificadoValidator;
+            _firmaStampApiService = firmaStampApiService;
             _hostEnvironment = hostEnvironment;
         }
 
@@ -117,11 +121,105 @@ namespace Simetric.Controllers
                 identificacion = resultado.IdentificacionExtraida,
                 fechaExpiracion = resultado.FechaExpiracion,
                 diasRestantes = resultado.DiasRestantes,
+                fechaEmision = resultado.FechaEmision,
+                emisor = resultado.EmisorCertificado,
+                numeroSerie = resultado.NumeroSerie,
+                huellaDigital = resultado.HuellaDigital,
                 logGuardado
             });
         }
 
         private const long MaxCertificadoSize = 5 * 1024 * 1024;
+
+        [HttpPost("firma/validar-temporal")]
+        [RequestSizeLimit(MaxCertificadoSize + 64 * 1024)]
+        public async Task<IActionResult> ValidarFirmaTemporal(
+            [FromQuery] int? idUsuario,
+            [FromForm] IFormFile? archivo,
+            [FromForm] string? clave)
+        {
+            if (idUsuario is null or <= 0)
+                return BadRequest("Id de usuario requerido.");
+
+            var idCuenta = await ObtenerIdCuentaEmisor(idUsuario.Value);
+            if (idCuenta is null)
+                return NotFound("Usuario no encontrado.");
+
+            if (archivo is null || archivo.Length <= 0)
+                return BadRequest("Selecciona un archivo .p12 para validar.");
+
+            if (archivo.Length > MaxCertificadoSize)
+                return BadRequest("El archivo de firma excede el tamano maximo de 5 MB.");
+
+            if (!string.Equals(Path.GetExtension(archivo.FileName), ".p12", StringComparison.OrdinalIgnoreCase))
+                return BadRequest("Solo se permiten archivos .p12.");
+
+            if (string.IsNullOrWhiteSpace(clave))
+                return BadRequest("Ingresa la clave del archivo .p12.");
+
+            var emisor = await _context.Emisores
+                .AsNoTracking()
+                .Where(item => item.IdUsuario == idCuenta.Value && item.Estado == true && !item.EsEmisorSistema)
+                .OrderByDescending(item => item.Codigo)
+                .FirstOrDefaultAsync();
+
+            await using var input = archivo.OpenReadStream();
+            using var buffer = new MemoryStream();
+            await input.CopyToAsync(buffer, HttpContext.RequestAborted);
+
+            var apiResult = await _firmaStampApiService.ObtenerDetallesFirmaAsync(
+                new FirmaStampApiFile(
+                    buffer.ToArray(),
+                    Path.GetFileName(archivo.FileName),
+                    string.IsNullOrWhiteSpace(archivo.ContentType) ? "application/x-pkcs12" : archivo.ContentType),
+                clave,
+                HttpContext.RequestAborted);
+
+            if (!apiResult.Success || apiResult.Detalle is null)
+                return BadRequest(string.IsNullOrWhiteSpace(apiResult.Message)
+                    ? "La API no pudo validar la firma y la clave."
+                    : apiResult.Message);
+
+            var detalle = apiResult.Detalle;
+            var coincideCuenta = emisor is null ||
+                string.IsNullOrWhiteSpace(detalle.Ruc) ||
+                CoincideIdentificacionFirma(detalle.Ruc, emisor.Ruc);
+            var esValida = detalle.EsValida && coincideCuenta;
+            var mensaje = !detalle.EsValida
+                ? "El archivo o la clave no son validos, o la firma no esta vigente."
+                : !coincideCuenta
+                    ? $"La firma es valida, pero no corresponde al RUC {emisor!.Ruc} de la cuenta."
+                    : "La firma y la clave son correctas. El archivo no fue guardado.";
+
+            return Ok(new
+            {
+                esValida,
+                coincideCuenta,
+                mensaje,
+                detalle.EstadoVigencia,
+                detalle.NombreTitular,
+                identificacion = detalle.Ruc,
+                detalle.Emisor,
+                detalle.NumeroSerie,
+                detalle.HuellaDigital,
+                detalle.FechaEmision,
+                detalle.FechaExpiracion,
+                diasRestantes = detalle.FechaExpiracion is null
+                    ? (int?)null
+                    : (detalle.FechaExpiracion.Value.Date - DateTimeOffset.Now.Date).Days
+            });
+        }
+
+        private static bool CoincideIdentificacionFirma(string? identificacionFirma, string? rucCuenta)
+        {
+            var firma = new string((identificacionFirma ?? string.Empty).Where(char.IsDigit).ToArray());
+            var cuenta = new string((rucCuenta ?? string.Empty).Where(char.IsDigit).ToArray());
+            if (string.IsNullOrWhiteSpace(firma) || string.IsNullOrWhiteSpace(cuenta))
+                return false;
+
+            return firma == cuenta ||
+                   (firma.Length == 10 && cuenta.Length == 13 && cuenta.StartsWith(firma, StringComparison.Ordinal));
+        }
 
         private async Task<bool> RegistrarValidacionFirmaAsync(
             int idUsuario,

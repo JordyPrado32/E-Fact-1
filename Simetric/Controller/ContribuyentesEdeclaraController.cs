@@ -289,9 +289,17 @@ public class ContribuyenteUpsertDto : IValidatableObject
         Correo = Correo?.Trim();
         Oblgconta = Oblgconta?.Trim().ToUpperInvariant();
 
-        if (!string.IsNullOrWhiteSpace(Numeroidentificacion) && !Numeroidentificacion.All(char.IsDigit))
+        var esDocumentoAlfanumerico = Tipoidentificacion is "06" or "08";
+        if (!string.IsNullOrWhiteSpace(Numeroidentificacion) &&
+            !(esDocumentoAlfanumerico
+                ? Numeroidentificacion.All(char.IsLetterOrDigit)
+                : Numeroidentificacion.All(char.IsDigit)))
         {
-            yield return new ValidationResult("La identificación solo debe contener números.", new[] { nameof(Numeroidentificacion) });
+            yield return new ValidationResult(
+                esDocumentoAlfanumerico
+                    ? "La identificación solo puede contener letras y números."
+                    : "La identificación solo debe contener números.",
+                new[] { nameof(Numeroidentificacion) });
         }
 
         if (PersonaNatural == true)

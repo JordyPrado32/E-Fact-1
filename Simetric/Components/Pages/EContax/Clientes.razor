@@ -767,6 +767,9 @@
 
     private class ClienteUpsertDto : IValidatableObject
     {
+        [JsonIgnore]
+        public Clientes? Parent { get; set; }
+
         public int Codcliente { get; set; }
 
         [StringLength(100, ErrorMessage = "Máximo 100 caracteres")]
@@ -785,7 +788,7 @@
         public int? Tipoidentificacion { get; set; }
 
         [Required(ErrorMessage = "El número de identificación es obligatorio")]
-        [StringLength(13, MinimumLength = 10, ErrorMessage = "La identificación debe tener entre 10 y 13 dígitos")]
+        [StringLength(20, MinimumLength = 3, ErrorMessage = "La identificación debe tener entre 3 y 20 caracteres")]
         public string? Numeroidentificacion { get; set; }
 
         [Required(ErrorMessage = "La dirección es obligatoria")]
@@ -842,11 +845,18 @@
             if (TipoCliente <= 0)
                 yield break;
 
+            var identificacion = Tipoidentificacion.HasValue
+                ? Parent?.identificaciones.FirstOrDefault(x => x.Id == Tipoidentificacion.Value)
+                : null;
+            var esAlfanumerica = EsIdentificacionAlfanumerica(identificacion);
+
             if (!string.IsNullOrWhiteSpace(Numeroidentificacion) &&
-                !Numeroidentificacion.All(char.IsDigit))
+                !(esAlfanumerica ? Numeroidentificacion.All(char.IsLetterOrDigit) : Numeroidentificacion.All(char.IsDigit)))
             {
                 yield return new ValidationResult(
-                    "La identificación solo debe contener números.",
+                    esAlfanumerica
+                        ? "La identificación solo puede contener letras y números."
+                        : "La identificación solo debe contener números.",
                     new[] { nameof(Numeroidentificacion) });
             }
 
@@ -1696,6 +1706,7 @@
 
         model = new ClienteUpsertDto
         {
+            Parent = this,
             Apellidos = null,
             Nombres = null,
             Nombrecomercial = null,
@@ -1762,6 +1773,7 @@
             // Mapeo al modelo de edición
             model = new ClienteUpsertDto
             {
+                Parent = this,
                 Codcliente = item.Codcliente,
                 Apellidos = item.Apellidos,
                 Nombres = item.Nombres,
@@ -1888,9 +1900,9 @@
         model.Tipoidentificacion.HasValue &&
         EsIdentificacionRuc(identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value));
 
-    private bool EsIdentificacionPasaporteSeleccionada =>
+    private bool EsIdentificacionAlfanumericaSeleccionada =>
         model.Tipoidentificacion.HasValue &&
-        EsIdentificacionPasaporte(identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value));
+        EsIdentificacionAlfanumerica(identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value));
 
     private bool EsTipoIdentificacionConsultaExternaSeleccionado
     {
@@ -2191,11 +2203,11 @@
             return true;
 
         if (EsEmpresaSeleccionada)
-            return EsIdentificacionRuc(identificacion);
+            return EsIdentificacionRuc(identificacion) || EsIdentificacionAlfanumerica(identificacion);
 
         return EsIdentificacionCedula(identificacion) ||
                EsIdentificacionRuc(identificacion) ||
-               EsIdentificacionPasaporte(identificacion);
+               EsIdentificacionAlfanumerica(identificacion);
     }
 
     private static bool EsIdentificacionCedula(IdentificacionDto? identificacion)
@@ -2226,11 +2238,21 @@
                identificacion.Descripcion.Contains("pasaporte", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool EsIdentificacionAlfanumerica(IdentificacionDto? identificacion)
+    {
+        if (identificacion is null)
+            return false;
+
+        return EsIdentificacionPasaporte(identificacion) ||
+               string.Equals(identificacion.Codigo, "08", StringComparison.OrdinalIgnoreCase) ||
+               identificacion.Descripcion.Contains("exterior", StringComparison.OrdinalIgnoreCase);
+    }
+
     private string NormalizarNumeroIdentificacionEntrada(string? valor)
     {
         var limpio = (valor ?? string.Empty).Trim();
 
-        if (EsIdentificacionPasaporteSeleccionada)
+        if (EsIdentificacionAlfanumericaSeleccionada)
             return new string(limpio.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
 
         return new string(limpio.Where(char.IsDigit).ToArray());

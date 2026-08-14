@@ -24,10 +24,8 @@ export async function init(options, dotNetRef) {
     let pageHeightMm = 0;
     let renderTask = null;
     let selectedPosition = null;
-    let drawingStart = null;
     let resizeStart = null;
     let dragStart = null;
-    let pointerMoved = false;
     let pageNumber = 1;
     let preferredSelection = null;
     let autoApplyPreferred = false;
@@ -213,48 +211,7 @@ export async function init(options, dotNetRef) {
 
         event.preventDefault();
         const point = getPagePoint(event);
-        const currentWidth = fixedStampWidthMm;
-        await applySelection(point.xMm, point.yMm, currentWidth);
-        drawingStart = {
-            pointerId: event.pointerId,
-            xMm: selectedPosition.xMm,
-            yMm: selectedPosition.yMm,
-            clientX: event.clientX,
-            clientY: event.clientY
-        };
-        pointerMoved = false;
-        canvas.setPointerCapture(event.pointerId);
-        stage.classList.add("is-drawing");
-    };
-
-    const onCanvasPointerMove = async event => {
-        if (!drawingStart || drawingStart.pointerId !== event.pointerId) {
-            return;
-        }
-
-        event.preventDefault();
-        const point = getPagePoint(event);
-        const deltaPixels = Math.hypot(event.clientX - drawingStart.clientX, event.clientY - drawingStart.clientY);
-        pointerMoved ||= deltaPixels > 4;
-
-        if (!pointerMoved) {
-            return;
-        }
-
         await applySelection(point.xMm, point.yMm, fixedStampWidthMm);
-    };
-
-    const finishDrawing = event => {
-        if (!drawingStart || drawingStart.pointerId !== event.pointerId) {
-            return;
-        }
-
-        if (canvas.hasPointerCapture(event.pointerId)) {
-            canvas.releasePointerCapture(event.pointerId);
-        }
-
-        drawingStart = null;
-        stage.classList.remove("is-drawing");
     };
 
     const onFootprintPointerDown = event => {
@@ -349,9 +306,6 @@ export async function init(options, dotNetRef) {
 
     pdfInput.addEventListener("change", onPdfChange);
     canvas.addEventListener("pointerdown", onCanvasPointerDown);
-    canvas.addEventListener("pointermove", onCanvasPointerMove);
-    canvas.addEventListener("pointerup", finishDrawing);
-    canvas.addEventListener("pointercancel", finishDrawing);
     footprint.addEventListener("pointerdown", onFootprintPointerDown);
     footprint.addEventListener("pointermove", onFootprintPointerMove);
     footprint.addEventListener("pointerup", finishDragging);
@@ -393,9 +347,6 @@ export async function init(options, dotNetRef) {
         dispose() {
             pdfInput.removeEventListener("change", onPdfChange);
             canvas.removeEventListener("pointerdown", onCanvasPointerDown);
-            canvas.removeEventListener("pointermove", onCanvasPointerMove);
-            canvas.removeEventListener("pointerup", finishDrawing);
-            canvas.removeEventListener("pointercancel", finishDrawing);
             footprint.removeEventListener("pointerdown", onFootprintPointerDown);
             footprint.removeEventListener("pointermove", onFootprintPointerMove);
             footprint.removeEventListener("pointerup", finishDragging);
