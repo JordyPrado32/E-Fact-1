@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.WebUtilities;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components.Forms;
+using System.Security.Cryptography;
 
 namespace Simetric.Services.ESign;
 
@@ -12,11 +13,16 @@ public sealed class FirmaStampApiService
     private const long MaxFileBytes = 15 * 1024 * 1024;
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<FirmaStampApiService> _logger;
 
-    public FirmaStampApiService(HttpClient httpClient, IConfiguration configuration)
+    public FirmaStampApiService(
+        HttpClient httpClient,
+        IConfiguration configuration,
+        ILogger<FirmaStampApiService> logger)
     {
         _httpClient = httpClient;
         _configuration = configuration;
+        _logger = logger;
     }
 
     public async Task<FirmaStampApiResult> EstamparAsync(
@@ -55,19 +61,22 @@ public sealed class FirmaStampApiService
         if (!string.IsNullOrWhiteSpace(ubicacion))
             form.Add(new StringContent(ubicacion.Trim()), "ubicacion");
         form.Add(new StringContent(pagina.ToString(CultureInfo.InvariantCulture)), "pagina");
-        form.Add(new StringContent(pagina.ToString(CultureInfo.InvariantCulture)), "page");
         form.Add(new StringContent(xMm.ToString(CultureInfo.InvariantCulture)), "xMm");
-        form.Add(new StringContent(xMm.ToString(CultureInfo.InvariantCulture)), "x_mm");
         form.Add(new StringContent(yMm.ToString(CultureInfo.InvariantCulture)), "yMm");
-        form.Add(new StringContent(yMm.ToString(CultureInfo.InvariantCulture)), "y_mm");
         form.Add(new StringContent(anchoMm.ToString(CultureInfo.InvariantCulture)), "anchoMm");
-        form.Add(new StringContent(anchoMm.ToString(CultureInfo.InvariantCulture)), "width_mm");
-        form.Add(new StringContent(BuildStampDesignJson(pagina, xMm, yMm, anchoMm)), "disenoEstampado");
-        form.Add(new StringContent(BuildStampDesignJson(pagina, xMm, yMm, anchoMm)), "stampDesign");
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, BuildEndpointUri(baseUri, "EstamparPath", "api/documentos/estampar"));
+        var endpoint = BuildEndpointUri(baseUri, "EstamparPath", "api/documentos/estampar");
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
         request.Content = form;
+
+        _logger.LogInformation(
+            "Enviando firma a {Endpoint}. Campos: pdf, certificado, clave. PDF bytes: {PdfBytes}. P12 bytes: {P12Bytes}. P12 SHA256: {P12Hash}. Clave presente: {ClavePresente}.",
+            endpoint,
+            pdf.Size,
+            certificado.Content.Length,
+            Convert.ToHexString(SHA256.HashData(certificado.Content)),
+            !string.IsNullOrEmpty(clave));
 
         try
         {
@@ -80,12 +89,23 @@ public sealed class FirmaStampApiService
                 var mensaje = ExtraerMensajeError(raw)
                     ?? $"La API de firma respondio con estado {(int)response.StatusCode}.";
 
+                _logger.LogWarning(
+                    "La API rechazo el estampado. Estado: {StatusCode}. P12 SHA256: {P12Hash}. Mensaje: {Mensaje}",
+                    (int)response.StatusCode,
+                    Convert.ToHexString(SHA256.HashData(certificado.Content)),
+                    mensaje);
+
                 return FirmaStampApiResult.Error(mensaje, raw, (int)response.StatusCode);
             }
 
             var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/pdf";
             var originalHash = TryGetHeader(response, "X-Documento-Original-SHA256");
             var outputHash = TryGetHeader(response, "X-Documento-Salida-SHA256");
+
+            _logger.LogInformation(
+                "Estampado aprobado por la API. Estado: {StatusCode}. P12 SHA256: {P12Hash}.",
+                (int)response.StatusCode,
+                Convert.ToHexString(SHA256.HashData(certificado.Content)));
 
             return FirmaStampApiResult.Ok(bytes, contentType, originalHash, outputHash, (int)response.StatusCode);
         }
@@ -96,64 +116,6 @@ public sealed class FirmaStampApiService
         catch (HttpRequestException)
         {
             return FirmaStampApiResult.Error("No fue posible conectar con la API de firma.");
-        }
-    }
-
-    public async Task<FirmaDetalleApiResult> ObtenerDetallesFirmaAsync(
-        FirmaStampApiFile certificado,
-        string clave,
-        CancellationToken cancellationToken = default)
-    {
-        var baseUri = GetBaseUri();
-        var apiKey = GetApiKey();
-
-        if (baseUri is null)
-            return FirmaDetalleApiResult.Error("La URL de la API de estampado no esta configurada.");
-
-        if (string.IsNullOrWhiteSpace(apiKey))
-            return FirmaDetalleApiResult.Error("La API key de estampado no esta configurada.");
-
-        await using var certificadoStream = new MemoryStream(certificado.Content, writable: false);
-        using var form = new MultipartFormDataContent();
-        using var certificadoContent = CreateFileContent(certificadoStream, certificado.ContentType);
-
-        form.Add(certificadoContent, "certificado", certificado.FileName);
-        form.Add(new StringContent(clave), "clave");
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, BuildEndpointUri(baseUri, "DetallesFirmaPath", "api/documentos/detalles-firma"));
-        request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
-        request.Content = form;
-
-        try
-        {
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            var raw = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var mensaje = ExtraerMensajeError(raw)
-                    ?? $"La API de firma respondio con estado {(int)response.StatusCode}.";
-
-                return FirmaDetalleApiResult.Error(mensaje, raw, (int)response.StatusCode);
-            }
-
-            var detalle = ParseFirmaDetalle(raw);
-
-            return detalle is null
-                ? FirmaDetalleApiResult.Error("La API no devolvio un detalle de firma valido.", raw, (int)response.StatusCode)
-                : FirmaDetalleApiResult.Ok(detalle, raw, (int)response.StatusCode);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return FirmaDetalleApiResult.Error("La API de firma excedio el tiempo de espera.");
-        }
-        catch (HttpRequestException)
-        {
-            return FirmaDetalleApiResult.Error("No fue posible conectar con la API de firma.");
-        }
-        catch (JsonException)
-        {
-            return FirmaDetalleApiResult.Error("La API devolvio un detalle de firma no valido.");
         }
     }
 
@@ -287,9 +249,13 @@ public sealed class FirmaStampApiService
             _configuration["FirmaStampApi:BaseUrl"],
             _configuration["ApiFirma:BaseUrl"]);
 
-        return Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri)
-            ? baseUri
-            : null;
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) ||
+            (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
+        {
+            return null;
+        }
+
+        return new Uri(baseUri.ToString().TrimEnd('/') + "/", UriKind.Absolute);
     }
 
     private string? GetApiKey() =>
@@ -320,43 +286,10 @@ public sealed class FirmaStampApiService
             : new Uri(QueryHelpers.AddQueryString(uri.ToString(), query));
     }
 
-    private static string BuildStampDesignJson(int pagina, double xMm, double yMm, double anchoMm) =>
-        JsonSerializer.Serialize(new
-        {
-            pagina,
-            page = pagina,
-            posicion = new
-            {
-                xMm,
-                yMm,
-                anchoMm,
-                x_mm = xMm,
-                y_mm = yMm,
-                width_mm = anchoMm
-            }
-        }, JsonOptions);
-
     private static string? TryGetHeader(HttpResponseMessage response, string name) =>
         response.Headers.TryGetValues(name, out var values)
             ? values.FirstOrDefault()
             : null;
-
-    private static FirmaDetalleApiResponse? ParseFirmaDetalle(string raw)
-    {
-        using var document = JsonDocument.Parse(raw);
-        var root = UnwrapPayload(document.RootElement);
-
-        return new FirmaDetalleApiResponse(
-            GetBool(root, false, "esValida", "valido", "valid", "isValid"),
-            GetString(root, "estadoVigencia", "estado", "status", "vigencia"),
-            GetString(root, "nombreTitular", "titular", "subjectName", "commonName", "firmante"),
-            GetString(root, "ruc", "identificacion", "identification", "documentNumber"),
-            GetString(root, "emisor", "issuer", "issuerName"),
-            GetString(root, "numeroSerie", "serialNumber", "serie"),
-            GetString(root, "huellaDigital", "thumbprint", "fingerprint"),
-            GetDate(root, "fechaEmision", "validFrom", "certificadoDesde", "notBefore"),
-            GetDate(root, "fechaExpiracion", "validTo", "certificadoHasta", "notAfter"));
-    }
 
     private static PdfSignatureValidationApiResponse? ParsePdfSignatureValidation(string raw)
     {
@@ -690,33 +623,5 @@ public sealed record PdfSignatureValidationApiResult(
         new(true, string.Empty, validation, rawBody, httpStatusCode);
 
     public static PdfSignatureValidationApiResult Error(string message, string? rawBody = null, int? httpStatusCode = null) =>
-        new(false, message, null, rawBody, httpStatusCode);
-}
-
-public sealed record FirmaDetalleApiResponse(
-    bool EsValida,
-    string? EstadoVigencia,
-    string? NombreTitular,
-    string? Ruc,
-    string? Emisor,
-    string? NumeroSerie,
-    string? HuellaDigital,
-    DateTimeOffset? FechaEmision,
-    DateTimeOffset? FechaExpiracion);
-
-public sealed record FirmaDetalleApiResult(
-    bool Success,
-    string Message,
-    FirmaDetalleApiResponse? Detalle,
-    string? RawBody = null,
-    int? HttpStatusCode = null)
-{
-    public static FirmaDetalleApiResult Ok(
-        FirmaDetalleApiResponse detalle,
-        string? rawBody,
-        int? httpStatusCode) =>
-        new(true, string.Empty, detalle, rawBody, httpStatusCode);
-
-    public static FirmaDetalleApiResult Error(string message, string? rawBody = null, int? httpStatusCode = null) =>
         new(false, message, null, rawBody, httpStatusCode);
 }

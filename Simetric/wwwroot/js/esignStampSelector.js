@@ -239,6 +239,11 @@ export async function init(options, dotNetRef) {
             return;
         }
 
+        if ((event.buttons & 1) === 0) {
+            finishDragging(event);
+            return;
+        }
+
         event.preventDefault();
         const point = getPagePoint(event);
         await applySelection(
@@ -281,6 +286,11 @@ export async function init(options, dotNetRef) {
             return;
         }
 
+        if ((event.buttons & 1) === 0) {
+            finishResize(event);
+            return;
+        }
+
         event.preventDefault();
         await applySelection(resizeStart.xMm, resizeStart.yMm, fixedStampWidthMm);
     };
@@ -312,6 +322,8 @@ export async function init(options, dotNetRef) {
     footprint.addEventListener("pointercancel", finishDragging);
     resizeHandle.addEventListener("pointerdown", onResizePointerDown);
     window.addEventListener("pointermove", onWindowPointerMove);
+    window.addEventListener("pointerup", finishDragging);
+    window.addEventListener("pointercancel", finishDragging);
     window.addEventListener("pointerup", finishResize);
     window.addEventListener("pointercancel", finishResize);
     previousButton.addEventListener("click", onPrevious);
@@ -353,6 +365,8 @@ export async function init(options, dotNetRef) {
             footprint.removeEventListener("pointercancel", finishDragging);
             resizeHandle.removeEventListener("pointerdown", onResizePointerDown);
             window.removeEventListener("pointermove", onWindowPointerMove);
+            window.removeEventListener("pointerup", finishDragging);
+            window.removeEventListener("pointercancel", finishDragging);
             window.removeEventListener("pointerup", finishResize);
             window.removeEventListener("pointercancel", finishResize);
             previousButton.removeEventListener("click", onPrevious);

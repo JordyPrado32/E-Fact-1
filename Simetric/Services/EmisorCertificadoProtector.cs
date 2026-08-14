@@ -20,13 +20,12 @@ public class EmisorCertificadoProtector
 
     public string? ProtegerClave(string? valorPlano)
     {
-        var normalizado = NormalizarClave(valorPlano);
-        if (string.IsNullOrWhiteSpace(normalizado))
+        if (string.IsNullOrEmpty(valorPlano))
         {
             return null;
         }
 
-        var protegido = _protector.Protect(normalizado);
+        var protegido = _protector.Protect(valorPlano);
         if (protegido.Length <= MaxInlineLength)
             return protegido;
 
@@ -66,7 +65,11 @@ public class EmisorCertificadoProtector
         }
         catch
         {
-            return valorProtegido.Trim();
+            // Si parece un payload de Data Protection y ya no puede abrirse,
+            // nunca debe enviarse el texto cifrado como si fuera la clave real.
+            return valorProtegido.StartsWith("CfDJ", StringComparison.Ordinal)
+                ? null
+                : valorProtegido;
         }
     }
 
@@ -107,7 +110,7 @@ public class EmisorCertificadoProtector
             return null;
         }
 
-        return File.ReadAllText(filePath).Trim();
+        return File.ReadAllText(filePath);
     }
 
     private string? ObtenerRutaVault(string? referencia)
@@ -148,5 +151,5 @@ public class EmisorCertificadoProtector
         return true;
     }
 
-    public static string? NormalizarClave(string? valor) => valor?.Trim();
+    public static string? NormalizarClave(string? valor) => valor;
 }

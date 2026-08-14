@@ -1,25 +1,20 @@
 using Simetric.Models;
-using Simetric.Services.ESign;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
-using System.Text.RegularExpressions;
 
 namespace Simetric.Services;
 
 public sealed class EmisorCertificadoValidator
 {
-    private static readonly Regex IdentificacionRegex = new(@"\d{10,13}", RegexOptions.Compiled);
     private readonly EmisorCertificadoProtector _certificadoProtector;
-    private readonly FirmaStampApiService _firmaStampApiService;
+    private readonly FirmaInfoApiService _firmaInfoApiService;
     private readonly FirmaPathResolver _firmaPathResolver;
 
     public EmisorCertificadoValidator(
         EmisorCertificadoProtector certificadoProtector,
-        FirmaStampApiService firmaStampApiService,
+        FirmaInfoApiService firmaInfoApiService,
         FirmaPathResolver firmaPathResolver)
     {
         _certificadoProtector = certificadoProtector;
-        _firmaStampApiService = firmaStampApiService;
+        _firmaInfoApiService = firmaInfoApiService;
         _firmaPathResolver = firmaPathResolver;
     }
 
@@ -33,7 +28,9 @@ public sealed class EmisorCertificadoValidator
         var rutaRelativa = NormalizarRutaCertificado(emisor.PathCertificado);
         var clave = _certificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
         if (string.IsNullOrWhiteSpace(clave) && !string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
-            clave = emisor.ClaveCertificado.Trim();
+            clave = emisor.ClaveCertificado.StartsWith("CfDJ", StringComparison.Ordinal)
+                ? null
+                : emisor.ClaveCertificado;
 
         if (string.IsNullOrWhiteSpace(rutaRelativa) && string.IsNullOrWhiteSpace(clave))
         {
@@ -69,24 +66,7 @@ public sealed class EmisorCertificadoValidator
         if (string.IsNullOrWhiteSpace(clave))
             return CertificadoEmisorValidationResult.Fail("No se pudo obtener la clave de la firma electronica.");
 
-        FirmaInfoApiResult apiResult;
-        try
-        {
-            var contenido = await File.ReadAllBytesAsync(rutaLocal, cancellationToken);
-            var detalleResult = await _firmaStampApiService.ObtenerDetallesFirmaAsync(
-                new FirmaStampApiFile(contenido, Path.GetFileName(rutaLocal), "application/x-pkcs12"),
-                clave,
-                cancellationToken);
-
-            apiResult = ConvertirResultadoApi(detalleResult);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            apiResult = FirmaInfoApiResult.Error("No se pudo leer el archivo .p12 configurado para enviarlo a la API de firma.");
-        }
-
-        if (!apiResult.Success && !cancellationToken.IsCancellationRequested)
-            apiResult = ValidarArchivoLocal(rutaLocal, clave);
+        var apiResult = await ConsultarArchivoConApiAsync(emisor.PathCertificado!, clave, cancellationToken);
 
         if (!apiResult.Success || apiResult.Info is null)
             return CertificadoEmisorValidationResult.Fail(
@@ -184,87 +164,20 @@ public sealed class EmisorCertificadoValidator
             info.HuellaDigital);
     }
 
+    public async Task<FirmaInfoApiResult> ConsultarArchivoConApiAsync(
+        string rutaFirma,
+        string clave,
+        CancellationToken cancellationToken = default)
+    {
+        var rutaParaApi = _firmaPathResolver.ResolverRutaParaApi(rutaFirma);
+        if (string.IsNullOrWhiteSpace(rutaParaApi))
+            return FirmaInfoApiResult.Error("No se encontro el archivo .p12 para validar.");
+
+        return await _firmaInfoApiService.ConsultarAsync(rutaParaApi, clave, cancellationToken);
+    }
+
     private static int CalcularDiasRestantes(DateTime fechaExpiracion) =>
         (fechaExpiracion.Date - DateTime.Today).Days;
-
-    private static FirmaInfoApiResult ConvertirResultadoApi(FirmaDetalleApiResult resultado)
-    {
-        if (!resultado.Success || resultado.Detalle is null)
-            return FirmaInfoApiResult.Error(resultado.Message, resultado.RawBody, resultado.HttpStatusCode);
-
-        var detalle = resultado.Detalle;
-        return FirmaInfoApiResult.Ok(
-            new FirmaInfoApiResponse
-            {
-                EsValida = detalle.EsValida,
-                EstadoVigencia = detalle.EstadoVigencia,
-                Mensaje = resultado.Message,
-                NombreTitular = detalle.NombreTitular,
-                Ruc = detalle.Ruc,
-                FechaEmision = detalle.FechaEmision,
-                FechaExpiracion = detalle.FechaExpiracion,
-                DiasRestantes = detalle.FechaExpiracion is null
-                    ? 0
-                    : (detalle.FechaExpiracion.Value.Date - DateTimeOffset.Now.Date).Days,
-                TieneClavePrivada = true,
-                EmisorCertificado = detalle.Emisor,
-                NumeroSerie = detalle.NumeroSerie,
-                HuellaDigital = detalle.HuellaDigital
-            },
-            resultado.RawBody,
-            resultado.HttpStatusCode);
-    }
-
-    private static FirmaInfoApiResult ValidarArchivoLocal(string rutaFirma, string passwordFirma)
-    {
-        var archivo = new FileInfo(rutaFirma);
-        if (!archivo.Exists)
-            return FirmaInfoApiResult.Error("No se encontró el archivo .p12 configurado.");
-
-        if (archivo.Length == 0)
-            return FirmaInfoApiResult.Error("El archivo .p12 está vacío. Carga nuevamente la firma electrónica.");
-
-        try
-        {
-            // 1. Usa la bandera MachineKeySet para que el usuario IWPD_ no dependa de un perfil cargado.
-            using var certificado = new X509Certificate2(
-                rutaFirma,
-                passwordFirma,
-                X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.Exportable);
-
-            var ahora = DateTime.Now;
-            var estaVigente = certificado.NotBefore <= ahora && certificado.NotAfter > ahora;
-            var aunNoVigente = certificado.NotBefore > ahora;
-            var identificaciones = ExtraerIdentificaciones(certificado);
-
-            var info = new FirmaInfoApiResponse
-            {
-                EsValida = estaVigente && certificado.HasPrivateKey,
-                EstadoVigencia = estaVigente ? "VIGENTE" : aunNoVigente ? "NO_VIGENTE" : "CADUCADA",
-                Mensaje = estaVigente
-                    ? "Firma valida."
-                    : aunNoVigente
-                        ? $"La firma electronica sera valida desde el {certificado.NotBefore:dd/MM/yyyy}."
-                        : $"La firma electronica esta caducada desde el {certificado.NotAfter:dd/MM/yyyy}.",
-                NombreTitular = certificado.GetNameInfo(X509NameType.SimpleName, forIssuer: false),
-                Ruc = identificaciones.FirstOrDefault(valor => valor.Length == 13),
-                Cedula = identificaciones.FirstOrDefault(valor => valor.Length == 10),
-                FechaEmision = certificado.NotBefore,
-                FechaExpiracion = certificado.NotAfter,
-                DiasRestantes = CalcularDiasRestantes(certificado.NotAfter),
-                TieneClavePrivada = certificado.HasPrivateKey,
-                EmisorCertificado = certificado.Issuer,
-                NumeroSerie = certificado.SerialNumber,
-                HuellaDigital = certificado.Thumbprint
-            };
-
-            return FirmaInfoApiResult.Ok(info);
-        }
-        catch (CryptographicException ex)
-        {
-            return FirmaInfoApiResult.Error(ObtenerMensajeErrorCertificado(ex));
-        }
-    }
 
     private static string ConstruirMensajeFirmaInvalida(FirmaInfoApiResponse info)
     {
@@ -297,58 +210,6 @@ public sealed class EmisorCertificadoValidator
         return string.Equals(normalizado, "Firma no valida", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(normalizado, "Firma inválida", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(normalizado, "Firma invalida", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string ObtenerMensajeErrorCertificado(CryptographicException exception)
-    {
-        var detalle = exception.Message;
-        if (detalle.Contains("password", StringComparison.OrdinalIgnoreCase) ||
-            detalle.Contains("contraseña", StringComparison.OrdinalIgnoreCase))
-        {
-            return "La clave ingresada no corresponde al archivo .p12. Verifica la clave e intenta nuevamente.";
-        }
-
-        if (detalle.Contains("ASN1", StringComparison.OrdinalIgnoreCase) ||
-            detalle.Contains("bad data", StringComparison.OrdinalIgnoreCase) ||
-            detalle.Contains("datos no válidos", StringComparison.OrdinalIgnoreCase) ||
-            detalle.Contains("decode", StringComparison.OrdinalIgnoreCase))
-        {
-            return "El archivo no tiene un formato .p12 válido o está dañado. Carga nuevamente el archivo original.";
-        }
-
-        return "No se pudo abrir la firma electrónica. La clave no corresponde al archivo o el archivo .p12 está dañado.";
-    }
-
-    private static IReadOnlyList<string> ExtraerIdentificaciones(X509Certificate2 certificado)
-    {
-        var identificaciones = new List<string>();
-        AgregarIdentificaciones(identificaciones, certificado.Subject);
-        AgregarIdentificaciones(identificaciones, certificado.SubjectName.Name);
-
-        foreach (var extension in certificado.Extensions)
-        {
-            try
-            {
-                AgregarIdentificaciones(identificaciones, extension.Format(multiLine: true));
-            }
-            catch (CryptographicException)
-            {
-            }
-        }
-
-        return identificaciones;
-    }
-
-    private static void AgregarIdentificaciones(ICollection<string> identificaciones, string? texto)
-    {
-        if (string.IsNullOrWhiteSpace(texto))
-            return;
-
-        foreach (Match coincidencia in IdentificacionRegex.Matches(texto))
-        {
-            if (!identificaciones.Contains(coincidencia.Value, StringComparer.Ordinal))
-                identificaciones.Add(coincidencia.Value);
-        }
     }
 
     private static bool PerteneceAlRuc(string? identificacionCertificado, string? rucEmisor)

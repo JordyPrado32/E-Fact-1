@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.Models;
 using Simetric.Services;
-using Simetric.Services.ESign;
 using System.Text.RegularExpressions;
 
 namespace Simetric.Controllers
@@ -14,18 +13,15 @@ namespace Simetric.Controllers
     {
         private readonly AppDbContext _context;
         private readonly EmisorCertificadoValidator _emisorCertificadoValidator;
-        private readonly FirmaStampApiService _firmaStampApiService;
         private readonly IWebHostEnvironment _hostEnvironment;
 
         public EmisoresController(
             AppDbContext context,
             EmisorCertificadoValidator emisorCertificadoValidator,
-            FirmaStampApiService firmaStampApiService,
             IWebHostEnvironment hostEnvironment)
         {
             _context = context;
             _emisorCertificadoValidator = emisorCertificadoValidator;
-            _firmaStampApiService = firmaStampApiService;
             _hostEnvironment = hostEnvironment;
         }
 
@@ -167,23 +163,41 @@ namespace Simetric.Controllers
             using var buffer = new MemoryStream();
             await input.CopyToAsync(buffer, HttpContext.RequestAborted);
 
-            var apiResult = await _firmaStampApiService.ObtenerDetallesFirmaAsync(
-                new FirmaStampApiFile(
-                    buffer.ToArray(),
-                    Path.GetFileName(archivo.FileName),
-                    string.IsNullOrWhiteSpace(archivo.ContentType) ? "application/x-pkcs12" : archivo.ContentType),
-                clave,
-                HttpContext.RequestAborted);
+            var relativePath = $"certs/temp/{Guid.NewGuid():N}.p12";
+            var physicalPath = Path.Combine(
+                _hostEnvironment.ContentRootPath,
+                "App_Data",
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(physicalPath)!);
 
-            if (!apiResult.Success || apiResult.Detalle is null)
+            FirmaInfoApiResult apiResult;
+            try
+            {
+                await System.IO.File.WriteAllBytesAsync(
+                    physicalPath,
+                    buffer.ToArray(),
+                    HttpContext.RequestAborted);
+                apiResult = await _emisorCertificadoValidator.ConsultarArchivoConApiAsync(
+                    relativePath,
+                    clave,
+                    HttpContext.RequestAborted);
+            }
+            finally
+            {
+                if (System.IO.File.Exists(physicalPath))
+                    System.IO.File.Delete(physicalPath);
+            }
+
+            if (!apiResult.Success || apiResult.Info is null)
                 return BadRequest(string.IsNullOrWhiteSpace(apiResult.Message)
                     ? "La API no pudo validar la firma y la clave."
                     : apiResult.Message);
 
-            var detalle = apiResult.Detalle;
+            var detalle = apiResult.Info;
+            var identificacion = string.IsNullOrWhiteSpace(detalle.Ruc) ? detalle.Cedula : detalle.Ruc;
             var coincideCuenta = emisor is null ||
-                string.IsNullOrWhiteSpace(detalle.Ruc) ||
-                CoincideIdentificacionFirma(detalle.Ruc, emisor.Ruc);
+                string.IsNullOrWhiteSpace(identificacion) ||
+                CoincideIdentificacionFirma(identificacion, emisor.Ruc);
             var esValida = detalle.EsValida && coincideCuenta;
             var mensaje = !detalle.EsValida
                 ? "El archivo o la clave no son validos, o la firma no esta vigente."
@@ -198,8 +212,8 @@ namespace Simetric.Controllers
                 mensaje,
                 detalle.EstadoVigencia,
                 detalle.NombreTitular,
-                identificacion = detalle.Ruc,
-                detalle.Emisor,
+                identificacion,
+                emisor = detalle.EmisorCertificado,
                 detalle.NumeroSerie,
                 detalle.HuellaDigital,
                 detalle.FechaEmision,
@@ -650,7 +664,6 @@ namespace Simetric.Controllers
         e.PathCertificado = e.PathCertificado?.Trim().TrimStart('~', '/', '\\').Replace('\\', '/');
         if (!string.IsNullOrWhiteSpace(e.PathCertificado) && e.PathCertificado.StartsWith("App_Data/", StringComparison.OrdinalIgnoreCase))
             e.PathCertificado = e.PathCertificado["App_Data/".Length..];
-            e.ClaveCertificado = e.ClaveCertificado?.Trim();
             e.Telefono = e.Telefono?.Trim();
             e.TiempoEspera = e.TiempoEspera?.Trim();
             

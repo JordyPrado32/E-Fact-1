@@ -20,7 +20,6 @@
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject FirmaStampApiService FirmaStampApiService
-@inject ESignFirmaAccessService FirmaAccessService
 @inject FirmaPathResolver FirmaPathResolver
 @inject EmisorCertificadoProtector CertificadoProtector
 @inject IJSRuntime JS
@@ -33,25 +32,6 @@
         <ESignLoadingState
             Title="Cargando estampado"
             Description="Preparando tu certificado, sello visual y herramientas para firmar el PDF." />
-    }
-    else if (accesoFirmaPdf?.TieneAcceso != true)
-    {
-        <section class="stamp-access-gate">
-            <div class="stamp-access-icon"><i class="bi bi-shield-lock"></i></div>
-            <span class="header-kicker">Acceso por vigencia</span>
-            <h1>Activa la firma de PDFs</h1>
-            <p>@(accesoFirmaPdf?.Mensaje ?? "Necesitas una firma pagada y vigente en E-Rúbrica para usar esta sección.")</p>
-            <div class="stamp-access-actions">
-                <button type="button" class="esign-btn-primary" @onclick='() => NavManager.NavigateTo("/solicitud/nueva")'>
-                    <i class="bi bi-cart-check"></i>
-                    <span>Comprar firma</span>
-                </button>
-                <button type="button" class="esign-btn-secondary" @onclick='() => NavManager.NavigateTo("/solicitud/pagos")'>
-                    <i class="bi bi-receipt"></i>
-                    <span>Revisar mis pagos</span>
-                </button>
-            </div>
-        </section>
     }
     else
     {
@@ -271,8 +251,6 @@
     private IJSObjectReference? stampSelectorModule;
     private IJSObjectReference? stampSelectorInstance;
     private bool stampSelectorInitialized;
-    private ESignFirmaAccessResult? accesoFirmaPdf;
-
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -303,13 +281,6 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
-        accesoFirmaPdf = await FirmaAccessService.ObtenerAccesoAsync(currentUserId);
-        if (!accesoFirmaPdf.TieneAcceso)
-        {
-            cargando = false;
-            return;
-        }
-
         await CargarEmisorAsync();
         cargando = false;
     }
@@ -321,7 +292,7 @@
 
         stampSelectorInitialized = true;
         dotNetRef = DotNetObjectReference.Create(this);
-        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js");
+        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js?v=20260814-3");
         stampSelectorInstance = await stampSelectorModule.InvokeAsync<IJSObjectReference>(
             "init",
             new
@@ -383,13 +354,6 @@
         mensaje = null;
         esError = false;
         resultado = null;
-
-        accesoFirmaPdf = await FirmaAccessService.ObtenerAccesoAsync(currentUserId);
-        if (!accesoFirmaPdf.TieneAcceso)
-        {
-            SetMensaje(accesoFirmaPdf.Mensaje, true);
-            return;
-        }
 
         if (!ValidarFormulario())
             return;
@@ -602,7 +566,7 @@
         }
 
         var pathCertificado = pathCertificadoPendiente ?? emisor.PathCertificado;
-        var claveNueva = claveCertificadoInput?.Trim();
+        var claveNueva = claveCertificadoInput;
 
         if (string.IsNullOrWhiteSpace(pathCertificado))
         {
@@ -743,10 +707,7 @@
         if (emisor is null)
             return null;
 
-        var password = CertificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
-        return string.IsNullOrWhiteSpace(password)
-            ? emisor.ClaveCertificado?.Trim()
-            : password;
+        return CertificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
     }
 
     private string? ResolverCertificadoPorClaveYRuc(string password)
