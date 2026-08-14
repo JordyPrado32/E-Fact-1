@@ -166,6 +166,15 @@
                                     <option value="sin saldo">Sin Saldo</option>
                                 </select>
                             </div>
+                            <div class="filter-size-wrap">
+                                <span>Mostrar</span>
+                                <select class="filter-select filter-page-size" @bind="pageSize" @bind:after="OnPageSizeChanged">
+                                    @foreach (var size in pageSizeOptions)
+                                    {
+                                        <option value="@size">@size</option>
+                                    }
+                                </select>
+                            </div>
                         </div>
                     </div>
 
@@ -318,6 +327,15 @@
                                     <option value="vencida">Vencida</option>
                                 </select>
                             </div>
+                            <div class="filter-size-wrap">
+                                <span>Mostrar</span>
+                                <select class="filter-select filter-page-size" @bind="pageSize" @bind:after="OnPageSizeChanged">
+                                    @foreach (var size in pageSizeOptions)
+                                    {
+                                        <option value="@size">@size</option>
+                                    }
+                                </select>
+                            </div>
                         </div>
                     </div>
 
@@ -419,6 +437,7 @@
 </div>
 
 @code {
+    private const string AccionAvisoSaldoAgotado = "AvisoSaldoAgotadoEfact";
     private bool isLoading = true;
 
     // e-Fact Data Lists
@@ -457,7 +476,9 @@
     private int totalESignPages = 0;
 
     private int pageSize = 5;
+    private readonly int[] pageSizeOptions = new[] { 5, 10, 20, 50, 100 };
     private readonly HashSet<int> enviandoAvisoSaldoIds = new();
+    private readonly HashSet<int> avisosAutomaticosProcesadosIds = new();
     private string? avisoSaldoMensaje;
     private bool avisoSaldoEsError;
 
@@ -660,6 +681,7 @@
             // Apply Filters and Paginate initially
             ApplyEFactFilters();
             ApplyESignFilters();
+            await ProcesarAvisosSaldoAgotadoAutomaticosAsync();
         }
         catch (Exception ex)
         {
@@ -777,7 +799,18 @@
         PaginateEFact();
     }
 
+    private void OnPageSizeChanged()
+    {
+        currentEFactPage = 1;
+        currentESignPage = 1;
+        ApplyEFactFilters();
+        ApplyESignFilters();
+    }
+
     private async Task EnviarAvisoSaldoAgotadoAsync(EFactSubscriptionRow row)
+        => await EnviarAvisoSaldoAgotadoAsync(row, esAutomatico: false);
+
+    private async Task EnviarAvisoSaldoAgotadoAsync(EFactSubscriptionRow row, bool esAutomatico)
     {
         if (enviandoAvisoSaldoIds.Contains(row.IdUsuario))
             return;
@@ -799,7 +832,14 @@
                 row.PaqueteContratado,
                 DateTime.Now);
 
-            avisoSaldoMensaje = $"Aviso enviado a {row.Email} y administrativo@numericasoftware.com.";
+            if (esAutomatico)
+            {
+                await RegistrarAvisoSaldoAgotadoAsync(row);
+            }
+
+            avisoSaldoMensaje = esAutomatico
+                ? $"Aviso automático enviado a {row.Email} y administrativo@numericasoftware.com."
+                : $"Aviso enviado a {row.Email} y administrativo@numericasoftware.com.";
         }
         catch (Exception ex)
         {
@@ -810,6 +850,60 @@
         {
             enviandoAvisoSaldoIds.Remove(row.IdUsuario);
         }
+    }
+
+    private async Task ProcesarAvisosSaldoAgotadoAutomaticosAsync()
+    {
+        foreach (var row in efactAllRows.Where(DebeEnviarAvisoSaldoAgotado))
+        {
+            if (avisosAutomaticosProcesadosIds.Contains(row.IdUsuario))
+                continue;
+
+            avisosAutomaticosProcesadosIds.Add(row.IdUsuario);
+
+            if (await AvisoSaldoAgotadoYaRegistradoAsync(row))
+                continue;
+
+            await EnviarAvisoSaldoAgotadoAsync(row, esAutomatico: true);
+        }
+    }
+
+    private static bool DebeEnviarAvisoSaldoAgotado(EFactSubscriptionRow row) =>
+        row.SaldoDisponible <= 0 &&
+        !row.PaqueteContratado.Contains("ilimitad", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(row.Email);
+
+    private string GetAvisoSaldoAgotadoKey(EFactSubscriptionRow row)
+    {
+        var fechaReferencia = row.FechaUltimaRecarga ?? row.FechaCompra;
+        return $"{row.IdUsuario}:{fechaReferencia:yyyyMMddHHmmss}:{row.PaqueteContratado}";
+    }
+
+    private async Task<bool> AvisoSaldoAgotadoYaRegistradoAsync(EFactSubscriptionRow row)
+    {
+        var key = GetAvisoSaldoAgotadoKey(row);
+        using var context = await DbFactory.CreateDbContextAsync();
+        return await context.Auditorias
+            .AsNoTracking()
+            .AnyAsync(a => a.IdUsuario == row.IdUsuario &&
+                           a.Accion == AccionAvisoSaldoAgotado &&
+                           a.ValorNuevo == key);
+    }
+
+    private async Task RegistrarAvisoSaldoAgotadoAsync(EFactSubscriptionRow row)
+    {
+        var key = GetAvisoSaldoAgotadoKey(row);
+        using var context = await DbFactory.CreateDbContextAsync();
+        context.Auditorias.Add(new Auditoria
+        {
+            IdUsuario = row.IdUsuario,
+            Fecha = DateTime.Now,
+            Accion = AccionAvisoSaldoAgotado,
+            ValoresPrevios = row.SaldoDisponible.ToString(),
+            ValorNuevo = key,
+            Detalles = $"Aviso automatico por documentos agotados enviado a {row.Email} y administrativo@numericasoftware.com."
+        });
+        await context.SaveChangesAsync();
     }
 
     // eRúbrica Filter & Pagination Logic
@@ -922,6 +1016,7 @@
         public int DocumentosConsumidos { get; set; }
         public int SaldoDisponible { get; set; }
         public DateTime FechaCompra { get; set; }
+        public DateTime? FechaUltimaRecarga { get; set; }
         public string Estado { get; set; } = ""; // "activo", "sin saldo"
     }
 
