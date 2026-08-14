@@ -103,6 +103,17 @@ public interface IEmailService
         string? ruc,
         DateTime fechaExpiracion,
         int diasRestantes);
+    Task EnviarAvisoDocumentosAgotadosClienteAsync(
+        string emailDestino,
+        string? nombreCliente);
+    Task EnviarAvisoDocumentosAgotadosAdministrativoAsync(
+        string? nombreCliente,
+        string? identificacion,
+        string? correoCliente,
+        string? telefonoCliente,
+        DateTime? fechaUltimaRecarga,
+        string? paqueteAnterior,
+        DateTime fechaAgotamiento);
 }
 
 public class EmailService : IEmailService
@@ -112,6 +123,7 @@ public class EmailService : IEmailService
     private const string EfactContactPhone = "+593 98 413 0238";
     private const string EfactLogoUrl = "https://efact.numericasoftware.com/images/services/efact.png";
     private const string ContabilidadNotificacionPagos = "contabilidad@numericasoftware.com";
+    private const string AdministrativoDocumentosAgotados = "administrativo@numericasoftware.com";
 
     private readonly AppDbContext _db;
     private readonly AuditService _auditService;
@@ -125,6 +137,7 @@ public class EmailService : IEmailService
     private readonly SecureSocketOptions _seguridadPreferida;
     private readonly List<string> _notificacionPagosDestinatarios;
     private readonly string _urlAccesoPlataforma;
+    private readonly string _urlRecargasDesdeLogin;
     private readonly string _urlSoportePlataforma;
     private readonly string _asesoraComercial;
     private readonly string _telefonoAsesoraComercial;
@@ -161,8 +174,10 @@ public class EmailService : IEmailService
             "EmailComprobantes:NombreRemitente",
             "Smtp:NombreRemitente") ?? "Sistema E-Fact";
         var appBaseUrl = configuration["AppBaseUrl"] ?? "https://efact.numericasoftware.com/";
-        _urlAccesoPlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "login").ToString();
-        _urlSoportePlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "soporte").ToString();
+        var appRootUrl = new Uri(appBaseUrl.TrimEnd('/') + "/");
+        _urlAccesoPlataforma = new Uri(appRootUrl, "login").ToString();
+        _urlRecargasDesdeLogin = new Uri(appRootUrl, "login?returnUrl=%2Frecargas").ToString();
+        _urlSoportePlataforma = new Uri(appRootUrl, "soporte").ToString();
         _asesoraComercial = configuration["WhatsAppCloudApi:CommercialAdvisorName"]?.Trim() ?? "Brigitte";
         _telefonoAsesoraComercial = new string(
             (configuration["WhatsAppCloudApi:CommercialAdvisorPhoneNumber"] ?? string.Empty)
@@ -1176,6 +1191,114 @@ public class EmailService : IEmailService
                 <p style='Margin:18px 0 0 0;font-size:14px;line-height:22px;color:#4b5563;'>
                   Puedes revisar el estado de tu pago desde tu cuenta. Si ya realizaste la transferencia, nuestro equipo validara el comprobante y actualizara el estado del cobro.
                 </p>")
+        }.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoDocumentosAgotadosClienteAsync(
+        string emailDestino,
+        string? nombreCliente)
+    {
+        emailDestino = NormalizarEmail(emailDestino);
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Cliente" : nombreCliente.Trim());
+        var recargasUrlSegura = WebUtility.HtmlEncode(_urlRecargasDesdeLogin);
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(emailDestino));
+        mensaje.Subject = "Tus documentos disponibles se han agotado | E-FACT";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = BuildOutlookEmailShell(
+                "Tu cuenta E-FACT llego a 0 documentos disponibles.",
+                "E-FACT",
+                "Tus documentos disponibles se han agotado",
+                $"Hola, <strong style='color:#006bb5;'>{clienteSeguro}</strong>:",
+                $@"
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;margin:0 0 18px 0;'>
+                  <tr>
+                    <td valign='top' width='150' style='width:150px;padding:0 20px 12px 0;'>
+                      <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;width:132px;'>
+                        <tr>
+                          <td align='center' style='height:132px;border:3px solid #0b73d9;border-radius:16px;background:#ffffff;font-family:Segoe UI,Arial,sans-serif;color:#0f1c3f;'>
+                            <div style='font-size:44px;line-height:48px;color:#ef1748;font-weight:900;'>0</div>
+                            <div style='font-size:13px;line-height:17px;font-weight:900;text-transform:uppercase;'>Documentos<br>disponibles</div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td valign='top' style='padding:0;font-family:Segoe UI,Arial,sans-serif;'>
+                      <p style='margin:0 0 12px 0;font-size:15px;line-height:24px;color:#21324d;'>
+                        Te informamos que actualmente tu cuenta de <strong>e-fact</strong> ha llegado a <strong style='color:#ef1748;'>0 documentos disponibles</strong>.
+                      </p>
+                      <p style='margin:0 0 18px 0;font-size:15px;line-height:24px;color:#21324d;'>
+                        Para continuar emitiendo tus comprobantes electronicos con normalidad, realiza una recarga de documentos.
+                      </p>
+                      <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;'>
+                        <tr>
+                          <td bgcolor='#31a313' style='background:#31a313;border-radius:999px;'>
+                            <a href='{recargasUrlSegura}' target='_blank' style='display:inline-block;padding:13px 24px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:18px;font-weight:900;color:#ffffff;text-decoration:none;text-transform:uppercase;'>
+                              &#128722;&nbsp; Recargar documentos
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+                      <p style='margin:12px 0 0 0;font-size:12px;line-height:18px;color:#31679c;font-weight:800;'>&#128737; Proceso seguro y rapido</p>
+                    </td>
+                  </tr>
+                </table>")
+        }.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoDocumentosAgotadosAdministrativoAsync(
+        string? nombreCliente,
+        string? identificacion,
+        string? correoCliente,
+        string? telefonoCliente,
+        DateTime? fechaUltimaRecarga,
+        string? paqueteAnterior,
+        DateTime fechaAgotamiento)
+    {
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Cliente sin nombre" : nombreCliente.Trim());
+        var identificacionSegura = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(identificacion) ? "No registrada" : identificacion.Trim());
+        var correoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(correoCliente) ? "No registrado" : correoCliente.Trim());
+        var telefonoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(telefonoCliente) ? "No registrado" : telefonoCliente.Trim());
+        var paqueteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(paqueteAnterior) ? "No registrado" : paqueteAnterior.Trim());
+        var cultura = CultureInfo.GetCultureInfo("es-EC");
+        var ultimaRecargaTexto = fechaUltimaRecarga?.ToString("dd/MM/yyyy", cultura) ?? "Sin registros";
+        var agotamientoTexto = fechaAgotamiento.ToString("dd/MM/yyyy HH:mm", cultura);
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(AdministrativoDocumentosAgotados)));
+        mensaje.Subject = "Cliente e-fact sin documentos disponibles";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = BuildOutlookEmailShell(
+                "Un cliente E-FACT agoto sus documentos disponibles.",
+                "E-FACT",
+                "Cliente e-fact sin documentos disponibles",
+                "Hola:",
+                $@"
+                <p style='margin:0 0 16px 0;font-size:15px;line-height:24px;color:#334155;'>
+                  El siguiente cliente ha agotado sus documentos disponibles en <strong>e-fact</strong>:
+                </p>
+                {BuildInfoTable(
+                    ("Cliente", clienteSeguro),
+                    ("RUC/Cedula", identificacionSegura),
+                    ("Correo", correoSeguro),
+                    ("Telefono", telefonoSeguro),
+                    ("Documentos disponibles", "<strong style='color:#dc2626;'>0</strong>"),
+                    ("Ultima recarga", WebUtility.HtmlEncode(ultimaRecargaTexto)),
+                    ("Ultimo paquete adquirido", paqueteSeguro),
+                    ("Fecha de agotamiento", WebUtility.HtmlEncode(agotamientoTexto)))}
+                <p style='margin:0 0 16px 0;font-size:15px;line-height:24px;color:#334155;'>
+                  El cliente ya recibio automaticamente un correo informandole que debe realizar una recarga.
+                </p>
+                {BuildNoticeBox("<strong>Accion sugerida:</strong> verificar si realiza la recarga. Si no la efectua dentro del plazo establecido, contactar al cliente para ofrecer asistencia.")}")
         }.ToMessageBody();
 
         await SendMessageAsync(mensaje);
