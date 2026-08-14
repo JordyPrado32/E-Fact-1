@@ -1216,7 +1216,7 @@ public class EmailService : IEmailService
                 "Tus documentos disponibles se han agotado",
                 $"Hola, <strong style='color:#006bb5;'>{clienteSeguro}</strong>:",
                 $@"
-                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;margin:0 0 18px 0;'>
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;margin:0 0 22px 0;'>
                   <tr>
                     <td valign='top' width='150' style='width:150px;padding:0 20px 12px 0;'>
                       <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;width:132px;'>
@@ -1247,7 +1247,29 @@ public class EmailService : IEmailService
                       <p style='margin:12px 0 0 0;font-size:12px;line-height:18px;color:#31679c;font-weight:800;'>&#128737; Proceso seguro y rapido</p>
                     </td>
                   </tr>
-                </table>")
+                </table>" + $@"
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;border-collapse:collapse;background:#eef6ff;border:1px solid #dbeafe;border-radius:12px;'>
+                  <tr>
+                    <td valign='middle' width='82' style='width:82px;padding:18px 12px 18px 18px;font-family:Segoe UI,Arial,sans-serif;'>
+                      <table role='presentation' cellpadding='0' cellspacing='0' border='0' style='border-collapse:collapse;'>
+                        <tr>
+                          <td align='center' valign='middle' bgcolor='#dceeff' style='width:56px;height:56px;border-radius:28px;background:#dceeff;color:#006bb5;font-size:28px;line-height:56px;font-weight:900;'>&#127911;</td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td valign='middle' style='padding:18px 18px 18px 0;font-family:Segoe UI,Arial,sans-serif;'>
+                      <div style='font-size:15px;line-height:20px;font-weight:900;color:#0054a6;margin:0 0 4px 0;'>&iquest;Necesitas ayuda?</div>
+                      <div style='font-size:12px;line-height:18px;color:#14213d;'>Nuestro equipo de soporte est&aacute; disponible para asistirte.</div>
+                    </td>
+                    <td valign='middle' style='padding:18px;border-left:1px solid #bfd7ef;font-family:Segoe UI,Arial,sans-serif;color:#14213d;'>
+                      <div style='font-size:12px;line-height:20px;margin:0 0 2px 0;'>&#9742;&nbsp; {WebUtility.HtmlEncode(EfactContactPhone)}</div>
+                      <div style='font-size:12px;line-height:20px;margin:0 0 2px 0;'>&#9993;&nbsp; soporte@numericasoftware.com</div>
+                      <div style='font-size:12px;line-height:20px;margin:0;'>&#9719;&nbsp; Lunes a Viernes 08h00 - 18h00</div>
+                    </td>
+                  </tr>
+                </table>",
+                enlazarLogo: false,
+                mostrarLinkFooter: false)
         }.ToMessageBody();
 
         await SendMessageAsync(mensaje);
@@ -1298,7 +1320,9 @@ public class EmailService : IEmailService
                 <p style='margin:0 0 16px 0;font-size:15px;line-height:24px;color:#334155;'>
                   El cliente ya recibio automaticamente un correo informandole que debe realizar una recarga.
                 </p>
-                {BuildNoticeBox("<strong>Accion sugerida:</strong> verificar si realiza la recarga. Si no la efectua dentro del plazo establecido, contactar al cliente para ofrecer asistencia.")}")
+                {BuildNoticeBox("<strong>Accion sugerida:</strong> verificar si realiza la recarga. Si no la efectua dentro del plazo establecido, contactar al cliente para ofrecer asistencia.")}",
+                enlazarLogo: false,
+                mostrarLinkFooter: false)
         }.ToMessageBody();
 
         await SendMessageAsync(mensaje);
@@ -1554,13 +1578,19 @@ Atentamente,
         await SendMessageAsync(mensaje);
     }
 
-    private static string BuildEfactLogoHtml(string linkUrl, int width = 220)
+    private static string BuildEfactLogoHtml(string? linkUrl, int width = 220)
     {
         var logoSafe = WebUtility.HtmlEncode(EfactLogoUrl);
+        var logoHtml = $@"
+  <img src='{logoSafe}' width='{width}' alt='Numerica e-fact' style='display:block;width:{width}px;max-width:{width}px;height:auto;border:0;outline:none;text-decoration:none;margin:0 auto;'>
+  <div style='font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:18px;font-weight:900;color:#006bb5;margin-top:6px;'>Numerica e-fact</div>";
+
+        if (string.IsNullOrWhiteSpace(linkUrl))
+            return logoHtml;
+
         return $@"
 <a href='{linkUrl}' target='_blank' style='display:inline-block;text-decoration:none;'>
-  <img src='{logoSafe}' width='{width}' alt='Numerica e-fact' style='display:block;width:{width}px;max-width:{width}px;height:auto;border:0;outline:none;text-decoration:none;margin:0 auto;'>
-  <span style='display:none;font-family:Segoe UI,Arial,sans-serif;font-size:42px;line-height:44px;font-weight:900;color:#006bb5;'>Numerica e-fact</span>
+{logoHtml}
 </a>";
     }
 
@@ -1575,13 +1605,28 @@ Atentamente,
                 </table>
               </div>";
 
-    private static string BuildOutlookEmailShell(string preheader, string brand, string title, string introHtml, string contentHtml)
+    private static string BuildOutlookEmailShell(
+        string preheader,
+        string brand,
+        string title,
+        string introHtml,
+        string contentHtml,
+        bool enlazarLogo = true,
+        bool mostrarLinkFooter = true)
     {
         var preheaderSeguro = WebUtility.HtmlEncode(preheader);
         var titleSeguro = title;
         var websiteSafe = WebUtility.HtmlEncode(EfactInfoUrl);
         var websiteDisplaySafe = WebUtility.HtmlEncode(EfactInfoDisplayUrl);
         var phoneSafe = WebUtility.HtmlEncode(EfactContactPhone);
+        var logoLink = enlazarLogo ? websiteSafe : null;
+        var footerContactoHtml = mostrarLinkFooter
+            ? $@"
+              <a href='{websiteSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:none;font-weight:800;'>{websiteDisplaySafe}</a>
+              <span style='display:inline-block;color:#9aa8b6;padding:0 12px;'>|</span>
+              <span style='font-size:12px;line-height:18px;color:#334155;font-weight:800;'>{phoneSafe}</span>"
+            : $@"
+              <span style='font-size:12px;line-height:18px;color:#334155;font-weight:800;'>{phoneSafe}</span>";
 
         return $@"
 <!doctype html>
@@ -1601,7 +1646,7 @@ Atentamente,
         <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:640px;border-collapse:collapse;background-color:#ffffff;border:1px solid #d8e3ec;'>
           <tr>
             <td align='center' style='padding:22px 24px 14px 24px;background-color:#ffffff;border-bottom:2px solid #86b7e4;font-family:Segoe UI,Arial,sans-serif;'>
-              {BuildEfactLogoHtml(websiteSafe)}
+              {BuildEfactLogoHtml(logoLink)}
             </td>
           </tr>
           <tr>
@@ -1619,11 +1664,9 @@ Atentamente,
           <tr>
             <td align='center' style='padding:20px 28px;background-color:#e8f1f2;font-family:Segoe UI,Arial,sans-serif;color:#4b5563;'>
               <div style='font-size:12px;line-height:18px;color:#4b5563;margin:0 0 4px 0;'>Emitido mediante</div>
-              {BuildEfactLogoHtml(websiteSafe, 140)}
+              {BuildEfactLogoHtml(logoLink, 140)}
               <div style='line-height:8px;height:8px;font-size:8px;'>&nbsp;</div>
-              <a href='{websiteSafe}' target='_blank' style='font-size:12px;line-height:18px;color:#006bb5;text-decoration:none;font-weight:800;'>{websiteDisplaySafe}</a>
-              <span style='display:inline-block;color:#9aa8b6;padding:0 12px;'>|</span>
-              <span style='font-size:12px;line-height:18px;color:#334155;font-weight:800;'>{phoneSafe}</span>
+              {footerContactoHtml}
             </td>
           </tr>
         </table>
@@ -1867,7 +1910,19 @@ Atentamente,
     private static string NormalizarEmail(string email)
     {
         var emailNormalizado = (email ?? string.Empty).Trim().ToLowerInvariant();
-        _ = MailboxAddress.Parse(emailNormalizado);
+
+        if (string.IsNullOrWhiteSpace(emailNormalizado))
+            throw new InvalidOperationException("El correo del destinatario no esta registrado.");
+
+        try
+        {
+            _ = MailboxAddress.Parse(emailNormalizado);
+        }
+        catch (Exception ex) when (ex is ParseException || ex is FormatException || ex is ArgumentException)
+        {
+            throw new InvalidOperationException($"El correo '{email}' no es valido. Corrige el correo del cliente antes de enviar el aviso.", ex);
+        }
+
         return emailNormalizado;
     }
 
