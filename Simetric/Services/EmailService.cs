@@ -3,6 +3,7 @@ using MailKit.Security;
 using MimeKit;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Components.Helpers;
 using Simetric.Data;
@@ -12,6 +13,7 @@ using Simetric.ViewModels;
 using System.Diagnostics;
 using System.Net;
 using System.Globalization;
+using MimeKit.Utils;
 
 public interface IEmailService
 {
@@ -146,16 +148,19 @@ public class EmailService : IEmailService
     private readonly string _urlConfiguracionFirma;
     private readonly string _asesoraComercial;
     private readonly string _telefonoAsesoraComercial;
+    private readonly string _webRootPath;
 
     public EmailService(
         AppDbContext db,
         AuditService auditService,
         IConfiguration configuration,
-        ILogger<EmailService> logger)
+        ILogger<EmailService> logger,
+        IWebHostEnvironment webHostEnvironment)
     {
         _db = db;
         _auditService = auditService;
         _logger = logger;
+        _webRootPath = webHostEnvironment.WebRootPath;
 
         _host = GetConfigValue(
             configuration,
@@ -1216,9 +1221,9 @@ public class EmailService : IEmailService
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
         mensaje.To.Add(MailboxAddress.Parse(emailDestino));
         mensaje.Subject = "Tus documentos disponibles se han agotado | E-FACT";
-        mensaje.Body = new BodyBuilder
-        {
-            HtmlBody = BuildOutlookEmailShell(
+        var bodyBuilder = new BodyBuilder();
+        var logoSrc = AddEfactLogoResource(bodyBuilder);
+        bodyBuilder.HtmlBody = BuildOutlookEmailShell(
                 "Tu cuenta E-FACT llego a 0 documentos disponibles.",
                 "E-FACT",
                 "Tus documentos disponibles se han agotado",
@@ -1277,8 +1282,9 @@ public class EmailService : IEmailService
                   </tr>
                 </table>",
                 enlazarLogo: false,
-                mostrarLinkFooter: false)
-        }.ToMessageBody();
+                mostrarLinkFooter: false,
+                logoSrc: logoSrc);
+        mensaje.Body = bodyBuilder.ToMessageBody();
 
         await SendMessageAsync(mensaje);
     }
@@ -1305,9 +1311,9 @@ public class EmailService : IEmailService
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
         mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(AdministrativoDocumentosAgotados)));
         mensaje.Subject = "Cliente e-fact sin documentos disponibles";
-        mensaje.Body = new BodyBuilder
-        {
-            HtmlBody = BuildOutlookEmailShell(
+        var bodyBuilder = new BodyBuilder();
+        var logoSrc = AddEfactLogoResource(bodyBuilder);
+        bodyBuilder.HtmlBody = BuildOutlookEmailShell(
                 "Un cliente E-FACT agoto sus documentos disponibles.",
                 "E-FACT",
                 "Cliente e-fact sin documentos disponibles",
@@ -1330,8 +1336,9 @@ public class EmailService : IEmailService
                 </p>
                 {BuildNoticeBox("<strong>Accion sugerida:</strong> verificar si realiza la recarga. Si no la efectua dentro del plazo establecido, contactar al cliente para ofrecer asistencia.")}",
                 enlazarLogo: false,
-                mostrarLinkFooter: false)
-        }.ToMessageBody();
+                mostrarLinkFooter: false,
+                logoSrc: logoSrc);
+        mensaje.Body = bodyBuilder.ToMessageBody();
 
         await SendMessageAsync(mensaje);
     }
@@ -1634,12 +1641,58 @@ Atentamente,
         await SendMessageAsync(mensaje);
     }
 
-    private static string BuildEfactLogoHtml(string? linkUrl, int width = 220)
+    private string? AddEfactLogoResource(BodyBuilder bodyBuilder)
     {
-        var logoSafe = WebUtility.HtmlEncode(EfactLogoUrl);
+        var logoPath = Path.Combine(_webRootPath, "images", "logo.png");
+        if (!File.Exists(logoPath))
+            return null;
+
+        try
+        {
+            var logo = bodyBuilder.LinkedResources.Add(logoPath);
+            logo.ContentId = MimeUtils.GenerateMessageId();
+            return $"cid:{logo.ContentId}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo incrustar el logo e-fact en el correo.");
+            return null;
+        }
+    }
+
+    private static string BuildEfactLogoHtml(string? linkUrl, int width = 220, string? logoSrc = null)
+    {
+        if (!string.IsNullOrWhiteSpace(logoSrc))
+        {
+            var logoSrcSeguro = WebUtility.HtmlEncode(logoSrc);
+            var logoWidth = width <= 150 ? 132 : 220;
+            var logoHtmlImagen = $@"
+  <img src='{logoSrcSeguro}' width='{logoWidth}' alt='Numerica e-fact' style='display:block;width:{logoWidth}px;max-width:{logoWidth}px;height:auto;border:0;outline:none;text-decoration:none;margin:0 auto;'>";
+
+            if (string.IsNullOrWhiteSpace(linkUrl))
+                return logoHtmlImagen;
+
+            return $@"
+<a href='{linkUrl}' target='_blank' style='display:inline-block;text-decoration:none;'>
+{logoHtmlImagen}
+</a>";
+        }
+
+        var brandFontSize = width <= 150 ? 24 : 34;
+        var subtitleFontSize = width <= 150 ? 7 : 9;
+        var iconSize = width <= 150 ? 36 : 46;
+        var iconFontSize = width <= 150 ? 22 : 28;
         var logoHtml = $@"
-  <img src='{logoSafe}' width='{width}' alt='Numerica e-fact' style='display:block;width:{width}px;max-width:{width}px;height:auto;border:0;outline:none;text-decoration:none;margin:0 auto;'>
-  <div style='font-family:Segoe UI,Arial,sans-serif;font-size:13px;line-height:18px;font-weight:900;color:#006bb5;margin-top:6px;'>Numerica e-fact</div>";
+  <table role='presentation' cellpadding='0' cellspacing='0' border='0' align='center' style='border-collapse:collapse;margin:0 auto;'>
+    <tr>
+      <td align='center' valign='middle' bgcolor='#0aa6d9' style='width:{iconSize}px;height:{iconSize}px;border-radius:12px;background:#0aa6d9;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:{iconFontSize}px;line-height:{iconSize}px;font-weight:900;'>N</td>
+      <td valign='middle' style='padding-left:10px;font-family:Segoe UI,Arial,sans-serif;text-align:left;'>
+        <div style='font-size:13px;line-height:14px;font-weight:900;color:#2f55d4;'>Num&eacute;rica</div>
+        <div style='font-size:{brandFontSize}px;line-height:{brandFontSize}px;font-weight:900;color:#2f55d4;letter-spacing:0;'>e-fact</div>
+        <div style='font-size:{subtitleFontSize}px;line-height:10px;font-weight:800;color:#6b7280;letter-spacing:.18em;text-transform:uppercase;'>Facturaci&oacute;n electr&oacute;nica</div>
+      </td>
+    </tr>
+  </table>";
 
         if (string.IsNullOrWhiteSpace(linkUrl))
             return logoHtml;
@@ -1668,7 +1721,8 @@ Atentamente,
         string introHtml,
         string contentHtml,
         bool enlazarLogo = true,
-        bool mostrarLinkFooter = true)
+        bool mostrarLinkFooter = true,
+        string? logoSrc = null)
     {
         var preheaderSeguro = WebUtility.HtmlEncode(preheader);
         var titleSeguro = title;
@@ -1702,7 +1756,7 @@ Atentamente,
         <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='width:100%;max-width:640px;border-collapse:collapse;background-color:#ffffff;border:1px solid #d8e3ec;'>
           <tr>
             <td align='center' style='padding:22px 24px 14px 24px;background-color:#ffffff;border-bottom:2px solid #86b7e4;font-family:Segoe UI,Arial,sans-serif;'>
-              {BuildEfactLogoHtml(logoLink)}
+              {BuildEfactLogoHtml(logoLink, logoSrc: logoSrc)}
             </td>
           </tr>
           <tr>
@@ -1720,7 +1774,7 @@ Atentamente,
           <tr>
             <td align='center' style='padding:20px 28px;background-color:#e8f1f2;font-family:Segoe UI,Arial,sans-serif;color:#4b5563;'>
               <div style='font-size:12px;line-height:18px;color:#4b5563;margin:0 0 4px 0;'>Emitido mediante</div>
-              {BuildEfactLogoHtml(logoLink, 140)}
+              {BuildEfactLogoHtml(logoLink, 140, logoSrc)}
               <div style='line-height:8px;height:8px;font-size:8px;'>&nbsp;</div>
               {footerContactoHtml}
             </td>
