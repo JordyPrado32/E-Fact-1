@@ -346,7 +346,7 @@ namespace Simetric.Models
                     new[] { nameof(SolFormatoFirma) });
             }
 
-            if (!EsValorPermitido(vigencia, "30 DIAS", "1 AÑO", "2 AÑOS", "3 AÑOS", "4 AÑOS"))
+            if (!EsValorPermitido(vigencia, "7 DIAS", "30 DIAS", "1 ANIO", "2 ANIOS", "3 ANIOS", "4 ANIOS", "5 ANIOS"))
             {
                 yield return new ValidationResult(
                     "Seleccione una vigencia valida.",
