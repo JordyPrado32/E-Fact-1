@@ -5,9 +5,9 @@
 @using Microsoft.AspNetCore.Hosting
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.JSInterop
-@using System.Security.Cryptography.X509Certificates
 @using System.Security.Claims
 @using System.Text.Json
+@using System.Text.RegularExpressions
 @using Simetric.Data
 @using Simetric.Models
 @using Simetric.Services
@@ -22,6 +22,7 @@
 @inject FirmaStampApiService FirmaStampApiService
 @inject FirmaPathResolver FirmaPathResolver
 @inject EmisorCertificadoProtector CertificadoProtector
+@inject EmisionControlService EmisionControlService
 @inject IJSRuntime JS
 
 <PageTitle>Estampar documento | E-RÚBRICA</PageTitle>
@@ -45,6 +46,14 @@
                 <span class="esign-hero-chip"><i class="bi bi-file-earmark-lock"></i> Firma segura</span>
             </div>
         </header>
+
+        @if (!puedeFirmarDocumentos)
+        {
+            <div class="stamp-alert is-error" role="alert">
+                <i class="bi bi-exclamation-triangle"></i>
+                <span>@mensajeAccesoFirma</span>
+            </div>
+        }
 
         @if (!string.IsNullOrWhiteSpace(mensaje))
         {
@@ -191,7 +200,7 @@
             </div>
 
             <div class="stamp-actions stamp-main-actions">
-                <button type="button" class="esign-btn-primary" @onclick="EstamparAsync" disabled="@procesando">
+                <button type="button" class="esign-btn-primary" @onclick="EstamparAsync" disabled="@(procesando || !puedeFirmarDocumentos)">
                     <i class="bi @(procesando ? "bi-arrow-repeat" : "bi-pen")"></i>
                     <span>@(procesando ? "Procesando..." : "Estampar PDF")</span>
                 </button>
@@ -227,9 +236,11 @@
     private bool cargando = true;
     private bool procesando;
     private bool guardandoConfiguracion;
+    private bool puedeFirmarDocumentos;
     private bool esError;
     private int currentUserId;
     private string? mensaje;
+    private string mensajeAccesoFirma = "Para firmar documentos necesitas un plan de documentos activo o una solicitud de firma electrónica pagada y vigente.";
     private int pagina = 1;
     private double xMm = 10;
     private double yMm = 10;
@@ -281,6 +292,7 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        await CargarAccesoFirmaAsync();
         await CargarEmisorAsync();
         cargando = false;
     }
@@ -354,6 +366,12 @@
         mensaje = null;
         esError = false;
         resultado = null;
+
+        if (!await CargarAccesoFirmaAsync())
+        {
+            Error(mensajeAccesoFirma);
+            return;
+        }
 
         if (!ValidarFormulario())
             return;
@@ -460,6 +478,63 @@
         emisorConfigurado = ValidarConfiguracionEmisor(out var estado);
         estadoEmisorMensaje = estado;
         await Task.CompletedTask;
+    }
+
+    private async Task<bool> CargarAccesoFirmaAsync()
+    {
+        if (await EmisionControlService.TienePlanDocumentosActivoAsync(currentUserId))
+        {
+            puedeFirmarDocumentos = true;
+            return true;
+        }
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios
+            .AsNoTracking()
+            .Where(item => item.IdUsuario == currentUserId)
+            .Select(item => new { item.estadoAsociado, item.idJefe })
+            .FirstOrDefaultAsync();
+
+        var idsCuenta = new[]
+        {
+            currentUserId,
+            usuario?.estadoAsociado == true && usuario.idJefe is > 0
+                ? usuario.idJefe.Value
+                : currentUserId
+        }.Distinct().ToArray();
+
+        var solicitudesPagadas = await context.UsuSolicitudFirma
+            .AsNoTracking()
+            .Where(item => idsCuenta.Contains(item.SolIdUsuarioCliente) &&
+                           item.SolActivo &&
+                           item.SolPagoExitoso == true)
+            .Select(item => new
+            {
+                item.SolFechaSolicitud,
+                item.SolFechaPago,
+                item.SolFechaAprobacion,
+                item.SolVigencia
+            })
+            .ToListAsync();
+
+        puedeFirmarDocumentos = solicitudesPagadas.Any(item =>
+            CalcularFechaFinFirma(
+                item.SolFechaAprobacion ?? item.SolFechaPago ?? item.SolFechaSolicitud,
+                item.SolVigencia) >= DateTime.Today);
+
+        return puedeFirmarDocumentos;
+    }
+
+    private static DateTime CalcularFechaFinFirma(DateTime fechaInicio, string? vigencia)
+    {
+        var match = Regex.Match(vigencia ?? string.Empty, @"\d+");
+        if (!match.Success || !int.TryParse(match.Value, out var cantidad))
+            return fechaInicio.AddYears(1);
+
+        if (Regex.IsMatch(vigencia ?? string.Empty, @"D[IÍ]AS?", RegexOptions.IgnoreCase))
+            return fechaInicio.AddDays(Math.Max(cantidad, 1));
+
+        return fechaInicio.AddYears(Math.Clamp(cantidad, 1, 5));
     }
 
     private void CambiarEmisor(ChangeEventArgs e)
@@ -636,7 +711,7 @@
             return false;
         }
 
-        rutaCertificadoEmisor = FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
+        rutaCertificadoEmisor = ResolverRutaCertificadoValidada();
         if (string.IsNullOrWhiteSpace(rutaCertificadoEmisor))
         {
             estado = "El certificado configurado no está disponible. Sube o selecciona nuevamente la firma .p12.";
@@ -681,25 +756,26 @@
         if (emisor is null)
             return null;
 
-        var rutaCertificado = rutaCertificadoEmisor ?? FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
-        if (string.IsNullOrWhiteSpace(rutaCertificado))
-        {
-            var clave = ObtenerClaveCertificado();
-            if (!string.IsNullOrWhiteSpace(clave))
-                rutaCertificado = ResolverCertificadoPorClaveYRuc(clave);
-        }
-
+        var rutaCertificado = rutaCertificadoEmisor ?? ResolverRutaCertificadoValidada();
         if (string.IsNullOrWhiteSpace(rutaCertificado) || !File.Exists(rutaCertificado))
             return null;
 
-        var extension = Path.GetExtension(rutaCertificado);
-        var contentType = string.Equals(extension, ".pfx", StringComparison.OrdinalIgnoreCase)
-            ? "application/x-pkcs12"
-            : "application/x-pkcs12";
         return new FirmaStampApiFile(
             File.ReadAllBytes(rutaCertificado),
-            $"certificado{extension}",
-            contentType);
+            Path.GetFileName(rutaCertificado),
+            "application/x-pkcs12");
+    }
+
+    private string? ResolverRutaCertificadoValidada()
+    {
+        if (emisor is null)
+            return null;
+
+        var rutaUsadaPorFirmaInfo = FirmaPathResolver.ResolverRutaParaApi(emisor.PathCertificado);
+        if (!string.IsNullOrWhiteSpace(rutaUsadaPorFirmaInfo) && File.Exists(rutaUsadaPorFirmaInfo))
+            return rutaUsadaPorFirmaInfo;
+
+        return FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
     }
 
     private string? ObtenerClaveCertificado()
@@ -708,62 +784,6 @@
             return null;
 
         return CertificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
-    }
-
-    private string? ResolverCertificadoPorClaveYRuc(string password)
-    {
-        var ruc = NormalizarDigitos(emisor?.Ruc);
-        var cedulaRuc = ruc?.Length >= 10 ? ruc[..10] : null;
-        var rutas = EnumerarCertificadosLocales();
-
-        foreach (var ruta in rutas)
-        {
-            try
-            {
-                var bytes = File.ReadAllBytes(ruta);
-                using var certificado = new X509Certificate2(
-                    bytes,
-                    password,
-                    X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
-                var textoCertificado = $"{certificado.Subject} {certificado.Issuer}";
-
-                if ((!string.IsNullOrWhiteSpace(ruc) && textoCertificado.Contains(ruc, StringComparison.Ordinal)) ||
-                    (!string.IsNullOrWhiteSpace(cedulaRuc) && textoCertificado.Contains(cedulaRuc, StringComparison.Ordinal)))
-                {
-                    rutaCertificadoEmisor = ruta;
-                    return ruta;
-                }
-            }
-            catch
-            {
-                continue;
-            }
-        }
-
-        return null;
-    }
-
-    private IEnumerable<string> EnumerarCertificadosLocales()
-    {
-        var baseDirectory = Path.Combine(HostEnvironment.ContentRootPath, "App_Data", "certs");
-        foreach (var subDirectory in new[] { "path", "system" })
-        {
-            var directory = Path.Combine(baseDirectory, subDirectory);
-            if (!Directory.Exists(directory))
-                continue;
-
-            foreach (var file in Directory.EnumerateFiles(directory, "*.p12"))
-                yield return file;
-        }
-    }
-
-    private static string? NormalizarDigitos(string? valor)
-    {
-        if (string.IsNullOrWhiteSpace(valor))
-            return null;
-
-        var digitos = new string(valor.Where(char.IsDigit).ToArray());
-        return string.IsNullOrWhiteSpace(digitos) ? null : digitos;
     }
 
     private async Task CargarPreferenciaAsync()

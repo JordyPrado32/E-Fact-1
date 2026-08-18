@@ -1,4 +1,5 @@
 @page "/solicitud/pagos"
+@page "/e-sign/solicitudes"
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Simetric.DTOs
@@ -8,15 +9,15 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
 
-<PageTitle>Mis pagos | Numerica e-fact</PageTitle>
+<PageTitle>Historial de firmas | Numerica E-Rúbrica</PageTitle>
 
 <div class="mis-pagos-shell" data-tour="pagos.page">
     <section class="mis-pagos-panel">
         <div class="mis-pagos-head" data-tour="pagos.header">
             <div>
-                <span class="mis-pagos-kicker">Pagos</span>
-                <h3>Mis pagos de solicitud</h3>
-                <p>Revisa el estado de pago de tus solicitudes de firma electronica.</p>
+                <span class="mis-pagos-kicker">Firma electrónica</span>
+                <h3>Historial de mis firmas</h3>
+                <p>Consulta el pago y el estado actualizado de tus solicitudes enviadas a Uanataca.</p>
             </div>
 
             <div class="mis-pagos-summary">
@@ -32,6 +33,13 @@
                     <i class="bi bi-clock"></i>
                     Pendientes: @TotalPendientes
                 </span>
+                <button type="button"
+                        class="mis-pagos-secondary mis-pagos-sync"
+                        @onclick="ActualizarEstadosUanatacaAsync"
+                        disabled="@actualizandoUanataca">
+                    <i class="bi @(actualizandoUanataca ? "bi-arrow-repeat" : "bi-arrow-clockwise")"></i>
+                    @(actualizandoUanataca ? "Actualizando..." : "Actualizar estados")
+                </button>
             </div>
         </div>
 
@@ -114,6 +122,22 @@
                 </div>
             }
 
+            @if (!string.IsNullOrWhiteSpace(mensajeSincronizacion))
+            {
+                <div class="mis-pagos-response-message is-success">
+                    <i class="bi bi-cloud-check"></i>
+                    <span>@mensajeSincronizacion</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(errorSincronizacion))
+            {
+                <div class="mis-pagos-response-message is-error">
+                    <i class="bi bi-cloud-slash"></i>
+                    <span>@errorSincronizacion</span>
+                </div>
+            }
+
             @if (!string.IsNullOrWhiteSpace(errorRespuesta) && solicitudAvisoSeleccionadaId is null)
             {
                 <div class="mis-pagos-response-message is-error">
@@ -132,6 +156,7 @@
                             <th>Total c/IVA</th>
                             <th>Pago</th>
                             <th>Estado solicitud</th>
+                            <th>Estado Uanataca</th>
                             <th>Soporte</th>
                         </tr>
                     </thead>
@@ -183,6 +208,15 @@
                                         {
                                             <small>Procesada. Revisa tu correo y configura tu firma en E-Rubrica.</small>
                                         }
+                                    </div>
+                                </td>
+                                <td data-label="Estado Uanataca">
+                                    <div class="mis-pagos-request-state">
+                                        <span class="mis-pagos-status @GetUanatacaClass(sol)">
+                                            <i class="bi bi-circle-fill"></i>
+                                            @GetEstadoUanataca(sol)
+                                        </span>
+                                        <small>@GetDetalleUanataca(sol)</small>
                                     </div>
                                 </td>
                                 <td data-label="Soporte">
@@ -583,6 +617,9 @@
     private string? errorCarga;
     private string? mensajeRespuesta;
     private string? errorRespuesta;
+    private string? mensajeSincronizacion;
+    private string? errorSincronizacion;
+    private bool actualizandoUanataca;
     private int usuarioIdActual;
     private int? enviandoRespuestaId;
     private int? solicitudAvisoSeleccionadaId;
@@ -678,7 +715,27 @@
                 return;
             }
 
+            var reconciliation = await SolicitudService.ReconciliarPagosClienteAsync(usuarioId);
             solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioId);
+
+            if (reconciliation.SentToUanataca > 0)
+            {
+                mensajeSincronizacion = reconciliation.SentToUanataca == 1
+                    ? "Tu pago fue aprobado y tu solicitud ha sido enviada a Uanataca correctamente."
+                    : $"Se aprobaron y enviaron {reconciliation.SentToUanataca} solicitudes a Uanataca correctamente.";
+            }
+            else if (reconciliation.Approved > 0)
+            {
+                mensajeSincronizacion = reconciliation.Approved == 1
+                    ? "Tu pago fue aprobado correctamente. Estamos preparando el envío de tu solicitud a Uanataca."
+                    : $"Se aprobaron {reconciliation.Approved} pagos correctamente. Estamos preparando el envío a Uanataca.";
+            }
+
+            if (reconciliation.UanatacaErrors > 0 || reconciliation.Errors > 0)
+            {
+                errorSincronizacion = "El pago fue consultado, pero alguna sincronización no pudo completarse. El intento quedó registrado en los logs del sistema.";
+            }
+
             PaginaActual = 1;
             await CargarNotificacionesAsync();
         }
@@ -686,6 +743,71 @@
         {
             errorCarga = "Ocurrio un problema al consultar tus pagos. Intenta nuevamente en unos minutos.";
             Console.WriteLine($"Error al cargar pagos del cliente: {ex.Message}");
+        }
+    }
+
+    private async Task ActualizarEstadosUanatacaAsync()
+    {
+        if (actualizandoUanataca || usuarioIdActual <= 0 || solicitudes is null)
+        {
+            return;
+        }
+
+        actualizandoUanataca = true;
+        mensajeSincronizacion = null;
+        errorSincronizacion = null;
+
+        try
+        {
+            var pagadas = solicitudes.Where(solicitud => solicitud.SolPagoExitoso).ToList();
+            if (pagadas.Count == 0)
+            {
+                mensajeSincronizacion = "No tienes solicitudes pagadas pendientes de consultar.";
+                return;
+            }
+
+            var actualizadas = 0;
+            var fallidas = 0;
+
+            foreach (var solicitud in pagadas)
+            {
+                try
+                {
+                    var resultado = await SolicitudService.SincronizarSolicitudClienteBesAsync(
+                        solicitud.SolId,
+                        usuarioIdActual);
+
+                    if (resultado.Success)
+                    {
+                        actualizadas++;
+                    }
+                    else
+                    {
+                        fallidas++;
+                    }
+                }
+                catch
+                {
+                    fallidas++;
+                }
+            }
+
+            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual);
+            PaginaActual = Math.Min(PaginaActual, TotalPaginas);
+
+            if (actualizadas > 0)
+            {
+                mensajeSincronizacion = $"Se actualizaron {actualizadas} solicitud(es) con la información disponible en Uanataca.";
+            }
+
+            if (fallidas > 0)
+            {
+                errorSincronizacion = $"No fue posible actualizar {fallidas} solicitud(es). Puedes intentarlo nuevamente más tarde.";
+            }
+        }
+        finally
+        {
+            actualizandoUanataca = false;
         }
     }
 
@@ -758,6 +880,52 @@
         }
 
         return "Sin referencia";
+    }
+
+    private static string GetEstadoUanataca(SolicitudPagoClienteDto sol)
+    {
+        if (!sol.SolPagoExitoso)
+        {
+            return "Pendiente de pago";
+        }
+
+        if (string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+        {
+            return "Pendiente de envío";
+        }
+
+        return !string.IsNullOrWhiteSpace(sol.SolUanatacaStatusText)
+            ? sol.SolUanatacaStatusText
+            : sol.SolUanatacaStatus ?? "Registrada";
+    }
+
+    private static string GetUanatacaClass(SolicitudPagoClienteDto sol)
+    {
+        var estado = (sol.SolUanatacaStatus ?? string.Empty).Trim().ToUpperInvariant();
+        return estado switch
+        {
+            "ISSUED" or "APPROVED" => "is-paid",
+            "REJECTED" or "CANCELED" => "is-rejected",
+            "IN_VALIDATION" or "UPDATE_REQUESTED" or "UPDATED" => "is-review",
+            "NEW" => "is-pending",
+            _ => sol.SolPagoExitoso ? "is-neutral" : "is-pending"
+        };
+    }
+
+    private static string GetDetalleUanataca(SolicitudPagoClienteDto sol)
+    {
+        if (string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+        {
+            return sol.SolPagoExitoso
+                ? "La solicitud se enviará usando el pago aprobado."
+                : "Se enviará después de aprobarse el pago.";
+        }
+
+        var actualizado = sol.SolFechaActualizacion is DateTime fecha
+            ? $" · actualizado {fecha:dd/MM/yyyy HH:mm}"
+            : string.Empty;
+
+        return $"Tu solicitud fue enviada a Uanataca correctamente. UUID: {sol.SolUanatacaUuid}{actualizado}";
     }
 
     private static string GetSolicitudClass(int estadoId) => estadoId switch

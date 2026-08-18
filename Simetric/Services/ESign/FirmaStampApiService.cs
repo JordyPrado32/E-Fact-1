@@ -5,24 +5,29 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components.Forms;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Simetric.Services.ESign;
 
 public sealed class FirmaStampApiService
 {
     private const long MaxFileBytes = 15 * 1024 * 1024;
+    private static readonly SemaphoreSlim DiagnosticLogLock = new(1, 1);
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
     private readonly ILogger<FirmaStampApiService> _logger;
+    private readonly IWebHostEnvironment _hostEnvironment;
 
     public FirmaStampApiService(
         HttpClient httpClient,
         IConfiguration configuration,
-        ILogger<FirmaStampApiService> logger)
+        ILogger<FirmaStampApiService> logger,
+        IWebHostEnvironment hostEnvironment)
     {
         _httpClient = httpClient;
         _configuration = configuration;
         _logger = logger;
+        _hostEnvironment = hostEnvironment;
     }
 
     public async Task<FirmaStampApiResult> EstamparAsync(
@@ -46,15 +51,18 @@ public sealed class FirmaStampApiService
         if (string.IsNullOrWhiteSpace(apiKey))
             return FirmaStampApiResult.Error("La API key de estampado no esta configurada.");
 
+        if (!TryValidateCertificate(certificado.Content, clave, out var certificateValidationError))
+            return FirmaStampApiResult.Error(certificateValidationError);
+
         await using var pdfStream = pdf.OpenReadStream(MaxFileBytes, cancellationToken);
-        await using var certificadoStream = new MemoryStream(certificado.Content, writable: false);
 
         using var form = new MultipartFormDataContent();
         using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
-        using var certificadoContent = CreateFileContent(certificadoStream, certificado.ContentType);
+        using var certificadoContent = CreateFileContent(certificado.Content, "application/x-pkcs12");
+        var certificadoFileName = NormalizeCertificateFileName(certificado.FileName);
 
         form.Add(pdfContent, "pdf", pdf.Name);
-        form.Add(certificadoContent, "certificado", certificado.FileName);
+        form.Add(certificadoContent, "certificado", certificadoFileName);
         form.Add(new StringContent(clave), "clave");
         if (!string.IsNullOrWhiteSpace(razon))
             form.Add(new StringContent(razon.Trim()), "razon");
@@ -66,34 +74,79 @@ public sealed class FirmaStampApiService
         form.Add(new StringContent(anchoMm.ToString(CultureInfo.InvariantCulture)), "anchoMm");
 
         var endpoint = BuildEndpointUri(baseUri, "EstamparPath", "api/documentos/estampar");
+        var correlationId = Guid.NewGuid().ToString("N");
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
+        request.Headers.TryAddWithoutValidation("X-Correlation-ID", correlationId);
         request.Content = form;
 
         _logger.LogInformation(
-            "Enviando firma a {Endpoint}. Campos: pdf, certificado, clave. PDF bytes: {PdfBytes}. P12 bytes: {P12Bytes}. P12 SHA256: {P12Hash}. Clave presente: {ClavePresente}.",
+            "Enviando firma {CorrelationId} a {Endpoint}. Campos: pdf, certificado, clave. PDF bytes: {PdfBytes}. P12 bytes: {P12Bytes}. P12 SHA256: {P12Hash}. Clave presente: {ClavePresente}. Longitud de clave: {ClaveLength}.",
+            correlationId,
             endpoint,
             pdf.Size,
             certificado.Content.Length,
             Convert.ToHexString(SHA256.HashData(certificado.Content)),
-            !string.IsNullOrEmpty(clave));
+            !string.IsNullOrEmpty(clave),
+            clave.Length);
+
+        await RegistrarDiagnosticoAsync(new
+        {
+            Evento = "Solicitud",
+            CorrelationId = correlationId,
+            Endpoint = endpoint.ToString(),
+            Pdf = new { pdf.Name, pdf.Size, pdf.ContentType },
+            Certificado = new
+            {
+                certificado.FileName,
+                MultipartFileName = certificadoFileName,
+                Size = certificado.Content.Length,
+                ContentType = certificadoContent.Headers.ContentType?.ToString(),
+                ContentLength = certificadoContent.Headers.ContentLength,
+                Sha256 = Convert.ToHexString(SHA256.HashData(certificado.Content))
+            },
+            ClaveRecibida = !string.IsNullOrEmpty(clave),
+            ClaveLongitud = clave.Length,
+            Posicion = new { pagina, xMm, yMm, anchoMm },
+            Razon = razon,
+            Ubicacion = ubicacion
+        });
+        await RegistrarAperturaLocalCertificadoAsync(
+            certificado,
+            clave,
+            correlationId);
 
         try
         {
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            var requestId = TryGetHeader(response, "X-Request-ID");
 
             if (!response.IsSuccessStatusCode)
             {
                 var raw = System.Text.Encoding.UTF8.GetString(bytes);
-                var mensaje = ExtraerMensajeError(raw)
+                var mensaje = InterpretarErrorEstampado(raw, (int)response.StatusCode)
                     ?? $"La API de firma respondio con estado {(int)response.StatusCode}.";
 
                 _logger.LogWarning(
-                    "La API rechazo el estampado. Estado: {StatusCode}. P12 SHA256: {P12Hash}. Mensaje: {Mensaje}",
+                    "La API rechazo el estampado {CorrelationId}. Request ID: {RequestId}. Estado: {StatusCode}. P12 SHA256: {P12Hash}. Mensaje: {Mensaje}",
+                    correlationId,
+                    requestId,
                     (int)response.StatusCode,
                     Convert.ToHexString(SHA256.HashData(certificado.Content)),
                     mensaje);
+
+                await RegistrarDiagnosticoAsync(new
+                {
+                    Evento = "RespuestaError",
+                    CorrelationId = correlationId,
+                    RequestId = requestId,
+                    EstadoHttp = (int)response.StatusCode,
+                    RazonHttp = response.ReasonPhrase,
+                    ContentType = response.Content.Headers.ContentType?.ToString(),
+                    MensajeInterpretado = mensaje,
+                    RespuestaApi = raw
+                });
 
                 return FirmaStampApiResult.Error(mensaje, raw, (int)response.StatusCode);
             }
@@ -103,19 +156,131 @@ public sealed class FirmaStampApiService
             var outputHash = TryGetHeader(response, "X-Documento-Salida-SHA256");
 
             _logger.LogInformation(
-                "Estampado aprobado por la API. Estado: {StatusCode}. P12 SHA256: {P12Hash}.",
+                "Estampado aprobado por la API {CorrelationId}. Request ID: {RequestId}. Estado: {StatusCode}. P12 SHA256: {P12Hash}.",
+                correlationId,
+                requestId,
                 (int)response.StatusCode,
                 Convert.ToHexString(SHA256.HashData(certificado.Content)));
 
+            await RegistrarDiagnosticoAsync(new
+            {
+                Evento = "RespuestaExitosa",
+                CorrelationId = correlationId,
+                RequestId = requestId,
+                EstadoHttp = (int)response.StatusCode,
+                ContentType = contentType,
+                BytesRespuesta = bytes.Length,
+                OriginalSha256 = originalHash,
+                SalidaSha256 = outputHash
+            });
+
             return FirmaStampApiResult.Ok(bytes, contentType, originalHash, outputHash, (int)response.StatusCode);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
+            await RegistrarDiagnosticoAsync(new
+            {
+                Evento = "Timeout",
+                CorrelationId = correlationId,
+                Excepcion = exception.GetType().FullName,
+                exception.Message
+            });
             return FirmaStampApiResult.Error("La API de firma excedio el tiempo de espera.");
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException exception)
         {
+            await RegistrarDiagnosticoAsync(new
+            {
+                Evento = "ErrorConexion",
+                CorrelationId = correlationId,
+                Excepcion = exception.GetType().FullName,
+                exception.Message,
+                InnerException = exception.InnerException?.Message
+            });
             return FirmaStampApiResult.Error("No fue posible conectar con la API de firma.");
+        }
+    }
+
+    private async Task RegistrarDiagnosticoAsync(object detalle)
+    {
+        if (string.Equals(
+                _configuration["FirmaStampApi:DiagnosticLogEnabled"],
+                "false",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            var directory = Path.Combine(
+                _hostEnvironment.ContentRootPath,
+                "App_Data",
+                "logs");
+            Directory.CreateDirectory(directory);
+
+            var path = Path.Combine(
+                directory,
+                $"firma-api-{DateTime.UtcNow:yyyyMMdd}.log");
+            var line = JsonSerializer.Serialize(new
+            {
+                FechaUtc = DateTimeOffset.UtcNow,
+                Detalle = detalle
+            }, JsonOptions) + Environment.NewLine;
+
+            await DiagnosticLogLock.WaitAsync();
+            try
+            {
+                await File.AppendAllTextAsync(path, line);
+            }
+            finally
+            {
+                DiagnosticLogLock.Release();
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "No se pudo guardar el diagnostico de FirmaStampApi en App_Data/logs.");
+        }
+    }
+
+    private async Task RegistrarAperturaLocalCertificadoAsync(
+        FirmaStampApiFile certificado,
+        string clave,
+        string correlationId)
+    {
+        try
+        {
+            using var certificate = new X509Certificate2(
+                certificado.Content,
+                clave,
+                X509KeyStorageFlags.EphemeralKeySet);
+
+            await RegistrarDiagnosticoAsync(new
+            {
+                Evento = "AperturaLocalCertificadoExitosa",
+                CorrelationId = correlationId,
+                certificate.Thumbprint,
+                certificate.HasPrivateKey,
+                certificate.NotBefore,
+                certificate.NotAfter,
+                certificate.Subject,
+                certificate.Issuer
+            });
+        }
+        catch (Exception exception)
+        {
+            await RegistrarDiagnosticoAsync(new
+            {
+                Evento = "AperturaLocalCertificadoError",
+                CorrelationId = correlationId,
+                Excepcion = exception.GetType().FullName,
+                exception.HResult,
+                exception.Message,
+                InnerException = exception.InnerException?.Message
+            });
         }
     }
 
@@ -238,6 +403,58 @@ public sealed class FirmaStampApiService
         }
 
         return content;
+    }
+
+    private static ByteArrayContent CreateFileContent(byte[] contentBytes, string contentType)
+    {
+        var content = new ByteArrayContent(contentBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        content.Headers.ContentLength = contentBytes.Length;
+        return content;
+    }
+
+    private static string NormalizeCertificateFileName(string? fileName)
+    {
+        var safeName = Path.GetFileName(fileName);
+        if (string.IsNullOrWhiteSpace(safeName))
+            return $"certificado-{Guid.NewGuid():N}.p12";
+
+        return Path.GetExtension(safeName).Equals(".pfx", StringComparison.OrdinalIgnoreCase) ||
+               Path.GetExtension(safeName).Equals(".p12", StringComparison.OrdinalIgnoreCase)
+            ? safeName
+            : $"{safeName}.p12";
+    }
+
+    private static bool TryValidateCertificate(byte[] content, string password, out string error)
+    {
+        error = string.Empty;
+
+        if (content.Length == 0)
+        {
+            error = "El certificado configurado esta vacio.";
+            return false;
+        }
+
+        try
+        {
+            using var certificate = new X509Certificate2(
+                content,
+                password,
+                X509KeyStorageFlags.EphemeralKeySet);
+
+            if (!certificate.HasPrivateKey)
+            {
+                error = "El certificado configurado no contiene una clave privada.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (CryptographicException)
+        {
+            error = "No se pudo abrir el certificado configurado con la clave registrada.";
+            return false;
+        }
     }
 
     private static string? FirstNonEmpty(params string?[] values) =>
@@ -472,6 +689,23 @@ public sealed class FirmaStampApiService
         }
 
         return rawBody;
+    }
+
+    private static string? InterpretarErrorEstampado(string rawBody, int statusCode)
+    {
+        if (rawBody.Contains("PFX_LOAD_FAILED", StringComparison.OrdinalIgnoreCase))
+        {
+            return rawBody.Contains("0x80070002", StringComparison.OrdinalIgnoreCase)
+                ? "La API recibio el archivo P12, pero no pudo abrirlo en su almacenamiento temporal (PFX_LOAD_FAILED 0x80070002). El archivo y la clave fueron validados correctamente antes del envio."
+                : "La API recibio el archivo P12, pero no pudo abrirlo internamente (PFX_LOAD_FAILED). El archivo y la clave fueron validados correctamente antes del envio.";
+        }
+
+        if (statusCode == 500 && rawBody.Contains("HTTP Error 500.30", StringComparison.OrdinalIgnoreCase))
+        {
+            return "El servicio remoto de firma no pudo iniciar. Intenta nuevamente cuando la API se encuentre disponible.";
+        }
+
+        return ExtraerMensajeError(rawBody);
     }
 
     private static bool TryGetQrToken(

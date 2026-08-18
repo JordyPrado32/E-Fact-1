@@ -113,6 +113,20 @@ public sealed class EmisionControlService
         return await ObtenerSaldoDisponibleAsync(context, idUsuario.Value);
     }
 
+    public async Task<bool> TienePlanDocumentosActivoAsync(int? idUsuario)
+    {
+        if (idUsuario is not > 0)
+        {
+            return false;
+        }
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var usuarioInfo = await ObtenerUsuarioEmisionInfoAsync(context, idUsuario.Value);
+
+        return Math.Max(usuarioInfo.SaldoDocumentos ?? 0, 0) > 0 ||
+            ObtenerPlanIlimitado(usuarioInfo.HistorialComprasDocumentosJson).Activo;
+    }
+
     public async Task AsegurarPuedeEmitirAsync(int? idUsuario)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();

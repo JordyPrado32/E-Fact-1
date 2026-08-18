@@ -94,6 +94,7 @@ namespace Simetric.Services
             c.Correo,
             c.Celular,
             c.Direccion,
+            c.Referencia,
             c.Estado,
             c.TipoCliente,
             c.Tipoidentificacion,
@@ -110,6 +111,7 @@ namespace Simetric.Services
             cliente.Apellidos = LimpiarTextoOpcional(cliente.Apellidos);
             cliente.Nombrerazonsocial = LimpiarTextoOpcional(cliente.Nombrerazonsocial);
             cliente.Nombrecomercial = LimpiarTextoOpcional(cliente.Nombrecomercial);
+            cliente.Referencia = LimpiarTextoOpcional(cliente.Referencia);
             cliente.Oblgconta = cliente.Oblgconta?.Trim().ToUpperInvariant();
 
             if (cliente.Oblgconta is not ("SI" or "NO"))
@@ -1145,6 +1147,7 @@ namespace Simetric.Services
                             clienteDb.Celular = clienteData.Celular;
                             clienteDb.Telefonoconvencional = clienteData.Telefonoconvencional;
                             clienteDb.Direccion = clienteData.Direccion;
+                            clienteDb.Referencia = clienteData.Referencia;
                             clienteDb.Observaciones = clienteData.Observaciones;
                             clienteDb.TipoCliente = clienteData.TipoCliente;
                             clienteDb.Tipoidentificacion = clienteData.Tipoidentificacion;
@@ -3451,6 +3454,7 @@ IF @resultado < 0
             var infoAdicional = new List<XElement>();
             AgregarCampoAdicional(infoAdicional, "EmailCliente", factura.CodclientesNavigation?.Correo);
             AgregarCampoAdicional(infoAdicional, "TelefonoCliente", factura.CodclientesNavigation?.Celular);
+            AgregarCampoAdicional(infoAdicional, "ReferenciaCliente", factura.CodclientesNavigation?.Referencia);
             AgregarCampoAdicional(infoAdicional, "EmailEmisor", factura.CodemisorNavigation?.Email);
             AgregarCampoAdicional(infoAdicional, "TelefonoEmisor", factura.CodemisorNavigation?.Telefono);
             AgregarCampoAdicional(infoAdicional, "DatosBancarios", factura.Notas);

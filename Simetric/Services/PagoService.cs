@@ -14,6 +14,7 @@ namespace Simetric.Services
     {
         private const string DefaultBaseUrl = "https://api.abitmedia.cloud/pagomedios/v2";
         private const string DevelopmentTokenFallback = "denljywrk5yafpzaqcfrpgzvj6skkxiev1ezh1hodiozgyjxadfymjgxtcwg1wpu2fbgr";
+        private const decimal TemporarySignaturePrice = 0.01m;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -52,14 +53,14 @@ namespace Simetric.Services
 
         public async Task<string?> GenerarSolicitudPago(UsuSolicitudFirma sol, string? notifyUrl = null)
         {
-            decimal subtotal = Math.Round(sol.SolMontoPago ?? 0, 2);
+            decimal subtotal = TemporarySignaturePrice;
             decimal iva = Math.Round(subtotal * 0.15m, 2);
             decimal total = Math.Round(subtotal + iva, 2);
-            var esignBearerToken = _configuration["Pagomedios:ESignBearerToken"];
+            var esignBearerToken = ResolveBearerToken();
 
             if (string.IsNullOrWhiteSpace(esignBearerToken))
             {
-                _logger.LogError("No se puede generar el pago de E-Rubrica: falta Pagomedios:ESignBearerToken.");
+                _logger.LogError("No se puede generar el pago de E-Rubrica: falta Pagomedios:BearerToken.");
                 return null;
             }
 
@@ -85,7 +86,7 @@ namespace Simetric.Services
                 amount_without_tax = 0m,
                 tax_value = iva,
                 settings = Array.Empty<string>(),
-                has_cards = 1,
+                has_cards = 0,
                 has_de_una = 1,
                 has_paypal = 0,
                 has_safetypay = false,
@@ -112,6 +113,101 @@ namespace Simetric.Services
                 result.ResponseBody);
 
             return null;
+        }
+
+        public async Task<PagomediosPaymentStatusResult> ConsultarSolicitudPagoAsync(
+            int solId,
+            CancellationToken cancellationToken = default)
+        {
+            if (solId <= 0)
+            {
+                return PagomediosPaymentStatusResult.NotFound("Identificador de solicitud invalido.");
+            }
+
+            var result = await SendRawAsync(
+                HttpMethod.Get.Method,
+                "/payment-requests",
+                null,
+                new Dictionary<string, string?>
+                {
+                    ["integration"] = "true",
+                    ["description"] = $"Solicitud #{solId}"
+                });
+
+            if (!result.IsSuccess || string.IsNullOrWhiteSpace(result.ResponseBody))
+            {
+                _logger.LogWarning(
+                    "No se pudo consultar en Pagomedios la solicitud de firma {SolId}. HTTP: {StatusCode}. Error: {Error}",
+                    solId,
+                    result.StatusCode,
+                    result.ErrorMessage);
+                return PagomediosPaymentStatusResult.NotFound(
+                    result.ErrorMessage ?? "Pagomedios no devolvio una respuesta valida.");
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(result.ResponseBody);
+                var payment = FindPaymentRequest(document.RootElement, solId);
+                if (payment is null)
+                {
+                    _logger.LogWarning(
+                        "Pagomedios no devolvio una solicitud coincidente para la firma {SolId}.",
+                        solId);
+                    return PagomediosPaymentStatusResult.NotFound(
+                        "No se encontro la solicitud de pago en Pagomedios.");
+                }
+
+                var status = FindJsonValue(
+                    payment.Value,
+                    "status",
+                    "paymentStatus",
+                    "payment_status",
+                    "transactionStatus",
+                    "transaction_status",
+                    "state");
+                var reference = FindJsonValue(
+                    payment.Value,
+                    "reference",
+                    "transactionReference",
+                    "transaction_reference");
+                var authorizationCode = FindJsonValue(
+                    payment.Value,
+                    "authorizationCode",
+                    "authorization_code",
+                    "authorization");
+                var message = FindJsonValue(payment.Value, "message", "detail", "description");
+                var approved = IsApprovedPaymentStatus(status);
+
+                if (!approved)
+                {
+                    _logger.LogWarning(
+                        "Pago de firma no aprobado en Pagomedios. SolId: {SolId}. Status: {Status}. Reference: {Reference}. Mensaje: {Message}",
+                        solId,
+                        status,
+                        reference,
+                        message);
+                }
+
+                return new PagomediosPaymentStatusResult
+                {
+                    Found = true,
+                    Approved = approved,
+                    Status = status,
+                    Reference = reference,
+                    AuthorizationCode = authorizationCode,
+                    Message = message
+                };
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Pagomedios devolvio JSON invalido al consultar la solicitud de firma {SolId}.",
+                    solId);
+                return PagomediosPaymentStatusResult.NotFound(
+                    "La respuesta de Pagomedios no tiene un formato valido.");
+            }
         }
 
         public async Task<PagomediosApiResult> SendJsonAsync(
@@ -389,6 +485,141 @@ namespace Simetric.Services
             return sol.SolIdentificacion?.Length == 13 ? "04" : "05";
         }
 
+        private static JsonElement? FindPaymentRequest(JsonElement root, int solId)
+        {
+            var expectedCustomValue = solId.ToString();
+            var expectedDescription = $"Solicitud #{solId}";
+            JsonElement? onlyCandidate = null;
+            var candidateCount = 0;
+
+            foreach (var candidate in EnumerateJsonObjects(root))
+            {
+                var customValue = FindDirectJsonValue(
+                    candidate,
+                    "customValue",
+                    "custom_value",
+                    "customvalue");
+                var description = FindDirectJsonValue(candidate, "description");
+
+                if (string.Equals(customValue, expectedCustomValue, StringComparison.OrdinalIgnoreCase) ||
+                    (!string.IsNullOrWhiteSpace(description) &&
+                     description.Contains(expectedDescription, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return candidate;
+                }
+
+                if (FindDirectJsonValue(candidate, "status", "paymentStatus", "payment_status") is not null)
+                {
+                    onlyCandidate = candidate;
+                    candidateCount++;
+                }
+            }
+
+            return candidateCount == 1 ? onlyCandidate : null;
+        }
+
+        private static IEnumerable<JsonElement> EnumerateJsonObjects(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                yield return element;
+                foreach (var property in element.EnumerateObject())
+                {
+                    foreach (var child in EnumerateJsonObjects(property.Value))
+                    {
+                        yield return child;
+                    }
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                {
+                    foreach (var child in EnumerateJsonObjects(item))
+                    {
+                        yield return child;
+                    }
+                }
+            }
+        }
+
+        private static string? FindJsonValue(JsonElement element, params string[] names)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (names.Any(name => string.Equals(name, property.Name, StringComparison.OrdinalIgnoreCase)) &&
+                        property.Value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                    {
+                        return property.Value.ValueKind == JsonValueKind.String
+                            ? property.Value.GetString()
+                            : property.Value.ToString();
+                    }
+                }
+
+                foreach (var property in element.EnumerateObject())
+                {
+                    var nested = FindJsonValue(property.Value, names);
+                    if (!string.IsNullOrWhiteSpace(nested))
+                    {
+                        return nested;
+                    }
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                {
+                    var nested = FindJsonValue(item, names);
+                    if (!string.IsNullOrWhiteSpace(nested))
+                    {
+                        return nested;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static string? FindDirectJsonValue(JsonElement element, params string[] names)
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (names.Any(name => string.Equals(name, property.Name, StringComparison.OrdinalIgnoreCase)) &&
+                    property.Value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                {
+                    return property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString()
+                        : property.Value.ToString();
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsApprovedPaymentStatus(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                return false;
+            }
+
+            var normalized = status.Trim();
+            return normalized.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Equals("3", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("aprob", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("autoriz", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("approved", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("authorized", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("paid", StringComparison.OrdinalIgnoreCase);
+        }
+
         public async Task<PagomediosApiResult> ObtenerTarjetasTokenizadas(string document)
         {
             var query = new Dictionary<string, string?>
@@ -429,5 +660,20 @@ namespace Simetric.Services
         public string? ErrorMessage { get; set; }
         public DateTimeOffset SentAt { get; set; }
         public long ElapsedMilliseconds { get; set; }
+    }
+
+    public sealed class PagomediosPaymentStatusResult
+    {
+        public bool Found { get; init; }
+        public bool Approved { get; init; }
+        public string? Status { get; init; }
+        public string? Reference { get; init; }
+        public string? AuthorizationCode { get; init; }
+        public string? Message { get; init; }
+
+        public static PagomediosPaymentStatusResult NotFound(string message) => new()
+        {
+            Message = message
+        };
     }
 }

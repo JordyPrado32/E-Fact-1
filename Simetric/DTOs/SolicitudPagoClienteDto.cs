@@ -19,6 +19,11 @@ public sealed class SolicitudPagoClienteDto
     public bool SolPagoExitoso { get; set; }
     public string? SolIdTransaccionPago { get; set; }
     public DateTime? SolFechaPago { get; set; }
+    public DateTime? SolFechaActualizacion { get; set; }
+    public string? SolUanatacaUuid { get; set; }
+    public string? SolUanatacaStatus { get; set; }
+    public string? SolUanatacaStatusText { get; set; }
+    public string? SolUanatacaComments { get; set; }
     public int ObservacionesPendientes { get; set; }
     public string? UltimaNotificacion { get; set; }
     public DateTime? FechaUltimaNotificacion { get; set; }

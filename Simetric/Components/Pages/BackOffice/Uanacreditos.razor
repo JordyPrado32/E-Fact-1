@@ -1,0 +1,193 @@
+@page "/backoffice/uanacreditos"
+@using Microsoft.AspNetCore.Authorization
+@using Simetric.Models
+@using Simetric.Services
+@using Simetric.Services.ESign
+@attribute [Authorize]
+@inject BesPrecompraService BesPrecompraService
+@inject EmisorSistemaService EmisorSistemaService
+@inject IConfiguration Configuration
+
+<PageTitle>Uanacréditos | BackOffice</PageTitle>
+
+<div class="uanacredits-page animate__animated animate__fadeIn">
+    <header class="uanacredits-header">
+        <div>
+            <span>Uanataca</span>
+            <h2>Saldo de Uanacréditos</h2>
+            <p>Consulta el saldo disponible para procesar solicitudes de firma electrónica.</p>
+        </div>
+        <button type="button" @onclick="ConsultarSaldoAsync" disabled="@consultando">
+            <i class="ri-refresh-line @(consultando ? "is-spinning" : string.Empty)"></i>
+            @(consultando ? "Consultando..." : "Actualizar saldo")
+        </button>
+    </header>
+
+    <section class="uanacredits-context-grid">
+        <article class="uanacredits-context-card">
+            <i class="ri-building-4-line"></i>
+            <div>
+                <span>Emisor maestro</span>
+                <strong>@NombreEmisorMaestro</strong>
+                <small>RUC: @RucEmisorMaestro</small>
+            </div>
+        </article>
+        <article class="uanacredits-context-card is-test">
+            <i class="ri-flask-line"></i>
+            <div>
+                <span>Entorno activo</span>
+                <strong>Pruebas Uanataca</strong>
+                <small>@BaseUrlPruebas</small>
+            </div>
+        </article>
+        <article class="uanacredits-context-card">
+            <i class="ri-shield-user-line"></i>
+            <div>
+                <span>Identidad de consulta</span>
+                <strong>Stakeholder del JWT</strong>
+                <small>El endpoint de saldo no solicita RUC.</small>
+            </div>
+        </article>
+    </section>
+
+    @if (!BesPrecompraService.IsConfigured)
+    {
+        <section class="uanacredits-alert">
+            <i class="ri-settings-3-line"></i>
+            <div>
+                <strong>Integración pendiente de configuración</strong>
+                <p>Configura la URL y las credenciales de BES Precompra para consultar el saldo.</p>
+            </div>
+        </section>
+    }
+    else if (consultando && saldo is null)
+    {
+        <section class="uanacredits-state">
+            <span class="spinner-border text-primary" role="status"></span>
+            <p>Consultando el saldo disponible...</p>
+        </section>
+    }
+    else if (!string.IsNullOrWhiteSpace(error))
+    {
+        <section class="uanacredits-alert is-error">
+            <i class="ri-error-warning-line"></i>
+            <div>
+                <strong>No fue posible consultar Uanacréditos</strong>
+                <p>@error</p>
+            </div>
+        </section>
+    }
+    else if (saldo is decimal saldoDisponible)
+    {
+        <section class="uanacredits-balance-grid">
+            <article class="uanacredits-card">
+                <div class="uanacredits-icon"><i class="ri-coins-line"></i></div>
+                <div>
+                    <span>Saldo disponible</span>
+                    <strong>@saldoDisponible.ToString("N2")</strong>
+                    <small>Uanacréditos</small>
+                </div>
+                @if (ultimaConsulta is DateTime fecha)
+                {
+                    <time>Actualizado: @fecha.ToString("dd/MM/yyyy HH:mm")</time>
+                }
+            </article>
+
+            <article class="uanacredits-chart" style="@GraficoStyle">
+                <div class="uanacredits-chart-head">
+                    <div>
+                        <span>Lectura visual</span>
+                        <strong>Saldo actual</strong>
+                    </div>
+                    <i class="ri-bar-chart-box-line"></i>
+                </div>
+                <div class="uanacredits-chart-track" role="img" aria-label="@GraficoAriaLabel">
+                    <span></span>
+                </div>
+                <div class="uanacredits-chart-scale">
+                    <small>0</small>
+                    <b>@saldoDisponible.ToString("N2")</b>
+                    <small>@EscalaGrafico.ToString("N0")</small>
+                </div>
+                <p>Escala dinámica de referencia; no representa un cupo máximo asignado.</p>
+            </article>
+        </section>
+
+        <section class="uanacredits-endpoints">
+            <div>
+                <span>Endpoint de pruebas</span>
+                <strong>@BalanceEndpoint</strong>
+            </div>
+            <small>Autenticación Bearer JWT · sin parámetros adicionales</small>
+        </section>
+    }
+</div>
+
+@code {
+    private decimal? saldo;
+    private DateTime? ultimaConsulta;
+    private bool consultando;
+    private string? error;
+    private Emisor? emisorMaestro;
+
+    private string NombreEmisorMaestro => emisorMaestro is null
+        ? "No configurado"
+        : !string.IsNullOrWhiteSpace(emisorMaestro.RazonSocial)
+            ? emisorMaestro.RazonSocial
+            : emisorMaestro.NomComercial ?? "Emisor maestro";
+
+    private string RucEmisorMaestro => string.IsNullOrWhiteSpace(emisorMaestro?.Ruc)
+        ? "No configurado"
+        : emisorMaestro.Ruc;
+
+    private string BaseUrlPruebas => Configuration["BESPrecompra:BaseUrl"] ?? "No configurada";
+    private string BalanceEndpoint => $"{BaseUrlPruebas.TrimEnd('/')}{Configuration["BESPrecompra:BalancePath"]}";
+    private decimal EscalaGrafico => saldo is > 0m
+        ? Math.Max(1000m, Math.Ceiling(saldo.Value / 1000m) * 1000m)
+        : 1000m;
+    private decimal PorcentajeGrafico => saldo is > 0m
+        ? Math.Min(100m, saldo.Value / EscalaGrafico * 100m)
+        : 0m;
+    private string GraficoStyle => $"--uanacredits-progress:{PorcentajeGrafico.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%";
+    private string GraficoAriaLabel => $"Saldo actual de {saldo.GetValueOrDefault():N2} Uanacréditos sobre una escala visual de {EscalaGrafico:N0}.";
+
+    protected override async Task OnInitializedAsync()
+    {
+        emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
+
+        if (BesPrecompraService.IsConfigured)
+        {
+            await ConsultarSaldoAsync();
+        }
+    }
+
+    private async Task ConsultarSaldoAsync()
+    {
+        if (consultando || !BesPrecompraService.IsConfigured)
+        {
+            return;
+        }
+
+        consultando = true;
+        error = null;
+
+        try
+        {
+            saldo = await BesPrecompraService.ObtenerSaldoAsync();
+            ultimaConsulta = DateTime.Now;
+
+            if (saldo is null)
+            {
+                error = "Uanataca no devolvió un saldo válido.";
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            consultando = false;
+        }
+    }
+}

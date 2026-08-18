@@ -9,6 +9,7 @@ public static class BackOfficeRoutes
     public const string Dashboard = "/backoffice";
     public const string Clientes = "/backoffice/clientes";
     public const string Ventas = "/backoffice/ventas";
+    public const string Uanacreditos = "/backoffice/uanacreditos";
     public const string Facturacion = "/backoffice/facturacion";
     public const string Suscripciones = "/backoffice/suscripciones";
     public const string Cobros = "/backoffice/cobros";

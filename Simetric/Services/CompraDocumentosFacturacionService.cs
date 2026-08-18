@@ -34,7 +34,8 @@ public sealed class CompraDocumentosFacturacionService
         CompraDocumentosHistorialItem compra,
         string? reference,
         string? authorizationCode,
-        bool esTransferenciaBackOffice = false)
+        bool esTransferenciaBackOffice = false,
+        bool usarIdComoMarcador = false)
     {
         if (idUsuario <= 0)
             return CompraDocumentosFacturaResultado.Error("No se pudo identificar al usuario titular de la compra.");
@@ -65,7 +66,7 @@ public sealed class CompraDocumentosFacturacionService
                 "Debes configurar primero la secuencia inicial del facturador del sistema en BackOffice > Emisor Maestro para evitar duplicidad de facturas.");
         }
 
-        var marker = ConstruirMarcadorCompra(compra.Id, reference);
+        var marker = ConstruirMarcadorCompra(compra.Id, usarIdComoMarcador ? null : reference);
 
         Factura? facturaExistente = null;
         if (compra.CodFactura is > 0)
@@ -201,6 +202,47 @@ public sealed class CompraDocumentosFacturacionService
         };
     }
 
+    public async Task<CompraDocumentosFacturaResultado> EmitirFacturaFirmaAsync(
+        int solId,
+        string? reference,
+        string? authorizationCode)
+    {
+        if (solId <= 0)
+            return CompraDocumentosFacturaResultado.Error("La solicitud de firma no es valida.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var solicitud = await context.UsuSolicitudFirma
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.SolId == solId);
+
+        if (solicitud is null)
+            return CompraDocumentosFacturaResultado.Error("No se encontro la solicitud de firma para emitir la factura.");
+
+        if (solicitud.SolPagoExitoso != true)
+            return CompraDocumentosFacturaResultado.Error("La solicitud de firma aun no tiene un pago aprobado.");
+
+        reference ??= solicitud.SolIdTransaccionPago;
+        var compra = new CompraDocumentosHistorialItem
+        {
+            Id = $"ESIGN-{solicitud.SolId}",
+            Fecha = solicitud.SolFechaPago ?? DateTime.Now,
+            Documentos = 1,
+            MontoTotal = solicitud.SolMontoPago ?? 0m,
+            Estado = "Aprobado",
+            Descripcion = $"Firma electronica E-Sign {solicitud.SolFormatoFirma} - {solicitud.SolVigencia}",
+            Reference = reference,
+            AuthorizationCode = authorizationCode,
+            CustomValue = solicitud.SolId.ToString()
+        };
+
+        return await EmitirFacturaAsync(
+            solicitud.SolIdUsuarioCliente,
+            compra,
+            reference,
+            authorizationCode,
+            usarIdComoMarcador: true);
+    }
+
     private static Factura ConstruirFactura(
         int idUsuario,
         int codEmisor,
@@ -290,7 +332,9 @@ public sealed class CompraDocumentosFacturacionService
 
     private async Task<Producto?> BuscarProductoRelacionadoAsync(AppDbContext context, int ownerId, CompraDocumentosHistorialItem compra)
     {
-        var palabrasClave = compra.EsIlimitado
+        var palabrasClave = EsCompraFirmaElectronica(compra)
+            ? new[] { "FIRMA", "E-SIGN", "RUBRICA" }
+            : compra.EsIlimitado
             ? new[] { "ILIMIT", "DOCUMENT", "E-FACT" }
             : new[] { "DOCUMENT", "E-FACT", "RECARGA" };
 
@@ -417,14 +461,21 @@ public sealed class CompraDocumentosFacturacionService
     }
 
     private static string ConstruirCodigoPrincipalRecarga(CompraDocumentosHistorialItem compra)
-        => compra.EsIlimitado
+        => EsCompraFirmaElectronica(compra)
+            ? "ESIGN-FIRMA"
+            : compra.EsIlimitado
             ? "REC-PLAN-ANUAL"
             : $"REC-DOC-{Math.Max(1, compra.Documentos)}";
 
     private static string ConstruirCodigoAuxiliarRecarga(CompraDocumentosHistorialItem compra)
-        => compra.EsIlimitado
+        => EsCompraFirmaElectronica(compra)
+            ? "ERUBRICA-FIRMA"
+            : compra.EsIlimitado
             ? "EFACT-ILIMITADO"
             : $"EFACT-REC-{Math.Max(1, compra.Documentos)}";
+
+    private static bool EsCompraFirmaElectronica(CompraDocumentosHistorialItem compra)
+        => compra.Id.StartsWith("ESIGN-", StringComparison.OrdinalIgnoreCase);
 
     private static string ObtenerDescripcionCompra(CompraDocumentosHistorialItem compra)
     {

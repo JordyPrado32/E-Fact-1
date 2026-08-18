@@ -91,7 +91,7 @@
         {
             <div class="action-notification-alert info">
                 <i class="bi bi-bell-fill"></i>
-                <span>@countSolicitudesDocumentosPendientes usuario(s) solicita(n) aprobación de transacción de documentos por transferencia.</span>
+                <span>@countSolicitudesDocumentosPendientes solicitud(es) por transferencia pendiente(s) de aprobación.</span>
             </div>
         }
 
@@ -353,7 +353,7 @@
                                         </td>
                                         <td>
                                             <div class="actions-cell">
-                                                @if (EsSolicitudTransferenciaDocumentos(row))
+                                                @if (EsSolicitudTransferenciaPendiente(row))
                                                 {
                                                     @if (HasComprobanteImage(row))
                                                     {
@@ -597,11 +597,11 @@
     <div class="modal-overlay">
         <div class="modal-content-container animate__animated animate__zoomIn">
             <header class="modal-header-n" style="background: #9f1239;">
-                <h4>@(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Rechazar transacción" : "Anular transacción")</h4>
+                <h4>@(EsSolicitudTransferenciaPendiente(selectedVenta) ? "Rechazar transacción" : "Anular transacción")</h4>
                 <button type="button" class="btn-close-n" @onclick="CloseAnularModal">&times;</button>
             </header>
             <div class="modal-body-n">
-                <p class="text-slate-700">@(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Esta seguro de rechazar esta solicitud de compra de documentos?" : "Esta seguro de que desea anular esta venta registrada?")</p>
+                <p class="text-slate-700">@(EsSolicitudTransferenciaPendiente(selectedVenta) ? "¿Está seguro de rechazar esta solicitud pagada por transferencia?" : "¿Está seguro de que desea anular esta venta registrada?")</p>
                 <div class="modal-detail-banner" style="background-color: #fff1f2; border-color: #fecdd3;">
                     <div class="banner-item">
                         <label>Cliente</label>
@@ -620,12 +620,12 @@
                         <span>@GetCleanPlanName(selectedVenta.PlanPaquete)</span>
                     </div>
                 </div>
-                <p class="text-danger small fw-bold">@(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Esta acción notificará el rechazo en el historial del usuario y no acreditará documentos." : "Esta acción marcará el estado de la venta como anulada y no aprovisionará ningún servicio.")</p>
+                <p class="text-danger small fw-bold">@(EsSolicitudTransferenciaPendiente(selectedVenta) ? "Esta acción rechazará el pago y no activará el producto solicitado." : "Esta acción marcará el estado de la venta como anulada y no aprovisionará ningún servicio.")</p>
             </div>
             <footer class="modal-footer-n">
                 <button type="button" class="btn-cancel-n" @onclick="CloseAnularModal">Cancelar</button>
                 <button type="button" class="btn-save-n" style="background: linear-gradient(135deg, #e11d48, #be123c); box-shadow: 0 2px 4px rgba(225, 29, 72, 0.2);" @onclick="SaveAnulacion">
-                    @(EsSolicitudTransferenciaDocumentos(selectedVenta) ? "Confirmar Rechazo" : "Confirmar Anulacion")
+                    @(EsSolicitudTransferenciaPendiente(selectedVenta) ? "Confirmar Rechazo" : "Confirmar Anulación")
                 </button>
             </footer>
         </div>
@@ -828,10 +828,10 @@
             countSolicitudesDocumentosPendientes = await ventasBaseQuery
                 .CountAsync(v =>
                     v.Estado == "pendiente" &&
-                    v.Producto == "e-fact" &&
                     v.Canal.Contains("Transferencia Web") &&
                     v.Observacion != null &&
-                    v.Observacion.Contains("[CompraDocs:"));
+                    ((v.Producto == "e-fact" && v.Observacion.Contains("[CompraDocs:")) ||
+                     (v.Producto == "e-sign" && v.Observacion.Contains("[SolicitudFirma:"))));
 
             montoCobradoMes = await ventasBaseQuery
                 .Where(v => v.Estado == "pagada" && v.Fecha.Month == now.Month && v.Fecha.Year == now.Year)
@@ -1254,13 +1254,15 @@
             return;
         }
 
-        if (!EsSolicitudTransferenciaDocumentos(venta) || isSaving)
+        if (!EsSolicitudTransferenciaPendiente(venta) || isSaving)
         {
             return;
         }
 
         var cliente = GetClientCleanName(venta.Cliente);
-        mensajeConfirmacionAprobacion = $"Se aprobará la recarga de {cliente} por ${venta.Valor:N2}. Esta acción acreditará los documentos y generará la factura automática.";
+        mensajeConfirmacionAprobacion = EsSolicitudTransferenciaFirma(venta)
+            ? $"Se aprobará la compra de firma de {cliente} por ${venta.Valor:N2}. Esta acción confirmará el pago y generará la factura automática."
+            : $"Se aprobará la recarga de {cliente} por ${venta.Valor:N2}. Esta acción acreditará los documentos y generará la factura automática.";
         ventaPendienteConfirmacion = venta;
         mostrarConfirmacionAprobacion = true;
         return;
@@ -1304,7 +1306,7 @@
             CompraDocumentosFacturaResultado resultadoFactura;
             try
             {
-                resultadoFactura = await EmitirFacturaTransferenciaAsync(dbVenta);
+                resultadoFactura = await EmitirFacturaTransferenciaBackOfficeAsync(dbVenta);
             }
             catch (Exception ex)
             {
@@ -1470,8 +1472,12 @@
                 {
                     await ActualizarHistorialCompraDocumentosAsync(dbVenta, aprobado: false);
                 }
+                else if (EsSolicitudTransferenciaFirma(dbVenta))
+                {
+                    await ActualizarSolicitudFirmaTransferenciaAsync(dbVenta, aprobado: false);
+                }
 
-                ShowFeedback(EsSolicitudTransferenciaDocumentos(dbVenta)
+                ShowFeedback(EsSolicitudTransferenciaPendiente(dbVenta)
                     ? "Solicitud rechazada. El usuario vera el estado en su historial."
                     : "Venta anulada correctamente.", true);
                 CloseAnularModal();
@@ -1648,7 +1654,64 @@
         }
     }
 
-    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaAsync(ReporteVentaBackOffice venta)
+    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaBackOfficeAsync(ReporteVentaBackOffice venta)
+    {
+        if (EsSolicitudTransferenciaFirma(venta))
+        {
+            return await EmitirFacturaTransferenciaFirmaAsync(venta);
+        }
+
+        return await EmitirFacturaTransferenciaDocumentosAsync(venta);
+    }
+
+    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaFirmaAsync(ReporteVentaBackOffice venta)
+    {
+        var solicitudId = ObtenerSolicitudFirmaId(venta);
+        if (!solicitudId.HasValue)
+        {
+            return CompraDocumentosFacturaResultado.Error("No se pudo identificar la solicitud de firma.");
+        }
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var solicitud = await context.UsuSolicitudFirma.FirstOrDefaultAsync(s => s.SolId == solicitudId.Value);
+        if (solicitud is null)
+        {
+            return CompraDocumentosFacturaResultado.Error("No se encontró la solicitud de firma asociada.");
+        }
+
+        solicitud.SolPagoExitoso = true;
+        solicitud.SolFechaPago ??= DateTime.Now;
+        solicitud.SolIdTransaccionPago = TruncateStr($"BO-{venta.IdReporte}", 100);
+        await context.SaveChangesAsync();
+
+        var resultado = await CompraDocumentosFacturacionService.EmitirFacturaFirmaAsync(
+            solicitudId.Value,
+            $"BO-{venta.IdReporte}",
+            GetComprobanteRef(venta.Observacion));
+
+        if (resultado.CodFactura > 0)
+        {
+            try
+            {
+                var correosAdmins = await ObtenerCorreosAdminsBackOfficeAsync(context);
+                var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(
+                    resultado.CodFactura,
+                    correosCopia: correosAdmins);
+                if (resultadoCorreo.Error || resultadoCorreo.SinDestinatarios)
+                {
+                    Logger.LogWarning("No se pudo enviar la factura de firma {CodFactura}: {Mensaje}", resultado.CodFactura, resultadoCorreo.Mensaje);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Fallo el envío de la factura de firma {CodFactura} generada desde Cobros.", resultado.CodFactura);
+            }
+        }
+
+        return resultado;
+    }
+
+    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaDocumentosAsync(ReporteVentaBackOffice venta)
     {
         var email = GetClientEmail(venta.Cliente);
         var compraId = ObtenerCompraDocumentosId(venta);
@@ -1804,13 +1867,13 @@
 
             if (venta is null ||
                 !string.Equals(venta.Estado, "pagada", StringComparison.OrdinalIgnoreCase) ||
-                !EsSolicitudTransferenciaDocumentos(venta))
+                !EsSolicitudTransferenciaPendiente(venta))
             {
                 ShowFeedback("No se encontró una transferencia aprobada válida para generar la factura.", false);
                 return;
             }
 
-            var resultado = await EmitirFacturaTransferenciaAsync(venta);
+            var resultado = await EmitirFacturaTransferenciaBackOfficeAsync(venta);
             await ActualizarResultadoAuditoriaFacturaAsync(audit.IdAuditoria, resultado);
 
             if (resultado.Exito)
@@ -2011,6 +2074,13 @@
             return "Solicitud pendiente de aprobación por compra de documentos.";
         }
 
+        const string solicitudFirmaTag = "[SolicitudFirma:";
+        if (workingObs.Contains(solicitudFirmaTag, StringComparison.OrdinalIgnoreCase) &&
+            workingObs.Contains("Solicitud pendiente", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Solicitud pendiente de aprobación por compra de firma electrónica.";
+        }
+
         return workingObs.Length > 95 ? $"{workingObs[..95].Trim()}..." : workingObs;
     }
 
@@ -2024,6 +2094,39 @@
         return row.Producto.Equals("e-fact", StringComparison.OrdinalIgnoreCase) &&
                row.Canal.Contains("Transferencia Web", StringComparison.OrdinalIgnoreCase) &&
                !string.IsNullOrWhiteSpace(ObtenerCompraDocumentosId(row));
+    }
+
+    private static bool EsSolicitudTransferenciaFirma(ReporteVentaBackOffice? row)
+    {
+        return row is not null &&
+               row.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase) &&
+               row.Canal.Contains("Transferencia Web", StringComparison.OrdinalIgnoreCase) &&
+               ObtenerSolicitudFirmaId(row).HasValue;
+    }
+
+    private static bool EsSolicitudTransferenciaPendiente(ReporteVentaBackOffice? row) =>
+        EsSolicitudTransferenciaDocumentos(row) || EsSolicitudTransferenciaFirma(row);
+
+    private static int? ObtenerSolicitudFirmaId(ReporteVentaBackOffice row)
+    {
+        var obs = row.Observacion;
+        if (string.IsNullOrWhiteSpace(obs))
+        {
+            return null;
+        }
+
+        const string startTag = "[SolicitudFirma:";
+        var startIdx = obs.IndexOf(startTag, StringComparison.OrdinalIgnoreCase);
+        if (startIdx < 0)
+        {
+            return null;
+        }
+
+        var contentStart = startIdx + startTag.Length;
+        var endIdx = obs.IndexOf(']', contentStart);
+        return endIdx > contentStart && int.TryParse(obs[contentStart..endIdx], out var solicitudId)
+            ? solicitudId
+            : null;
     }
 
     private static string ObtenerCompraDocumentosId(ReporteVentaBackOffice row)
@@ -2158,6 +2261,29 @@
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         user.HistorialComprasDocumentosJson = JsonSerializer.Serialize(history, options);
         context.Entry(user).State = EntityState.Modified;
+        await context.SaveChangesAsync();
+    }
+
+    private async Task ActualizarSolicitudFirmaTransferenciaAsync(ReporteVentaBackOffice venta, bool aprobado)
+    {
+        var solicitudId = ObtenerSolicitudFirmaId(venta);
+        if (!solicitudId.HasValue)
+        {
+            return;
+        }
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var solicitud = await context.UsuSolicitudFirma.FirstOrDefaultAsync(s => s.SolId == solicitudId.Value);
+        if (solicitud is null)
+        {
+            return;
+        }
+
+        solicitud.SolPagoExitoso = aprobado;
+        solicitud.SolFechaPago = aprobado ? DateTime.Now : null;
+        solicitud.SolIdTransaccionPago = TruncateStr(
+            aprobado ? $"BO-{venta.IdReporte}" : $"TRANSFERENCIA-RECHAZADA-BO-{venta.IdReporte}",
+            100);
         await context.SaveChangesAsync();
     }
 

@@ -188,15 +188,29 @@
             </header>
 
             <div class="modal-body">
-                <label class="series-field">
-                    <span>Establecimiento - punto de emisión</span>
-                    <input value="@cajaEdicion.Serie"
-                           maxlength="7"
-                           inputmode="numeric"
-                           @oninput="e => cajaEdicion.Serie = e.Value?.ToString() ?? string.Empty"
-                           disabled="@guardando" />
-                    <small>Formato SRI: 001-001. El establecimiento y punto no pueden ser 000.</small>
-                </label>
+                <div class="series-editor">
+                    <div class="series-fields">
+                        <label class="series-field">
+                            <span>Establecimiento</span>
+                            <input value="@establecimientoEdicion"
+                                   maxlength="3"
+                                   inputmode="numeric"
+                                   @oninput="OnEstablecimientoChanged"
+                                   disabled="@guardando" />
+                        </label>
+                        <span class="series-separator">-</span>
+                        <label class="series-field">
+                            <span>Punto de emisión</span>
+                            <input value="@puntoEmisionEdicion"
+                                   maxlength="3"
+                                   inputmode="numeric"
+                                   @oninput="OnPuntoEmisionChanged"
+                                   disabled="@guardando" />
+                        </label>
+                        <strong class="series-preview">@SerieEdicion</strong>
+                    </div>
+                    <small>Se aplicará la misma serie a facturas, guías, notas de crédito, notas de débito, liquidaciones, compras y retenciones.</small>
+                </div>
 
                 <div class="modal-table-wrap">
                     <table class="table modal-table mb-0">
@@ -619,9 +633,16 @@
         gap: 1rem;
     }
 
-    .series-field span,
-    .series-field small {
+    .series-editor > small,
+    .series-field span {
         display: block;
+    }
+
+    .series-fields {
+        display: flex;
+        align-items: flex-end;
+        gap: .65rem;
+        flex-wrap: wrap;
     }
 
     .series-field span {
@@ -629,9 +650,21 @@
         font-weight: 800;
     }
 
-    .series-field small {
+    .series-editor > small {
         margin-top: .35rem;
         color: #64748b;
+    }
+
+    .series-separator {
+        padding-bottom: .65rem;
+        color: #64748b;
+        font-size: 1.25rem;
+        font-weight: 800;
+    }
+
+    .series-preview {
+        margin-bottom: .45rem;
+        color: #006bb5;
     }
 
     .series-field input,
@@ -721,8 +754,12 @@
     private bool tienePermiso = true;
     private bool mensajeEsError;
     private string filtro = string.Empty;
+    private string establecimientoEdicion = string.Empty;
+    private string puntoEmisionEdicion = string.Empty;
     private string? mensaje;
     private AdminCajaSecuenciaDto? cajaEdicion;
+
+    private string SerieEdicion => $"{establecimientoEdicion}-{puntoEmisionEdicion}";
 
     private string Filtro
     {
@@ -788,6 +825,9 @@
     private void AbrirEditar(AdminCajaSecuenciaDto caja)
     {
         cajaEdicion = Clonar(caja);
+        var partesSerie = ObtenerPartesSerie(caja.Serie);
+        establecimientoEdicion = partesSerie.Establecimiento;
+        puntoEmisionEdicion = partesSerie.PuntoEmision;
         mensaje = null;
     }
 
@@ -811,6 +851,7 @@
 
         try
         {
+            cajaEdicion.Serie = SerieEdicion;
             var nombre = NombreCliente(cajaEdicion);
             var numeroCaja = cajaEdicion.NumeroCaja;
             await AdminService.SaveAsync(actorUserId, cajaEdicion);
@@ -903,4 +944,21 @@
         long.TryParse(value?.ToString(), out var parsed)
             ? Math.Clamp(parsed, 0, 999_999_999)
             : 0;
+
+    private void OnEstablecimientoChanged(ChangeEventArgs e) =>
+        establecimientoEdicion = NormalizarCodigoSerie(e.Value?.ToString());
+
+    private void OnPuntoEmisionChanged(ChangeEventArgs e) =>
+        puntoEmisionEdicion = NormalizarCodigoSerie(e.Value?.ToString());
+
+    private static string NormalizarCodigoSerie(string? value) =>
+        new((value ?? string.Empty).Where(char.IsDigit).Take(3).ToArray());
+
+    private static (string Establecimiento, string PuntoEmision) ObtenerPartesSerie(string? serie)
+    {
+        var digitos = new string((serie ?? string.Empty).Where(char.IsDigit).Take(6).ToArray());
+        return digitos.Length == 6
+            ? (digitos[..3], digitos[3..])
+            : (string.Empty, string.Empty);
+    }
 }

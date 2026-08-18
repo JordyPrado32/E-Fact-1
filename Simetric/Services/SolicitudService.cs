@@ -37,6 +37,8 @@ namespace Simetric.Services
         private readonly IWebHostEnvironment _env;
         private readonly IDataProtector _firmaProtector;
         private readonly BesPrecompraService _besPrecompraService;
+        private readonly PagoService _pagoService;
+        private readonly CompraDocumentosFacturacionService _facturacionPagosService;
         private readonly IConfiguration _configuration;
         private readonly IEmailService _emailService;
         private readonly ILogger<SolicitudService> _logger;
@@ -49,6 +51,8 @@ namespace Simetric.Services
             IWebHostEnvironment env,
             IDataProtectionProvider dataProtectionProvider,
             BesPrecompraService besPrecompraService,
+            PagoService pagoService,
+            CompraDocumentosFacturacionService facturacionPagosService,
             IConfiguration configuration,
             IEmailService emailService,
             ILogger<SolicitudService> logger)
@@ -57,6 +61,8 @@ namespace Simetric.Services
             _env = env;
             _firmaProtector = dataProtectionProvider.CreateProtector("Simetric.SolicitudFirma.P12.v1");
             _besPrecompraService = besPrecompraService;
+            _pagoService = pagoService;
+            _facturacionPagosService = facturacionPagosService;
             _configuration = configuration;
             _emailService = emailService;
             _logger = logger;
@@ -406,6 +412,11 @@ namespace Simetric.Services
                     s.SolPagoExitoso AS SolPagoExitoso,
                     s.SolIdTransaccionPago AS SolIdTransaccionPago,
                     s.SolFechaPago AS SolFechaPago,
+                    s.SOL_FECHA_ACTUALIZACION AS SolFechaActualizacion,
+                    s.SOL_UANATACA_UUID AS SolUanatacaUuid,
+                    s.SOL_UANATACA_STATUS AS SolUanatacaStatus,
+                    s.SOL_UANATACA_STATUS_TEXT AS SolUanatacaStatusText,
+                    s.SOL_UANATACA_COMMENTS AS SolUanatacaComments,
                     (
                         SELECT COUNT(1)
                         FROM USU_SOLICITUD_OBSERVACION o
@@ -439,6 +450,156 @@ namespace Simetric.Services
                 new { UsuarioClienteId = usuarioClienteId });
 
             return solicitudes.AsList();
+        }
+
+        public async Task<PagoFirmaReconciliationResult> ReconciliarPagosClienteAsync(
+            int usuarioClienteId,
+            CancellationToken cancellationToken = default)
+        {
+            var summary = new PagoFirmaReconciliationResult();
+            if (usuarioClienteId <= 0)
+            {
+                return summary;
+            }
+
+            List<int> approvedIds = [];
+            await using (var context = await _contextFactory.CreateDbContextAsync(cancellationToken))
+            {
+                var pendingRequests = await context.UsuSolicitudFirma
+                    .Where(solicitud => solicitud.SolIdUsuarioCliente == usuarioClienteId &&
+                                          solicitud.SolActivo &&
+                                          solicitud.SolPagoExitoso != true)
+                    .OrderByDescending(solicitud => solicitud.SolFechaSolicitud)
+                    .ToListAsync(cancellationToken);
+
+                foreach (var solicitud in pendingRequests)
+                {
+                    summary.Consulted++;
+                    try
+                    {
+                        var payment = await _pagoService.ConsultarSolicitudPagoAsync(
+                            solicitud.SolId,
+                            cancellationToken);
+
+                        if (!payment.Found)
+                        {
+                            summary.NotFound++;
+                            _logger.LogWarning(
+                                "Pago de firma pendiente no encontrado en Pagomedios. SolId: {SolId}. Detalle: {Message}",
+                                solicitud.SolId,
+                                payment.Message);
+                            continue;
+                        }
+
+                        if (!payment.Approved)
+                        {
+                            summary.NotApproved++;
+                            _logger.LogWarning(
+                                "Pago de firma sigue sin aprobarse. SolId: {SolId}. Status: {Status}. Reference: {Reference}. Detalle: {Message}",
+                                solicitud.SolId,
+                                payment.Status,
+                                payment.Reference,
+                                payment.Message);
+                            continue;
+                        }
+
+                        solicitud.SolPagoExitoso = true;
+                        solicitud.SolFechaPago ??= DateTime.Now;
+                        solicitud.SolFechaActualizacion = DateTime.Now;
+                        solicitud.SolIdTransaccionPago = FirstNonEmpty(
+                            payment.Reference,
+                            payment.AuthorizationCode,
+                            solicitud.SolIdTransaccionPago);
+                        approvedIds.Add(solicitud.SolId);
+                        summary.Approved++;
+
+                        _logger.LogInformation(
+                            "Pago de firma reconciliado y aprobado desde Pagomedios. SolId: {SolId}. Status: {Status}. Reference: {Reference}",
+                            solicitud.SolId,
+                            payment.Status,
+                            payment.Reference);
+                    }
+                    catch (Exception ex)
+                    {
+                        summary.Errors++;
+                        _logger.LogError(
+                            ex,
+                            "Fallo la consulta del pago de firma pendiente {SolId} en Pagomedios.",
+                            solicitud.SolId);
+                    }
+                }
+
+                if (approvedIds.Count > 0)
+                {
+                    await context.SaveChangesAsync(cancellationToken);
+                }
+            }
+
+            foreach (var solId in approvedIds)
+            {
+                try
+                {
+                    var factura = await _facturacionPagosService.EmitirFacturaFirmaAsync(
+                        solId,
+                        reference: null,
+                        authorizationCode: null);
+                    if (!factura.Exito)
+                    {
+                        _logger.LogWarning(
+                            "Pago E-Sign reconciliado, pero no se pudo generar la factura de BackOffice. SolId: {SolId}. Motivo: {Message}",
+                            solId,
+                            factura.Mensaje);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "Factura de BackOffice asegurada para pago E-Sign reconciliado. SolId: {SolId}. CodFactura: {CodFactura}. Numero: {NumeroFactura}",
+                            solId,
+                            factura.CodFactura,
+                            factura.NumeroFactura);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Pago E-Sign reconciliado, pero fallo la facturacion automatica de BackOffice. SolId: {SolId}.",
+                        solId);
+                }
+
+                try
+                {
+                    var sync = await SincronizarSolicitudBesAsync(
+                        solId,
+                        cancellationToken: cancellationToken);
+                    if (sync.Success)
+                    {
+                        summary.SentToUanataca++;
+                        _logger.LogInformation(
+                            "Solicitud de firma enviada o sincronizada con Uanataca despues de aprobar el pago. SolId: {SolId}. UUID: {Uuid}",
+                            solId,
+                            sync.Uuid);
+                    }
+                    else
+                    {
+                        summary.UanatacaErrors++;
+                        _logger.LogWarning(
+                            "Pago aprobado, pero no se pudo enviar la solicitud {SolId} a Uanataca. Motivo: {Message}",
+                            solId,
+                            sync.Message);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    summary.UanatacaErrors++;
+                    _logger.LogError(
+                        ex,
+                        "Pago aprobado, pero fallo el envio de la solicitud {SolId} a Uanataca.",
+                        solId);
+                }
+            }
+
+            return summary;
         }
 
         public async Task<List<SolicitudFirmaClienteDto>> ObtenerFirmasClienteAsync(int usuarioClienteId)
@@ -592,6 +753,41 @@ namespace Simetric.Services
             }
 
             return await ActualizarEstadoBesAsync(context, solicitud, cancellationToken);
+        }
+
+        public async Task<BesSolicitudOperacionResultadoDto> SincronizarSolicitudClienteBesAsync(
+            int solId,
+            int usuarioClienteId,
+            CancellationToken cancellationToken = default)
+        {
+            if (solId <= 0 || usuarioClienteId <= 0)
+            {
+                return new BesSolicitudOperacionResultadoDto
+                {
+                    Success = false,
+                    Message = "No fue posible identificar la solicitud del cliente."
+                };
+            }
+
+            using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+            var perteneceAlCliente = await context.UsuSolicitudFirma
+                .AsNoTracking()
+                .AnyAsync(
+                    solicitud => solicitud.SolId == solId &&
+                                 solicitud.SolIdUsuarioCliente == usuarioClienteId &&
+                                 solicitud.SolActivo,
+                    cancellationToken);
+
+            if (!perteneceAlCliente)
+            {
+                return new BesSolicitudOperacionResultadoDto
+                {
+                    Success = false,
+                    Message = "La solicitud no pertenece al cliente autenticado."
+                };
+            }
+
+            return await SincronizarSolicitudBesAsync(solId, cancellationToken: cancellationToken);
         }
 
         // --- MÉTODOS PARA SOPORTE (ADMIN) ---
@@ -1933,6 +2129,9 @@ namespace Simetric.Services
 
             return value.Length <= maxLength ? value : value[..maxLength];
         }
+
+        private static string? FirstNonEmpty(params string?[] values) =>
+            values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
         public async Task<bool> ActualizarEstadoAsync(int solId, int nuevoEstadoId, string comentario, int usuarioSoporteId)
         {

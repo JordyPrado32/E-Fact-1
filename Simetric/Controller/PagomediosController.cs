@@ -19,6 +19,8 @@ namespace Simetric.Controllers
     {
         private readonly IDbContextFactory<AppDbContext> _dbFactory;
         private readonly IEmailService _emailService;
+        private readonly SolicitudService _solicitudService;
+        private readonly PagoService _pagoService;
         private readonly CompraDocumentosFacturacionService _compraDocumentosFacturacionService;
         private readonly ILogger<PagomediosController> _logger;
         private static readonly JsonSerializerOptions HistorialJsonOptions = new()
@@ -30,11 +32,15 @@ namespace Simetric.Controllers
         public PagomediosController(
             IDbContextFactory<AppDbContext> dbFactory,
             IEmailService emailService,
+            SolicitudService solicitudService,
+            PagoService pagoService,
             CompraDocumentosFacturacionService compraDocumentosFacturacionService,
             ILogger<PagomediosController> logger)
         {
             _dbFactory = dbFactory;
             _emailService = emailService;
+            _solicitudService = solicitudService;
+            _pagoService = pagoService;
             _compraDocumentosFacturacionService = compraDocumentosFacturacionService;
             _logger = logger;
         }
@@ -92,6 +98,41 @@ namespace Simetric.Controllers
             }
 
             var pagoAprobado = EsPagoAprobado(status);
+            if (!pagoAprobado)
+            {
+                try
+                {
+                    var remotePayment = await _pagoService.ConsultarSolicitudPagoAsync(solId);
+                    if (remotePayment.Found)
+                    {
+                        status = FirstNonEmpty(remotePayment.Status, status);
+                        reference = FirstNonEmpty(remotePayment.Reference, reference);
+                        authorizationCode = FirstNonEmpty(
+                            remotePayment.AuthorizationCode,
+                            authorizationCode);
+                        pagoAprobado = remotePayment.Approved;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "No se pudo reconciliar en Pagomedios el retorno de pago de la solicitud {SolId}.",
+                        solId);
+                }
+            }
+
+            if (!pagoAprobado)
+            {
+                _logger.LogWarning(
+                    "Pago de firma no aprobado. SolId: {SolId}. Metodo: {Method}. Status: {Status}. Reference: {Reference}. Auth: {Authorization}. Campos: {Fields}",
+                    solId,
+                    Request.Method,
+                    status,
+                    reference,
+                    authorizationCode,
+                    string.Join(", ", data.Keys.OrderBy(key => key)));
+            }
 
             await using var context = await _dbFactory.CreateDbContextAsync();
             await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
@@ -172,6 +213,56 @@ namespace Simetric.Controllers
                     _logger.LogWarning(
                         ex,
                         "El pago de firma electronica {SolId} fue aprobado pero no se pudo enviar la notificacion administrativa.",
+                        solicitud.SolId);
+                }
+
+                try
+                {
+                    var factura = await _compraDocumentosFacturacionService.EmitirFacturaFirmaAsync(
+                        solicitud.SolId,
+                        reference,
+                        authorizationCode);
+                    if (!factura.Exito)
+                    {
+                        _logger.LogWarning(
+                            "Pago E-Sign aprobado, pero no se pudo generar la factura de BackOffice. SolId: {SolId}. Motivo: {Message}",
+                            solicitud.SolId,
+                            factura.Mensaje);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "Factura de BackOffice generada para pago E-Sign. SolId: {SolId}. CodFactura: {CodFactura}. Numero: {NumeroFactura}. EstadoSRI: {EstadoSri}",
+                            solicitud.SolId,
+                            factura.CodFactura,
+                            factura.NumeroFactura,
+                            factura.EstadoSri);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Pago E-Sign aprobado, pero fallo la facturacion automatica de BackOffice. SolId: {SolId}.",
+                        solicitud.SolId);
+                }
+
+                try
+                {
+                    var resultadoBes = await _solicitudService.SincronizarSolicitudBesAsync(solicitud.SolId);
+                    if (!resultadoBes.Success)
+                    {
+                        _logger.LogWarning(
+                            "El pago de firma electronica {SolId} fue aprobado, pero la solicitud no pudo enviarse a Uanataca. Motivo: {Message}",
+                            solicitud.SolId,
+                            resultadoBes.Message);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "El pago de firma electronica {SolId} fue aprobado, pero fallo el envio automatico a Uanataca.",
                         solicitud.SolId);
                 }
 

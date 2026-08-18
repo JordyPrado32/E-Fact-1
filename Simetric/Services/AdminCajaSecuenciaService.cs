@@ -218,8 +218,13 @@ ORDER BY Cliente, c.[numCaja], c.[sec], doc.DocumentOrder;
             const string snapshotSql = """
 SELECT TOP (1)
     c.[sec] AS CajaSec,
+    c.[numCaja] AS NumeroCaja,
     c.[idUsuario] AS IdUsuario,
-    c.[serieFactura] AS Serie,
+    ISNULL(c.[serieFactura], '') AS SerieFactura,
+    ISNULL(c.[serieCompras], '') AS SerieCompras,
+    ISNULL(c.[serieGuia], '') AS SerieGuia,
+    ISNULL(c.[serieDebitos], '') AS SerieDebitos,
+    ISNULL(c.[serieNotasCred], '') AS SerieNotasCred,
     CAST(ISNULL(c.[es_caja_sistema], 0) AS bit) AS EsCajaSistema
 FROM [dbo].[CAJA] c WITH (UPDLOCK, HOLDLOCK)
 WHERE c.[sec] = @cajaSec;
@@ -256,7 +261,7 @@ WHERE c.[sec] <> @cajaSec
       u.[IdUsuario] = @titularId
       OR (u.[idJefe] = @titularId AND u.[estadoAsociado] = 1)
   )
-  AND (c.[serieFactura] = @serie OR c.[serieNotasCred] = @serie);
+  AND @serie IN (c.[serieFactura], c.[serieCompras], c.[serieGuia], c.[serieDebitos], c.[serieNotasCred]);
 """;
 
             var duplicates = await connection.ExecuteScalarAsync<int>(
@@ -328,6 +333,67 @@ WHERE [sec] = @cajaSec;
                 throw new InvalidOperationException("No se pudo actualizar la caja seleccionada.");
             }
 
+            const string synchronizeSeriesSql = """
+DECLARE @newSeriesRaw VARCHAR(6) = RIGHT(REPLACE(ISNULL(@newSeries, ''), '-', ''), 6);
+DECLARE @titularId INT = @idUsuario;
+
+SELECT @titularId =
+    CASE
+        WHEN ISNULL([estadoAsociado], 0) = 1 AND ISNULL([idJefe], 0) > 0 THEN [idJefe]
+        ELSE [IdUsuario]
+    END
+FROM [dbo].[Usuarios]
+WHERE [IdUsuario] = @idUsuario;
+
+UPDATE [dbo].[CAJA_SECUENCIA_PREFERENCIA]
+SET [seriesKey] = @newSeriesRaw,
+    [updatedAt] = SYSUTCDATETIME()
+WHERE [titularUserId] = @titularId
+  AND (
+      ([documentKey] = N'factura' AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) = RIGHT(REPLACE(ISNULL(@oldSerieFactura, ''), '-', ''), 6))
+      OR ([documentKey] = N'guia-remision' AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) = RIGHT(REPLACE(ISNULL(@oldSerieGuia, ''), '-', ''), 6))
+      OR ([documentKey] = N'nota-credito' AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) = RIGHT(REPLACE(ISNULL(@oldSerieNotasCred, ''), '-', ''), 6))
+      OR ([documentKey] = N'nota-debito' AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) = RIGHT(REPLACE(ISNULL(@oldSerieDebitos, ''), '-', ''), 6))
+      OR ([documentKey] IN (N'liquidacion-compra', N'compra-manual', N'retencion') AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) = RIGHT(REPLACE(ISNULL(@oldSerieCompras, ''), '-', ''), 6))
+  );
+
+IF @numeroCaja = 1
+BEGIN
+    UPDATE em
+    SET em.[codEstablecimiento] = LEFT(@newSeriesRaw, 3),
+        em.[codPuntoEmision] = RIGHT(@newSeriesRaw, 3)
+    FROM [dbo].[EMISOR] em
+    WHERE em.[ESTADO] = 1
+      AND (
+          (@esCajaSistema = 1 AND ISNULL(em.[es_emisor_sistema], 0) = 1)
+          OR
+          (@esCajaSistema = 0 AND em.[id_usuario] IN (
+              SELECT u.[IdUsuario]
+              FROM [dbo].[Usuarios] u
+              WHERE u.[IdUsuario] = @titularId
+                 OR (u.[idJefe] = @titularId AND ISNULL(u.[estadoAsociado], 0) = 1)
+          ))
+      );
+END;
+""";
+
+            await connection.ExecuteAsync(
+                synchronizeSeriesSql,
+                new
+                {
+                    oldSeries = previous.SerieFactura,
+                    newSeries = model.Serie,
+                    previous.IdUsuario,
+                    previous.NumeroCaja,
+                    previous.EsCajaSistema,
+                    oldSerieFactura = previous.SerieFactura,
+                    oldSerieCompras = previous.SerieCompras,
+                    oldSerieGuia = previous.SerieGuia,
+                    oldSerieDebitos = previous.SerieDebitos,
+                    oldSerieNotasCred = previous.SerieNotasCred
+                },
+                transaction);
+
             const string mergeSequenceSql = """
 DECLARE @oldSeriesRaw VARCHAR(6) = RIGHT(REPLACE(ISNULL(@oldSeries, ''), '-', ''), 6);
 
@@ -377,11 +443,12 @@ WHEN NOT MATCHED THEN
             var rawSeries = model.Serie.Replace("-", string.Empty, StringComparison.Ordinal);
             foreach (var sequence in model.Secuencias)
             {
+                var oldSeries = GetPreviousSeries(previous, sequence.DocumentKey);
                 var parameters = new
                 {
                     cajaSec = model.CajaSec,
                     previous.IdUsuario,
-                    oldSeries = previous.Serie,
+                    oldSeries,
                     documentKey = sequence.DocumentKey,
                     seriesKey = rawSeries,
                     initialized = sequence.Initialized,
@@ -406,6 +473,20 @@ WHERE [cajaSec] = @cajaSec
                     var updated = await connection.ExecuteAsync(recoverDuplicateSql, parameters, transaction);
                     if (updated == 0)
                         throw;
+                }
+
+                if (!string.Equals(
+                        NormalizeSeriesKey(oldSeries),
+                        rawSeries,
+                        StringComparison.Ordinal))
+                {
+                    const string deleteStaleSequenceSql = """
+DELETE FROM [dbo].[CAJA_SECUENCIA]
+WHERE [cajaSec] = @cajaSec
+  AND [documentKey] = @documentKey
+  AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) = RIGHT(REPLACE(ISNULL(@oldSeries, ''), '-', ''), 6);
+""";
+                    await connection.ExecuteAsync(deleteStaleSequenceSql, parameters, transaction);
                 }
             }
 
@@ -504,6 +585,20 @@ WHERE u.[IdUsuario] = @actorUserId
         }
     }
 
+    private static string GetPreviousSeries(AdminCajaSnapshot snapshot, string documentKey) =>
+        documentKey switch
+        {
+            "factura" => snapshot.SerieFactura,
+            "guia-remision" => snapshot.SerieGuia,
+            "nota-credito" => snapshot.SerieNotasCred,
+            "nota-debito" => snapshot.SerieDebitos,
+            "liquidacion-compra" or "compra-manual" or "retencion" => snapshot.SerieCompras,
+            _ => snapshot.SerieFactura
+        };
+
+    private static string NormalizeSeriesKey(string? series) =>
+        new((series ?? string.Empty).Where(char.IsDigit).Take(6).ToArray());
+
     private sealed class AdminCajaSecuenciaRow
     {
         public int CajaSec { get; set; }
@@ -526,8 +621,13 @@ WHERE u.[IdUsuario] = @actorUserId
     private sealed class AdminCajaSnapshot
     {
         public int CajaSec { get; set; }
+        public int NumeroCaja { get; set; }
         public int IdUsuario { get; set; }
-        public string Serie { get; set; } = string.Empty;
+        public string SerieFactura { get; set; } = string.Empty;
+        public string SerieCompras { get; set; } = string.Empty;
+        public string SerieGuia { get; set; } = string.Empty;
+        public string SerieDebitos { get; set; } = string.Empty;
+        public string SerieNotasCred { get; set; } = string.Empty;
         public bool EsCajaSistema { get; set; }
     }
 }
