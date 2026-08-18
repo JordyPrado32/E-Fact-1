@@ -277,8 +277,7 @@ namespace Simetric.Controllers
                 authorizationCode,
                 cardBrand);
 
-            var estado = solicitud.SolPagoExitoso == true ? "aprobado" : "pendiente";
-            return Redirect($"/solicitud/pago/resultado?solId={solId}&estado={estado}&reference={Uri.EscapeDataString(reference ?? string.Empty)}&authorization={Uri.EscapeDataString(authorizationCode ?? string.Empty)}");
+            return Redirect("/solicitud/pagos");
         }
 
         private async Task<IActionResult> ProcesarNotificacionCompraDocumentosAsync(Dictionary<string, string> data)
