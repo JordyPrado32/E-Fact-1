@@ -203,6 +203,251 @@ ORDER BY Cliente, c.[numCaja], c.[sec], doc.DocumentOrder;
             .ToList();
     }
 
+    public async Task<List<AdminCajaClienteDto>> GetClientsAsync(int actorUserId)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+        await EnsurePermissionAsync(connection, actorUserId);
+
+        const string sql = """
+SELECT
+    u.[IdUsuario],
+    LTRIM(RTRIM(CONCAT(ISNULL(u.[Nombres], ''), ' ', ISNULL(u.[Apellidos], '')))) AS Cliente,
+    ISNULL(u.[Email], '') AS Email,
+    ISNULL(em.[RUC], '') AS Ruc,
+    ISNULL(em.[razonSocial], ISNULL(u.[NombreEmpresa], '')) AS RazonSocial,
+    ISNULL(nextBox.[NumeroCaja], 1) AS SiguienteNumeroCaja,
+    COALESCE(NULLIF(LEFT(REPLACE(ISNULL(currentBox.[serieFactura], ''), '-', ''), 3), ''),
+             NULLIF(em.[codEstablecimiento], ''), '001') AS EstablecimientoSugerido
+FROM [dbo].[Usuarios] u
+OUTER APPLY
+(
+    SELECT TOP (1) e.[RUC], e.[razonSocial], e.[codEstablecimiento]
+    FROM [dbo].[EMISOR] e
+    WHERE e.[ESTADO] = 1
+      AND e.[id_usuario] IN (u.[IdUsuario], CASE WHEN ISNULL(u.[estadoAsociado], 0) = 1 THEN u.[idJefe] ELSE u.[IdUsuario] END)
+    ORDER BY CASE WHEN e.[id_usuario] = u.[IdUsuario] THEN 0 ELSE 1 END, e.[codigo]
+) em
+OUTER APPLY
+(
+    SELECT TOP (1) c.[serieFactura]
+    FROM [dbo].[CAJA] c
+    INNER JOIN [dbo].[Usuarios] accountUser ON accountUser.[IdUsuario] = c.[idUsuario]
+    WHERE c.[estado] = 1
+      AND ISNULL(c.[es_caja_sistema], 0) = 0
+      AND (accountUser.[IdUsuario] = CASE WHEN ISNULL(u.[estadoAsociado], 0) = 1 THEN u.[idJefe] ELSE u.[IdUsuario] END
+           OR (accountUser.[idJefe] = CASE WHEN ISNULL(u.[estadoAsociado], 0) = 1 THEN u.[idJefe] ELSE u.[IdUsuario] END
+               AND ISNULL(accountUser.[estadoAsociado], 0) = 1))
+    ORDER BY c.[numCaja], c.[sec]
+) currentBox
+OUTER APPLY
+(
+    SELECT ISNULL(MAX(c.[numCaja]), 0) + 1 AS NumeroCaja
+    FROM [dbo].[CAJA] c
+    INNER JOIN [dbo].[Usuarios] accountUser ON accountUser.[IdUsuario] = c.[idUsuario]
+    WHERE c.[estado] = 1
+      AND ISNULL(c.[es_caja_sistema], 0) = 0
+      AND (accountUser.[IdUsuario] = CASE WHEN ISNULL(u.[estadoAsociado], 0) = 1 THEN u.[idJefe] ELSE u.[IdUsuario] END
+           OR (accountUser.[idJefe] = CASE WHEN ISNULL(u.[estadoAsociado], 0) = 1 THEN u.[idJefe] ELSE u.[IdUsuario] END
+               AND ISNULL(accountUser.[estadoAsociado], 0) = 1))
+) nextBox
+WHERE u.[Estado] = 1
+  AND u.[IdTipoUsuario] IN (1, 5)
+ORDER BY RazonSocial, Cliente, u.[IdUsuario];
+""";
+
+        return (await connection.QueryAsync<AdminCajaClienteDto>(sql)).ToList();
+    }
+
+    public async Task<int> CreateAsync(int actorUserId, AdminCajaSecuenciaDto model)
+    {
+        ValidateCreate(model);
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        try
+        {
+            await EnsurePermissionAsync(connection, actorUserId, transaction);
+
+            const string userSql = """
+SELECT TOP (1)
+    u.[IdUsuario],
+    CASE WHEN ISNULL(u.[estadoAsociado], 0) = 1 AND ISNULL(u.[idJefe], 0) > 0
+         THEN u.[idJefe] ELSE u.[IdUsuario] END AS TitularId
+FROM [dbo].[Usuarios] u WITH (UPDLOCK, HOLDLOCK)
+WHERE u.[IdUsuario] = @idUsuario
+  AND u.[Estado] = 1
+  AND u.[IdTipoUsuario] IN (1, 5);
+""";
+            var user = await connection.QuerySingleOrDefaultAsync<AdminCajaCreateUser>(
+                userSql,
+                new { idUsuario = model.IdUsuario },
+                transaction);
+            if (user is null)
+                throw new InvalidOperationException("El cliente seleccionado no existe o está inactivo.");
+
+            const string validationSql = """
+SELECT
+    COUNT(1) AS TotalCajas,
+    SUM(CASE WHEN c.[numCaja] = @numeroCaja THEN 1 ELSE 0 END) AS NumeroDuplicado,
+    SUM(CASE WHEN @serie IN (c.[serieFactura], c.[serieCompras], c.[serieGuia], c.[serieDebitos], c.[serieNotasCred]) THEN 1 ELSE 0 END) AS SerieDuplicada
+FROM [dbo].[CAJA] c WITH (UPDLOCK, HOLDLOCK)
+INNER JOIN [dbo].[Usuarios] accountUser ON accountUser.[IdUsuario] = c.[idUsuario]
+WHERE c.[estado] = 1
+  AND ISNULL(c.[es_caja_sistema], 0) = 0
+  AND (accountUser.[IdUsuario] = @titularId
+       OR (accountUser.[idJefe] = @titularId AND ISNULL(accountUser.[estadoAsociado], 0) = 1));
+""";
+            var validation = await connection.QuerySingleAsync<AdminCajaCreateValidation>(
+                validationSql,
+                new { model.NumeroCaja, serie = model.Serie, user.TitularId },
+                transaction);
+            if (validation.TotalCajas >= 50)
+                throw new InvalidOperationException("La cuenta alcanzó el máximo de 50 puntos de emisión.");
+            if (validation.NumeroDuplicado > 0)
+                throw new InvalidOperationException($"La caja número {model.NumeroCaja} ya existe en esta cuenta.");
+            if (validation.SerieDuplicada > 0)
+                throw new InvalidOperationException($"La serie {model.Serie} ya pertenece a otra caja de esta cuenta.");
+
+            var sequenceByKey = model.Secuencias.ToDictionary(item => item.DocumentKey, StringComparer.OrdinalIgnoreCase);
+            const string createCajaSql = """
+DECLARE @idEmpresa INT;
+DECLARE @idSucursal INT;
+
+SELECT TOP (1)
+    @idEmpresa = NULLIF(c.[idEmpresa], 0),
+    @idSucursal = NULLIF(c.[idSucursal], 0)
+FROM [dbo].[CAJA] c
+INNER JOIN [dbo].[Usuarios] accountUser ON accountUser.[IdUsuario] = c.[idUsuario]
+WHERE ISNULL(c.[es_caja_sistema], 0) = 0
+  AND (accountUser.[IdUsuario] = @titularId
+       OR (accountUser.[idJefe] = @titularId AND ISNULL(accountUser.[estadoAsociado], 0) = 1))
+ORDER BY c.[estado] DESC, c.[numCaja], c.[sec];
+
+IF @idEmpresa IS NULL OR @idSucursal IS NULL
+BEGIN
+    SELECT TOP (1)
+        @idEmpresa = COALESCE(@idEmpresa, NULLIF(em.[idEmpresa], 0)),
+        @idSucursal = COALESCE(@idSucursal, NULLIF(em.[idSucursal], 0))
+    FROM [dbo].[EMISOR] em
+    WHERE em.[ESTADO] = 1
+      AND em.[id_usuario] IN (@idUsuario, @titularId)
+    ORDER BY CASE WHEN em.[id_usuario] = @idUsuario THEN 0 ELSE 1 END, em.[codigo];
+END;
+
+INSERT INTO [dbo].[CAJA]
+(
+    [numCaja], [idUsuario], [idEmpresa], [idSucursal],
+    [serieFactura], [serieCompras], [serieGuia], [serieDebitos], [serieNotasCred],
+    [estado], [es_caja_sistema],
+    [secuenciaFacturaInicializada], [ultimoSecuencialFactura],
+    [secuenciaGuiaInicializada], [ultimoSecuencialGuia],
+    [secuenciaNotaCreditoInicializada], [ultimoSecuencialNotaCredito],
+    [secuenciaNotaDebitoInicializada], [ultimoSecuencialNotaDebito],
+    [secuenciaLiquidacionInicializada], [ultimoSecuencialLiquidacion],
+    [secuenciaCompraManualInicializada], [ultimoSecuencialCompraManual],
+    [secuenciaRetencionInicializada], [ultimoSecuencialRetencion]
+)
+VALUES
+(
+    @numeroCaja, @idUsuario, ISNULL(@idEmpresa, 1), ISNULL(@idSucursal, 1),
+    @serie, @serie, @serie, @serie, @serie,
+    1, 0,
+    @facturaInitialized, @facturaLast,
+    @guiaInitialized, @guiaLast,
+    @notaCreditoInitialized, @notaCreditoLast,
+    @notaDebitoInitialized, @notaDebitoLast,
+    @liquidacionInitialized, @liquidacionLast,
+    @compraInitialized, @compraLast,
+    @retencionInitialized, @retencionLast
+);
+
+SELECT CONVERT(INT, SCOPE_IDENTITY());
+""";
+            var cajaSec = await connection.ExecuteScalarAsync<int>(
+                createCajaSql,
+                new
+                {
+                    model.NumeroCaja,
+                    model.IdUsuario,
+                    model.Serie,
+                    user.TitularId,
+                    facturaInitialized = sequenceByKey["factura"].Initialized,
+                    facturaLast = sequenceByKey["factura"].LastSequence,
+                    guiaInitialized = sequenceByKey["guia-remision"].Initialized,
+                    guiaLast = sequenceByKey["guia-remision"].LastSequence,
+                    notaCreditoInitialized = sequenceByKey["nota-credito"].Initialized,
+                    notaCreditoLast = sequenceByKey["nota-credito"].LastSequence,
+                    notaDebitoInitialized = sequenceByKey["nota-debito"].Initialized,
+                    notaDebitoLast = sequenceByKey["nota-debito"].LastSequence,
+                    liquidacionInitialized = sequenceByKey["liquidacion-compra"].Initialized,
+                    liquidacionLast = sequenceByKey["liquidacion-compra"].LastSequence,
+                    compraInitialized = sequenceByKey["compra-manual"].Initialized,
+                    compraLast = sequenceByKey["compra-manual"].LastSequence,
+                    retencionInitialized = sequenceByKey["retencion"].Initialized,
+                    retencionLast = sequenceByKey["retencion"].LastSequence
+                },
+                transaction);
+
+            const string createSequenceSql = """
+DECLARE @rawSeries VARCHAR(6) = REPLACE(@serie, '-', '');
+
+INSERT INTO [dbo].[CAJA_SECUENCIA]
+    ([cajaSec], [documentKey], [seriesKey], [initialized], [lastSequence], [updatedAt])
+VALUES
+    (@cajaSec, @documentKey, @rawSeries, @initialized, @lastSequence, SYSUTCDATETIME());
+
+INSERT INTO [dbo].[CAJA_SECUENCIA]
+    ([cajaSec], [documentKey], [seriesKey], [initialized], [lastSequence], [updatedAt])
+SELECT DISTINCT
+    @cajaSec,
+    @documentKey,
+    CONCAT('E', em.[codigo], ':', @rawSeries),
+    @initialized,
+    @lastSequence,
+    SYSUTCDATETIME()
+FROM [dbo].[EMISOR] em
+WHERE em.[id_usuario] = @idUsuario
+  AND em.[ESTADO] = 1;
+""";
+            foreach (var sequence in model.Secuencias)
+            {
+                await connection.ExecuteAsync(
+                    createSequenceSql,
+                    new
+                    {
+                        cajaSec,
+                        model.IdUsuario,
+                        model.Serie,
+                        sequence.DocumentKey,
+                        sequence.Initialized,
+                        sequence.LastSequence
+                    },
+                    transaction);
+            }
+
+            await transaction.CommitAsync();
+            model.CajaSec = cajaSec;
+
+            await _auditService.TryRegistrarAuditoriaAsync(
+                actorUserId,
+                "ADMIN_CAJA_SECUENCIA_CREADA",
+                null,
+                model,
+                new { Entidad = "CajaSecuencia", Tabla = "CAJA / CAJA_SECUENCIA", Llaves = new { cajaSec } });
+
+            return cajaSec;
+        }
+        catch
+        {
+            if (transaction.Connection is not null)
+                await transaction.RollbackAsync();
+            throw;
+        }
+    }
+
     public async Task SaveAsync(int actorUserId, AdminCajaSecuenciaDto model)
     {
         Validate(model);
@@ -394,50 +639,64 @@ END;
                 },
                 transaction);
 
-            const string mergeSequenceSql = """
+            const string replaceSequenceSql = """
 DECLARE @oldSeriesRaw VARCHAR(6) = RIGHT(REPLACE(ISNULL(@oldSeries, ''), '-', ''), 6);
+DECLARE @desiredSeries TABLE
+(
+    [seriesKey] NVARCHAR(120) NOT NULL PRIMARY KEY
+);
 
-MERGE [dbo].[CAJA_SECUENCIA] WITH (HOLDLOCK) AS target
-USING (
-    SELECT DISTINCT
-        @cajaSec AS cajaSec,
-        @documentKey AS documentKey,
-        scoped.SeriesKey AS seriesKey
-    FROM (
-        SELECT @seriesKey AS SeriesKey
+INSERT INTO @desiredSeries ([seriesKey]) VALUES (@seriesKey);
 
-        UNION ALL
+INSERT INTO @desiredSeries ([seriesKey])
+SELECT DISTINCT CONCAT(
+    CASE
+        WHEN CHARINDEX(':', existingState.[seriesKey]) > 0
+            THEN LEFT(existingState.[seriesKey], CHARINDEX(':', existingState.[seriesKey]))
+        ELSE ''
+    END,
+    @seriesKey)
+FROM [dbo].[CAJA_SECUENCIA] existingState WITH (UPDLOCK, HOLDLOCK)
+WHERE existingState.[cajaSec] = @cajaSec
+  AND existingState.[documentKey] = @documentKey
+  AND RIGHT(REPLACE(ISNULL(existingState.[seriesKey], ''), '-', ''), 6) IN (@oldSeriesRaw, @seriesKey)
+  AND CHARINDEX(':', existingState.[seriesKey]) > 0
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM @desiredSeries desired
+      WHERE desired.[seriesKey] = CONCAT(
+          LEFT(existingState.[seriesKey], CHARINDEX(':', existingState.[seriesKey])),
+          @seriesKey)
+  );
 
-        SELECT CONCAT(
-            CASE
-                WHEN CHARINDEX(':', existingState.[seriesKey]) > 0
-                    THEN LEFT(existingState.[seriesKey], CHARINDEX(':', existingState.[seriesKey]))
-                ELSE ''
-            END,
-            @seriesKey)
-        FROM [dbo].[CAJA_SECUENCIA] existingState
-        WHERE existingState.[cajaSec] = @cajaSec
-          AND existingState.[documentKey] = @documentKey
-          AND RIGHT(existingState.[seriesKey], 6) IN (@oldSeriesRaw, @seriesKey)
+INSERT INTO @desiredSeries ([seriesKey])
+SELECT DISTINCT CONCAT('E', em.[codigo], ':', @seriesKey)
+FROM [dbo].[EMISOR] em
+WHERE em.[id_usuario] = @idUsuario
+  AND em.[ESTADO] = 1
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM @desiredSeries desired
+      WHERE desired.[seriesKey] = CONCAT('E', em.[codigo], ':', @seriesKey)
+  );
 
-        UNION ALL
+DELETE FROM [dbo].[CAJA_SECUENCIA]
+WHERE [cajaSec] = @cajaSec
+  AND [documentKey] = @documentKey
+  AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) IN (@oldSeriesRaw, @seriesKey);
 
-        SELECT CONCAT('E', em.[codigo], ':', @seriesKey)
-        FROM [dbo].[EMISOR] em
-        WHERE em.[id_usuario] = @idUsuario
-          AND em.[ESTADO] = 1
-    ) scoped
-) AS source
-ON target.[cajaSec] = source.cajaSec
-   AND target.[documentKey] = source.documentKey
-   AND target.[seriesKey] = source.seriesKey
-WHEN MATCHED THEN
-    UPDATE SET [initialized] = @initialized,
-               [lastSequence] = @lastSequence,
-               [updatedAt] = SYSUTCDATETIME()
-WHEN NOT MATCHED THEN
-    INSERT ([cajaSec], [documentKey], [seriesKey], [initialized], [lastSequence])
-    VALUES (@cajaSec, @documentKey, @seriesKey, @initialized, @lastSequence);
+INSERT INTO [dbo].[CAJA_SECUENCIA]
+    ([cajaSec], [documentKey], [seriesKey], [initialized], [lastSequence], [updatedAt])
+SELECT
+    @cajaSec,
+    @documentKey,
+    desired.[seriesKey],
+    @initialized,
+    @lastSequence,
+    SYSUTCDATETIME()
+FROM @desiredSeries desired;
 """;
 
             var rawSeries = model.Serie.Replace("-", string.Empty, StringComparison.Ordinal);
@@ -455,39 +714,7 @@ WHEN NOT MATCHED THEN
                     lastSequence = sequence.LastSequence
                 };
 
-                try
-                {
-                    await connection.ExecuteAsync(mergeSequenceSql, parameters, transaction);
-                }
-                catch (SqlException ex) when (ex.Number is 2601 or 2627)
-                {
-                    const string recoverDuplicateSql = """
-UPDATE [dbo].[CAJA_SECUENCIA]
-SET [initialized] = @initialized,
-    [lastSequence] = @lastSequence,
-    [updatedAt] = SYSUTCDATETIME()
-WHERE [cajaSec] = @cajaSec
-  AND [documentKey] = @documentKey
-  AND [seriesKey] = @seriesKey;
-""";
-                    var updated = await connection.ExecuteAsync(recoverDuplicateSql, parameters, transaction);
-                    if (updated == 0)
-                        throw;
-                }
-
-                if (!string.Equals(
-                        NormalizeSeriesKey(oldSeries),
-                        rawSeries,
-                        StringComparison.Ordinal))
-                {
-                    const string deleteStaleSequenceSql = """
-DELETE FROM [dbo].[CAJA_SECUENCIA]
-WHERE [cajaSec] = @cajaSec
-  AND [documentKey] = @documentKey
-  AND RIGHT(REPLACE(ISNULL([seriesKey], ''), '-', ''), 6) = RIGHT(REPLACE(ISNULL(@oldSeries, ''), '-', ''), 6);
-""";
-                    await connection.ExecuteAsync(deleteStaleSequenceSql, parameters, transaction);
-                }
+                await connection.ExecuteAsync(replaceSequenceSql, parameters, transaction);
             }
 
             await transaction.CommitAsync();
@@ -585,6 +812,24 @@ WHERE u.[IdUsuario] = @actorUserId
         }
     }
 
+    private static void ValidateCreate(AdminCajaSecuenciaDto model)
+    {
+        if (model.IdUsuario <= 0)
+            throw new InvalidOperationException("Debe seleccionar un cliente.");
+        if (model.NumeroCaja <= 0)
+            throw new InvalidOperationException("El número de caja debe ser mayor a cero.");
+
+        model.CajaSec = 1;
+        try
+        {
+            Validate(model);
+        }
+        finally
+        {
+            model.CajaSec = 0;
+        }
+    }
+
     private static string GetPreviousSeries(AdminCajaSnapshot snapshot, string documentKey) =>
         documentKey switch
         {
@@ -595,9 +840,6 @@ WHERE u.[IdUsuario] = @actorUserId
             "liquidacion-compra" or "compra-manual" or "retencion" => snapshot.SerieCompras,
             _ => snapshot.SerieFactura
         };
-
-    private static string NormalizeSeriesKey(string? series) =>
-        new((series ?? string.Empty).Where(char.IsDigit).Take(6).ToArray());
 
     private sealed class AdminCajaSecuenciaRow
     {
@@ -630,6 +872,19 @@ WHERE u.[IdUsuario] = @actorUserId
         public string SerieNotasCred { get; set; } = string.Empty;
         public bool EsCajaSistema { get; set; }
     }
+
+    private sealed class AdminCajaCreateUser
+    {
+        public int IdUsuario { get; set; }
+        public int TitularId { get; set; }
+    }
+
+    private sealed class AdminCajaCreateValidation
+    {
+        public int TotalCajas { get; set; }
+        public int NumeroDuplicado { get; set; }
+        public int SerieDuplicada { get; set; }
+    }
 }
 
 public sealed class AdminCajaSecuenciaDto
@@ -653,4 +908,15 @@ public sealed class AdminDocumentoSecuenciaDto
     public string DocumentLabel { get; set; } = string.Empty;
     public bool Initialized { get; set; }
     public long LastSequence { get; set; }
+}
+
+public sealed class AdminCajaClienteDto
+{
+    public int IdUsuario { get; set; }
+    public string Cliente { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string Ruc { get; set; } = string.Empty;
+    public string RazonSocial { get; set; } = string.Empty;
+    public int SiguienteNumeroCaja { get; set; }
+    public string EstablecimientoSugerido { get; set; } = "001";
 }

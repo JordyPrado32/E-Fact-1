@@ -54,6 +54,10 @@
                            @bind:event="oninput"
                            placeholder="Cliente, correo, RUC, empresa, serie o SEC" />
                 </label>
+                <button type="button" class="primary-btn" @onclick="AbrirCrear" disabled="@guardando">
+                    <i class="ri-add-line"></i>
+                    Crear caja
+                </button>
                 <button type="button" class="secondary-btn" @onclick="Cargar" disabled="@guardando">
                     <i class="ri-refresh-line"></i>
                     Refrescar
@@ -178,9 +182,9 @@
         <section class="edit-modal" @onclick:stopPropagation="true">
             <header class="modal-head">
                 <div>
-                    <span class="section-kicker">Edición administrativa</span>
-                    <h3>@NombreCliente(cajaEdicion)</h3>
-                    <p>Caja @cajaEdicion.NumeroCaja · SEC @cajaEdicion.CajaSec</p>
+                    <span class="section-kicker">@(EsCreacion ? "Nueva caja" : "Edición administrativa")</span>
+                    <h3>@(EsCreacion ? "Crear punto de emisión" : NombreCliente(cajaEdicion))</h3>
+                    <p>@(EsCreacion ? "Configure el cliente, la serie y los secuenciales iniciales." : $"Caja {cajaEdicion.NumeroCaja} · SEC {cajaEdicion.CajaSec}")</p>
                 </div>
                 <button type="button" class="close-btn" @onclick="CerrarEditar" disabled="@guardando">
                     <i class="ri-close-line"></i>
@@ -188,6 +192,31 @@
             </header>
 
             <div class="modal-body">
+                @if (EsCreacion)
+                {
+                    <div class="creation-grid">
+                        <label class="creation-field is-wide">
+                            <span>Cliente</span>
+                            <select value="@cajaEdicion.IdUsuario" @onchange="OnClienteCreacionChanged" disabled="@guardando">
+                                <option value="0">Seleccione un cliente...</option>
+                                @foreach (var cliente in clientes)
+                                {
+                                    <option value="@cliente.IdUsuario">@NombreCliente(cliente) · @cliente.Email · ID @cliente.IdUsuario</option>
+                                }
+                            </select>
+                        </label>
+                        <label class="creation-field">
+                            <span>Número de caja</span>
+                            <input type="number"
+                                   min="1"
+                                   max="9999"
+                                   value="@cajaEdicion.NumeroCaja"
+                                   @oninput="e => cajaEdicion.NumeroCaja = ParseCajaNumber(e.Value)"
+                                   disabled="@guardando" />
+                        </label>
+                    </div>
+                }
+
                 <div class="series-editor">
                     <div class="series-fields">
                         <label class="series-field">
@@ -260,7 +289,7 @@
                     else
                     {
                         <i class="ri-save-line"></i>
-                        <span>Guardar cambios</span>
+                        <span>@(EsCreacion ? "Crear caja" : "Guardar cambios")</span>
                     }
                 </button>
             </footer>
@@ -633,6 +662,31 @@
         gap: 1rem;
     }
 
+    .creation-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(150px, .7fr);
+        gap: .8rem;
+    }
+
+    .creation-field span {
+        display: block;
+        margin-bottom: .35rem;
+        color: #31526d;
+        font-size: .78rem;
+        font-weight: 800;
+        text-transform: uppercase;
+    }
+
+    .creation-field input,
+    .creation-field select {
+        width: 100%;
+        min-height: 44px;
+        padding: .6rem .72rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 11px;
+        background: #fff;
+    }
+
     .series-editor > small,
     .series-field span {
         display: block;
@@ -741,12 +795,17 @@
         .edit-modal {
             width: 100%;
         }
+
+        .creation-grid {
+            grid-template-columns: 1fr;
+        }
     }
 </style>
 
 @code {
     private const int PageSize = 10;
     private readonly List<AdminCajaSecuenciaDto> cajas = new();
+    private readonly List<AdminCajaClienteDto> clientes = new();
     private int actorUserId;
     private int paginaActual = 1;
     private bool cargando = true;
@@ -760,6 +819,7 @@
     private AdminCajaSecuenciaDto? cajaEdicion;
 
     private string SerieEdicion => $"{establecimientoEdicion}-{puntoEmisionEdicion}";
+    private bool EsCreacion => cajaEdicion?.CajaSec == 0;
 
     private string Filtro
     {
@@ -800,8 +860,13 @@
 
         try
         {
+            var cajasTask = AdminService.GetAllAsync(actorUserId);
+            var clientesTask = AdminService.GetClientsAsync(actorUserId);
+            await Task.WhenAll(cajasTask, clientesTask);
             cajas.Clear();
-            cajas.AddRange(await AdminService.GetAllAsync(actorUserId));
+            cajas.AddRange(await cajasTask);
+            clientes.Clear();
+            clientes.AddRange(await clientesTask);
             tienePermiso = true;
             paginaActual = Math.Min(paginaActual, TotalPaginas);
         }
@@ -831,6 +896,21 @@
         mensaje = null;
     }
 
+    private void AbrirCrear()
+    {
+        cajaEdicion = new AdminCajaSecuenciaDto
+        {
+            CajaSec = 0,
+            NumeroCaja = 1,
+            Activa = true,
+            Serie = "001-001",
+            Secuencias = CrearSecuenciasIniciales()
+        };
+        establecimientoEdicion = "001";
+        puntoEmisionEdicion = "001";
+        mensaje = null;
+    }
+
     private void CerrarEditar()
     {
         if (!guardando)
@@ -851,15 +931,21 @@
 
         try
         {
+            var esCreacion = EsCreacion;
             cajaEdicion.Serie = SerieEdicion;
             var nombre = NombreCliente(cajaEdicion);
             var numeroCaja = cajaEdicion.NumeroCaja;
-            await AdminService.SaveAsync(actorUserId, cajaEdicion);
+            if (esCreacion)
+                await AdminService.CreateAsync(actorUserId, cajaEdicion);
+            else
+                await AdminService.SaveAsync(actorUserId, cajaEdicion);
             cajaEdicion = null;
             await Cargar();
             mensajeEsError = false;
-            mensaje = $"Caja {numeroCaja} de {nombre} actualizada correctamente.";
-            await JS.ShowToastAsync("Caja y secuencias actualizadas");
+            mensaje = esCreacion
+                ? $"Caja {numeroCaja} de {nombre} creada correctamente."
+                : $"Caja {numeroCaja} de {nombre} actualizada correctamente.";
+            await JS.ShowToastAsync(esCreacion ? "Caja creada correctamente" : "Caja y secuencias actualizadas");
         }
         catch (Exception ex)
         {
@@ -917,6 +1003,46 @@
             }).ToList()
         };
 
+    private void OnClienteCreacionChanged(ChangeEventArgs e)
+    {
+        if (cajaEdicion is null || !int.TryParse(e.Value?.ToString(), out var idUsuario))
+            return;
+
+        cajaEdicion.IdUsuario = idUsuario;
+        var cliente = clientes.FirstOrDefault(item => item.IdUsuario == idUsuario);
+        if (cliente is null)
+            return;
+
+        cajaEdicion.Cliente = cliente.Cliente;
+        cajaEdicion.Email = cliente.Email;
+        cajaEdicion.Ruc = cliente.Ruc;
+        cajaEdicion.RazonSocial = cliente.RazonSocial;
+        cajaEdicion.NumeroCaja = Math.Max(1, cliente.SiguienteNumeroCaja);
+        establecimientoEdicion = NormalizarCodigoSerie(cliente.EstablecimientoSugerido);
+        puntoEmisionEdicion = Math.Clamp(cliente.SiguienteNumeroCaja, 1, 999).ToString("D3");
+    }
+
+    private static List<AdminDocumentoSecuenciaDto> CrearSecuenciasIniciales() =>
+        new()
+        {
+            CrearSecuencia("factura", "Factura"),
+            CrearSecuencia("guia-remision", "Guía de remisión"),
+            CrearSecuencia("nota-credito", "Nota de crédito"),
+            CrearSecuencia("nota-debito", "Nota de débito"),
+            CrearSecuencia("liquidacion-compra", "Liquidación de compra"),
+            CrearSecuencia("compra-manual", "Compra manual"),
+            CrearSecuencia("retencion", "Retención")
+        };
+
+    private static AdminDocumentoSecuenciaDto CrearSecuencia(string key, string label) =>
+        new()
+        {
+            DocumentKey = key,
+            DocumentLabel = label,
+            Initialized = false,
+            LastSequence = 0
+        };
+
     private static string AbreviarDocumento(string documentKey) =>
         documentKey switch
         {
@@ -940,10 +1066,22 @@
                 ? caja.Cliente
                 : $"Usuario {caja.IdUsuario}";
 
+    private static string NombreCliente(AdminCajaClienteDto cliente) =>
+        !string.IsNullOrWhiteSpace(cliente.RazonSocial)
+            ? cliente.RazonSocial
+            : !string.IsNullOrWhiteSpace(cliente.Cliente)
+                ? cliente.Cliente
+                : $"Usuario {cliente.IdUsuario}";
+
     private static long ParseSequence(object? value) =>
         long.TryParse(value?.ToString(), out var parsed)
             ? Math.Clamp(parsed, 0, 999_999_999)
             : 0;
+
+    private static int ParseCajaNumber(object? value) =>
+        int.TryParse(value?.ToString(), out var parsed)
+            ? Math.Clamp(parsed, 1, 9999)
+            : 1;
 
     private void OnEstablecimientoChanged(ChangeEventArgs e) =>
         establecimientoEdicion = NormalizarCodigoSerie(e.Value?.ToString());

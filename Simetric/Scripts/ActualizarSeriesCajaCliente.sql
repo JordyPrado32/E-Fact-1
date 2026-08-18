@@ -111,38 +111,41 @@ FROM (
         ) AS RowNumber
     FROM [dbo].[CAJA_SECUENCIA] s
     WHERE s.[cajaSec] = @CajaSec
-      AND EXISTS (
+      AND (
+          RIGHT(REPLACE(ISNULL(s.[seriesKey], ''), '-', ''), 6) = @SerieRaw
+          OR EXISTS (
+              SELECT 1
+              FROM @OldDocumentSeries old
+              WHERE old.DocumentKey = s.[documentKey]
+                AND old.SeriesRaw = RIGHT(REPLACE(ISNULL(s.[seriesKey], ''), '-', ''), 6)
+          )
+      )
+) source
+WHERE source.RowNumber = 1;
+
+DELETE s
+FROM [dbo].[CAJA_SECUENCIA] s
+WHERE s.[cajaSec] = @CajaSec
+  AND (
+      RIGHT(REPLACE(ISNULL(s.[seriesKey], ''), '-', ''), 6) = @SerieRaw
+      OR EXISTS (
           SELECT 1
           FROM @OldDocumentSeries old
           WHERE old.DocumentKey = s.[documentKey]
             AND old.SeriesRaw = RIGHT(REPLACE(ISNULL(s.[seriesKey], ''), '-', ''), 6)
       )
-) source
-WHERE source.RowNumber = 1;
+  );
 
-MERGE [dbo].[CAJA_SECUENCIA] WITH (HOLDLOCK) AS target
-USING @StateChanges AS source
-ON target.[cajaSec] = source.CajaSec
-   AND target.[documentKey] = source.DocumentKey
-   AND target.[seriesKey] = source.SeriesKey
-WHEN MATCHED THEN
-    UPDATE SET [initialized] = source.Initialized,
-               [lastSequence] = source.LastSequence,
-               [updatedAt] = SYSUTCDATETIME()
-WHEN NOT MATCHED THEN
-    INSERT ([cajaSec], [documentKey], [seriesKey], [initialized], [lastSequence])
-    VALUES (source.CajaSec, source.DocumentKey, source.SeriesKey, source.Initialized, source.LastSequence);
-
-DELETE s
-FROM [dbo].[CAJA_SECUENCIA] s
-WHERE s.[cajaSec] = @CajaSec
-  AND EXISTS (
-      SELECT 1
-      FROM @OldDocumentSeries old
-      WHERE old.DocumentKey = s.[documentKey]
-        AND old.SeriesRaw = RIGHT(REPLACE(ISNULL(s.[seriesKey], ''), '-', ''), 6)
-  )
-  AND RIGHT(REPLACE(ISNULL(s.[seriesKey], ''), '-', ''), 6) <> @SerieRaw;
+INSERT INTO [dbo].[CAJA_SECUENCIA]
+    ([cajaSec], [documentKey], [seriesKey], [initialized], [lastSequence], [updatedAt])
+SELECT
+    source.CajaSec,
+    source.DocumentKey,
+    source.SeriesKey,
+    source.Initialized,
+    source.LastSequence,
+    SYSUTCDATETIME()
+FROM @StateChanges source;
 
 UPDATE [dbo].[CAJA]
 SET [serieFactura] = @SerieVisual,

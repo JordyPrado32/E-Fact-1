@@ -14,8 +14,6 @@ namespace Simetric.Services
     {
         private const string DefaultBaseUrl = "https://api.abitmedia.cloud/pagomedios/v2";
         private const string DevelopmentTokenFallback = "denljywrk5yafpzaqcfrpgzvj6skkxiev1ezh1hodiozgyjxadfymjgxtcwg1wpu2fbgr";
-        private const decimal TemporarySignaturePrice = 0.01m;
-
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -53,7 +51,7 @@ namespace Simetric.Services
 
         public async Task<string?> GenerarSolicitudPago(UsuSolicitudFirma sol, string? notifyUrl = null)
         {
-            decimal subtotal = TemporarySignaturePrice;
+            decimal subtotal = Math.Round(sol.SolMontoPago ?? 0, 2);
             decimal iva = Math.Round(subtotal * 0.15m, 2);
             decimal total = Math.Round(subtotal + iva, 2);
             var esignBearerToken = ResolveBearerToken();
