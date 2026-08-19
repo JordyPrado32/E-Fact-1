@@ -1,7 +1,9 @@
 @page "/solicitud/nueva"
+@using System.Text.Json
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
 @using Simetric.Data
 @using Simetric.Models
 @using Simetric.Services
@@ -12,22 +14,54 @@
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject IEmailService EmailService
+@inject IJSRuntime JS
 
 <div class="solicitud-shell" data-tour="solicitud.page">
-    <section class="solicitud-hero" data-tour="solicitud.hero">
+    <header class="solicitud-page-head" data-tour="solicitud.hero">
         <div>
-            <span class="solicitud-kicker">Firma electrónica</span>
-            <h2>Solicitud guiada en dos pasos</h2>
-            <p>
-                Primero define el tipo de firma y la vigencia requerida. Después completa tus datos
-                y adjunta la documentación obligatoria.
-            </p>
+            <span class="solicitud-page-kicker">Firma electrónica</span>
+            <h2>Nueva solicitud de firma</h2>
+            <p>Completa la información para generar tu solicitud de firma electrónica.</p>
         </div>
+        <div class="solicitud-page-meta">
+            <span><i class="bi bi-shield-check"></i> Validación guiada</span>
+            <span><i class="bi bi-file-earmark-lock"></i> Archivo .P12</span>
+        </div>
+    </header>
 
-        <div class="solicitud-hero-badges">
-            <span class="solicitud-hero-chip"><i class="bi bi-shield-check"></i> Validación completa</span>
+    <section class="solicitud-flow-steps" aria-label="Progreso de la solicitud">
+        <div class="solicitud-flow-step @GetPasoVisualClass(1)">
+            <span>1</span>
+            <div><strong>Configuración</strong><small>Firma y vigencia</small></div>
+        </div>
+        <div class="solicitud-flow-step @GetPasoVisualClass(2)">
+            <span>2</span>
+            <div><strong>Titular</strong><small>Datos del titular</small></div>
+        </div>
+        <div class="solicitud-flow-step @GetPasoVisualClass(3)">
+            <span>3</span>
+            <div><strong>Información</strong><small>Datos del solicitante</small></div>
+        </div>
+        <div class="solicitud-flow-step @GetPasoVisualClass(4)">
+            <span>4</span>
+            <div><strong>Revisión</strong><small>Verifica los datos</small></div>
+        </div>
+        <div class="solicitud-flow-step @GetPasoVisualClass(5)">
+            <span>5</span>
+            <div><strong>Confirmación</strong><small>Enviar solicitud</small></div>
         </div>
     </section>
+
+    @if (!string.IsNullOrWhiteSpace(mensajeBorrador))
+    {
+        <div class="solicitud-alert @(borradorExitoso ? "solicitud-alert-success" : "solicitud-alert-warning")">
+            <i class="bi @(borradorExitoso ? "bi-check-circle-fill" : "bi-info-circle-fill")"></i>
+            <span>@mensajeBorrador</span>
+        </div>
+    }
+
+    <div class="solicitud-workspace">
+        <main class="solicitud-main-panel">
 
     <EditForm EditContext="editContext" OnValidSubmit="Enviar">
         <DataAnnotationsValidator />
@@ -56,8 +90,17 @@
                     </div>
                 </div>
 
-                <div class="solicitud-setup-shell">
-                    <div class="solicitud-setup-card">
+                <section class="solicitud-config-panel">
+                    <div class="solicitud-config-panel-head">
+                        <span class="solicitud-config-icon"><i class="bi bi-shield-check"></i></span>
+                        <div>
+                            <h3>Configura tu firma electrónica</h3>
+                            <p>Selecciona el formato y la vigencia antes de completar los datos del titular.</p>
+                        </div>
+                    </div>
+
+                    <div class="solicitud-setup-shell">
+                        <div class="solicitud-setup-card">
                         <div class="solicitud-field-top">
                             <label class="solicitud-field-label">Tipo de firma requerida *</label>
                             <span class="solicitud-field-tag">Servicio</span>
@@ -79,9 +122,9 @@
                         </div>
 
                         <ValidationMessage For="@(() => solicitud.SolFormatoFirma)" class="solicitud-field-error" />
-                    </div>
+                        </div>
 
-                    <div class="solicitud-setup-card">
+                        <div class="solicitud-setup-card">
                         <div class="solicitud-field-top">
                             <label class="solicitud-field-label">Vigencia requerida *</label>
                             <span class="solicitud-field-tag">Tiempo</span>
@@ -109,8 +152,9 @@
                                 <span>El total final se mostrara en el pago con el IVA correspondiente.</span>
                             </div>
                         </div>
+                        </div>
                     </div>
-                </div>
+                </section>
 
                 @if (!ConfiguracionFirmaCompleta)
                 {
@@ -124,10 +168,6 @@
                 }
                 else
                 {
-                    <div class="solicitud-config-banner">
-                        <span class="solicitud-config-chip">@GetFormatoFirmaLabel()</span>
-                        <span class="solicitud-config-chip">@GetVigenciaLabel(solicitud.SolVigencia)</span>
-                    </div>
                     <section class="solicitud-persona-panel">
                         <div class="solicitud-persona-header">
                             <span class="solicitud-section-kicker">Tipo de persona</span>
@@ -661,9 +701,18 @@
                             </div>
                         }
 
-                        <div class="solicitud-actions">
+                        <div class="solicitud-actions solicitud-bottom-actions">
+                            <button type="button" class="secondary-btn" @onclick='() => Navigation.NavigateTo("/e-sign/solicitudes")'>
+                                Cancelar
+                            </button>
+                            <button type="button" class="secondary-btn" @onclick="CargarBorradorAsync" disabled="@(!tieneBorrador)">
+                                <i class="bi bi-clock-history"></i> Historial de borradores
+                            </button>
+                            <button type="button" class="secondary-btn" @onclick="GuardarBorradorAsync">
+                                <i class="bi bi-bookmark"></i> Guardar borrador
+                            </button>
                             <button type="button" class="primary-btn solicitud-action-main" @onclick="IrAPasoDocumentos">
-                                Continuar con documentos <i class="bi bi-arrow-right"></i>
+                                Siguiente <i class="bi bi-arrow-right"></i>
                             </button>
                         </div>
                     </div>
@@ -729,25 +778,38 @@
                     }
                 </div>
 
-                <div class="solicitud-actions solicitud-actions-between" data-tour="solicitud.submit">
+                <div class="solicitud-actions solicitud-actions-between solicitud-bottom-actions" data-tour="solicitud.submit">
                     <button type="button" class="secondary-btn" @onclick="RegresarAPasoUno">
                         <i class="bi bi-arrow-left"></i> Regresar
                     </button>
 
-                    <button type="submit" class="primary-btn solicitud-action-main" disabled="@enviando">
-                        @if (enviando)
-                        {
-                            <span>Enviando solicitud...</span>
-                        }
-                        else
-                        {
-                            <span>@(solicitud.SolId > 0 ? "Continuar con el pago" : "Finalizar y enviar")</span>
-                        }
-                    </button>
+                    <div class="solicitud-bottom-actions-right">
+                        <button type="button" class="secondary-btn" @onclick="CargarBorradorAsync" disabled="@(!tieneBorrador)">
+                            <i class="bi bi-clock-history"></i> Historial de borradores
+                        </button>
+
+                        <button type="button" class="secondary-btn" @onclick="GuardarBorradorAsync">
+                            <i class="bi bi-bookmark"></i> Guardar borrador
+                        </button>
+
+                        <button type="submit" class="primary-btn solicitud-action-main" disabled="@enviando">
+                            @if (enviando)
+                            {
+                                <span>Enviando solicitud...</span>
+                            }
+                            else
+                            {
+                                <span>@(solicitud.SolId > 0 ? "Continuar con el pago" : "Finalizar y enviar")</span>
+                            }
+                            <i class="bi bi-arrow-right"></i>
+                        </button>
+                    </div>
                 </div>
             </section>
         }
     </EditForm>
+        </main>
+    </div>
 </div>
 
 @if (mostrarModalPagoFirma)
@@ -862,6 +924,64 @@
         string Titulo,
         string Descripcion,
         string Icono);
+
+    private sealed record SolicitudFirmaDraft
+    {
+        public string? SolFormatoFirma { get; init; }
+        public string? SolVigencia { get; init; }
+        public string? SolTipoPersona { get; init; }
+        public string? SolTipoIdentificacion { get; init; }
+        public string? SolIdentificacion { get; init; }
+        public string? SolCodigoDactilar { get; init; }
+        public string? SolNombres { get; init; }
+        public string? SolPrimerApellido { get; init; }
+        public string? SolSegundoApellido { get; init; }
+        public DateTime SolFechaNacimiento { get; init; }
+        public string? SolNacionalidad { get; init; }
+        public string? SolSexo { get; init; }
+        public string? SolTelefono1 { get; init; }
+        public string? SolTelefono2 { get; init; }
+        public string? SolCorreo1 { get; init; }
+        public string? SolCorreo2 { get; init; }
+        public bool SolTieneRuc { get; init; }
+        public string? SolNroRuc { get; init; }
+        public string? SolProvincia { get; init; }
+        public string? SolCanton { get; init; }
+        public string? SolDireccion { get; init; }
+        public string? SolCompanyName { get; init; }
+        public string? SolDepartment { get; init; }
+        public string? SolPosition { get; init; }
+        public string? SolReason { get; init; }
+
+        public static SolicitudFirmaDraft FromSolicitud(UsuSolicitudFirma solicitud) => new()
+        {
+            SolFormatoFirma = solicitud.SolFormatoFirma,
+            SolVigencia = solicitud.SolVigencia,
+            SolTipoPersona = solicitud.SolTipoPersona,
+            SolTipoIdentificacion = solicitud.SolTipoIdentificacion,
+            SolIdentificacion = solicitud.SolIdentificacion,
+            SolCodigoDactilar = solicitud.SolCodigoDactilar,
+            SolNombres = solicitud.SolNombres,
+            SolPrimerApellido = solicitud.SolPrimerApellido,
+            SolSegundoApellido = solicitud.SolSegundoApellido,
+            SolFechaNacimiento = solicitud.SolFechaNacimiento,
+            SolNacionalidad = solicitud.SolNacionalidad,
+            SolSexo = solicitud.SolSexo,
+            SolTelefono1 = solicitud.SolTelefono1,
+            SolTelefono2 = solicitud.SolTelefono2,
+            SolCorreo1 = solicitud.SolCorreo1,
+            SolCorreo2 = solicitud.SolCorreo2,
+            SolTieneRuc = solicitud.SolTieneRuc,
+            SolNroRuc = solicitud.SolNroRuc,
+            SolProvincia = solicitud.SolProvincia,
+            SolCanton = solicitud.SolCanton,
+            SolDireccion = solicitud.SolDireccion,
+            SolCompanyName = solicitud.SolCompanyName,
+            SolDepartment = solicitud.SolDepartment,
+            SolPosition = solicitud.SolPosition,
+            SolReason = solicitud.SolReason
+        };
+    }
 
     private const string TipoPersonaNatural = "NATURAL";
     private const string TipoPersonaJuridica = "JURIDICA";
@@ -1224,6 +1344,9 @@
     private byte[]? transferComprobanteFirmaBytes;
     private string? mensajeArchivos;
     private string? mensajeGeneralFormulario;
+    private string? mensajeBorrador;
+    private bool borradorExitoso;
+    private bool tieneBorrador;
     private int usuarioActualId;
     private List<string> catalogoNacionalidades = new();
     private IReadOnlyList<ProvinciaEcuador> provinciasEcuador = Array.Empty<ProvinciaEcuador>();
@@ -1309,6 +1432,107 @@
         _ => vigencia
     };
 
+    private void AplicarBorrador(SolicitudFirmaDraft draft)
+    {
+        solicitud.SolFormatoFirma = string.IsNullOrWhiteSpace(draft.SolFormatoFirma) ? "ARCHIVO_P12" : draft.SolFormatoFirma;
+        solicitud.SolVigencia = string.IsNullOrWhiteSpace(draft.SolVigencia) ? "7 DIAS" : draft.SolVigencia;
+        solicitud.SolMontoPago = VigenciasDisponibles.Contains(solicitud.SolVigencia) ? PrecioFirmaTemporal : 0m;
+        solicitud.SolTipoPersona = string.IsNullOrWhiteSpace(draft.SolTipoPersona) ? TipoPersonaNatural : draft.SolTipoPersona;
+        solicitud.SolTipoIdentificacion = draft.SolTipoIdentificacion ?? string.Empty;
+        solicitud.SolIdentificacion = draft.SolIdentificacion ?? string.Empty;
+        solicitud.SolCodigoDactilar = draft.SolCodigoDactilar;
+        solicitud.SolNombres = draft.SolNombres ?? string.Empty;
+        solicitud.SolPrimerApellido = draft.SolPrimerApellido ?? string.Empty;
+        solicitud.SolSegundoApellido = draft.SolSegundoApellido;
+        solicitud.SolFechaNacimiento = draft.SolFechaNacimiento == default ? DateTime.Today : draft.SolFechaNacimiento;
+        solicitud.SolNacionalidad = string.IsNullOrWhiteSpace(draft.SolNacionalidad) ? "ECUATORIANA" : draft.SolNacionalidad;
+        solicitud.SolSexo = draft.SolSexo ?? string.Empty;
+        solicitud.SolTelefono1 = draft.SolTelefono1 ?? string.Empty;
+        solicitud.SolTelefono2 = draft.SolTelefono2;
+        solicitud.SolCorreo1 = draft.SolCorreo1 ?? string.Empty;
+        solicitud.SolCorreo2 = draft.SolCorreo2;
+        solicitud.SolTieneRuc = draft.SolTieneRuc;
+        solicitud.SolNroRuc = draft.SolNroRuc;
+        solicitud.SolProvincia = draft.SolProvincia ?? string.Empty;
+        solicitud.SolCanton = draft.SolCanton ?? string.Empty;
+        solicitud.SolDireccion = draft.SolDireccion ?? string.Empty;
+        solicitud.SolCompanyName = draft.SolCompanyName;
+        solicitud.SolDepartment = draft.SolDepartment;
+        solicitud.SolPosition = draft.SolPosition;
+        solicitud.SolReason = draft.SolReason;
+        solicitud.SolId = 0;
+        solicitud.SolIdTransaccionPago = null;
+        solicitud.SolPagoExitoso = false;
+
+        VerificarEdad();
+        SincronizarTipoPersonaConRuc();
+        ActualizarCantonesDisponibles();
+        editContext = new EditContext(solicitud);
+        paso = 1;
+    }
+
+    private void LimpiarDocumentosTemporales()
+    {
+        foreach (var archivo in archivosTemporales.Values)
+        {
+            SolicitudService.EliminarArchivoTemporal(archivo.TempFileName);
+        }
+
+        archivosTemporales.Clear();
+        erroresDocumentos.Clear();
+    }
+
+    private string GetPasoVisualClass(int step)
+    {
+        var actual = paso == 1
+            ? 1
+            : solicitud.SolId > 0 ? 5 : 4;
+
+        if (step < actual)
+        {
+            return "is-complete";
+        }
+
+        return step == actual ? "is-active" : string.Empty;
+    }
+
+    private string GetTipoPersonaResumen() =>
+        string.Equals(solicitud.SolTipoPersona, TipoPersonaJuridica, StringComparison.OrdinalIgnoreCase)
+            ? "Persona jurídica"
+            : "Persona natural";
+
+    private string NombreTitularResumen
+    {
+        get
+        {
+            var nombre = $"{solicitud.SolNombres} {solicitud.SolPrimerApellido}".Trim();
+            if (!string.IsNullOrWhiteSpace(nombre))
+            {
+                return nombre;
+            }
+
+            return string.IsNullOrWhiteSpace(solicitud.SolNroRuc)
+                ? "Pendiente"
+                : $"RUC: {solicitud.SolNroRuc}";
+        }
+    }
+
+    private string GetDocumentosResumen()
+    {
+        var total = ObtenerDocumentosVisibles().Count();
+        return $"{archivosTemporales.Count}/{total} cargados";
+    }
+
+    private string GetDocumentosAyudaResumen()
+    {
+        if (archivosTemporales.Count == 0)
+        {
+            return "Se adjuntan al finalizar.";
+        }
+
+        return "Puedes reemplazarlos antes de enviar.";
+    }
+
     protected override async Task OnInitializedAsync()
     {
         editContext = new EditContext(solicitud);
@@ -1330,7 +1554,80 @@
         if (firstRender)
         {
             await SelectedAppServiceState.SetCurrentServiceKeyAsync("e-sign");
+            tieneBorrador = !string.IsNullOrWhiteSpace(await JS.InvokeAsync<string?>("localStorage.getItem", DraftStorageKey));
+            StateHasChanged();
         }
+    }
+
+    private async Task GuardarBorradorAsync()
+    {
+        mensajeBorrador = null;
+        borradorExitoso = false;
+        NormalizarSolicitud();
+        VerificarEdad();
+
+        var draft = SolicitudFirmaDraft.FromSolicitud(solicitud);
+        var json = JsonSerializer.Serialize(draft);
+        await JS.InvokeVoidAsync("localStorage.setItem", DraftStorageKey, json);
+        tieneBorrador = true;
+        borradorExitoso = true;
+        mensajeBorrador = "Borrador guardado. Se conservará la información del cliente para futuras compras; los documentos deberán confirmarse o adjuntarse al usarlo.";
+    }
+
+    private async Task CargarBorradorAsync()
+    {
+        mensajeBorrador = null;
+        borradorExitoso = false;
+
+        var raw = await JS.InvokeAsync<string?>("localStorage.getItem", DraftStorageKey);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            tieneBorrador = false;
+            mensajeBorrador = "No encontramos un borrador guardado para esta cuenta.";
+            return;
+        }
+
+        SolicitudFirmaDraft? draft;
+        try
+        {
+            draft = JsonSerializer.Deserialize<SolicitudFirmaDraft>(raw);
+        }
+        catch
+        {
+            draft = null;
+        }
+
+        if (draft is null)
+        {
+            mensajeBorrador = "El borrador guardado no se pudo leer. Guarda uno nuevo para reemplazarlo.";
+            return;
+        }
+
+        var volverADocumentos = false;
+
+        if (archivosTemporales.Count > 0)
+        {
+            var mantener = await JS.InvokeAsync<bool>(
+                "confirm",
+                "Ya tienes documentos cargados en esta solicitud. Acepta para seguir con esos documentos o cancela para adjuntarlos nuevamente.");
+            if (!mantener)
+            {
+                LimpiarDocumentosTemporales();
+                volverADocumentos = true;
+                mensajeArchivos = "Adjunta nuevamente los documentos para esta solicitud.";
+            }
+        }
+
+        AplicarBorrador(draft);
+        if (volverADocumentos)
+        {
+            paso = 2;
+        }
+
+        borradorExitoso = true;
+        mensajeBorrador = archivosTemporales.Count > 0
+            ? "Borrador aplicado. Se mantuvieron los documentos que ya estaban cargados."
+            : "Borrador aplicado. Revisa la información y adjunta los documentos requeridos.";
     }
 
     private void VerificarEdad()
