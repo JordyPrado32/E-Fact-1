@@ -9,4 +9,5 @@ public sealed class PagoFirmaReconciliationResult
     public int Errors { get; set; }
     public int SentToUanataca { get; set; }
     public int UanatacaErrors { get; set; }
+    public int SkippedApproved { get; set; }
 }

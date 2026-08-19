@@ -249,7 +249,7 @@ namespace Simetric.Controllers
 
                 try
                 {
-                    var resultadoBes = await _solicitudService.SincronizarSolicitudBesAsync(solicitud.SolId);
+                    var resultadoBes = await _solicitudService.SincronizarSolicitudUanatacaAsync(solicitud.SolId);
                     if (!resultadoBes.Success)
                     {
                         _logger.LogWarning(

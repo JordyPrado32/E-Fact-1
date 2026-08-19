@@ -260,7 +260,7 @@ builder.Services.AddScoped<EContaxOrganizacionBootstrapService>();
 builder.Services.AddScoped<EDeclaraSharedDataService>();
 builder.Services.AddScoped<IEDeclaraMenuService, EDeclaraMenuService>();
 builder.Services.AddScoped<IESignMenuService, ESignMenuService>();
-builder.Services.AddScoped<BesPrecompraService>();
+builder.Services.AddScoped<UanatacaApiService>();
 builder.Services.AddHttpClient<CedulaLookupService>(client =>
 {
     client.BaseAddress = new Uri("http://nessoftfact-001-site6.atempurl.com/");

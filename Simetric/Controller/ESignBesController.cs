@@ -7,29 +7,29 @@ namespace Simetric.Controllers;
 
 [Authorize]
 [ApiController]
-[Route("api/e-sign/bes")]
-public sealed class ESignBesController : ControllerBase
+[Route("api/e-sign/uanataca")]
+public sealed class ESignUanatacaController : ControllerBase
 {
-    private readonly BesPrecompraService _besPrecompraService;
+    private readonly UanatacaApiService _uanatacaApiService;
     private readonly SolicitudService _solicitudService;
 
-    public ESignBesController(BesPrecompraService besPrecompraService, SolicitudService solicitudService)
+    public ESignUanatacaController(UanatacaApiService uanatacaApiService, SolicitudService solicitudService)
     {
-        _besPrecompraService = besPrecompraService;
+        _uanatacaApiService = uanatacaApiService;
         _solicitudService = solicitudService;
     }
 
     [HttpGet("productos")]
     public async Task<IActionResult> ObtenerProductos(CancellationToken cancellationToken)
-        => Ok(await _besPrecompraService.ObtenerProductosAsync(cancellationToken));
+        => Ok(await _uanatacaApiService.ObtenerProductosAsync(cancellationToken));
 
     [HttpGet("stakeholder-productos")]
     public async Task<IActionResult> ObtenerProductosStakeholder([FromQuery] string? stakeholderUuid, CancellationToken cancellationToken)
-        => Ok(await _besPrecompraService.ObtenerProductosStakeholderAsync(stakeholderUuid, cancellationToken));
+        => Ok(await _uanatacaApiService.ObtenerProductosStakeholderAsync(stakeholderUuid, cancellationToken));
 
     [HttpGet("saldo")]
     public async Task<IActionResult> ObtenerSaldo(CancellationToken cancellationToken)
-        => Ok(new { balance = await _besPrecompraService.ObtenerSaldoAsync(cancellationToken) });
+        => Ok(new { balance = await _uanatacaApiService.ObtenerSaldoAsync(cancellationToken) });
 
     [HttpGet("solicitudes")]
     public async Task<IActionResult> BuscarSolicitudes(
@@ -37,12 +37,12 @@ public sealed class ESignBesController : ControllerBase
         [FromQuery] string? status,
         [FromQuery] string? uuid,
         CancellationToken cancellationToken)
-        => Ok(await _besPrecompraService.BuscarSolicitudesAsync(q, status, uuid, cancellationToken));
+        => Ok(await _uanatacaApiService.BuscarSolicitudesAsync(q, status, uuid, cancellationToken));
 
     [HttpPost("solicitudes/{solId:int}/sincronizar")]
     public async Task<IActionResult> SincronizarSolicitud(int solId, CancellationToken cancellationToken)
     {
-        var result = await _solicitudService.SincronizarSolicitudBesAsync(solId, cancellationToken: cancellationToken);
+        var result = await _solicitudService.SincronizarSolicitudUanatacaAsync(solId, cancellationToken: cancellationToken);
         return result.Success ? Ok(result) : BadRequest(result);
     }
 }

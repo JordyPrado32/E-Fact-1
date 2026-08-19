@@ -1,10 +1,12 @@
 @page "/backoffice/uanacreditos"
 @using Microsoft.AspNetCore.Authorization
 @using Simetric.Models
+@using Simetric.DTOs.ESign
 @using Simetric.Services
 @using Simetric.Services.ESign
 @attribute [Authorize]
-@inject BesPrecompraService BesPrecompraService
+@inject UanatacaApiService UanatacaApiService
+@inject SolicitudService SolicitudService
 @inject EmisorSistemaService EmisorSistemaService
 @inject IConfiguration Configuration
 
@@ -20,6 +22,10 @@
         <button type="button" @onclick="ConsultarSaldoAsync" disabled="@consultando">
             <i class="ri-refresh-line @(consultando ? "is-spinning" : string.Empty)"></i>
             @(consultando ? "Consultando..." : "Actualizar saldo")
+        </button>
+        <button type="button" @onclick="ActualizarPendientesAsync" disabled="@(sincronizandoPendientes || !UanatacaApiService.IsConfigured)">
+            <i class="ri-refresh-line @(sincronizandoPendientes ? "is-spinning" : string.Empty)"></i>
+            @(sincronizandoPendientes ? "Actualizando solicitudes..." : "Actualizar estados pendientes")
         </button>
     </header>
 
@@ -50,13 +56,13 @@
         </article>
     </section>
 
-    @if (!BesPrecompraService.IsConfigured)
+    @if (!UanatacaApiService.IsConfigured)
     {
         <section class="uanacredits-alert">
             <i class="ri-settings-3-line"></i>
             <div>
                 <strong>Integración pendiente de configuración</strong>
-                <p>Configura la URL y las credenciales de BES Precompra para consultar el saldo.</p>
+                <p>Configura la URL y las credenciales de Uanataca para consultar el saldo.</p>
             </div>
         </section>
     }
@@ -121,13 +127,71 @@
             <small>Autenticación Bearer JWT · sin parámetros adicionales</small>
         </section>
     }
+
+    @if (UanatacaApiService.IsConfigured)
+    {
+        @if (!string.IsNullOrWhiteSpace(mensajePendientes))
+        {
+            <section class="uanacredits-endpoints"><strong>@mensajePendientes</strong></section>
+        }
+        <section class="uanacredits-endpoints">
+            <div>
+                <span>Solicitudes enviadas a Uanataca</span>
+                <strong>GET @CertificateRequestsEndpoint</strong>
+            </div>
+            <div class="d-flex gap-2 flex-wrap mt-3">
+                <input class="form-control" style="max-width:280px" placeholder="UUID, identificación o correo" @bind="filtroTexto" />
+                <select class="form-select" style="max-width:220px" @bind="filtroEstado">
+                    <option value="">Todos los estados</option>
+                    <option value="NEW">Nuevas</option>
+                    <option value="IN_VALIDATION">En validación</option>
+                    <option value="APPROVED">Aprobadas</option>
+                    <option value="REJECTED">Rechazadas</option>
+                    <option value="CANCELED">Canceladas</option>
+                </select>
+                <button type="button" class="btn btn-primary" @onclick="ConsultarSolicitudesAsync" disabled="@consultandoSolicitudes">
+                    @(consultandoSolicitudes ? "Consultando..." : "Consultar solicitudes")
+                </button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(errorSolicitudes))
+            {
+                <p class="text-danger mt-2">@errorSolicitudes</p>
+            }
+            @if (solicitudesRemotas is not null)
+            {
+                <div class="table-responsive mt-3">
+                    <table class="table table-sm align-middle">
+                        <thead><tr><th>UUID</th><th>Identificación</th><th>Estado</th><th>Fecha</th></tr></thead>
+                        <tbody>
+                            @foreach (var solicitud in solicitudesRemotas)
+                            {
+                                <tr>
+                                    <td>@(solicitud.Uuid ?? "Sin UUID")</td>
+                                    <td>@(solicitud.Identification ?? "-")</td>
+                                    <td>@(solicitud.UanatacaStatus ?? solicitud.Status ?? "-")</td>
+                                    <td>@(solicitud.RequestDate?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "-")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
 </div>
 
 @code {
     private decimal? saldo;
     private DateTime? ultimaConsulta;
     private bool consultando;
+    private bool consultandoSolicitudes;
+    private bool sincronizandoPendientes;
     private string? error;
+    private string? errorSolicitudes;
+    private string? mensajePendientes;
+    private string filtroTexto = string.Empty;
+    private string filtroEstado = string.Empty;
+    private IReadOnlyList<BesCertificateRequestDto>? solicitudesRemotas;
     private Emisor? emisorMaestro;
 
     private string NombreEmisorMaestro => emisorMaestro is null
@@ -140,8 +204,9 @@
         ? "No configurado"
         : emisorMaestro.Ruc;
 
-    private string BaseUrlPruebas => Configuration["BESPrecompra:BaseUrl"] ?? "No configurada";
-    private string BalanceEndpoint => $"{BaseUrlPruebas.TrimEnd('/')}{Configuration["BESPrecompra:BalancePath"]}";
+    private string BaseUrlPruebas => Configuration["UanatacaApi:BaseUrl"] ?? "No configurada";
+    private string BalanceEndpoint => $"{BaseUrlPruebas.TrimEnd('/')}{Configuration["UanatacaApi:BalancePath"]}";
+    private string CertificateRequestsEndpoint => $"{BaseUrlPruebas.TrimEnd('/')}{Configuration["UanatacaApi:CertificateRequestsPath"]}";
     private decimal EscalaGrafico => saldo is > 0m
         ? Math.Max(1000m, Math.Ceiling(saldo.Value / 1000m) * 1000m)
         : 1000m;
@@ -155,7 +220,7 @@
     {
         emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
 
-        if (BesPrecompraService.IsConfigured)
+        if (UanatacaApiService.IsConfigured)
         {
             await ConsultarSaldoAsync();
         }
@@ -163,7 +228,7 @@
 
     private async Task ConsultarSaldoAsync()
     {
-        if (consultando || !BesPrecompraService.IsConfigured)
+        if (consultando || !UanatacaApiService.IsConfigured)
         {
             return;
         }
@@ -173,7 +238,7 @@
 
         try
         {
-            saldo = await BesPrecompraService.ObtenerSaldoAsync();
+            saldo = await UanatacaApiService.ObtenerSaldoAsync();
             ultimaConsulta = DateTime.Now;
 
             if (saldo is null)
@@ -188,6 +253,57 @@
         finally
         {
             consultando = false;
+        }
+    }
+
+    private async Task ConsultarSolicitudesAsync()
+    {
+        if (consultandoSolicitudes || !UanatacaApiService.IsConfigured)
+        {
+            return;
+        }
+
+        consultandoSolicitudes = true;
+        errorSolicitudes = null;
+
+        try
+        {
+            solicitudesRemotas = await UanatacaApiService.BuscarSolicitudesAsync(
+                string.IsNullOrWhiteSpace(filtroTexto) ? null : filtroTexto.Trim(),
+                string.IsNullOrWhiteSpace(filtroEstado) ? null : filtroEstado);
+        }
+        catch (Exception ex)
+        {
+            solicitudesRemotas = null;
+            errorSolicitudes = ex.Message;
+        }
+        finally
+        {
+            consultandoSolicitudes = false;
+        }
+    }
+
+    private async Task ActualizarPendientesAsync()
+    {
+        if (sincronizandoPendientes || !UanatacaApiService.IsConfigured)
+        {
+            return;
+        }
+
+        sincronizandoPendientes = true;
+        mensajePendientes = null;
+        try
+        {
+            var lote = await SolicitudService.SincronizarSolicitudesUanatacaPendientesAsync();
+            mensajePendientes = $"Consultadas: {lote.Consulted}. Aprobadas: {lote.Approved}. Pendientes: {lote.NotApproved}. Omitidas por estar aprobadas: {lote.SkippedApproved}. Errores: {lote.UanatacaErrors}.";
+        }
+        catch (Exception ex)
+        {
+            mensajePendientes = $"No fue posible actualizar los estados: {ex.Message}";
+        }
+        finally
+        {
+            sincronizandoPendientes = false;
         }
     }
 }

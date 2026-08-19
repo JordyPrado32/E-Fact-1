@@ -716,7 +716,7 @@
             }
 
             var reconciliation = await SolicitudService.ReconciliarPagosClienteAsync(usuarioId);
-            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioId);
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioId));
 
             if (reconciliation.SentToUanataca > 0)
             {
@@ -759,50 +759,18 @@
 
         try
         {
-            var pagadas = solicitudes.Where(solicitud => solicitud.SolPagoExitoso).ToList();
-            if (pagadas.Count == 0)
-            {
-                mensajeSincronizacion = "No tienes solicitudes pagadas pendientes de consultar.";
-                return;
-            }
+            var lote = await SolicitudService.SincronizarSolicitudesUanatacaPendientesAsync(usuarioIdActual);
 
-            var actualizadas = 0;
-            var fallidas = 0;
-
-            foreach (var solicitud in pagadas)
-            {
-                try
-                {
-                    var resultado = await SolicitudService.SincronizarSolicitudClienteBesAsync(
-                        solicitud.SolId,
-                        usuarioIdActual);
-
-                    if (resultado.Success)
-                    {
-                        actualizadas++;
-                    }
-                    else
-                    {
-                        fallidas++;
-                    }
-                }
-                catch
-                {
-                    fallidas++;
-                }
-            }
-
-            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual);
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
             PaginaActual = Math.Min(PaginaActual, TotalPaginas);
 
-            if (actualizadas > 0)
-            {
-                mensajeSincronizacion = $"Se actualizaron {actualizadas} solicitud(es) con la información disponible en Uanataca.";
-            }
+            mensajeSincronizacion = lote.Consulted == 0
+                ? $"No había solicitudes pendientes. Se omitieron {lote.SkippedApproved} ya aprobadas."
+                : $"Se consultaron {lote.Consulted} solicitud(es); aprobadas: {lote.Approved}, pendientes: {lote.NotApproved}, omitidas: {lote.SkippedApproved}.";
 
-            if (fallidas > 0)
+            if (lote.UanatacaErrors > 0)
             {
-                errorSincronizacion = $"No fue posible actualizar {fallidas} solicitud(es). Puedes intentarlo nuevamente más tarde.";
+                errorSincronizacion = $"No fue posible consultar {lote.UanatacaErrors} solicitud(es). Puedes intentarlo nuevamente más tarde.";
             }
         }
         finally
@@ -818,6 +786,9 @@
 
         return int.TryParse(idClaim, out var parsedId) ? parsedId : 0;
     }
+
+    private List<SolicitudPagoClienteDto> FiltrarSolicitudesDeCuenta(IEnumerable<SolicitudPagoClienteDto> items) =>
+        items.Where(item => item.SolIdUsuarioCliente == usuarioIdActual).ToList();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -1074,7 +1045,7 @@
             }
 
             respuestasSoporte.Remove(observacionId);
-            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual);
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
             PaginaActual = Math.Min(PaginaActual, TotalPaginas);
             await CargarNotificacionesAsync();
             if (solicitudAvisoSeleccionadaId is int solIdSeleccionado &&
@@ -1122,7 +1093,7 @@
             archivosSoporte.Remove(notificacion.ObsId);
             erroresArchivosSoporte.Remove(notificacion.ObsId);
             respuestasSoporte.Remove(notificacion.ObsId);
-            solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual);
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
             PaginaActual = Math.Min(PaginaActual, TotalPaginas);
             await CargarNotificacionesAsync();
             if (solicitudAvisoSeleccionadaId is int solIdSeleccionado &&

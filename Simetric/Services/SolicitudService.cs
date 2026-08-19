@@ -36,7 +36,7 @@ namespace Simetric.Services
         private readonly IDbContextFactory<AppDbContext> _contextFactory;
         private readonly IWebHostEnvironment _env;
         private readonly IDataProtector _firmaProtector;
-        private readonly BesPrecompraService _besPrecompraService;
+        private readonly UanatacaApiService _uanatacaApiService;
         private readonly PagoService _pagoService;
         private readonly CompraDocumentosFacturacionService _facturacionPagosService;
         private readonly IConfiguration _configuration;
@@ -50,7 +50,7 @@ namespace Simetric.Services
             IDbContextFactory<AppDbContext> contextFactory,
             IWebHostEnvironment env,
             IDataProtectionProvider dataProtectionProvider,
-            BesPrecompraService besPrecompraService,
+            UanatacaApiService uanatacaApiService,
             PagoService pagoService,
             CompraDocumentosFacturacionService facturacionPagosService,
             IConfiguration configuration,
@@ -60,7 +60,7 @@ namespace Simetric.Services
             _contextFactory = contextFactory;
             _env = env;
             _firmaProtector = dataProtectionProvider.CreateProtector("Simetric.SolicitudFirma.P12.v1");
-            _besPrecompraService = besPrecompraService;
+            _uanatacaApiService = uanatacaApiService;
             _pagoService = pagoService;
             _facturacionPagosService = facturacionPagosService;
             _configuration = configuration;
@@ -449,6 +449,8 @@ namespace Simetric.Services
                 sql,
                 new { UsuarioClienteId = usuarioClienteId });
 
+            _logger.LogInformation("E-Rúbrica pagos cargados por cuenta. UsuarioClienteId: {UsuarioClienteId}. Total: {Total}", usuarioClienteId, solicitudes.Count());
+
             return solicitudes.AsList();
         }
 
@@ -569,7 +571,7 @@ namespace Simetric.Services
 
                 try
                 {
-                    var sync = await SincronizarSolicitudBesAsync(
+                    var sync = await SincronizarSolicitudUanatacaAsync(
                         solId,
                         cancellationToken: cancellationToken);
                     if (sync.Success)
@@ -710,24 +712,17 @@ namespace Simetric.Services
             };
         }
 
-        public async Task<BesSolicitudOperacionResultadoDto> SincronizarSolicitudBesAsync(
+        public async Task<BesSolicitudOperacionResultadoDto> SincronizarSolicitudUanatacaAsync(
             int solId,
             bool forzarCreacion = false,
             CancellationToken cancellationToken = default)
         {
-            if (!_besPrecompraService.IsConfigured)
-            {
-                return new BesSolicitudOperacionResultadoDto
-                {
-                    Success = false,
-                    Message = "La integracion BES no esta configurada en este ambiente."
-                };
-            }
-
             using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
             var solicitud = await context.UsuSolicitudFirma
                 .Include(s => s.Documentos.Where(d => d.DocVigente))
                 .FirstOrDefaultAsync(s => s.SolId == solId, cancellationToken);
+
+            _logger.LogInformation("Uanataca reintento iniciado. SolId: {SolId}. ForzarCreacion: {ForzarCreacion}. UUID local: {Uuid}", solId, forzarCreacion, solicitud?.SolUanatacaUuid ?? "(sin UUID)");
 
             if (solicitud is null)
             {
@@ -743,19 +738,21 @@ namespace Simetric.Services
                 return new BesSolicitudOperacionResultadoDto
                 {
                     Success = false,
-                    Message = "La solicitud aun no tiene un pago aprobado, por lo que no puede enviarse a BES."
+                    Message = "La solicitud aún no tiene un pago aprobado, por lo que no puede enviarse a Uanataca."
                 };
             }
 
             if (forzarCreacion || string.IsNullOrWhiteSpace(solicitud.SolUanatacaUuid))
             {
+                _logger.LogInformation("Uanataca envío nuevo seleccionado. SolId: {SolId}", solId);
                 return await CrearSolicitudBesAsync(context, solicitud, cancellationToken);
             }
 
+            _logger.LogInformation("Uanataca reintento idempotente: consulta de estado remoto. SolId: {SolId}. UUID: {Uuid}", solId, solicitud.SolUanatacaUuid);
             return await ActualizarEstadoBesAsync(context, solicitud, cancellationToken);
         }
 
-        public async Task<BesSolicitudOperacionResultadoDto> SincronizarSolicitudClienteBesAsync(
+        public async Task<BesSolicitudOperacionResultadoDto> SincronizarSolicitudClienteUanatacaAsync(
             int solId,
             int usuarioClienteId,
             CancellationToken cancellationToken = default)
@@ -787,7 +784,68 @@ namespace Simetric.Services
                 };
             }
 
-            return await SincronizarSolicitudBesAsync(solId, cancellationToken: cancellationToken);
+            return await SincronizarSolicitudUanatacaAsync(solId, cancellationToken: cancellationToken);
+        }
+
+        public async Task<PagoFirmaReconciliationResult> SincronizarSolicitudesUanatacaPendientesAsync(
+            int? usuarioClienteId = null,
+            CancellationToken cancellationToken = default)
+        {
+            using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+            var solicitudes = await context.UsuSolicitudFirma
+                .AsNoTracking()
+                .Where(s => s.SolActivo &&
+                            s.SolPagoExitoso == true &&
+                            !string.IsNullOrWhiteSpace(s.SolUanatacaUuid) &&
+                            (usuarioClienteId == null || s.SolIdUsuarioCliente == usuarioClienteId))
+                .Select(s => new { s.SolId, s.SolUanatacaStatus })
+                .ToListAsync(cancellationToken);
+
+            var resultado = new PagoFirmaReconciliationResult();
+            foreach (var solicitud in solicitudes)
+            {
+                if (string.Equals(solicitud.SolUanatacaStatus, "APPROVED", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(solicitud.SolUanatacaStatus, "ISSUED", StringComparison.OrdinalIgnoreCase))
+                {
+                    resultado.SkippedApproved++;
+                    continue;
+                }
+
+                resultado.Consulted++;
+                try
+                {
+                    var sync = await SincronizarSolicitudUanatacaAsync(solicitud.SolId, cancellationToken: cancellationToken);
+                    if (sync.Success && (string.Equals(sync.ProviderStatus, "APPROVED", StringComparison.OrdinalIgnoreCase) ||
+                                         string.Equals(sync.ProviderStatus, "ISSUED", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        resultado.Approved++;
+                    }
+                    else if (sync.Success)
+                    {
+                        resultado.NotApproved++;
+                    }
+                    else
+                    {
+                        resultado.UanatacaErrors++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    resultado.UanatacaErrors++;
+                    _logger.LogError(ex, "Error sincronizando lote Uanataca. SolId: {SolId}", solicitud.SolId);
+                }
+            }
+
+            _logger.LogInformation(
+                "Lote Uanataca completado. Cliente: {UsuarioClienteId}. Consultadas: {Consulted}. Aprobadas: {Approved}. Omitidas aprobadas: {SkippedApproved}. Pendientes: {NotApproved}. Errores: {Errors}",
+                usuarioClienteId?.ToString() ?? "todos",
+                resultado.Consulted,
+                resultado.Approved,
+                resultado.SkippedApproved,
+                resultado.NotApproved,
+                resultado.UanatacaErrors);
+
+            return resultado;
         }
 
         // --- MÉTODOS PARA SOPORTE (ADMIN) ---
@@ -1900,15 +1958,17 @@ namespace Simetric.Services
             UsuSolicitudFirma solicitud,
             CancellationToken cancellationToken)
         {
-            var productUuid = await _besPrecompraService.ResolverProductoUuidAsync(solicitud, cancellationToken);
+            _logger.LogInformation("Uanataca creación iniciada. SolId: {SolId}", solicitud.SolId);
+            var productUuid = await _uanatacaApiService.ResolverProductoUuidAsync(solicitud, cancellationToken);
             var request = await ConstruirSolicitudBesAsync(solicitud, productUuid, cancellationToken);
-            var createResult = await _besPrecompraService.CrearSolicitudAsync(request, cancellationToken);
+            var createResult = await _uanatacaApiService.CrearSolicitudAsync(request, cancellationToken);
 
             if (!createResult.Success)
             {
+                _logger.LogError("Uanataca creación rechazada. SolId: {SolId}. HTTP: {StatusCode}. Location: {Location}. Error: {Error}", solicitud.SolId, createResult.StatusCode, createResult.Location ?? "(none)", createResult.ErrorMessage ?? "(sin detalle)");
                 solicitud.SolUanatacaComments = TruncateText(
                     string.Join(" ",
-                        new[] { "Error al crear la solicitud BES.", createResult.ErrorMessage, createResult.ResponseBody }
+                        new[] { "Error al crear la solicitud en Uanataca.", createResult.ErrorMessage, createResult.ResponseBody }
                             .Where(item => !string.IsNullOrWhiteSpace(item))),
                     4000);
                 solicitud.SolFechaActualizacion = DateTime.Now;
@@ -1918,14 +1978,32 @@ namespace Simetric.Services
                 {
                     Success = false,
                     StatusCode = createResult.StatusCode,
-                    Message = createResult.ErrorMessage ?? "BES rechazo la creacion de la solicitud.",
+                    Message = createResult.ErrorMessage ?? "Uanataca rechazó la creación de la solicitud.",
                     ErrorBody = createResult.ResponseBody
                 };
             }
 
             solicitud.SolUanatacaUuid = createResult.Uuid;
+            _logger.LogInformation("Uanataca creación aceptada. SolId: {SolId}. UUID: {Uuid}. HTTP: {StatusCode}", solicitud.SolId, createResult.Uuid ?? "(sin UUID)", createResult.StatusCode);
+
+            if (string.IsNullOrWhiteSpace(solicitud.SolUanatacaUuid))
+            {
+                solicitud.SolUanatacaComments = "Uanataca aceptó la solicitud, pero no devolvió un identificador remoto para consultar su estado.";
+                solicitud.SolFechaActualizacion = DateTime.Now;
+                await context.SaveChangesAsync(cancellationToken);
+                _logger.LogError("Uanataca POST exitoso sin UUID persistible. SolId: {SolId}. Response: {Response}", solicitud.SolId, createResult.ResponseBody ?? "(vacío)");
+
+                return new BesSolicitudOperacionResultadoDto
+                {
+                    Success = false,
+                    StatusCode = createResult.StatusCode,
+                    Message = "Uanataca aceptó la solicitud, pero no devolvió su identificador. No se reintentará para evitar duplicarla.",
+                    ErrorBody = createResult.ResponseBody
+                };
+            }
+
             solicitud.SolUanatacaProductUuid = productUuid;
-            solicitud.SolUanatacaOfferUuid ??= _configuration["BESPrecompra:DefaultOfferUuid"];
+            solicitud.SolUanatacaOfferUuid ??= _configuration["UanatacaApi:DefaultOfferUuid"];
             solicitud.SolUanatacaStatus ??= "NEW";
             solicitud.SolUanatacaStatusText ??= "SOLICITUD REGISTRADA";
             solicitud.SolFechaActualizacion = DateTime.Now;
@@ -1943,17 +2021,19 @@ namespace Simetric.Services
             UsuSolicitudFirma solicitud,
             CancellationToken cancellationToken)
         {
-            var remote = (await _besPrecompraService.BuscarSolicitudesAsync(
+            _logger.LogInformation("Uanataca consulta de estado iniciada. SolId: {SolId}. UUID: {Uuid}", solicitud.SolId, solicitud.SolUanatacaUuid ?? "(sin UUID)");
+            var remote = (await _uanatacaApiService.BuscarSolicitudesAsync(
                 uuid: solicitud.SolUanatacaUuid,
                 cancellationToken: cancellationToken))
                 .FirstOrDefault();
 
             if (remote is null)
             {
+                _logger.LogWarning("Uanataca no devolvió estado remoto. SolId: {SolId}. UUID: {Uuid}", solicitud.SolId, solicitud.SolUanatacaUuid ?? "(sin UUID)");
                 return new BesSolicitudOperacionResultadoDto
                 {
                     Success = false,
-                    Message = "La solicitud ya fue enviada a BES, pero no se pudo recuperar su estado remoto.",
+                    Message = "La solicitud ya fue enviada a Uanataca, pero no se pudo recuperar su estado remoto.",
                     Uuid = solicitud.SolUanatacaUuid
                 };
             }
@@ -1984,7 +2064,7 @@ namespace Simetric.Services
             {
                 Success = true,
                 StatusCode = 200,
-                Message = "Solicitud BES sincronizada correctamente.",
+                Message = "Solicitud Uanataca sincronizada correctamente.",
                 Uuid = solicitud.SolUanatacaUuid,
                 ProviderStatus = solicitud.SolUanatacaStatus,
                 ProviderStatusText = solicitud.SolUanatacaStatusText
@@ -2021,7 +2101,7 @@ namespace Simetric.Services
                 City = solicitud.SolCanton,
                 Address = solicitud.SolDireccion,
                 ProductUuid = productUuid,
-                OfferUuid = solicitud.SolUanatacaOfferUuid ?? _configuration["BESPrecompra:DefaultOfferUuid"],
+                OfferUuid = solicitud.SolUanatacaOfferUuid ?? _configuration["UanatacaApi:DefaultOfferUuid"],
                 Ruc = solicitud.SolTieneRuc ? solicitud.SolNroRuc : null,
                 Company = solicitud.SolCompanyName,
                 Department = solicitud.SolDepartment,
@@ -2054,11 +2134,11 @@ namespace Simetric.Services
         {
             if (!documentos.TryGetValue(docTipo, out var documento))
             {
-                throw new InvalidOperationException($"Falta el documento requerido {docTipo} para enviar la solicitud a BES.");
+                throw new InvalidOperationException($"Falta el documento requerido {docTipo} para enviar la solicitud a Uanataca.");
             }
 
             return await BuildOptionalFilePayloadAsync(documento, cancellationToken)
-                ?? throw new InvalidOperationException($"No se pudo leer el documento {docTipo} para BES.");
+                ?? throw new InvalidOperationException($"No se pudo leer el documento {docTipo} para Uanataca.");
         }
 
         private async Task<BesArchivoAdjuntoDto?> BuildOptionalFilePayloadAsync(

@@ -7,7 +7,7 @@ using Simetric.Models;
 
 namespace Simetric.Services.ESign;
 
-public sealed class BesPrecompraService
+public sealed class UanatacaApiService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -16,23 +16,22 @@ public sealed class BesPrecompraService
 
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
-    private readonly ILogger<BesPrecompraService> _logger;
+    private readonly IHostEnvironment _hostEnvironment;
+    private readonly ILogger<UanatacaApiService> _logger;
 
-    public BesPrecompraService(
+    public UanatacaApiService(
         HttpClient httpClient,
         IConfiguration configuration,
-        ILogger<BesPrecompraService> logger)
+        IHostEnvironment hostEnvironment,
+        ILogger<UanatacaApiService> logger)
     {
         _httpClient = httpClient;
         _configuration = configuration;
+        _hostEnvironment = hostEnvironment;
         _logger = logger;
     }
 
-    public bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(_configuration["BESPrecompra:BaseUrl"]) &&
-        (!RequireAuthentication ||
-         (!string.IsNullOrWhiteSpace(_configuration["BESPrecompra:Username"]) &&
-          !string.IsNullOrWhiteSpace(_configuration["BESPrecompra:Password"])));
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(_configuration["UanatacaApi:BaseUrl"]);
 
     public async Task<IReadOnlyList<BesProductoDto>> ObtenerProductosAsync(CancellationToken cancellationToken = default)
     {
@@ -43,7 +42,7 @@ public sealed class BesPrecompraService
 
     public async Task<IReadOnlyList<BesStakeholderProductDto>> ObtenerProductosStakeholderAsync(string? stakeholderUuid = null, CancellationToken cancellationToken = default)
     {
-        stakeholderUuid ??= _configuration["BESPrecompra:StakeholderUuid"];
+        stakeholderUuid ??= _configuration["UanatacaApi:StakeholderUuid"];
         if (string.IsNullOrWhiteSpace(stakeholderUuid))
         {
             return [];
@@ -109,7 +108,7 @@ public sealed class BesPrecompraService
     {
         var token = await ObtenerTokenSiAplicaAsync(cancellationToken);
         var path = GetPath("CreateCertificateRequestPath", "/api/certificateRequests");
-        var sendAsArray = bool.TryParse(_configuration["BESPrecompra:SendCreatePayloadAsArray"], out var value)
+        var sendAsArray = bool.TryParse(_configuration["UanatacaApi:SendCreatePayloadAsArray"], out var value)
             ? value
             : true;
 
@@ -121,6 +120,15 @@ public sealed class BesPrecompraService
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         var location = response.Headers.Location?.ToString();
 
+        var uuid = ExtractUuidFromLocation(location) ?? ExtractUuidFromBody(body);
+
+        _logger.LogInformation(
+            "Uanataca POST creación. Path: {Path}. HTTP: {StatusCode}. UUID recibido: {Uuid}. Location: {Location}",
+            path,
+            (int)response.StatusCode,
+            uuid ?? "(no recibido)",
+            location ?? "(none)");
+
         return new BesCreateCertificateResponseDto
         {
             Success = response.IsSuccessStatusCode,
@@ -130,14 +138,14 @@ public sealed class BesPrecompraService
             ErrorMessage = response.IsSuccessStatusCode
                 ? null
                 : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}".Trim(),
-            Uuid = ExtractUuidFromLocation(location)
+            Uuid = uuid
         };
     }
 
     public async Task<string> ResolverProductoUuidAsync(UsuSolicitudFirma solicitud, CancellationToken cancellationToken = default)
     {
         var mappingKey = $"{(solicitud.SolTipoPersona ?? "NATURAL").Trim().ToUpperInvariant()}|{(solicitud.SolFormatoFirma ?? string.Empty).Trim().ToUpperInvariant()}|{(solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant()}";
-        var explicitMapping = _configuration[$"BESPrecompra:ProductMappings:{mappingKey}"];
+        var explicitMapping = _configuration[$"UanatacaApi:ProductMappings:{mappingKey}"];
         if (!string.IsNullOrWhiteSpace(explicitMapping))
         {
             return explicitMapping;
@@ -166,20 +174,22 @@ public sealed class BesPrecompraService
 
         if (string.IsNullOrWhiteSpace(match))
         {
-            throw new InvalidOperationException($"No se encontro un producto BES activo para la combinacion {mappingKey}. Configura BESPrecompra:ProductMappings:{mappingKey}.");
+            throw new InvalidOperationException($"No se encontró un producto Uanataca activo para la combinación {mappingKey}. Configura UanatacaApi:ProductMappings:{mappingKey}.");
         }
 
         return match;
     }
 
     private bool RequireAuthentication =>
-        !bool.TryParse(_configuration["BESPrecompra:RequireAuthentication"], out var requireAuthentication) ||
+        !_hostEnvironment.IsDevelopment() &&
+        bool.TryParse(_configuration["UanatacaApi:RequireAuthentication"], out var requireAuthentication) &&
         requireAuthentication;
 
     private async Task<string?> ObtenerTokenSiAplicaAsync(CancellationToken cancellationToken)
     {
         if (!RequireAuthentication)
         {
+            _logger.LogDebug("Uanataca autenticación omitida: RequireAuthentication=false.");
             return null;
         }
 
@@ -190,13 +200,13 @@ public sealed class BesPrecompraService
     {
         if (!IsConfigured)
         {
-            throw new InvalidOperationException("La integracion BES Precompra no esta configurada. Revisa BESPrecompra:BaseUrl y, si aplica, Username y Password.");
+            throw new InvalidOperationException("La API de Uanataca no está configurada. Revisa UanatacaApi:BaseUrl y las credenciales requeridas.");
         }
 
         var request = new
         {
-            username = _configuration["BESPrecompra:Username"],
-            password = _configuration["BESPrecompra:Password"]
+            username = _configuration["UanatacaApi:Username"],
+            password = _configuration["UanatacaApi:Password"]
         };
 
         using var httpRequest = BuildRequest(HttpMethod.Post, GetPath("LoginPath", "/auth/login"), bearerToken: null, query: null);
@@ -206,14 +216,14 @@ public sealed class BesPrecompraService
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogError("BES auth fallo. Status: {Status}. Body: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException($"No fue posible autenticarse contra BES. HTTP {(int)response.StatusCode} {response.ReasonPhrase}.");
+            _logger.LogError("Uanataca auth fallo. Status: {Status}. Body: {Body}", (int)response.StatusCode, body);
+            throw new InvalidOperationException($"No fue posible autenticarse contra Uanataca. HTTP {(int)response.StatusCode} {response.ReasonPhrase}.");
         }
 
         var auth = JsonSerializer.Deserialize<BesAuthResponseDto>(body, JsonOptions);
         if (auth is null || string.IsNullOrWhiteSpace(auth.AccessToken))
         {
-            throw new InvalidOperationException("BES devolvio una autenticacion sin token.");
+            throw new InvalidOperationException("Uanataca devolvió una autenticación sin token.");
         }
 
         return auth.AccessToken;
@@ -248,8 +258,8 @@ public sealed class BesPrecompraService
 
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogWarning("BES request fallo. Method: {Method}. Path: {Path}. Status: {Status}. Body: {Body}", method, path, (int)response.StatusCode, body);
-            throw new InvalidOperationException($"BES respondio HTTP {(int)response.StatusCode} {response.ReasonPhrase}.");
+            _logger.LogWarning("Uanataca request fallo. Method: {Method}. Path: {Path}. Status: {Status}. Body: {Body}", method, path, (int)response.StatusCode, body);
+            throw new InvalidOperationException($"Uanataca respondió HTTP {(int)response.StatusCode} {response.ReasonPhrase}.");
         }
 
         return body;
@@ -275,10 +285,10 @@ public sealed class BesPrecompraService
 
     private string BuildUrl(string path, IReadOnlyDictionary<string, string?>? query)
     {
-        var baseUrl = (_configuration["BESPrecompra:BaseUrl"] ?? string.Empty).TrimEnd('/');
+        var baseUrl = (_configuration["UanatacaApi:BaseUrl"] ?? string.Empty).TrimEnd('/');
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            throw new InvalidOperationException("No se ha configurado BESPrecompra:BaseUrl.");
+            throw new InvalidOperationException("No se ha configurado UanatacaApi:BaseUrl.");
         }
 
         var url = $"{baseUrl}{(path.StartsWith('/') ? path : "/" + path)}";
@@ -296,7 +306,7 @@ public sealed class BesPrecompraService
     }
 
     private string GetPath(string key, string fallback)
-        => _configuration[$"BESPrecompra:{key}"] ?? fallback;
+        => _configuration[$"UanatacaApi:{key}"] ?? fallback;
 
     private static string ObtenerVigenciaTextoBusqueda(string? vigencia)
     {
@@ -328,6 +338,62 @@ public sealed class BesPrecompraService
         return location
             .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .LastOrDefault();
+    }
+
+    private static string? ExtractUuidFromBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return FindIdentifier(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? FindIdentifier(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var propertyName in new[] { "uuid", "id", "requestUuid", "certificateRequestUuid" })
+            {
+                if (element.TryGetProperty(propertyName, out var property) &&
+                    property.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(property.GetString()))
+                {
+                    return property.GetString();
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                var nested = FindIdentifier(property.Value);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = FindIdentifier(item);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static string? PrettyJson(string? value)
