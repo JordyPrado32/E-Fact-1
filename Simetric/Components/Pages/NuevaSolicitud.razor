@@ -23,9 +23,10 @@
             <h2>Nueva solicitud de firma</h2>
             <p>Completa la información para generar tu solicitud de firma electrónica.</p>
         </div>
-        <div class="solicitud-page-meta">
-            <span><i class="bi bi-shield-check"></i> Validación guiada</span>
-            <span><i class="bi bi-file-earmark-lock"></i> Archivo .P12</span>
+        <div class="solicitud-head-actions">
+            <button type="button" class="solicitud-draft-btn" @onclick="AbrirHistorialBorradoresAsync" disabled="@(!tieneBorrador)">
+                <i class="bi bi-clock-history"></i> Historial de borradores
+            </button>
         </div>
     </header>
 
@@ -702,14 +703,11 @@
                         }
 
                         <div class="solicitud-actions solicitud-bottom-actions">
-                            <button type="button" class="secondary-btn" @onclick='() => Navigation.NavigateTo("/e-sign/solicitudes")'>
-                                Cancelar
+                            <button type="button" class="secondary-btn" @onclick="LimpiarFormulario">
+                                <i class="bi bi-eraser"></i> Limpiar formulario
                             </button>
-                            <button type="button" class="secondary-btn" @onclick="CargarBorradorAsync" disabled="@(!tieneBorrador)">
-                                <i class="bi bi-clock-history"></i> Historial de borradores
-                            </button>
-                            <button type="button" class="secondary-btn" @onclick="GuardarBorradorAsync">
-                                <i class="bi bi-bookmark"></i> Guardar borrador
+                            <button type="button" class="secondary-btn solicitud-save-draft-btn @(borradorExitoso ? "is-saved" : string.Empty)" @onclick="GuardarBorradorAsync">
+                                <i class="bi bi-bookmark-fill"></i> Guardar borrador
                             </button>
                             <button type="button" class="primary-btn solicitud-action-main" @onclick="IrAPasoDocumentos">
                                 Siguiente <i class="bi bi-arrow-right"></i>
@@ -784,12 +782,8 @@
                     </button>
 
                     <div class="solicitud-bottom-actions-right">
-                        <button type="button" class="secondary-btn" @onclick="CargarBorradorAsync" disabled="@(!tieneBorrador)">
-                            <i class="bi bi-clock-history"></i> Historial de borradores
-                        </button>
-
-                        <button type="button" class="secondary-btn" @onclick="GuardarBorradorAsync">
-                            <i class="bi bi-bookmark"></i> Guardar borrador
+                        <button type="button" class="secondary-btn solicitud-save-draft-btn @(borradorExitoso ? "is-saved" : string.Empty)" @onclick="GuardarBorradorAsync">
+                            <i class="bi bi-bookmark-fill"></i> Guardar borrador
                         </button>
 
                         <button type="submit" class="primary-btn solicitud-action-main" disabled="@enviando">
@@ -811,6 +805,54 @@
         </main>
     </div>
 </div>
+
+@if (mostrarModalBorradores)
+{
+    <div class="solicitud-drafts-overlay" role="dialog" aria-modal="true" aria-labelledby="draftHistoryTitle" @onclick="CerrarHistorialBorradores">
+        <section class="solicitud-drafts-modal" @onclick:stopPropagation>
+            <header class="solicitud-drafts-header">
+                <div>
+                    <span class="solicitud-section-kicker">Borradores guardados</span>
+                    <h3 id="draftHistoryTitle">Selecciona un borrador</h3>
+                </div>
+                <button type="button" class="solicitud-drafts-close" @onclick="CerrarHistorialBorradores" aria-label="Cerrar historial">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </header>
+
+            <div class="solicitud-drafts-body">
+                @if (!borradoresGuardados.Any())
+                {
+                    <div class="solicitud-empty-state">
+                        <i class="bi bi-info-circle"></i>
+                        <div>
+                            <strong>No hay borradores guardados.</strong>
+                            <span>Guarda un borrador para verlo aquí.</span>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    @foreach (var borrador in borradoresGuardados)
+                    {
+                        <article class="solicitud-draft-item">
+                            <button type="button" class="solicitud-draft-select" @onclick="() => SeleccionarBorradorAsync(borrador)">
+                                <span class="solicitud-draft-icon"><i class="bi bi-bookmark-fill"></i></span>
+                                <span>
+                                    <strong>@borrador.Titulo</strong>
+                                    <small>@borrador.FechaGuardado.ToString("dd/MM/yyyy HH:mm")</small>
+                                </span>
+                            </button>
+                            <button type="button" class="solicitud-draft-delete" @onclick="() => EliminarBorradorAsync(borrador)" aria-label="Eliminar borrador">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </article>
+                    }
+                }
+            </div>
+        </section>
+    </div>
+}
 
 @if (mostrarModalPagoFirma)
 {
@@ -925,6 +967,14 @@
         string Descripcion,
         string Icono);
 
+    private sealed class SolicitudFirmaDraftItem
+    {
+        public string Id { get; init; } = Guid.NewGuid().ToString("N");
+        public DateTime FechaGuardado { get; init; } = DateTime.Now;
+        public string Titulo { get; init; } = "Borrador sin nombre";
+        public SolicitudFirmaDraft Datos { get; init; } = new();
+    }
+
     private sealed record SolicitudFirmaDraft
     {
         public string? SolFormatoFirma { get; init; }
@@ -952,6 +1002,10 @@
         public string? SolDepartment { get; init; }
         public string? SolPosition { get; init; }
         public string? SolReason { get; init; }
+        public string? SolIdentificationTypeManager { get; init; }
+        public string? SolIdentificationManager { get; init; }
+        public string? SolNamesManager { get; init; }
+        public string? SolLastNameManager { get; init; }
 
         public static SolicitudFirmaDraft FromSolicitud(UsuSolicitudFirma solicitud) => new()
         {
@@ -979,7 +1033,11 @@
             SolCompanyName = solicitud.SolCompanyName,
             SolDepartment = solicitud.SolDepartment,
             SolPosition = solicitud.SolPosition,
-            SolReason = solicitud.SolReason
+            SolReason = solicitud.SolReason,
+            SolIdentificationTypeManager = solicitud.SolIdentificationTypeManager,
+            SolIdentificationManager = solicitud.SolIdentificationManager,
+            SolNamesManager = solicitud.SolNamesManager,
+            SolLastNameManager = solicitud.SolLastNameManager
         };
     }
 
@@ -1348,6 +1406,8 @@
     private string? mensajeBorrador;
     private bool borradorExitoso;
     private bool tieneBorrador;
+    private bool mostrarModalBorradores;
+    private List<SolicitudFirmaDraftItem> borradoresGuardados = new();
     private int usuarioActualId;
     private List<string> catalogoNacionalidades = new();
     private IReadOnlyList<ProvinciaEcuador> provinciasEcuador = Array.Empty<ProvinciaEcuador>();
@@ -1454,6 +1514,10 @@
         solicitud.SolDepartment = draft.SolDepartment;
         solicitud.SolPosition = draft.SolPosition;
         solicitud.SolReason = draft.SolReason;
+        solicitud.SolIdentificationTypeManager = draft.SolIdentificationTypeManager;
+        solicitud.SolIdentificationManager = draft.SolIdentificationManager;
+        solicitud.SolNamesManager = draft.SolNamesManager;
+        solicitud.SolLastNameManager = draft.SolLastNameManager;
         solicitud.SolId = 0;
         solicitud.SolIdTransaccionPago = null;
         solicitud.SolPagoExitoso = false;
@@ -1474,6 +1538,24 @@
 
         archivosTemporales.Clear();
         erroresDocumentos.Clear();
+    }
+
+    private void LimpiarFormulario()
+    {
+        LimpiarDocumentosTemporales();
+        AplicarBorrador(new SolicitudFirmaDraft());
+
+        solicitud.SolIdentificationTypeManager = null;
+        solicitud.SolIdentificationManager = null;
+        solicitud.SolNamesManager = null;
+        solicitud.SolLastNameManager = null;
+        solicitud.SolEsMayor65 = false;
+
+        mensajeArchivos = null;
+        mensajeGeneralFormulario = null;
+        mensajeBorrador = null;
+        mostrarResumenValidacion = false;
+        borradorExitoso = false;
     }
 
     private string GetPasoVisualClass(int step)
@@ -1548,7 +1630,8 @@
         if (firstRender)
         {
             await SelectedAppServiceState.SetCurrentServiceKeyAsync("e-sign");
-            tieneBorrador = !string.IsNullOrWhiteSpace(await JS.InvokeAsync<string?>("localStorage.getItem", DraftStorageKey));
+            borradoresGuardados = await ObtenerBorradoresGuardadosAsync();
+            tieneBorrador = borradoresGuardados.Any();
             StateHasChanged();
         }
     }
@@ -1560,43 +1643,44 @@
         NormalizarSolicitud();
         VerificarEdad();
 
-        var draft = SolicitudFirmaDraft.FromSolicitud(solicitud);
-        var json = JsonSerializer.Serialize(draft);
-        await JS.InvokeVoidAsync("localStorage.setItem", DraftStorageKey, json);
+        var borradores = await ObtenerBorradoresGuardadosAsync();
+        borradores.Insert(0, new SolicitudFirmaDraftItem
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            FechaGuardado = DateTime.Now,
+            Titulo = CrearTituloBorrador(),
+            Datos = SolicitudFirmaDraft.FromSolicitud(solicitud)
+        });
+
+        borradoresGuardados = borradores
+            .OrderByDescending(b => b.FechaGuardado)
+            .Take(20)
+            .ToList();
+
+        await GuardarBorradoresGuardadosAsync(borradoresGuardados);
         tieneBorrador = true;
         borradorExitoso = true;
-        mensajeBorrador = "Borrador guardado. Se conservará la información del cliente para futuras compras; los documentos deberán confirmarse o adjuntarse al usarlo.";
+        mensajeBorrador = "Borrador guardado. Podrás seleccionarlo desde el historial; los documentos deberán confirmarse o adjuntarse al usarlo.";
     }
 
-    private async Task CargarBorradorAsync()
+    private async Task AbrirHistorialBorradoresAsync()
     {
         mensajeBorrador = null;
         borradorExitoso = false;
+        borradoresGuardados = await ObtenerBorradoresGuardadosAsync();
+        tieneBorrador = borradoresGuardados.Any();
 
-        var raw = await JS.InvokeAsync<string?>("localStorage.getItem", DraftStorageKey);
-        if (string.IsNullOrWhiteSpace(raw))
+        if (!tieneBorrador)
         {
-            tieneBorrador = false;
             mensajeBorrador = "No encontramos un borrador guardado para esta cuenta.";
             return;
         }
 
-        SolicitudFirmaDraft? draft;
-        try
-        {
-            draft = JsonSerializer.Deserialize<SolicitudFirmaDraft>(raw);
-        }
-        catch
-        {
-            draft = null;
-        }
+        mostrarModalBorradores = true;
+    }
 
-        if (draft is null)
-        {
-            mensajeBorrador = "El borrador guardado no se pudo leer. Guarda uno nuevo para reemplazarlo.";
-            return;
-        }
-
+    private async Task SeleccionarBorradorAsync(SolicitudFirmaDraftItem borrador)
+    {
         var volverADocumentos = false;
 
         if (archivosTemporales.Count > 0)
@@ -1612,16 +1696,100 @@
             }
         }
 
-        AplicarBorrador(draft);
+        AplicarBorrador(borrador.Datos);
         if (volverADocumentos)
         {
             paso = 2;
         }
 
+        mostrarModalBorradores = false;
         borradorExitoso = true;
         mensajeBorrador = archivosTemporales.Count > 0
             ? "Borrador aplicado. Se mantuvieron los documentos que ya estaban cargados."
             : "Borrador aplicado. Revisa la información y adjunta los documentos requeridos.";
+    }
+
+    private async Task EliminarBorradorAsync(SolicitudFirmaDraftItem borrador)
+    {
+        borradoresGuardados = borradoresGuardados
+            .Where(item => !string.Equals(item.Id, borrador.Id, StringComparison.Ordinal))
+            .ToList();
+
+        await GuardarBorradoresGuardadosAsync(borradoresGuardados);
+        tieneBorrador = borradoresGuardados.Any();
+        if (!tieneBorrador)
+        {
+            mostrarModalBorradores = false;
+        }
+    }
+
+    private void CerrarHistorialBorradores()
+    {
+        mostrarModalBorradores = false;
+    }
+
+    private async Task<List<SolicitudFirmaDraftItem>> ObtenerBorradoresGuardadosAsync()
+    {
+        var raw = await JS.InvokeAsync<string?>("localStorage.getItem", DraftStorageKey);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return new List<SolicitudFirmaDraftItem>();
+        }
+
+        try
+        {
+            var items = JsonSerializer.Deserialize<List<SolicitudFirmaDraftItem>>(raw);
+            if (items is { Count: > 0 })
+            {
+                return items
+                    .Where(item => item.Datos is not null)
+                    .OrderByDescending(item => item.FechaGuardado)
+                    .ToList();
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            var draft = JsonSerializer.Deserialize<SolicitudFirmaDraft>(raw);
+            if (draft is not null)
+            {
+                return
+                [
+                    new SolicitudFirmaDraftItem
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        FechaGuardado = DateTime.Now,
+                        Titulo = "Borrador anterior",
+                        Datos = draft
+                    }
+                ];
+            }
+        }
+        catch
+        {
+        }
+
+        return new List<SolicitudFirmaDraftItem>();
+    }
+
+    private async Task GuardarBorradoresGuardadosAsync(List<SolicitudFirmaDraftItem> borradores)
+    {
+        var json = JsonSerializer.Serialize(borradores);
+        await JS.InvokeVoidAsync("localStorage.setItem", DraftStorageKey, json);
+    }
+
+    private string CrearTituloBorrador()
+    {
+        var titular = NombreTitularResumen;
+        if (string.Equals(titular, "Pendiente", StringComparison.OrdinalIgnoreCase))
+        {
+            titular = GetTipoPersonaResumen();
+        }
+
+        return $"{titular} - {GetVigenciaLabel(solicitud.SolVigencia)}";
     }
 
     private void VerificarEdad()

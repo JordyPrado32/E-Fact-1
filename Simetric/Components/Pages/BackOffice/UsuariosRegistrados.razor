@@ -1,10 +1,13 @@
 @page "/backoffice/usuarios-registrados"
 @namespace Simetric.Components.Pages.BackOffice
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
 @using Simetric.Data
 @using Simetric.Models
 @using Simetric.Services
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+@inject ISimpleExcelExportService SimpleExcelExportService
 
 <PageTitle>Usuarios registrados - BackOffice | Numerica</PageTitle>
 
@@ -105,6 +108,14 @@
         width: min(100%, 520px);
     }
 
+    .registered-users-toolbar-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.7rem;
+        flex-wrap: wrap;
+    }
+
     .registered-users-filters {
         display: inline-flex;
         gap: 0.5rem;
@@ -126,6 +137,24 @@
         background: #0f1c3f;
         border-color: #0f1c3f;
         color: #ffffff;
+    }
+
+    .registered-users-export {
+        min-height: 40px;
+        padding: 0 1rem;
+        border: 1px solid #15803d;
+        border-radius: 12px;
+        background: #15803d;
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-weight: 800;
+    }
+
+    .registered-users-export:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
     }
 
     .registered-users-table-head {
@@ -303,10 +332,19 @@
                placeholder="Buscar por nombre, correo o identificación..."
                @bind="searchText"
                @bind:event="oninput" />
-        <div class="registered-users-filters">
-            <button type="button" class="registered-users-filter @(purchaseFilter == PurchaseFilter.All ? "is-active" : "")" @onclick="() => SetFilter(PurchaseFilter.All)">Todos</button>
-            <button type="button" class="registered-users-filter @(purchaseFilter == PurchaseFilter.WithPurchases ? "is-active" : "")" @onclick="() => SetFilter(PurchaseFilter.WithPurchases)">Con compras</button>
-            <button type="button" class="registered-users-filter @(purchaseFilter == PurchaseFilter.WithoutPurchases ? "is-active" : "")" @onclick="() => SetFilter(PurchaseFilter.WithoutPurchases)">Sin compras</button>
+        <div class="registered-users-toolbar-actions">
+            <div class="registered-users-filters">
+                <button type="button" class="registered-users-filter @(purchaseFilter == PurchaseFilter.All ? "is-active" : "")" @onclick="() => SetFilter(PurchaseFilter.All)">Todos</button>
+                <button type="button" class="registered-users-filter @(purchaseFilter == PurchaseFilter.WithPurchases ? "is-active" : "")" @onclick="() => SetFilter(PurchaseFilter.WithPurchases)">Con compras</button>
+                <button type="button" class="registered-users-filter @(purchaseFilter == PurchaseFilter.WithoutPurchases ? "is-active" : "")" @onclick="() => SetFilter(PurchaseFilter.WithoutPurchases)">Sin compras</button>
+            </div>
+            <button type="button"
+                    class="registered-users-export"
+                    @onclick="ExportarUsuariosRegistradosExcelAsync"
+                    disabled="@(loading || exportandoUsuariosExcel || usuariosFiltrados.Count == 0)">
+                <i class="bi bi-file-earmark-excel"></i>
+                <span>@(exportandoUsuariosExcel ? "Exportando..." : "Descargar reporte")</span>
+            </button>
         </div>
     </section>
 
@@ -389,6 +427,7 @@
     private string searchText = string.Empty;
     private PurchaseFilter purchaseFilter = PurchaseFilter.All;
     private bool loading = true;
+    private bool exportandoUsuariosExcel;
     private int currentPage = 1;
 
     private IEnumerable<UsuarioRegistradoRow> UsuariosFiltrados
@@ -487,6 +526,113 @@
     private void SetPage(int page)
     {
         currentPage = Math.Max(1, page);
+    }
+
+    private async Task ExportarUsuariosRegistradosExcelAsync()
+    {
+        var usuariosReporte = UsuariosFiltrados
+            .OrderByDescending(u => u.FechaRegistro?.Date)
+            .ThenBy(u => u.Nombre)
+            .ThenBy(u => u.Email)
+            .ToList();
+
+        if (usuariosReporte.Count == 0)
+        {
+            return;
+        }
+
+        exportandoUsuariosExcel = true;
+        try
+        {
+            var resumenRows = usuariosReporte
+                .GroupBy(usuario => usuario.FechaRegistro?.Date)
+                .OrderByDescending(group => group.Key)
+                .Select(group => (IReadOnlyList<string>)
+                [
+                    group.Key?.ToString("dd/MM/yyyy") ?? "Sin fecha",
+                    group.Count().ToString(),
+                    group.Count(u => u.Compras > 0).ToString(),
+                    group.Count(u => u.Compras == 0).ToString(),
+                    group.Sum(u => u.Compras).ToString(),
+                    group.Sum(u => u.TotalComprado).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
+                ])
+                .ToList();
+
+            var detalleRows = usuariosReporte
+                .Select(usuario => (IReadOnlyList<string>)
+                [
+                    usuario.IdUsuario.ToString(),
+                    usuario.Nombre,
+                    usuario.Email,
+                    DisplayOrDash(usuario.Identificacion),
+                    DisplayOrDash(usuario.Celular),
+                    usuario.FechaRegistro?.ToString("dd/MM/yyyy HH:mm") ?? "-",
+                    DisplayOrDash(usuario.Vendedor),
+                    usuario.Compras.ToString(),
+                    usuario.TotalComprado.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
+                    usuario.Activo ? "Activo" : "Inactivo"
+                ])
+                .ToList();
+
+            var archivo = SimpleExcelExportService.Create(
+                $"reporte_usuarios_registrados_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+                new ExcelSheetData(
+                    "Resumen por fecha",
+                    [
+                        "Fecha registro",
+                        "Usuarios registrados",
+                        "Con compras",
+                        "Sin compras",
+                        "Compras",
+                        "Total comprado"
+                    ],
+                    resumenRows,
+                    ColumnWidths:
+                    [
+                        18,
+                        22,
+                        16,
+                        16,
+                        12,
+                        18
+                    ]),
+                new ExcelSheetData(
+                    "Detalle usuarios",
+                    [
+                        "Id usuario",
+                        "Nombre",
+                        "Email",
+                        "Identificación",
+                        "Celular",
+                        "Fecha registro",
+                        "Vendedor",
+                        "Compras",
+                        "Total comprado",
+                        "Estado"
+                    ],
+                    detalleRows,
+                    ColumnWidths:
+                    [
+                        12,
+                        28,
+                        34,
+                        18,
+                        18,
+                        20,
+                        26,
+                        12,
+                        16,
+                        14
+                    ]));
+
+            await using var stream = new MemoryStream(archivo.Content);
+            using var streamRef = new DotNetStreamReference(stream);
+            await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+        }
+        finally
+        {
+            exportandoUsuariosExcel = false;
+        }
     }
 
     private static string ObtenerNombreUsuario(Usuario usuario)
