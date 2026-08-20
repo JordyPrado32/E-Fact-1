@@ -353,6 +353,13 @@ namespace Simetric.Models
                     new[] { nameof(SolVigencia) });
             }
 
+            if (tipoPersona == "JURIDICA" && (vigencia == "7 DIAS" || vigencia == "30 DIAS"))
+            {
+                yield return new ValidationResult(
+                    "Las personas juridicas solo pueden solicitar certificados desde 1 año.",
+                    new[] { nameof(SolVigencia), nameof(SolTipoPersona) });
+            }
+
             if (tipoPersona == "JURIDICA")
             {
                 if (string.IsNullOrWhiteSpace(SolCompanyName))
@@ -367,6 +374,13 @@ namespace Simetric.Models
                     yield return new ValidationResult(
                         "Ingrese el cargo en la empresa.",
                         new[] { nameof(SolPosition) });
+                }
+
+                if (string.IsNullOrWhiteSpace(SolDepartment))
+                {
+                    yield return new ValidationResult(
+                        "Ingrese el departamento de la empresa.",
+                        new[] { nameof(SolDepartment) });
                 }
 
                 if (string.IsNullOrWhiteSpace(SolReason))

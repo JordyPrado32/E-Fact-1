@@ -2,6 +2,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Simetric.DTOs.ESign;
 using Simetric.Models;
 
@@ -11,7 +12,10 @@ public sealed class UanatacaApiService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     private readonly HttpClient _httpClient;
@@ -104,6 +108,7 @@ public sealed class UanatacaApiService
 
     public async Task<BesCreateCertificateResponseDto> CrearSolicitudAsync(
         BesCreateCertificateRequestDto request,
+        int? solicitudId = null,
         CancellationToken cancellationToken = default)
     {
         var token = await ObtenerTokenSiAplicaAsync(cancellationToken);
@@ -113,28 +118,31 @@ public sealed class UanatacaApiService
             : true;
 
         var payload = sendAsArray ? JsonSerializer.Serialize(new[] { request }, JsonOptions) : JsonSerializer.Serialize(request, JsonOptions);
+        await GuardarJsonSolicitudAsync(payload, solicitudId, cancellationToken);
         using var httpRequest = BuildRequest(HttpMethod.Post, path, token, null);
         httpRequest.Content = new StringContent(payload, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         var location = response.Headers.Location?.ToString();
+        var responseBody = BuildResponseDiagnostic(response, body);
 
         var uuid = ExtractUuidFromLocation(location) ?? ExtractUuidFromBody(body);
 
         _logger.LogInformation(
-            "Uanataca POST creación. Path: {Path}. HTTP: {StatusCode}. UUID recibido: {Uuid}. Location: {Location}",
+            "Uanataca POST creación. Path: {Path}. HTTP: {StatusCode}. UUID recibido: {Uuid}. Location: {Location}. Respuesta: {ResponseBody}",
             path,
             (int)response.StatusCode,
             uuid ?? "(no recibido)",
-            location ?? "(none)");
+            location ?? "(none)",
+            response.IsSuccessStatusCode ? "(omitida)" : TruncateLog(responseBody, 4000));
 
         return new BesCreateCertificateResponseDto
         {
             Success = response.IsSuccessStatusCode,
             StatusCode = (int)response.StatusCode,
             Location = location,
-            ResponseBody = PrettyJson(body),
+            ResponseBody = responseBody,
             ErrorMessage = response.IsSuccessStatusCode
                 ? null
                 : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}".Trim(),
@@ -181,7 +189,6 @@ public sealed class UanatacaApiService
     }
 
     private bool RequireAuthentication =>
-        !_hostEnvironment.IsDevelopment() &&
         bool.TryParse(_configuration["UanatacaApi:RequireAuthentication"], out var requireAuthentication) &&
         requireAuthentication;
 
@@ -340,6 +347,40 @@ public sealed class UanatacaApiService
             .LastOrDefault();
     }
 
+    private async Task GuardarJsonSolicitudAsync(
+        string payload,
+        int? solicitudId,
+        CancellationToken cancellationToken)
+    {
+        var enabled = !bool.TryParse(_configuration["UanatacaApi:SaveRequestJson"], out var saveRequestJson)
+            || saveRequestJson;
+        if (!enabled)
+        {
+            return;
+        }
+
+        try
+        {
+            var configuredDirectory = _configuration["UanatacaApi:RequestJsonDirectory"];
+            var directory = string.IsNullOrWhiteSpace(configuredDirectory)
+                ? Path.Combine(_hostEnvironment.ContentRootPath, "App_Data", "uanataca-requests")
+                : Path.IsPathRooted(configuredDirectory)
+                    ? configuredDirectory
+                    : Path.Combine(_hostEnvironment.ContentRootPath, configuredDirectory);
+
+            Directory.CreateDirectory(directory);
+            var suffix = solicitudId.HasValue ? $"sol-{solicitudId.Value}" : "sin-sol-id";
+            var fileName = $"{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{suffix}.json";
+            var path = Path.Combine(directory, fileName);
+            await File.WriteAllTextAsync(path, payload, Encoding.UTF8, cancellationToken);
+            _logger.LogInformation("JSON Uanataca guardado. SolId: {SolId}. Archivo: {Path}", solicitudId, path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(exception, "No se pudo guardar el JSON de Uanataca. SolId: {SolId}", solicitudId);
+        }
+    }
+
     private static string? ExtractUuidFromBody(string? body)
     {
         if (string.IsNullOrWhiteSpace(body))
@@ -412,5 +453,24 @@ public sealed class UanatacaApiService
         {
             return value;
         }
+    }
+
+    private static string BuildResponseDiagnostic(HttpResponseMessage response, string? body)
+    {
+        var formattedBody = PrettyJson(body);
+        if (!string.IsNullOrWhiteSpace(formattedBody))
+        {
+            return formattedBody;
+        }
+
+        var contentType = response.Content.Headers.ContentType?.ToString() ?? "(sin Content-Type)";
+        var contentLength = response.Content.Headers.ContentLength?.ToString() ?? "desconocido";
+        return $"(respuesta HTTP sin cuerpo; Content-Type: {contentType}; Content-Length: {contentLength})";
+    }
+
+    private static string TruncateLog(string? value, int maxLength)
+    {
+        var text = value ?? string.Empty;
+        return text.Length <= maxLength ? text : text[..maxLength] + "...";
     }
 }

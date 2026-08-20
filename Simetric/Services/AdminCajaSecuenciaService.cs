@@ -823,6 +823,12 @@ WHERE u.[IdUsuario] = @actorUserId
         try
         {
             Validate(model);
+
+            if (model.Secuencias.Any(item => !item.Initialized))
+            {
+                throw new InvalidOperationException(
+                    "Antes de crear la caja debe configurar e inicializar la secuencia de cada tipo de documento.");
+            }
         }
         finally
         {

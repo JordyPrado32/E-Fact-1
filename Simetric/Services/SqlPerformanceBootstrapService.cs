@@ -64,6 +64,34 @@ public sealed class SqlPerformanceBootstrapService
             """;
 
         yield return """
+            IF OBJECT_ID('dbo.CAJA_SECUENCIA', 'U') IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM sys.indexes
+                   WHERE name = 'IX_CAJA_SECUENCIA_Caja_Documento_Serie'
+                     AND object_id = OBJECT_ID('dbo.CAJA_SECUENCIA'))
+            BEGIN
+                CREATE NONCLUSTERED INDEX IX_CAJA_SECUENCIA_Caja_Documento_Serie
+                ON dbo.CAJA_SECUENCIA (cajaSec, documentKey, seriesKey, updatedAt DESC)
+                INCLUDE (initialized, lastSequence);
+            END
+            """;
+
+        yield return """
+            IF OBJECT_ID('dbo.Auditoria', 'U') IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM sys.indexes
+                   WHERE name = 'IX_Auditoria_Fecha_IdAuditoria'
+                     AND object_id = OBJECT_ID('dbo.Auditoria'))
+            BEGIN
+                CREATE NONCLUSTERED INDEX IX_Auditoria_Fecha_IdAuditoria
+                ON dbo.Auditoria (Fecha DESC, IdAuditoria DESC)
+                INCLUDE (IdUsuario, Accion);
+            END
+            """;
+
+        yield return """
             IF NOT EXISTS (
                 SELECT 1
                 FROM sys.indexes

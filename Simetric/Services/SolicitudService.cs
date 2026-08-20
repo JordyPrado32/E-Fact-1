@@ -1959,13 +1959,23 @@ namespace Simetric.Services
             CancellationToken cancellationToken)
         {
             _logger.LogInformation("Uanataca creación iniciada. SolId: {SolId}", solicitud.SolId);
+            RegistrarDiagnosticoPreEnvioBes(solicitud);
             var productUuid = await _uanatacaApiService.ResolverProductoUuidAsync(solicitud, cancellationToken);
             var request = await ConstruirSolicitudBesAsync(solicitud, productUuid, cancellationToken);
-            var createResult = await _uanatacaApiService.CrearSolicitudAsync(request, cancellationToken);
+            _logger.LogInformation(
+                "Uanataca payload preparado. SolId: {SolId}. TipoPersona: {TipoPersona}. ProductUuid: {ProductUuid}. TieneRuc: {TieneRuc}. TieneEmpresa: {TieneEmpresa}. TieneRepresentante: {TieneRepresentante}. Documentos: {Documentos}",
+                solicitud.SolId,
+                solicitud.SolTipoPersona,
+                request.ProductUuid,
+                !string.IsNullOrWhiteSpace(request.Ruc),
+                !string.IsNullOrWhiteSpace(request.Company),
+                !string.IsNullOrWhiteSpace(request.IdentificationManager),
+                string.Join(",", solicitud.Documentos.Where(d => d.DocVigente).Select(d => d.DocTipo).OrderBy(x => x)));
+            var createResult = await _uanatacaApiService.CrearSolicitudAsync(request, solicitud.SolId, cancellationToken);
 
             if (!createResult.Success)
             {
-                _logger.LogError("Uanataca creación rechazada. SolId: {SolId}. HTTP: {StatusCode}. Location: {Location}. Error: {Error}", solicitud.SolId, createResult.StatusCode, createResult.Location ?? "(none)", createResult.ErrorMessage ?? "(sin detalle)");
+                _logger.LogError("Uanataca creación rechazada. SolId: {SolId}. HTTP: {StatusCode}. Location: {Location}. Error: {Error}. Respuesta: {ResponseBody}", solicitud.SolId, createResult.StatusCode, createResult.Location ?? "(none)", createResult.ErrorMessage ?? "(sin detalle)", createResult.ResponseBody ?? "(vacía)");
                 solicitud.SolUanatacaComments = TruncateText(
                     string.Join(" ",
                         new[] { "Error al crear la solicitud en Uanataca.", createResult.ErrorMessage, createResult.ResponseBody }
@@ -2014,6 +2024,98 @@ namespace Simetric.Services
             syncResult.Location = createResult.Location;
             syncResult.Uuid ??= createResult.Uuid;
             return syncResult;
+        }
+
+        private void RegistrarDiagnosticoPreEnvioBes(UsuSolicitudFirma solicitud)
+        {
+            var faltantes = new List<string>();
+            var tipoPersona = (solicitud.SolTipoPersona ?? string.Empty).Trim().ToUpperInvariant();
+            var formato = (solicitud.SolFormatoFirma ?? string.Empty).Trim().ToUpperInvariant();
+            var vigencia = (solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant();
+            var mappingKey = $"{(string.IsNullOrWhiteSpace(tipoPersona) ? "NATURAL" : tipoPersona)}|{formato}|{vigencia}";
+            var mappedProductUuid = _configuration[$"UanatacaApi:ProductMappings:{mappingKey}"];
+            var stakeholderConfigured = !string.IsNullOrWhiteSpace(_configuration["UanatacaApi:StakeholderUuid"]);
+
+            if (string.IsNullOrWhiteSpace(_configuration["UanatacaApi:BaseUrl"]))
+                faltantes.Add("UanatacaApi:BaseUrl");
+            if (string.IsNullOrWhiteSpace(_configuration["UanatacaApi:Username"]))
+                faltantes.Add("UanatacaApi:Username");
+            if (string.IsNullOrWhiteSpace(_configuration["UanatacaApi:Password"]))
+                faltantes.Add("UanatacaApi:Password");
+            if (string.IsNullOrWhiteSpace(mappedProductUuid) && !stakeholderConfigured)
+                faltantes.Add("ProductMappings:" + mappingKey + " o UanatacaApi:StakeholderUuid");
+
+            foreach (var campo in new (string Nombre, string? Valor)[]
+            {
+                ("identificación", solicitud.SolIdentificacion),
+                ("nombres", solicitud.SolNombres),
+                ("primer apellido", solicitud.SolPrimerApellido),
+                ("correo", solicitud.SolCorreo1),
+                ("teléfono", solicitud.SolTelefono1),
+                ("provincia", solicitud.SolProvincia),
+                ("cantón", solicitud.SolCanton),
+                ("dirección", solicitud.SolDireccion)
+            })
+            {
+                if (string.IsNullOrWhiteSpace(campo.Valor))
+                    faltantes.Add(campo.Nombre);
+            }
+
+            if (tipoPersona == "JURIDICA")
+            {
+                foreach (var campo in new (string Nombre, string? Valor)[]
+                {
+                    ("RUC", solicitud.SolNroRuc),
+                    ("razón social", solicitud.SolCompanyName),
+                    ("departamento", solicitud.SolDepartment),
+                    ("cargo", solicitud.SolPosition),
+                    ("motivo", solicitud.SolReason),
+                    ("tipo de identificación del representante", solicitud.SolIdentificationTypeManager),
+                    ("identificación del representante", solicitud.SolIdentificationManager),
+                    ("nombres del representante", solicitud.SolNamesManager),
+                    ("apellidos del representante", solicitud.SolLastNameManager)
+                })
+                {
+                    if (string.IsNullOrWhiteSpace(campo.Valor))
+                        faltantes.Add(campo.Nombre);
+                }
+            }
+
+            var tiposDocumentosRequeridos = ObtenerTiposDocumentoRequeridos(solicitud);
+            var documentosVigentes = solicitud.Documentos
+                .Where(d => d.DocVigente)
+                .Select(d => d.DocTipo.ToUpperInvariant())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var documentosFaltantes = tiposDocumentosRequeridos
+                .Where(tipo => !documentosVigentes.Contains(tipo))
+                .ToList();
+
+            if (documentosFaltantes.Count > 0)
+                faltantes.Add("documentos: " + string.Join(",", documentosFaltantes));
+
+            if (faltantes.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Uanataca diagnóstico pre-envío. SolId: {SolId}. TipoPersona: {TipoPersona}. Vigencia: {Vigencia}. Formato: {Formato}. ProductMapping: {ProductMapping}. StakeholderUuidConfigurado: {StakeholderUuidConfigurado}. Faltantes: {Faltantes}",
+                    solicitud.SolId,
+                    tipoPersona,
+                    vigencia,
+                    formato,
+                    !string.IsNullOrWhiteSpace(mappedProductUuid),
+                    stakeholderConfigured,
+                    string.Join(" | ", faltantes));
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Uanataca diagnóstico pre-envío OK. SolId: {SolId}. TipoPersona: {TipoPersona}. Vigencia: {Vigencia}. Formato: {Formato}. ProductMapping: {ProductMapping}. StakeholderUuid requerido: {StakeholderUuidRequerido}",
+                    solicitud.SolId,
+                    tipoPersona,
+                    vigencia,
+                    formato,
+                    !string.IsNullOrWhiteSpace(mappedProductUuid),
+                    string.IsNullOrWhiteSpace(mappedProductUuid));
+            }
         }
 
         private async Task<BesSolicitudOperacionResultadoDto> ActualizarEstadoBesAsync(
@@ -2101,7 +2203,9 @@ namespace Simetric.Services
                 City = solicitud.SolCanton,
                 Address = solicitud.SolDireccion,
                 ProductUuid = productUuid,
-                OfferUuid = solicitud.SolUanatacaOfferUuid ?? _configuration["UanatacaApi:DefaultOfferUuid"],
+                OfferUuid = string.IsNullOrWhiteSpace(solicitud.SolUanatacaOfferUuid ?? _configuration["UanatacaApi:DefaultOfferUuid"])
+                    ? null
+                    : solicitud.SolUanatacaOfferUuid ?? _configuration["UanatacaApi:DefaultOfferUuid"],
                 Ruc = solicitud.SolTieneRuc ? solicitud.SolNroRuc : null,
                 Company = solicitud.SolCompanyName,
                 Department = solicitud.SolDepartment,
