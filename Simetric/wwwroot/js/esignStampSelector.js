@@ -11,6 +11,9 @@ export async function init(options, dotNetRef) {
     const pageCountLabel = document.getElementById(options.pageCountLabelId);
     const selectionStatus = document.getElementById(options.selectionStatusId);
     const thumbnails = document.getElementById(options.thumbnailsId);
+    const zoomOutButton = document.getElementById(options.zoomOutButtonId);
+    const zoomInButton = document.getElementById(options.zoomInButtonId);
+    const zoomLabel = document.getElementById(options.zoomLabelId);
 
     if (!pdfInput || !canvas || !stage || !footprint || !resizeHandle) {
         return null;
@@ -31,8 +34,12 @@ export async function init(options, dotNetRef) {
     let preferredSelection = null;
     let autoApplyPreferred = false;
     let thumbnailTasks = [];
+    let zoomPercent = 100;
 
     const fixedStampWidthMm = 60;
+    const minZoomPercent = 50;
+    const maxZoomPercent = 200;
+    const zoomStepPercent = 25;
 
     const normalizeSelection = selection => {
         if (!selection) {
@@ -71,6 +78,18 @@ export async function init(options, dotNetRef) {
         pageCountLabel.textContent = total.toString();
         previousButton.disabled = !pdfDocument || pageNumber <= 1;
         nextButton.disabled = !pdfDocument || pageNumber >= total;
+
+        if (zoomLabel) {
+            zoomLabel.textContent = `${zoomPercent}%`;
+        }
+
+        if (zoomOutButton) {
+            zoomOutButton.disabled = !pdfDocument || zoomPercent <= minZoomPercent;
+        }
+
+        if (zoomInButton) {
+            zoomInButton.disabled = !pdfDocument || zoomPercent >= maxZoomPercent;
+        }
 
         thumbnails?.querySelectorAll(".pdf-thumb").forEach(item => {
             item.classList.toggle("is-active", Number(item.dataset.page) === pageNumber);
@@ -209,7 +228,7 @@ export async function init(options, dotNetRef) {
         pdfPage = await pdfDocument.getPage(pageNumber);
         const baseViewport = pdfPage.getViewport({ scale: 1 });
         const availableWidth = Math.max(280, Math.min(820, stage.clientWidth - 24));
-        const scale = availableWidth / baseViewport.width;
+        const scale = (availableWidth / baseViewport.width) * (zoomPercent / 100);
         const viewport = pdfPage.getViewport({ scale });
         const outputScale = Math.min(window.devicePixelRatio || 1, 2);
 
@@ -250,6 +269,25 @@ export async function init(options, dotNetRef) {
         }
     };
 
+    const changeZoom = async delta => {
+        if (!pdfDocument) {
+            return;
+        }
+
+        const nextZoom = Math.max(
+            minZoomPercent,
+            Math.min(maxZoomPercent, zoomPercent + delta));
+
+        if (nextZoom === zoomPercent) {
+            updateNavigation();
+            return;
+        }
+
+        zoomPercent = nextZoom;
+        updateNavigation();
+        await renderPage();
+    };
+
     const onPdfChange = async () => {
         const file = pdfInput.files?.[0];
         selectedPosition = null;
@@ -268,6 +306,7 @@ export async function init(options, dotNetRef) {
         try {
             setStatus("Abriendo PDF...");
             pdfDocument = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+            zoomPercent = 100;
             pageNumber = autoApplyPreferred && preferredSelection?.page
                 ? Math.min(pdfDocument.numPages, Math.max(1, preferredSelection.page))
                 : 1;
@@ -393,6 +432,14 @@ export async function init(options, dotNetRef) {
         await renderPage();
     };
 
+    const onZoomOut = async () => {
+        await changeZoom(-zoomStepPercent);
+    };
+
+    const onZoomIn = async () => {
+        await changeZoom(zoomStepPercent);
+    };
+
     pdfInput.addEventListener("change", onPdfChange);
     canvas.addEventListener("pointerdown", onCanvasPointerDown);
     footprint.addEventListener("pointerdown", onFootprintPointerDown);
@@ -407,6 +454,8 @@ export async function init(options, dotNetRef) {
     window.addEventListener("pointercancel", finishResize);
     previousButton.addEventListener("click", onPrevious);
     nextButton.addEventListener("click", onNext);
+    zoomOutButton?.addEventListener("click", onZoomOut);
+    zoomInButton?.addEventListener("click", onZoomIn);
     updateNavigation();
 
     return {
@@ -451,6 +500,8 @@ export async function init(options, dotNetRef) {
             window.removeEventListener("pointercancel", finishResize);
             previousButton.removeEventListener("click", onPrevious);
             nextButton.removeEventListener("click", onNext);
+            zoomOutButton?.removeEventListener("click", onZoomOut);
+            zoomInButton?.removeEventListener("click", onZoomIn);
         }
     };
 }
