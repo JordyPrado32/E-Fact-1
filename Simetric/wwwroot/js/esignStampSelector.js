@@ -10,6 +10,7 @@ export async function init(options, dotNetRef) {
     const currentPageLabel = document.getElementById(options.currentPageLabelId);
     const pageCountLabel = document.getElementById(options.pageCountLabelId);
     const selectionStatus = document.getElementById(options.selectionStatusId);
+    const thumbnails = document.getElementById(options.thumbnailsId);
 
     if (!pdfInput || !canvas || !stage || !footprint || !resizeHandle) {
         return null;
@@ -29,6 +30,7 @@ export async function init(options, dotNetRef) {
     let pageNumber = 1;
     let preferredSelection = null;
     let autoApplyPreferred = false;
+    let thumbnailTasks = [];
 
     const fixedStampWidthMm = 60;
 
@@ -69,6 +71,80 @@ export async function init(options, dotNetRef) {
         pageCountLabel.textContent = total.toString();
         previousButton.disabled = !pdfDocument || pageNumber <= 1;
         nextButton.disabled = !pdfDocument || pageNumber >= total;
+
+        thumbnails?.querySelectorAll(".pdf-thumb").forEach(item => {
+            item.classList.toggle("is-active", Number(item.dataset.page) === pageNumber);
+        });
+    };
+
+    const clearThumbnails = () => {
+        thumbnailTasks.forEach(task => task?.cancel?.());
+        thumbnailTasks = [];
+
+        if (!thumbnails) {
+            return;
+        }
+
+        thumbnails.innerHTML = "";
+        const item = document.createElement("div");
+        item.className = "pdf-thumb is-placeholder";
+        item.innerHTML = "<span></span><strong>1</strong>";
+        thumbnails.appendChild(item);
+    };
+
+    const renderThumbnails = async () => {
+        if (!pdfDocument || !thumbnails) {
+            return;
+        }
+
+        clearThumbnails();
+        thumbnails.innerHTML = "";
+
+        for (let pageIndex = 1; pageIndex <= pdfDocument.numPages; pageIndex += 1) {
+            const item = document.createElement("button");
+            item.type = "button";
+            item.className = "pdf-thumb";
+            item.dataset.page = pageIndex.toString();
+            item.setAttribute("aria-label", `Ir a pagina ${pageIndex}`);
+
+            const thumbCanvas = document.createElement("canvas");
+            const label = document.createElement("strong");
+            label.textContent = pageIndex.toString();
+
+            item.append(thumbCanvas, label);
+            item.addEventListener("click", async () => {
+                pageNumber = pageIndex;
+                await renderPage();
+            });
+            thumbnails.appendChild(item);
+
+            try {
+                const page = await pdfDocument.getPage(pageIndex);
+                const viewport = page.getViewport({ scale: 1 });
+                const scale = 56 / viewport.width;
+                const scaledViewport = page.getViewport({ scale });
+                const outputScale = Math.min(window.devicePixelRatio || 1, 2);
+                const context = thumbCanvas.getContext("2d", { alpha: false });
+
+                thumbCanvas.width = Math.floor(scaledViewport.width * outputScale);
+                thumbCanvas.height = Math.floor(scaledViewport.height * outputScale);
+                thumbCanvas.style.width = `${Math.floor(scaledViewport.width)}px`;
+                thumbCanvas.style.height = `${Math.floor(scaledViewport.height)}px`;
+
+                const task = page.render({
+                    canvasContext: context,
+                    viewport: scaledViewport,
+                    transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0]
+                });
+
+                thumbnailTasks.push(task);
+                await task.promise;
+            } catch {
+                item.classList.add("is-placeholder");
+            }
+        }
+
+        updateNavigation();
     };
 
     const updateFootprint = () => {
@@ -178,6 +254,7 @@ export async function init(options, dotNetRef) {
         const file = pdfInput.files?.[0];
         selectedPosition = null;
         footprint.hidden = true;
+        clearThumbnails();
 
         if (!file) {
             return;
@@ -194,6 +271,7 @@ export async function init(options, dotNetRef) {
             pageNumber = autoApplyPreferred && preferredSelection?.page
                 ? Math.min(pdfDocument.numPages, Math.max(1, preferredSelection.page))
                 : 1;
+            await renderThumbnails();
             await renderPage();
         } catch {
             pdfDocument = null;
@@ -201,6 +279,7 @@ export async function init(options, dotNetRef) {
             placeholder.hidden = false;
             setStatus("No fue posible abrir el PDF.", true);
             updateNavigation();
+            clearThumbnails();
         }
     };
 
@@ -357,6 +436,7 @@ export async function init(options, dotNetRef) {
             }
         },
         dispose() {
+            clearThumbnails();
             pdfInput.removeEventListener("change", onPdfChange);
             canvas.removeEventListener("pointerdown", onCanvasPointerDown);
             footprint.removeEventListener("pointerdown", onFootprintPointerDown);
