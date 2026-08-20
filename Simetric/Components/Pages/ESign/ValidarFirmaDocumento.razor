@@ -3,13 +3,16 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using System.Security.Claims
+@using Microsoft.JSInterop
 @using Simetric.Services
 @using Simetric.Services.ESign
+@implements IAsyncDisposable
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject FirmaStampApiService FirmaStampApiService
+@inject IJSRuntime JS
 
 <PageTitle>Validar firma digital | E-Rubrica</PageTitle>
 
@@ -42,14 +45,17 @@
 
                     <div class="file-grid">
                         <label class="signature-file-card @(pdfValidacionFirmaFile is null ? null : "is-ready")">
-                            <InputFile class="file-input" accept="application/pdf,.pdf" OnChange="SeleccionarPdfValidacionFirma" />
+                            <InputFile id="validationPdfInput" class="file-input" accept="application/pdf,.pdf" OnChange="SeleccionarPdfValidacionFirma" />
                             <span class="pdf-illustration">
                                 <i class="bi bi-file-earmark-pdf"></i>
                                 <span class="upload-arrow"><i class="bi bi-arrow-up"></i></span>
                             </span>
                             <strong>Arrastra y suelta tu archivo PDF aquí</strong>
                             <span>@(pdfValidacionFirmaFile?.Name ?? "o selecciona un archivo desde tu dispositivo")</span>
-                            <span class="select-file-button"><i class="bi bi-upload"></i> Seleccionar PDF</span>
+                            <span class="select-file-button">
+                                <i class="bi bi-file-earmark-arrow-up"></i>
+                                <span>Seleccionar PDF</span>
+                            </span>
                             <small>
                                 <span><i class="bi bi-filetype-pdf"></i> Formato: PDF</span>
                                 <span><i class="bi bi-clock-history"></i> Tamaño máximo: 10 MB</span>
@@ -57,21 +63,41 @@
                             </small>
                         </label>
                     </div>
-                </article>
 
-                <section class="validation-check-grid" aria-label="Validaciones incluidas">
-                    @foreach (var item in CriteriosValidacion)
-                    {
-                        <article class="validation-check-card">
-                            <span><i class="@item.Icono"></i></span>
-                            <div>
-                                <strong>@item.Titulo</strong>
-                                <p>@item.Descripcion</p>
-                                <small>Se verificará</small>
+                    <div class="validation-pdf-viewer">
+                        <div class="validation-pdf-toolbar">
+                            <button type="button" id="validationPreviousPage" aria-label="Página anterior">
+                                <i class="bi bi-chevron-left"></i>
+                            </button>
+                            <button type="button" id="validationNextPage" aria-label="Página siguiente">
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
+                            <span>Página <strong id="validationCurrentPage">1</strong> de <strong id="validationPageCount">0</strong></span>
+                            <span class="toolbar-spacer"></span>
+                            <button type="button" id="validationZoomOut" aria-label="Alejar">
+                                <i class="bi bi-dash"></i>
+                            </button>
+                            <span class="zoom-label" id="validationZoomLabel">100%</span>
+                            <button type="button" id="validationZoomIn" aria-label="Acercar">
+                                <i class="bi bi-plus"></i>
+                            </button>
+                            <span class="validation-pdf-status" id="validationPdfStatus">Carga un PDF para visualizarlo.</span>
+                        </div>
+                        <div class="validation-pdf-shell">
+                            <aside class="validation-pdf-thumbnails" id="validationPdfThumbnails" aria-label="Miniaturas del PDF">
+                                <div class="validation-pdf-thumb is-placeholder"><span></span><strong>1</strong></div>
+                            </aside>
+                            <div class="validation-pdf-stage" id="validationPdfStage">
+                                <canvas id="validationPdfCanvas" hidden></canvas>
+                                <div class="validation-pdf-placeholder" id="validationPdfPlaceholder">
+                                    <i class="bi bi-file-earmark-pdf"></i>
+                                    <strong>Previsualización del PDF</strong>
+                                    <span>Selecciona un documento firmado para verlo aquí.</span>
+                                </div>
                             </div>
-                        </article>
-                    }
-                </section>
+                        </div>
+                    </div>
+                </article>
 
                 <div class="validation-actions">
                     <button type="button" class="validation-btn" @onclick="ValidarFirmaPdfAsync" disabled="@procesandoValidacionFirmaPdf">
@@ -108,7 +134,7 @@
                         <span class="support-icon"><i class="bi bi-headset"></i></span>
                         <h2>¿Necesitas ayuda?</h2>
                         <p>Nuestro equipo de soporte está listo para asistirte en cualquier momento.</p>
-                        <a class="support-link" href="/soporte">
+                        <a class="support-link" href="/e-sign/soporte">
                             Contactar soporte <i class="bi bi-box-arrow-up-right"></i>
                         </a>
                     </div>
@@ -187,6 +213,9 @@
     private string? pdfFirmaMensaje;
     private IBrowserFile? pdfValidacionFirmaFile;
     private PdfSignatureValidationApiResponse? pdfFirmaResultado;
+    private IJSObjectReference? pdfPreviewModule;
+    private IJSObjectReference? pdfPreviewInstance;
+    private bool pdfPreviewInitialized;
 
     private static readonly IReadOnlyList<CriterioValidacion> CriteriosValidacion =
     [
@@ -228,6 +257,33 @@
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
         cargando = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (cargando || pdfPreviewInitialized)
+            return;
+
+        pdfPreviewInitialized = true;
+        pdfPreviewModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignPdfPreview.js?v=20260820-1");
+        pdfPreviewInstance = await pdfPreviewModule.InvokeAsync<IJSObjectReference>(
+            "init",
+            new
+            {
+                pdfInputId = "validationPdfInput",
+                canvasId = "validationPdfCanvas",
+                stageId = "validationPdfStage",
+                placeholderId = "validationPdfPlaceholder",
+                previousButtonId = "validationPreviousPage",
+                nextButtonId = "validationNextPage",
+                currentPageLabelId = "validationCurrentPage",
+                pageCountLabelId = "validationPageCount",
+                statusId = "validationPdfStatus",
+                thumbnailsId = "validationPdfThumbnails",
+                zoomOutButtonId = "validationZoomOut",
+                zoomInButtonId = "validationZoomIn",
+                zoomLabelId = "validationZoomLabel"
+            });
     }
 
     private void SeleccionarPdfValidacionFirma(InputFileChangeEventArgs e) => pdfValidacionFirmaFile = e.File;
@@ -309,6 +365,18 @@
 
     private static bool EsExtension(string fileName, string extension) =>
         string.Equals(Path.GetExtension(fileName), extension, StringComparison.OrdinalIgnoreCase);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (pdfPreviewInstance is not null)
+        {
+            await pdfPreviewInstance.InvokeVoidAsync("dispose");
+            await pdfPreviewInstance.DisposeAsync();
+        }
+
+        if (pdfPreviewModule is not null)
+            await pdfPreviewModule.DisposeAsync();
+    }
 
     private sealed record CriterioValidacion(string Titulo, string Descripcion, string Detalle, string Icono);
 }

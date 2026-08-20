@@ -1,155 +1,378 @@
 @page "/e-sign/soporte"
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using System.Security.Claims
 @using Simetric.Services
 @using Simetric.Services.ESign
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
+@inject IJSRuntime JS
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
+@inject WhatsAppSupportService WhatsAppSupportSvc
 
 <PageTitle>Soporte | Numerica E-Rúbrica</PageTitle>
 
-<div class="support-shell">
+<div class="support-center-shell">
     @if (cargando)
     {
-        <ESignLoadingState
-            Title="Cargando Soporte"
-            Description="Organizando las opciones de ayuda y contacto para e-rubrica." />
+        <ESignLoadingState Title="Cargando Soporte" Description="Organizando las opciones de ayuda y contacto para E-Rúbrica." />
     }
     else
     {
-        <section class="support-hero">
-            <div class="hero-copy">
-                <span class="hero-eyebrow">Centro de ayuda</span>
-                <h2>Soporte E-Rúbrica</h2>
-                <p>
-                    Encuentra respuestas concretas sobre el uso de firmas electrónicas,
-                    los procesos de firma de documentos y la gestión de tus solicitudes.
-                </p>
-            </div>
-
-            <div class="hero-summary">
-                <article class="summary-card summary-card-primary">
-                    <span class="summary-label">Horario</span>
-                    <strong>09:00</strong>
-                    <small>Lunes a viernes hasta las 18:00.</small>
-                </article>
-
-                <article class="summary-card">
-                    <span class="summary-label">Canales</span>
-                    <strong>2</strong>
-                    <small>WhatsApp y correo electrónico.</small>
-                </article>
-
-                <article class="summary-card">
-                    <span class="summary-label">Guías</span>
-                    <strong>@faqs.Count</strong>
-                    <small>Preguntas frecuentes disponibles.</small>
-                </article>
-            </div>
-        </section>
-
-        <section class="toolbar-card">
-            <div class="toolbar-copy">
-                <span class="toolbar-kicker">Atención</span>
-                <h3>Canales de soporte</h3>
-                <p>Ten a mano tu cédula de identidad, RUC y una captura de pantalla del inconveniente.</p>
-            </div>
-
-            <div class="support-actions">
-                <button type="button" class="primary-btn whatsapp-btn" @onclick="IrAWhatsApp">
-                    <i class="bi bi-whatsapp"></i>
-                    <span>WhatsApp</span>
-                </button>
-                <a href="mailto:soporte@numericasoftware.com?subject=Soporte%20E-Rúbrica" class="secondary-btn">
-                    <i class="bi bi-envelope"></i>
-                    <span>Correo electrónico</span>
-                </a>
-            </div>
-        </section>
-
-        <section class="support-grid">
-            <section class="table-card">
-                <div class="table-card-head">
-                    <div>
-                        <span class="table-kicker">Preguntas frecuentes</span>
-                        <h3>Respuestas rápidas</h3>
-                    </div>
-                    <span class="table-badge">@faqs.Count temas</span>
+        <section class="support-top-grid">
+            <article class="support-search-panel">
+                <div class="support-title">
+                    <span>Centro de ayuda</span>
+                    <h1>¿En que podemos ayudarte hoy?</h1>
+                    <p>Busca una respuesta, conversa con el asistente IA o contacta a un asesor.</p>
                 </div>
 
-                <div class="faq-list">
-                    @foreach (var item in faqs)
+                <div class="support-search-box">
+                    <i class="bi bi-search"></i>
+                    <input placeholder="Buscar una respuesta, ejemplo: firmar PDF, archivo .p12, validar firma..."
+                           @bind="supportSearch"
+                           @bind:event="oninput"
+                           @onkeydown="HandleSearchKeyDown" />
+                    @if (!string.IsNullOrWhiteSpace(supportSearch))
                     {
-                        var isActive = active == item.Id;
-                        <article class="faq-item @(isActive ? "is-active" : string.Empty)">
-                            <button type="button"
-                                    class="faq-button"
-                                    aria-expanded="@isActive"
-                                    @onclick="() => Toggle(item.Id)">
-                                <span class="faq-icon">
-                                    <i class="@item.Icon"></i>
-                                </span>
-                                <span class="faq-question">@item.Pregunta</span>
-                                <i class="bi @(isActive ? "bi-chevron-up" : "bi-chevron-down") faq-toggle"></i>
-                            </button>
+                        <button type="button" class="support-search-clear-btn" @onclick="LimpiarBusqueda" aria-label="Limpiar busqueda">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    }
+                    <button type="button" @onclick="AplicarBusqueda">Buscar</button>
+                </div>
+            </article>
 
-                            @if (isActive)
-                            {
-                                <div class="faq-answer">@item.Respuesta</div>
-                            }
-                        </article>
+            <article class="support-ai-panel">
+                <div class="support-ai-copy">
+                    <div class="support-ai-heading">
+                        <span>Asistente IA</span>
+                        <small><i class="bi bi-circle-fill"></i> En linea</small>
+                    </div>
+                    <p>Habla o escribe tu consulta y te ayudare con tus procesos de firma.</p>
+                    <button type="button" class="support-primary-btn support-bot-cta" @onclick="AbrirWhatsAppDesdeBusqueda">
+                        <span class="support-bot-cta-icon"><i class="bi bi-robot"></i></span>
+                        <span class="support-bot-cta-copy">
+                            <strong>Hablar con el bot</strong>
+                            <small>Guia paso a paso con asesor de E-Rúbrica</small>
+                        </span>
+                        <i class="bi bi-arrow-right-short support-bot-cta-arrow"></i>
+                    </button>
+                </div>
+
+                <div class="support-bot-scene" aria-hidden="true">
+                    <div class="support-bot-bubble">
+                        <strong>Hola!</strong>
+                        <span>Soy tu asistente IA de E-Rúbrica</span>
+                    </div>
+                    <img class="support-bot-image" src="/images/support/numerica-support-bot12.png" alt="Asistente de soporte Numerica" />
+                </div>
+            </article>
+        </section>
+
+        <section class="support-category-panel">
+            <div class="support-section-head">
+                <div>
+                    <span>Explora por categoria</span>
+                    <h2>Temas frecuentes</h2>
+                </div>
+            </div>
+
+            <div class="support-category-grid">
+                @foreach (var category in categories)
+                {
+                    <button type="button"
+                            class="support-category @(activeCategory == category.Name ? "is-active" : string.Empty)"
+                            @onclick="() => SetCategory(category.Name)">
+                        <span><i class="@category.Icon"></i></span>
+                        <strong>@category.Name</strong>
+                    </button>
+                }
+            </div>
+        </section>
+
+        <section class="support-main-grid">
+            <article class="support-faq-panel">
+                <div class="support-section-head">
+                    <div>
+                        <span>Preguntas frecuentes</span>
+                        <h2>Respuestas rapidas</h2>
+                    </div>
+                </div>
+
+                <div class="support-tabs">
+                    @foreach (var tab in tabs)
+                    {
+                        <button type="button"
+                                class="@(activeCategory == tab ? "is-active" : string.Empty)"
+                                @onclick="() => SetCategory(tab)">
+                            @tab
+                        </button>
                     }
                 </div>
-            </section>
 
-            <aside class="editor-card support-side-card">
-                <div class="editor-head">
-                    <div>
-                        <span class="panel-kicker">Antes de escribir</span>
-                        <h3>Datos útiles</h3>
-                        <p>Con esta información soporte puede revisar tu firma o trámite con mayor rapidez.</p>
-                    </div>
-                </div>
+                <div class="support-faq-list">
+                    @if (!string.IsNullOrWhiteSpace(supportSearch))
+                    {
+                        <div class="support-search-helper-card">
+                            <button type="button" class="support-helper-close-btn" @onclick="LimpiarBusqueda" aria-label="Cerrar">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                            <div class="support-helper-badge">
+                                <span class="support-helper-badge-dot"></span>
+                                SOPORTE DIRECTO
+                            </div>
+                            <h3>¿Tienes dudas sobre "@supportSearch"?</h3>
+                            <p>Inicia un chat guiado por WhatsApp para elegir el area y preparar tu mensaje.</p>
+                            <button type="button" class="btn-helper-wa" @onclick="AbrirWhatsAppDesdeBusqueda">
+                                <i class="bi bi-whatsapp"></i>
+                                <span>WhatsApp</span>
+                            </button>
+                        </div>
+                    }
 
-                <div class="support-checklist">
-                    <div class="support-check-item">
-                        <i class="bi bi-person-badge"></i>
-                        <span>Cédula, RUC y nombre del solicitante.</span>
-                    </div>
-                    <div class="support-check-item">
-                        <i class="bi bi-key"></i>
-                        <span>Tipo de firma (Archivo .p12 o en nube).</span>
-                    </div>
-                    <div class="support-check-item">
-                        <i class="bi bi-window"></i>
-                        <span>Pantalla o módulo donde aparece el problema.</span>
-                    </div>
-                    <div class="support-check-item">
-                        <i class="bi bi-image"></i>
-                        <span>Captura completa del error o comportamiento.</span>
-                    </div>
+                    @if (!FaqsFiltradas.Any())
+                    {
+                        <div class="support-empty">
+                            <i class="bi bi-search"></i>
+                            <strong>Sin resultados</strong>
+                            <span>Prueba con otro termino o revisa todas las preguntas.</span>
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var item in FaqsFiltradas)
+                        {
+                            var isActive = activeFaq == item.Id;
+                            <article class="support-faq-item @(isActive ? "is-open" : string.Empty)">
+                                <button type="button" @onclick="() => Toggle(item.Id)">
+                                    <span><i class="@item.Icon"></i></span>
+                                    <strong>@item.Pregunta</strong>
+                                    <i class="bi @(isActive ? "bi-dash" : "bi-plus")"></i>
+                                </button>
+                                @if (isActive)
+                                {
+                                    <p>@item.Respuesta</p>
+                                }
+                            </article>
+                        }
+                    }
                 </div>
+            </article>
+
+            <aside class="support-side-stack">
+                <article class="support-card support-channel-card">
+                    <div class="support-section-head">
+                        <div>
+                            <span>Canales de soporte</span>
+                            <h2>Contactanos</h2>
+                        </div>
+                    </div>
+
+                    <button type="button" class="support-channel is-whatsapp" @onclick="AbrirWhatsAppPrincipal">
+                        <span><i class="bi bi-whatsapp"></i></span>
+                        <strong>WhatsApp</strong>
+                        <small>Respuesta promedio: 3 min</small>
+                        <i class="bi bi-arrow-right"></i>
+                    </button>
+
+                    <a class="support-channel" href="mailto:soporte@numericasoftware.com?subject=Soporte%20E-Rúbrica">
+                        <span><i class="bi bi-envelope"></i></span>
+                        <strong>Correo electronico</strong>
+                        <small>soporte@numericasoftware.com</small>
+                        <i class="bi bi-copy"></i>
+                    </a>
+                </article>
+
+                <article class="support-card">
+                    <div class="support-section-head">
+                        <div>
+                            <span>Estado del servicio</span>
+                            <h2>Operacion</h2>
+                        </div>
+                    </div>
+                    <div class="support-status-ok">
+                        <span></span>
+                        <div>
+                            <strong>Todos los servicios operativos</strong>
+                            <small>Ultima actualizacion: hoy 09:45</small>
+                        </div>
+                    </div>
+                    <div class="support-hours">
+                        <i class="bi bi-clock-history"></i>
+                        <div>
+                            <strong>Horarios de atencion</strong>
+                            <small>Lunes a Viernes 09:00 - 18:00</small>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="support-card">
+                    <div class="support-section-head">
+                        <div>
+                            <span>Videos mas vistos</span>
+                            <h2>Tutoriales</h2>
+                        </div>
+                    </div>
+                    <div class="support-video-list">
+                        <button type="button"><i class="bi bi-play-fill"></i> Firmar un PDF</button>
+                        <button type="button"><i class="bi bi-play-fill"></i> Solicitar firma electronica</button>
+                        <button type="button"><i class="bi bi-play-fill"></i> Validar un documento firmado</button>
+                    </div>
+                </article>
             </aside>
         </section>
+
+        @if (mostrarWhatsAppChatIntegrado)
+        {
+            <div class="support-chat-overlay" @onclick="CerrarWhatsAppIntegrado">
+                <section class="support-chat-window" @onclick:stopPropagation="true">
+                    <header class="support-chat-header">
+                        <div class="support-chat-avatar">
+                            <i class="bi bi-whatsapp"></i>
+                            <span></span>
+                        </div>
+                        <div>
+                            <h3>@whatsAppChatTitle</h3>
+                            <p>@whatsAppChatSubtitle</p>
+                        </div>
+                        <button type="button" @onclick="CerrarWhatsAppIntegrado" aria-label="Cerrar">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </header>
+
+                    <div class="support-chat-messages">
+                        <div class="support-chat-day">Hoy</div>
+                        <div class="support-chat-system-card">
+                            <strong><i class="bi bi-lock-fill"></i> Chat preparado para WhatsApp</strong>
+                            <small>Tu mensaje se abrira en WhatsApp con el asesor correspondiente.</small>
+                        </div>
+
+                        <div class="support-chat-row is-bot">
+                            <div class="support-chat-face">N</div>
+                            <div class="support-chat-bubble">@whatsAppBotPrompt</div>
+                        </div>
+
+                        @if (whatsAppMostrarCategorias)
+                        {
+                            <div class="support-chat-row is-bot">
+                                <div class="support-chat-face">N</div>
+                                <div class="support-chat-bubble support-chat-options">
+                                    <strong>Elige el area que mejor describe tu caso</strong>
+                                    @foreach (var option in whatsAppOpcionesCategoria)
+                                    {
+                                        <button type="button" class="@GetWhatsAppAreaOptionClass(option)" @onclick="() => SeleccionarCategoriaWhatsApp(option)">
+                                            <i class="@option.Icon"></i>
+                                            <span>@option.Label</span>
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="support-chat-row is-user">
+                                <div class="support-chat-bubble">
+                                    <strong>@whatsAppCategoriaActual</strong>
+                                    <small>Asesor: @whatsAppAsesorActual</small>
+                                </div>
+                            </div>
+
+                            <div class="support-chat-row is-bot">
+                                <div class="support-chat-face">N</div>
+                                <div class="support-chat-bubble support-chat-options">
+                                    <strong>Selecciona el motivo principal</strong>
+                                    @foreach (var option in whatsAppOpcionesMotivo)
+                                    {
+                                        <button type="button" class="@(whatsAppMotivoActual == option.Value ? "is-selected" : string.Empty)" @onclick="() => SeleccionarMotivoWhatsApp(option)">
+                                            <i class="@option.Icon"></i>
+                                            <span>@option.Label</span>
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    @if (!whatsAppMostrarCategorias)
+                    {
+                        <footer class="support-chat-footer">
+                            <textarea placeholder="Escribe aqui el mensaje que se adjuntara al WhatsApp..."
+                                      @bind="whatsAppConsultaActual"
+                                      @bind:event="oninput"></textarea>
+                            <div class="support-chat-actions">
+                                <button type="button" class="support-chat-cancel" @onclick="AbrirSelectorCategoriaWhatsApp">Cambiar area</button>
+                                <button type="button" class="support-chat-submit" @onclick="EnviarWhatsAppIntegradoAsync" disabled="@(!PuedeEnviarWhatsApp)">
+                                    <i class="bi bi-whatsapp"></i>
+                                    <span>@(enviandoWhatsAppIntegrado ? "Abriendo mensaje..." : "Enviar mensaje")</span>
+                                </button>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(whatsAppEstadoMensaje))
+                            {
+                                <div class="support-chat-status @(whatsAppEstadoEsError ? "is-error" : "is-success")">@whatsAppEstadoMensaje</div>
+                            }
+                        </footer>
+                    }
+                    else
+                    {
+                        <footer class="support-chat-footer is-simple">
+                            <button type="button" class="support-chat-cancel" @onclick="CerrarWhatsAppIntegrado">Cerrar</button>
+                        </footer>
+                    }
+                </section>
+            </div>
+        }
     }
 </div>
 
 @code {
     private bool cargando = true;
-    private int active = 1;
+    private bool mostrarWhatsAppChatIntegrado;
+    private bool enviandoWhatsAppIntegrado;
+    private bool whatsAppMostrarCategorias = true;
+    private bool whatsAppEstadoEsError;
+    private int activeFaq = 1;
+    private string activeCategory = "Todos";
+    private string supportSearch = string.Empty;
+    private string usuarioSoporte = "Usuario E-Rúbrica";
+    private string whatsAppCategoriaActual = "Selecciona un area";
+    private string whatsAppAsesorActual = "Numerica";
+    private string whatsAppDestinoActual = string.Empty;
+    private string whatsAppMotivoActual = string.Empty;
+    private string whatsAppConsultaActual = string.Empty;
+    private string whatsAppEstadoMensaje = string.Empty;
+    private string whatsAppChatTitle = "WhatsApp | Soporte E-Rúbrica";
+    private string whatsAppChatSubtitle = "Conversacion guiada";
+    private string whatsAppBotPrompt = "Antes de contactarte con un asesor, cuentame si tu tema es tecnico o comercial.";
+    private List<WhatsAppQuickOption> whatsAppOpcionesCategoria = new();
+    private List<WhatsAppQuickOption> whatsAppOpcionesMotivo = new();
 
-    private void Toggle(int id)
-    {
-        active = active == id ? 0 : id;
-    }
+    private readonly string[] tabs = ["Todos", "Firma PDF", "Solicitud", "Certificado", "Validacion", "Cuenta"];
 
-    private void IrAWhatsApp()
+    private IEnumerable<FaqItem> FaqsFiltradas
     {
-        var numero = "593995876753";
-        var mensaje = Uri.EscapeDataString("Hola, necesito soporte en E-Rúbrica.");
-        NavManager.NavigateTo($"https://wa.me/{numero}?text={mensaje}", true);
+        get
+        {
+            var query = supportSearch.Trim();
+            var items = faqs.AsEnumerable();
+
+            if (activeCategory != "Todos")
+            {
+                items = items.Where(item => item.Category == activeCategory);
+            }
+
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                items = items.Where(item =>
+                    item.Pregunta.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    item.Respuesta.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    item.Category.Contains(query, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return items;
+        }
     }
 
     protected override async Task OnInitializedAsync()
@@ -182,75 +405,207 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
-
+        usuarioSoporte = user.Identity?.Name ?? user.FindFirst(ClaimTypes.Name)?.Value ?? "Usuario E-Rúbrica";
+        whatsAppOpcionesCategoria = BuildCategoryOptions();
+        whatsAppOpcionesMotivo = BuildTopicOptions("Soporte tecnico");
         cargando = false;
     }
 
-    private readonly List<FaqItem> faqs = new()
+    private void SetCategory(string category)
     {
-        new()
+        activeCategory = category;
+        activeFaq = FaqsFiltradas.FirstOrDefault()?.Id ?? 0;
+    }
+
+    private void Toggle(int id)
+    {
+        activeFaq = activeFaq == id ? 0 : id;
+    }
+
+    private void AplicarBusqueda()
+    {
+        activeFaq = FaqsFiltradas.FirstOrDefault()?.Id ?? 0;
+    }
+
+    private void LimpiarBusqueda()
+    {
+        supportSearch = string.Empty;
+        AplicarBusqueda();
+    }
+
+    private void HandleSearchKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
         {
-            Id = 1,
-            Icon = "bi bi-info-circle",
-            Pregunta = "¿Qué es una firma electrónica y para qué sirve?",
-            Respuesta = "Es el equivalente digital de tu firma manuscrita. Permite firmar documentos (PDF, XML, etc.) garantizando la autoría, integridad y validez jurídica de la información."
-        },
-        new()
-        {
-            Id = 2,
-            Icon = "bi bi-filetype-pdf",
-            Pregunta = "¿Qué formatos de archivo de firma son compatibles con E-Rúbrica?",
-            Respuesta = "E-Rúbrica trabaja de forma óptima con certificados emitidos por Uanataca y soporta archivos .p12 o .pfx, que son el estándar autorizado en el Ecuador."
-        },
-        new()
-        {
-            Id = 3,
-            Icon = "bi bi-pen",
-            Pregunta = "¿Cómo puedo firmar un documento PDF en el sistema?",
-            Respuesta = "Dirígete a la sección 'Documentos firmados', carga tu archivo PDF, selecciona el archivo de tu firma .p12, ingresa la contraseña correspondiente y haz clic en 'Firmar'. El documento se descargará automáticamente firmado."
-        },
-        new()
-        {
-            Id = 4,
-            Icon = "bi bi-check-circle",
-            Pregunta = "¿Tiene la misma validez legal que una firma física en papel?",
-            Respuesta = "Sí. De acuerdo con la Ley de Comercio Electrónico, Firmas y Mensajes de Datos del Ecuador, las firmas electrónicas tienen la misma validez legal e idénticos efectos que una firma física."
-        },
-        new()
-        {
-            Id = 5,
-            Icon = "bi bi-key",
-            Pregunta = "¿Qué debo hacer si olvido la contraseña de mi firma electrónica?",
-            Respuesta = "Por seguridad y protección de tus datos, las contraseñas de las firmas electrónicas no se almacenan en nuestros servidores. Si la olvidas, deberás solicitar una revocación y posterior reemisión de tu certificado."
-        },
-        new()
-        {
-            Id = 6,
-            Icon = "bi bi-cloud",
-            Pregunta = "¿Puedo utilizar mi firma emitida aquí en otros portales gubernamentales?",
-            Respuesta = "Sí, al ser emitida por una entidad de certificación autorizada en el Ecuador, puedes usar tu firma en el portal del SRI (facturación electrónica, trámites), Superintendencia de Compañías, Senae, Quipux y más."
-        },
-        new()
-        {
-            Id = 7,
-            Icon = "bi bi-shield-check",
-            Pregunta = "¿Cómo sé si un documento firmado electrónicamente por otro usuario es válido?",
-            Respuesta = "Puedes verificar la validez de las firmas abriendo el PDF en programas oficiales como Adobe Acrobat Reader, o subiéndolo al validador oficial Firmatic del MINTEL."
-        },
-        new()
-        {
-            Id = 8,
-            Icon = "bi bi-calendar-check",
-            Pregunta = "¿Qué vigencia tiene mi firma electrónica y cuándo debo renovarla?",
-            Respuesta = "La validez depende directamente del certificado digital emitido por la entidad certificadora. La API de precompra no gestiona renovaciones; ese proceso se coordina con la entidad emisora y con nuestro flujo operativo interno."
+            AplicarBusqueda();
         }
+    }
+
+    private void AbrirWhatsAppPrincipal()
+        => AbrirSelectorCategoriaWhatsApp();
+
+    private void AbrirWhatsAppDesdeBusqueda()
+        => AbrirWhatsAppIntegrado("Soporte tecnico", supportSearch);
+
+    private void AbrirSelectorCategoriaWhatsApp()
+    {
+        whatsAppCategoriaActual = "Selecciona un area";
+        whatsAppAsesorActual = "Numerica";
+        whatsAppDestinoActual = string.Empty;
+        whatsAppMotivoActual = string.Empty;
+        whatsAppConsultaActual = string.Empty;
+        whatsAppEstadoMensaje = string.Empty;
+        whatsAppEstadoEsError = false;
+        whatsAppMostrarCategorias = true;
+        whatsAppChatTitle = "WhatsApp | Soporte E-Rúbrica";
+        whatsAppChatSubtitle = "Conversacion guiada";
+        whatsAppBotPrompt = "Antes de contactarte con un asesor, cuentame si tu tema es tecnico o comercial.";
+        whatsAppOpcionesCategoria = BuildCategoryOptions();
+        whatsAppOpcionesMotivo = new();
+        mostrarWhatsAppChatIntegrado = true;
+    }
+
+    private void AbrirWhatsAppIntegrado(string categoria, string? consultaInicial = null, string? asesor = null)
+    {
+        whatsAppCategoriaActual = string.IsNullOrWhiteSpace(categoria) ? "Soporte tecnico" : categoria.Trim();
+        whatsAppAsesorActual = string.IsNullOrWhiteSpace(asesor)
+            ? WhatsAppSupportSvc.ResolveAdvisorName(whatsAppCategoriaActual)
+            : asesor.Trim();
+        whatsAppDestinoActual = WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(whatsAppCategoriaActual, whatsAppAsesorActual);
+        whatsAppMotivoActual = string.Empty;
+        whatsAppConsultaActual = string.IsNullOrWhiteSpace(consultaInicial)
+            ? "Hola, necesito soporte en E-Rúbrica."
+            : consultaInicial.Trim();
+        whatsAppEstadoMensaje = string.Empty;
+        whatsAppEstadoEsError = false;
+        whatsAppMostrarCategorias = false;
+        whatsAppChatTitle = $"WhatsApp | {whatsAppAsesorActual}";
+        whatsAppChatSubtitle = whatsAppCategoriaActual;
+        whatsAppBotPrompt = $"Perfecto. Vamos a abrir el chat con {whatsAppAsesorActual}. Primero selecciona el motivo principal de tu consulta.";
+        whatsAppOpcionesMotivo = BuildTopicOptions(whatsAppCategoriaActual);
+        mostrarWhatsAppChatIntegrado = true;
+    }
+
+    private void CerrarWhatsAppIntegrado()
+    {
+        mostrarWhatsAppChatIntegrado = false;
+        enviandoWhatsAppIntegrado = false;
+    }
+
+    private void SeleccionarCategoriaWhatsApp(WhatsAppQuickOption opcion)
+    {
+        AbrirWhatsAppIntegrado(opcion.Value, supportSearch, opcion.Advisor);
+        whatsAppDestinoActual = opcion.PhoneNumber;
+    }
+
+    private void SeleccionarMotivoWhatsApp(WhatsAppQuickOption opcion)
+    {
+        whatsAppMotivoActual = opcion.Value;
+        whatsAppAsesorActual = opcion.Advisor;
+        whatsAppDestinoActual = opcion.PhoneNumber;
+
+        var consulta = string.IsNullOrWhiteSpace(supportSearch)
+            ? "Hola, necesito soporte en E-Rúbrica."
+            : supportSearch.Trim();
+        whatsAppConsultaActual = $"{opcion.Label}: {consulta}".Trim();
+    }
+
+    private bool PuedeEnviarWhatsApp
+        => !enviandoWhatsAppIntegrado &&
+           !string.IsNullOrWhiteSpace(whatsAppDestinoActual) &&
+           !string.IsNullOrWhiteSpace(whatsAppConsultaActual);
+
+    private async Task EnviarWhatsAppIntegradoAsync()
+    {
+        if (!PuedeEnviarWhatsApp)
+        {
+            return;
+        }
+
+        enviandoWhatsAppIntegrado = true;
+        whatsAppEstadoMensaje = string.Empty;
+        whatsAppEstadoEsError = false;
+
+        try
+        {
+            var request = new WhatsAppSupportRequest
+            {
+                Categoria = $"E-Rúbrica | {whatsAppCategoriaActual}",
+                Asesor = whatsAppAsesorActual,
+                Usuario = usuarioSoporte,
+                Empresa = "Cuenta E-Rúbrica",
+                Consulta = whatsAppConsultaActual
+            };
+
+            var redirectUrl = WhatsAppSupportSvc.BuildExternalChatUrl(request);
+            whatsAppEstadoMensaje = $"Estamos abriendo tu chat de WhatsApp con {whatsAppAsesorActual}.";
+            await JS.InvokeVoidAsync("open", redirectUrl, "_blank");
+        }
+        catch (Exception ex)
+        {
+            whatsAppEstadoEsError = true;
+            whatsAppEstadoMensaje = $"No se pudo preparar el chat de WhatsApp: {ex.Message}";
+        }
+        finally
+        {
+            enviandoWhatsAppIntegrado = false;
+        }
+    }
+
+    private static string GetWhatsAppAreaOptionClass(WhatsAppQuickOption opcion)
+        => opcion.Value.Contains("Ventas", StringComparison.OrdinalIgnoreCase) ? "is-sales" : "is-support";
+
+    private List<WhatsAppQuickOption> BuildCategoryOptions()
+        => new()
+        {
+            new("Soporte tecnico", "Soporte tecnico", "bi bi-tools", "Arleth", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber("Soporte tecnico", "Arleth")),
+            new("Ventas y consultas", "Ventas y consultas", "bi bi-briefcase", "Brigitte", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber("Ventas y consultas", "Brigitte"))
+        };
+
+    private List<WhatsAppQuickOption> BuildTopicOptions(string categoria)
+    {
+        if (categoria.Contains("Ventas", StringComparison.OrdinalIgnoreCase))
+        {
+            return new()
+            {
+                new("Solicitar una firma electronica", "Solicitud de firma", "bi bi-person-plus", "Brigitte", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(categoria, "Brigitte")),
+                new("Consultar vigencias y precios", "Vigencias y precios", "bi bi-tags", "Brigitte", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(categoria, "Brigitte")),
+                new("Renovar mi firma", "Renovacion", "bi bi-arrow-clockwise", "Brigitte", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(categoria, "Brigitte"))
+            };
+        }
+
+        return new()
+        {
+            new("Problemas al firmar PDF", "Firmar PDF", "bi bi-filetype-pdf", "Arleth", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(categoria, "Arleth")),
+            new("Archivo .p12 o clave", "Certificado", "bi bi-key", "Arleth", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(categoria, "Arleth")),
+            new("Validar firma digital", "Validacion", "bi bi-shield-check", "Arleth", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(categoria, "Arleth")),
+            new("Solicitud o borrador", "Solicitud", "bi bi-file-earmark-text", "Arleth", WhatsAppSupportSvc.ResolveAdvisorPhoneNumber(categoria, "Arleth"))
+        };
+    }
+
+    private readonly List<CategoryItem> categories = new()
+    {
+        new("Firma PDF", "bi bi-filetype-pdf"),
+        new("Solicitud", "bi bi-file-earmark-text"),
+        new("Certificado", "bi bi-key"),
+        new("Validacion", "bi bi-shield-check"),
+        new("Cuenta", "bi bi-person-gear"),
+        new("Todos", "bi bi-grid")
     };
 
-    private sealed class FaqItem
+    private readonly List<FaqItem> faqs = new()
     {
-        public int Id { get; set; }
-        public string Icon { get; set; } = string.Empty;
-        public string Pregunta { get; set; } = string.Empty;
-        public string Respuesta { get; set; } = string.Empty;
-    }
+        new(1, "Firma PDF", "bi bi-filetype-pdf", "¿Cómo firmo un documento PDF?", "Ingresa a Firmar PDF, carga el documento, selecciona tu archivo .p12, escribe la clave y ubica el sello antes de estampar."),
+        new(2, "Firma PDF", "bi bi-cursor", "¿Puedo mover el sello antes de firmar?", "Sí. En la vista de ubicación puedes arrastrar el sello sobre la página y guardar la posición para usarla nuevamente."),
+        new(3, "Solicitud", "bi bi-file-earmark-text", "¿Cómo creo una nueva solicitud de firma?", "Completa la configuración, datos del titular, información del solicitante y revisa el resumen antes de enviar."),
+        new(4, "Solicitud", "bi bi-clock-history", "¿Dónde veo mis borradores?", "En Nueva solicitud de firma puedes revisar el historial de borradores y continuar solicitudes pendientes."),
+        new(5, "Certificado", "bi bi-key", "¿Qué hago si olvidé la clave del .p12?", "Por seguridad la clave no se almacena. Debes solicitar soporte para revisar las opciones de revocación o reemisión."),
+        new(6, "Certificado", "bi bi-award", "¿Qué vigencia tiene mi firma?", "La vigencia depende del certificado contratado. Puedes revisar el tiempo seleccionado durante la solicitud."),
+        new(7, "Validacion", "bi bi-shield-check", "¿Qué revisa Validar Firma?", "Comprueba integridad del documento, certificado digital, revocación OCSP/CRL, sello de tiempo y validez legal."),
+        new(8, "Cuenta", "bi bi-person-gear", "¿Qué datos debo enviar a soporte?", "Ten a mano tu cédula, RUC, correo de la cuenta, captura del error y el módulo donde ocurre el problema.")
+    };
+
+    private sealed record CategoryItem(string Name, string Icon);
+    private sealed record FaqItem(int Id, string Category, string Icon, string Pregunta, string Respuesta);
+    private sealed record WhatsAppQuickOption(string Label, string Value, string Icon, string Advisor, string PhoneNumber);
 }
