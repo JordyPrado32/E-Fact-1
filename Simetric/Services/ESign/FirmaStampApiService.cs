@@ -372,6 +372,20 @@ public sealed class FirmaStampApiService
         IBrowserFile pdf,
         CancellationToken cancellationToken = default)
     {
+        await using var pdfStream = pdf.OpenReadStream(10 * 1024 * 1024, cancellationToken);
+        return await ValidarFirmaPdfAsync(
+            pdfStream,
+            pdf.Name,
+            pdf.ContentType,
+            cancellationToken);
+    }
+
+    public async Task<PdfSignatureValidationApiResult> ValidarFirmaPdfAsync(
+        Stream pdfStream,
+        string pdfFileName,
+        string? pdfContentType,
+        CancellationToken cancellationToken = default)
+    {
         var baseUri = GetBaseUri();
         var apiKey = GetApiKey();
 
@@ -381,11 +395,10 @@ public sealed class FirmaStampApiService
         if (string.IsNullOrWhiteSpace(apiKey))
             return PdfSignatureValidationApiResult.Error("La API key de estampado no esta configurada.");
 
-        await using var pdfStream = pdf.OpenReadStream(10 * 1024 * 1024, cancellationToken);
         using var form = new MultipartFormDataContent();
-        using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
+        using var pdfContent = CreateFileContent(pdfStream, string.IsNullOrWhiteSpace(pdfContentType) ? "application/pdf" : pdfContentType);
 
-        form.Add(pdfContent, "pdf", pdf.Name);
+        form.Add(pdfContent, "pdf", pdfFileName);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildEndpointUri(baseUri, "ValidarFirmaPath", "api/documentos/validar-firma"));
         request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
@@ -755,7 +768,7 @@ public sealed class FirmaStampApiService
 
         if (input.Length > 12_000)
         {
-            error = "El valor del QR excede el tamano permitido.";
+            error = "El valor del QR excede el tamaño permitido.";
             return false;
         }
 
@@ -781,7 +794,7 @@ public sealed class FirmaStampApiService
 
         if (token.Length > 8_000)
         {
-            error = "El token del QR excede el tamano permitido.";
+            error = "El token del QR excede el tamaño permitido.";
             return false;
         }
 
