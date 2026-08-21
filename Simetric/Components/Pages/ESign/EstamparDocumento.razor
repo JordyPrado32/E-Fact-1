@@ -74,6 +74,23 @@
                         </span>
                         <small>@(pdfFile?.Name ?? "Formato PDF - Máx. 10 MB")</small>
                     </label>
+                    <button type="button" class="stored-documents-btn" @onclick="AbrirModalDocumentos">
+                        <i class="bi bi-folder2-open"></i>
+                        <span>Documentos</span>
+                    </button>
+                    @if (documentoGuardadoSeleccionado is not null)
+                    {
+                        <div class="stored-document-selected">
+                            <i class="bi bi-file-earmark-pdf"></i>
+                            <span>
+                                <strong>@documentoGuardadoSeleccionado.Nombre</strong>
+                                <small>@documentoGuardadoSeleccionado.Tamano · @documentoGuardadoSeleccionado.Fecha.ToString("dd/MM/yyyy HH:mm")</small>
+                            </span>
+                            <button type="button" @onclick="LimpiarDocumentoGuardado" aria-label="Quitar documento guardado">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                    }
                 </div>
             </article>
 
@@ -187,7 +204,7 @@
                                     type="button"
                                     class="resize-handle"
                                     id="stampResizeHandle"
-                                    aria-label="Tamano fijo del sello"
+                                    aria-label="Tamaño fijo del sello"
                                     title="Ancho fijo: 60 mm"></button>
                             </div>
                             <div class="pdf-placeholder" id="stampPdfPlaceholder">
@@ -252,6 +269,65 @@
                 </div>
             </section>
         }
+
+        @if (mostrarModalDocumentos)
+        {
+            <div class="stamp-documents-backdrop" @onclick="CerrarModalDocumentos"></div>
+            <section class="stamp-documents-modal" role="dialog" aria-modal="true" aria-labelledby="stampDocumentosTitulo">
+                <header class="stamp-documents-header">
+                    <div>
+                        <span class="header-kicker">Repositorio</span>
+                        <h2 id="stampDocumentosTitulo">Mis documentos subidos</h2>
+                    </div>
+                    <button type="button" @onclick="CerrarModalDocumentos" aria-label="Cerrar modal">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </header>
+
+                <div class="stamp-documents-upload">
+                    <InputFile id="stampDocumentUpload" class="file-input" accept=".pdf,application/pdf" OnChange="SubirDocumentoGuardadoAsync" />
+                    <label for="stampDocumentUpload">
+                        <i class="bi bi-cloud-arrow-up"></i>
+                        <span>
+                            <strong>Subir documento para firmar</strong>
+                            <small>@(subiendoDocumentoGuardado ? "Guardando documento..." : "PDF maximo 10 MB")</small>
+                        </span>
+                    </label>
+                </div>
+
+                <div class="stamp-documents-list">
+                    @if (!documentosGuardados.Any())
+                    {
+                        <div class="stamp-documents-empty">
+                            <i class="bi bi-folder2-open"></i>
+                            <strong>No hay documentos guardados.</strong>
+                            <span>Sube un PDF para usarlo en esta firma.</span>
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var doc in documentosGuardados)
+                        {
+                            <div class="stamp-document-item @(documentoGuardadoSeleccionado?.NombreArchivo == doc.NombreArchivo ? "is-active" : null)">
+                                <button type="button" class="stamp-document-main" @onclick="() => UsarDocumentoGuardadoAsync(doc)">
+                                    <span class="stamp-document-preview">
+                                        <embed src="@doc.Url#toolbar=0&navpanes=0&scrollbar=0" type="application/pdf" />
+                                    </span>
+                                    <span class="stamp-document-copy">
+                                        <strong title="@doc.Nombre">@doc.Nombre</strong>
+                                        <small>@doc.Fecha.ToString("dd/MM/yyyy HH:mm") · @doc.Tamano</small>
+                                    </span>
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                                <button type="button" class="stamp-document-delete" @onclick="() => BorrarDocumentoGuardadoAsync(doc)" title="Borrar" aria-label="Borrar documento">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        }
+                    }
+                </div>
+            </section>
+        }
     }
 </div>
 
@@ -263,6 +339,8 @@
     private bool cargando = true;
     private bool procesando;
     private bool guardandoConfiguracion;
+    private bool mostrarModalDocumentos;
+    private bool subiendoDocumentoGuardado;
     private bool puedeFirmarDocumentos;
     private bool esError;
     private int currentUserId;
@@ -273,6 +351,8 @@
     private double yMm = 10;
     private double anchoMm = StampWidthMm;
     private IBrowserFile? pdfFile;
+    private DocumentoGuardadoItem? documentoGuardadoSeleccionado;
+    private readonly List<DocumentoGuardadoItem> documentosGuardados = [];
     private Emisor? emisor;
     private List<Emisor> emisoresCuenta = [];
     private bool emisorConfigurado;
@@ -289,6 +369,11 @@
     private IJSObjectReference? stampSelectorModule;
     private IJSObjectReference? stampSelectorInstance;
     private bool stampSelectorInitialized;
+    private bool documentoQueryCargado;
+
+    [SupplyParameterFromQuery(Name = "documento")]
+    public string? DocumentoQuery { get; set; }
+
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -319,6 +404,8 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        CargarDocumentosGuardados();
+        SeleccionarDocumentoDesdeQuery();
         await CargarAccesoFirmaAsync();
         await CargarEmisorAsync();
         cargando = false;
@@ -331,7 +418,7 @@
 
         stampSelectorInitialized = true;
         dotNetRef = DotNetObjectReference.Create(this);
-        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js?v=20260820-2");
+        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js?v=20260821-1");
         stampSelectorInstance = await stampSelectorModule.InvokeAsync<IJSObjectReference>(
             "init",
             new
@@ -355,9 +442,14 @@
             dotNetRef);
 
         await CargarPreferenciaAsync();
+        await CargarDocumentoQueryEnVisorAsync();
     }
 
-    private void SeleccionarPdf(InputFileChangeEventArgs e) => pdfFile = e.File;
+    private void SeleccionarPdf(InputFileChangeEventArgs e)
+    {
+        pdfFile = e.File;
+        documentoGuardadoSeleccionado = null;
+    }
 
     private bool TieneCertificadoDisponible =>
         !string.IsNullOrWhiteSpace(pathCertificadoPendiente) ||
@@ -414,16 +506,37 @@
             if (recursosFirma is null)
                 return;
 
-            var apiResult = await FirmaStampApiService.EstamparAsync(
-                pdfFile!,
-                recursosFirma.Certificado,
-                recursosFirma.Clave,
-                "Firma digital del documento",
-                null,
-                pagina,
-                xMm,
-                yMm,
-                anchoMm);
+            FirmaStampApiResult apiResult;
+            if (documentoGuardadoSeleccionado is not null)
+            {
+                await using var pdfStream = File.OpenRead(documentoGuardadoSeleccionado.RutaFisica);
+                apiResult = await FirmaStampApiService.EstamparAsync(
+                    pdfStream,
+                    documentoGuardadoSeleccionado.Nombre,
+                    documentoGuardadoSeleccionado.Bytes,
+                    "application/pdf",
+                    recursosFirma.Certificado,
+                    recursosFirma.Clave,
+                    "Firma digital del documento",
+                    null,
+                    pagina,
+                    xMm,
+                    yMm,
+                    anchoMm);
+            }
+            else
+            {
+                apiResult = await FirmaStampApiService.EstamparAsync(
+                    pdfFile!,
+                    recursosFirma.Certificado,
+                    recursosFirma.Clave,
+                    "Firma digital del documento",
+                    null,
+                    pagina,
+                    xMm,
+                    yMm,
+                    anchoMm);
+            }
 
             if (!apiResult.Success || apiResult.Pdf is null)
             {
@@ -431,7 +544,7 @@
                 return;
             }
 
-            var downloadFileName = CrearNombrePdfFirmado(pdfFile!.Name);
+            var downloadFileName = CrearNombrePdfFirmado(documentoGuardadoSeleccionado?.Nombre ?? pdfFile!.Name);
             var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{downloadFileName}";
             var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", currentUserId.ToString());
             var physicalDirectory = Path.Combine(HostEnvironment.WebRootPath, relativeDirectory);
@@ -457,17 +570,25 @@
 
     private bool ValidarFormulario()
     {
-        if (pdfFile is null)
+        if (pdfFile is null && documentoGuardadoSeleccionado is null)
             return Error("Selecciona el PDF.");
 
         if (!emisorConfigurado)
             return Error(estadoEmisorMensaje);
 
-        if (pdfFile.Size <= 0 || pdfFile.Size > MaxPdfSize)
+        if (pdfFile is not null && (pdfFile.Size <= 0 || pdfFile.Size > MaxPdfSize))
             return Error("El PDF debe pesar maximo 10 MB.");
 
-        if (!EsExtension(pdfFile.Name, ".pdf"))
+        if (pdfFile is not null && !EsExtension(pdfFile.Name, ".pdf"))
             return Error("El documento debe ser PDF.");
+
+        if (documentoGuardadoSeleccionado is not null &&
+            (!File.Exists(documentoGuardadoSeleccionado.RutaFisica) ||
+             documentoGuardadoSeleccionado.Bytes <= 0 ||
+             documentoGuardadoSeleccionado.Bytes > MaxPdfSize))
+        {
+            return Error("El documento guardado no esta disponible o excede 10 MB.");
+        }
 
         if (pagina < 1)
             return Error("La pagina debe ser mayor que cero.");
@@ -631,7 +752,7 @@
 
             if (file.Size > MaxCertificadoSize)
             {
-                SetMensaje("La firma .p12 excede el tamano maximo de 5 MB.", true);
+                SetMensaje("La firma .p12 excede el tamaño máximo de 5 MB.", true);
                 return;
             }
 
@@ -893,6 +1014,145 @@
             false);
     }
 
+    private void AbrirModalDocumentos() => mostrarModalDocumentos = true;
+
+    private void CerrarModalDocumentos() => mostrarModalDocumentos = false;
+
+    private async Task UsarDocumentoGuardadoAsync(DocumentoGuardadoItem doc)
+    {
+        documentoGuardadoSeleccionado = doc;
+        pdfFile = null;
+        mostrarModalDocumentos = false;
+        SetMensaje($"Documento seleccionado: {doc.Nombre}", false);
+
+        if (stampSelectorInstance is not null)
+            await stampSelectorInstance.InvokeVoidAsync("loadFromUrl", doc.Url);
+    }
+
+    private async Task LimpiarDocumentoGuardado()
+    {
+        documentoGuardadoSeleccionado = null;
+        if (stampSelectorInstance is not null)
+            await stampSelectorInstance.InvokeVoidAsync("loadFromUrl", string.Empty);
+    }
+
+    private async Task SubirDocumentoGuardadoAsync(InputFileChangeEventArgs e)
+    {
+        if (subiendoDocumentoGuardado)
+            return;
+
+        var file = e.File;
+        if (file is null)
+            return;
+
+        if (!EsExtension(file.Name, ".pdf") || file.Size <= 0 || file.Size > MaxPdfSize)
+        {
+            SetMensaje("Selecciona un PDF valido de maximo 10 MB.", true);
+            return;
+        }
+
+        subiendoDocumentoGuardado = true;
+        try
+        {
+            var directory = ObtenerDirectorioDocumentosGuardados();
+            Directory.CreateDirectory(directory);
+
+            var storedName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{CrearNombreArchivoSeguro(file.Name)}";
+            var physicalPath = Path.Combine(directory, storedName);
+
+            await using var stream = file.OpenReadStream(MaxPdfSize);
+            await using var target = File.Create(physicalPath);
+            await stream.CopyToAsync(target);
+
+            CargarDocumentosGuardados();
+            var doc = documentosGuardados.FirstOrDefault(item => item.NombreArchivo == storedName);
+            if (doc is not null)
+                await UsarDocumentoGuardadoAsync(doc);
+
+            SetMensaje("Documento guardado para firmar.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMensaje($"No se pudo guardar el documento: {FormatearMensajeError(ex.Message)}", true);
+        }
+        finally
+        {
+            subiendoDocumentoGuardado = false;
+        }
+    }
+
+    private void CargarDocumentosGuardados()
+    {
+        documentosGuardados.Clear();
+        var directory = ObtenerDirectorioDocumentosGuardados();
+        if (!Directory.Exists(directory))
+            return;
+
+        foreach (var file in Directory.EnumerateFiles(directory, "*.pdf")
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.CreationTime))
+        {
+            documentosGuardados.Add(new DocumentoGuardadoItem(
+                CrearNombreDocumentoGuardado(file.Name),
+                file.Name,
+                FormatearTamano(file.Length),
+                file.Length,
+                file.CreationTime,
+                file.FullName,
+                "/" + Path.Combine(ObtenerDirectorioDocumentosGuardadosRelativo(), file.Name).Replace('\\', '/')));
+        }
+    }
+
+    private void SeleccionarDocumentoDesdeQuery()
+    {
+        if (string.IsNullOrWhiteSpace(DocumentoQuery))
+            return;
+
+        documentoGuardadoSeleccionado = documentosGuardados.FirstOrDefault(item =>
+            string.Equals(item.NombreArchivo, DocumentoQuery, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task CargarDocumentoQueryEnVisorAsync()
+    {
+        if (documentoQueryCargado || documentoGuardadoSeleccionado is null || stampSelectorInstance is null)
+            return;
+
+        documentoQueryCargado = true;
+        pdfFile = null;
+        await stampSelectorInstance.InvokeVoidAsync("loadFromUrl", documentoGuardadoSeleccionado.Url);
+    }
+
+    private async Task BorrarDocumentoGuardadoAsync(DocumentoGuardadoItem doc)
+    {
+        try
+        {
+            var directory = Path.GetFullPath(ObtenerDirectorioDocumentosGuardados());
+            var path = Path.GetFullPath(doc.RutaFisica);
+            if (!path.StartsWith(directory, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+            {
+                SetMensaje("No se encontro el documento para borrar.", true);
+                return;
+            }
+
+            File.Delete(path);
+            CargarDocumentosGuardados();
+            if (documentoGuardadoSeleccionado?.NombreArchivo == doc.NombreArchivo)
+                await LimpiarDocumentoGuardado();
+
+            SetMensaje("Documento eliminado.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMensaje($"No se pudo borrar el documento: {FormatearMensajeError(ex.Message)}", true);
+        }
+    }
+
+    private string ObtenerDirectorioDocumentosGuardados() =>
+        Path.Combine(HostEnvironment.WebRootPath, ObtenerDirectorioDocumentosGuardadosRelativo());
+
+    private string ObtenerDirectorioDocumentosGuardadosRelativo() =>
+        Path.Combine("uploads", "e-rubrica", "por-firmar", currentUserId.ToString());
+
     private bool Error(string texto)
     {
         SetMensaje(texto, true);
@@ -927,6 +1187,33 @@
 
     private static bool EsExtension(string fileName, string extension) =>
         string.Equals(Path.GetExtension(fileName), extension, StringComparison.OrdinalIgnoreCase);
+
+    private static string CrearNombreArchivoSeguro(string fileName)
+    {
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var extension = Path.GetExtension(fileName);
+        var limpio = new string(nombre.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray()).Trim('_');
+
+        if (string.IsNullOrWhiteSpace(limpio))
+            limpio = "documento";
+
+        return $"{limpio}{extension.ToLowerInvariant()}";
+    }
+
+    private static string CrearNombreDocumentoGuardado(string fileName)
+    {
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length > 3 && partes[0].Length == 14 && Guid.TryParse(partes[1], out _))
+            nombre = string.Join("_", partes.Skip(2));
+
+        return $"{nombre.Replace('_', ' ').Trim()}.pdf";
+    }
+
+    private static string FormatearTamano(long bytes) =>
+        bytes >= 1024 * 1024
+            ? $"{bytes / 1024d / 1024d:0.##} MB"
+            : $"{Math.Max(1, bytes / 1024d):0.##} KB";
 
     private static string CrearNombrePdfFirmado(string? fileName)
     {
@@ -963,6 +1250,15 @@
         DateTime Fecha,
         string? OriginalSha256,
         string? OutputSha256);
+
+    private sealed record DocumentoGuardadoItem(
+        string Nombre,
+        string NombreArchivo,
+        string Tamano,
+        long Bytes,
+        DateTime Fecha,
+        string RutaFisica,
+        string Url);
 
     public async ValueTask DisposeAsync()
     {

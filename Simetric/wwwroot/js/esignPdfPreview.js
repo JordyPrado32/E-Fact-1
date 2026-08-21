@@ -219,6 +219,27 @@ export async function init(options) {
         }
     };
 
+    const loadPdfData = async (data, successMessage) => {
+        clearThumbnails();
+
+        try {
+            setStatus("Abriendo PDF...");
+            pdfDocument = await pdfjs.getDocument({ data }).promise;
+            pageNumber = 1;
+            zoomPercent = 100;
+            await renderThumbnails();
+            await renderPage();
+            setStatus(successMessage || "PDF cargado correctamente.");
+        } catch {
+            pdfDocument = null;
+            canvas.hidden = true;
+            if (placeholder) placeholder.hidden = false;
+            setStatus("No fue posible abrir el PDF.", true);
+            updateNavigation();
+            clearThumbnails();
+        }
+    };
+
     const onPrevious = async () => {
         if (!pdfDocument || pageNumber <= 1) return;
         pageNumber -= 1;
@@ -240,6 +261,19 @@ export async function init(options) {
     clearThumbnails();
 
     return {
+        async loadFromUrl(url) {
+            if (!url) {
+                return;
+            }
+
+            const response = await fetch(url, { cache: "no-store" });
+            if (!response.ok) {
+                setStatus("No fue posible abrir el PDF.", true);
+                return;
+            }
+
+            await loadPdfData(await response.arrayBuffer(), "PDF del historial cargado.");
+        },
         dispose() {
             if (renderTask) {
                 renderTask.cancel();

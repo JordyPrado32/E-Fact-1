@@ -1,0 +1,568 @@
+@page "/e-sign/documentos/firmar"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Hosting
+@using System.Security.Claims
+@using Simetric.Services
+@using Simetric.Services.ESign
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment HostEnvironment
+@inject NavigationManager NavManager
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+
+<PageTitle>Firmar documentos | E-Rubrica</PageTitle>
+
+<div class="pending-sign-page">
+    @if (cargando)
+    {
+        <ESignLoadingState
+            Title="Cargando documentos"
+            Description="Preparando tus documentos pendientes para firma." />
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(mensaje))
+        {
+            <div class="pending-alert @(esError ? "is-error" : "is-ok")" role="alert">
+                <i class="bi @(esError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
+                <span>@mensaje</span>
+                <button type="button" @onclick="CerrarMensaje" aria-label="Cerrar alerta">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+        }
+
+        <header class="pending-heading">
+            <div>
+                <span class="header-kicker">Documentos Electronicos</span>
+                <h1>Documentos por firmar</h1>
+                <p>Administra los PDF subidos y elige el documento que vas a firmar.</p>
+            </div>
+            <button type="button" class="toolbar-btn" @onclick="AbrirModalDocumentos">
+                <i class="bi bi-folder2-open"></i>
+                <span>Documentos</span>
+            </button>
+        </header>
+
+        <section class="pending-stats">
+            <article class="pending-stat is-blue">
+                <div>
+                    <span>Pendientes</span>
+                    <strong>@DocumentosPendientes</strong>
+                    <small>Documentos por firmar</small>
+                </div>
+                <em></em>
+            </article>
+            <article class="pending-stat is-green">
+                <div>
+                    <span>Listos</span>
+                    <strong>@documentos.Count</strong>
+                    <small>Subidos para firma</small>
+                </div>
+                <em></em>
+            </article>
+            <article class="pending-stat is-gold">
+                <div>
+                    <span>Firmas del mes</span>
+                    <strong>@FirmasMesActual</strong>
+                    <small>@DateTime.Now.ToString("MMMM yyyy")</small>
+                </div>
+                <em></em>
+            </article>
+        </section>
+
+        <section class="pending-layout">
+            <article class="pending-table-card">
+                <div class="pending-filters">
+                    <label class="filter-control filter-search">
+                        <i class="bi bi-search"></i>
+                        <input placeholder="Buscar por nombre de documento..." @bind="busqueda" @bind:event="oninput" @bind:after="ReiniciarPagina" />
+                    </label>
+                    <label class="filter-control">
+                        <input type="date" @bind="fechaFiltro" @bind:format="yyyy-MM-dd" @bind:after="ReiniciarPagina" />
+                    </label>
+                    <label class="filter-control">
+                        <select @bind="estadoFiltro" @bind:after="ReiniciarPagina">
+                            <option value="">Todos los estados</option>
+                            <option value="Pendiente">Pendiente</option>
+                        </select>
+                    </label>
+                    <button type="button" class="clear-filters-btn" @onclick="LimpiarFiltros">
+                        <i class="bi bi-funnel"></i>
+                        <span>Limpiar filtros</span>
+                    </button>
+                </div>
+
+                <div class="pending-table-wrap">
+                    <table class="pending-table">
+                        <thead>
+                            <tr>
+                                <th>Documento</th>
+                                <th>Vista previa</th>
+                                <th>Fecha</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!DocumentosPagina.Any())
+                            {
+                                <tr>
+                                    <td colspan="5">
+                                        <div class="empty-row">
+                                            <i class="bi bi-file-earmark-arrow-up"></i>
+                                            <strong>No hay documentos pendientes.</strong>
+                                            <span>Usa el boton Documentos para subir o seleccionar un PDF.</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var doc in DocumentosPagina)
+                                {
+                                    <tr class="@(documentoSeleccionado?.NombreArchivo == doc.NombreArchivo ? "is-selected" : null)">
+                                        <td>
+                                            <button type="button" class="document-cell" @onclick="() => SeleccionarDocumento(doc)">
+                                                <span class="file-badge is-pdf">PDF</span>
+                                                <span>
+                                                    <strong title="@doc.Nombre">@doc.Nombre</strong>
+                                                    <small>@doc.Codigo</small>
+                                                </span>
+                                            </button>
+                                        </td>
+                                        <td>
+                                            <button type="button" class="table-preview" @onclick="() => SeleccionarDocumento(doc)" aria-label="Vista previa del documento">
+                                                <embed src="@doc.Url#toolbar=0&navpanes=0&scrollbar=0" type="application/pdf" />
+                                                <span><i class="bi bi-eye"></i></span>
+                                            </button>
+                                        </td>
+                                        <td>
+                                            <div class="date-stack">
+                                                <strong>@doc.Fecha.ToString("dd MMM yyyy")</strong>
+                                                <span>@doc.Fecha.ToString("hh:mm tt").ToLowerInvariant()</span>
+                                            </div>
+                                        </td>
+                                        <td><span class="status-pill">Pendiente</span></td>
+                                        <td>
+                                            <div class="row-actions">
+                                                <button type="button" class="action-icon-btn sign-action" @onclick="() => FirmarDocumento(doc)" title="Firmar" aria-label="Firmar">
+                                                    <i class="bi bi-pen"></i>
+                                                </button>
+                                                <a class="action-icon-btn download-action" href="@doc.Url" download="@doc.NombreArchivo" title="Descargar" aria-label="Descargar">
+                                                    <i class="bi bi-download"></i>
+                                                </a>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-footer">
+                    <span>Mostrando @PrimerDocumentoMostrado a @UltimoDocumentoMostrado de @DocumentosFiltrados.Count documentos</span>
+                    <div class="pagination">
+                        <button type="button" @onclick="PaginaAnterior" disabled="@(PaginaActualNormalizada <= 1)" aria-label="Pagina anterior">
+                            <i class="bi bi-chevron-left"></i>
+                        </button>
+                        @foreach (var numeroPagina in PaginasVisibles)
+                        {
+                            <button type="button" class="@(numeroPagina == PaginaActualNormalizada ? "is-active" : null)" @onclick="() => IrAPagina(numeroPagina)">
+                                @numeroPagina
+                            </button>
+                        }
+                        <button type="button" @onclick="PaginaSiguiente" disabled="@(PaginaActualNormalizada >= TotalPaginas)" aria-label="Pagina siguiente">
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </article>
+
+            <aside class="selected-panel">
+                <div class="selected-header">
+                    <h2>Documento seleccionado</h2>
+                    <button type="button" @onclick="LimpiarSeleccion" aria-label="Limpiar seleccion">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+
+                @if (documentoSeleccionado is null)
+                {
+                    <div class="selected-empty">
+                        <i class="bi bi-file-earmark-pdf"></i>
+                        <strong>Sin documento activo</strong>
+                        <span>Selecciona un documento de la tabla o desde el modal.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="preview-card">
+                        <embed src="@documentoSeleccionado.Url#toolbar=0&navpanes=0" type="application/pdf" />
+                        <span>1 de 1</span>
+                    </div>
+
+                    <div class="selected-title">
+                        <h3>@documentoSeleccionado.Nombre</h3>
+                        <span>PDF</span>
+                    </div>
+
+                    <dl class="document-meta">
+                        <div><dt>Fecha</dt><dd>@documentoSeleccionado.Fecha.ToString("dd MMM yyyy, hh:mm tt").ToLowerInvariant()</dd></div>
+                        <div><dt>Tamaño</dt><dd>@documentoSeleccionado.Tamano</dd></div>
+                        <div><dt>Estado</dt><dd><span class="status-pill">Pendiente</span></dd></div>
+                    </dl>
+
+                    <div class="selected-actions">
+                        <a class="view-btn" href="@documentoSeleccionado.Url" download="@documentoSeleccionado.NombreArchivo">
+                            <i class="bi bi-download"></i>
+                            <span>Descargar</span>
+                        </a>
+                        <button type="button" class="sign-btn" @onclick="IrAEstampar">
+                            <i class="bi bi-pen"></i>
+                            <span>Firmar</span>
+                        </button>
+                    </div>
+                }
+            </aside>
+        </section>
+
+        @if (mostrarModalDocumentos)
+        {
+            <div class="documents-modal-backdrop" @onclick="CerrarModalDocumentos"></div>
+            <section class="documents-modal" role="dialog" aria-modal="true" aria-labelledby="documentosModalTitulo">
+                <header class="modal-header">
+                    <div>
+                        <span class="header-kicker">Repositorio</span>
+                        <h2 id="documentosModalTitulo">Mis documentos subidos</h2>
+                    </div>
+                    <button type="button" @onclick="CerrarModalDocumentos" aria-label="Cerrar modal">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </header>
+
+                <div class="modal-upload">
+                    <InputFile id="pendingDocumentUpload" class="file-input" accept=".pdf,application/pdf" OnChange="SubirDocumentoAsync" />
+                    <label for="pendingDocumentUpload" class="upload-box">
+                        <i class="bi bi-cloud-arrow-up"></i>
+                        <span>
+                            <strong>Subir documento para firmar</strong>
+                            <small>@(subiendoDocumento ? "Guardando documento..." : "PDF maximo 10 MB")</small>
+                        </span>
+                    </label>
+                </div>
+
+                <div class="modal-document-list">
+                    @if (!documentos.Any())
+                    {
+                        <div class="modal-empty">
+                            <i class="bi bi-folder2-open"></i>
+                            <strong>No hay documentos guardados.</strong>
+                            <span>Sube un PDF para usarlo al firmar.</span>
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var doc in documentos)
+                        {
+                            <div class="modal-document @(documentoSeleccionado?.NombreArchivo == doc.NombreArchivo ? "is-active" : null)">
+                                <button type="button" class="modal-document-main" @onclick="() => UsarDocumento(doc)">
+                                    <span class="file-badge is-pdf">PDF</span>
+                                    <span>
+                                        <strong title="@doc.Nombre">@doc.Nombre</strong>
+                                        <small>@doc.Fecha.ToString("dd/MM/yyyy HH:mm") · @doc.Tamano</small>
+                                    </span>
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                                <button type="button" class="modal-delete-btn" @onclick="() => BorrarDocumentoAsync(doc)" title="Borrar" aria-label="Borrar documento">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        }
+                    }
+                </div>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private const long MaxPdfSize = 10 * 1024 * 1024;
+    private const int PageSize = 6;
+
+    private bool cargando = true;
+    private bool mostrarModalDocumentos;
+    private bool subiendoDocumento;
+    private bool esError;
+    private int currentUserId;
+    private int paginaActual = 1;
+    private string currentUserName = "Usuario";
+    private string busqueda = string.Empty;
+    private DateTime? fechaFiltro;
+    private string estadoFiltro = string.Empty;
+    private string? mensaje;
+    private DocumentoPorFirmarItem? documentoSeleccionado;
+    private readonly List<DocumentoPorFirmarItem> documentos = [];
+
+    private List<DocumentoPorFirmarItem> DocumentosFiltrados
+    {
+        get
+        {
+            var query = documentos.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(busqueda))
+                query = query.Where(doc => doc.Nombre.Contains(busqueda.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            if (fechaFiltro.HasValue)
+                query = query.Where(doc => doc.Fecha.Date == fechaFiltro.Value.Date);
+
+            if (!string.IsNullOrWhiteSpace(estadoFiltro))
+                query = query.Where(doc => string.Equals("Pendiente", estadoFiltro, StringComparison.OrdinalIgnoreCase));
+
+            return query.ToList();
+        }
+    }
+
+    private IReadOnlyList<DocumentoPorFirmarItem> DocumentosPagina =>
+        DocumentosFiltrados.Skip((PaginaActualNormalizada - 1) * PageSize).Take(PageSize).ToList();
+
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(DocumentosFiltrados.Count / (double)PageSize));
+    private int PaginaActualNormalizada => Math.Clamp(paginaActual, 1, TotalPaginas);
+    private int PrimerDocumentoMostrado => DocumentosFiltrados.Count == 0 ? 0 : ((PaginaActualNormalizada - 1) * PageSize) + 1;
+    private int UltimoDocumentoMostrado => Math.Min(PaginaActualNormalizada * PageSize, DocumentosFiltrados.Count);
+    private int DocumentosPendientes => documentos.Count;
+    private int FirmasMesActual => documentos.Count(doc => doc.Fecha.Month == DateTime.Now.Month && doc.Fecha.Year == DateTime.Now.Year);
+    private IEnumerable<int> PaginasVisibles => Enumerable.Range(1, TotalPaginas).Take(5);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out currentUserId) || currentUserId <= 0)
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        var isSuperAdmin = string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var access = await AppAccessService.CanAccessAsync(currentUserId, ESignRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(ESignRoutes.ServiceKey)}", forceLoad: true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        currentUserName = user.FindFirst(ClaimTypes.Name)?.Value ?? user.Identity?.Name ?? currentUserName;
+        CargarDocumentos();
+        documentoSeleccionado = documentos.FirstOrDefault();
+        cargando = false;
+    }
+
+    private void AbrirModalDocumentos() => mostrarModalDocumentos = true;
+
+    private void CerrarModalDocumentos() => mostrarModalDocumentos = false;
+
+    private void CerrarMensaje() => mensaje = null;
+
+    private void LimpiarSeleccion() => documentoSeleccionado = null;
+
+    private void SeleccionarDocumento(DocumentoPorFirmarItem doc) => documentoSeleccionado = doc;
+
+    private void UsarDocumento(DocumentoPorFirmarItem doc)
+    {
+        documentoSeleccionado = doc;
+        mostrarModalDocumentos = false;
+        SetMensaje($"Documento seleccionado: {doc.Nombre}", false);
+    }
+
+    private void FirmarDocumento(DocumentoPorFirmarItem doc)
+    {
+        documentoSeleccionado = doc;
+        IrAEstampar();
+    }
+
+    private void IrAEstampar()
+    {
+        if (documentoSeleccionado is null)
+        {
+            SetMensaje("Selecciona un documento para firmar.", true);
+            return;
+        }
+
+        NavManager.NavigateTo($"/e-sign/documentos/estampar?documento={Uri.EscapeDataString(documentoSeleccionado.NombreArchivo)}");
+    }
+
+    private void IrAPagina(int pagina) => paginaActual = Math.Clamp(pagina, 1, TotalPaginas);
+
+    private void PaginaAnterior() => IrAPagina(paginaActual - 1);
+
+    private void PaginaSiguiente() => IrAPagina(paginaActual + 1);
+
+    private void ReiniciarPagina() => paginaActual = 1;
+
+    private void LimpiarFiltros()
+    {
+        busqueda = string.Empty;
+        fechaFiltro = null;
+        estadoFiltro = string.Empty;
+        paginaActual = 1;
+    }
+
+    private async Task SubirDocumentoAsync(InputFileChangeEventArgs e)
+    {
+        if (subiendoDocumento)
+            return;
+
+        var file = e.File;
+        if (file is null)
+            return;
+
+        if (!EsPdf(file.Name) || file.Size <= 0 || file.Size > MaxPdfSize)
+        {
+            SetMensaje("Selecciona un PDF valido de maximo 10 MB.", true);
+            return;
+        }
+
+        subiendoDocumento = true;
+        try
+        {
+            var directory = ObtenerDirectorioFisico();
+            Directory.CreateDirectory(directory);
+
+            var safeName = CrearNombreArchivoSeguro(file.Name);
+            var storedName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{safeName}";
+            var physicalPath = Path.Combine(directory, storedName);
+
+            await using var stream = file.OpenReadStream(MaxPdfSize);
+            await using var target = File.Create(physicalPath);
+            await stream.CopyToAsync(target);
+
+            CargarDocumentos();
+            documentoSeleccionado = documentos.FirstOrDefault(doc => doc.NombreArchivo == storedName) ?? documentos.FirstOrDefault();
+            SetMensaje("Documento guardado para firmar.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMensaje($"No se pudo guardar el documento: {ex.Message}", true);
+        }
+        finally
+        {
+            subiendoDocumento = false;
+        }
+    }
+
+    private void CargarDocumentos()
+    {
+        documentos.Clear();
+        var directory = ObtenerDirectorioFisico();
+        if (!Directory.Exists(directory))
+            return;
+
+        foreach (var file in Directory.EnumerateFiles(directory, "*.pdf")
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.CreationTime))
+        {
+            documentos.Add(new DocumentoPorFirmarItem(
+                CrearNombreVisible(file.Name),
+                file.Name,
+                $"DOC-{file.CreationTime:yyyyMMdd-HHmm}",
+                FormatearTamano(file.Length),
+                file.CreationTime,
+                file.FullName,
+                "/" + Path.Combine(ObtenerDirectorioRelativo(), file.Name).Replace('\\', '/')));
+        }
+    }
+
+    private async Task BorrarDocumentoAsync(DocumentoPorFirmarItem doc)
+    {
+        try
+        {
+            var directory = Path.GetFullPath(ObtenerDirectorioFisico());
+            var path = Path.GetFullPath(doc.RutaFisica);
+            if (!path.StartsWith(directory, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+            {
+                SetMensaje("No se encontro el documento para borrar.", true);
+                return;
+            }
+
+            File.Delete(path);
+            CargarDocumentos();
+            if (documentoSeleccionado?.NombreArchivo == doc.NombreArchivo)
+                documentoSeleccionado = documentos.FirstOrDefault();
+
+            SetMensaje("Documento eliminado.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMensaje($"No se pudo borrar el documento: {ex.Message}", true);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private string ObtenerDirectorioFisico() =>
+        Path.Combine(HostEnvironment.WebRootPath, ObtenerDirectorioRelativo());
+
+    private string ObtenerDirectorioRelativo() =>
+        Path.Combine("uploads", "e-rubrica", "por-firmar", currentUserId.ToString());
+
+    private static bool EsPdf(string fileName) =>
+        string.Equals(Path.GetExtension(fileName), ".pdf", StringComparison.OrdinalIgnoreCase);
+
+    private static string CrearNombreArchivoSeguro(string fileName)
+    {
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var extension = Path.GetExtension(fileName);
+        var limpio = new string(nombre.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray()).Trim('_');
+
+        if (string.IsNullOrWhiteSpace(limpio))
+            limpio = "documento";
+
+        return $"{limpio}{extension.ToLowerInvariant()}";
+    }
+
+    private static string CrearNombreVisible(string fileName)
+    {
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length > 3 && partes[0].Length == 14 && Guid.TryParse(partes[1], out _))
+            nombre = string.Join("_", partes.Skip(2));
+
+        return $"{nombre.Replace('_', ' ').Trim()}.pdf";
+    }
+
+    private static string FormatearTamano(long bytes) =>
+        bytes >= 1024 * 1024
+            ? $"{bytes / 1024d / 1024d:0.##} MB"
+            : $"{Math.Max(1, bytes / 1024d):0.##} KB";
+
+    private void SetMensaje(string texto, bool error)
+    {
+        mensaje = texto;
+        esError = error;
+    }
+
+    private sealed record DocumentoPorFirmarItem(
+        string Nombre,
+        string NombreArchivo,
+        string Codigo,
+        string Tamano,
+        DateTime Fecha,
+        string RutaFisica,
+        string Url);
+}

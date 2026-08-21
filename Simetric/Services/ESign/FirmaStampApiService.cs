@@ -42,6 +42,38 @@ public sealed class FirmaStampApiService
         double anchoMm,
         CancellationToken cancellationToken = default)
     {
+        await using var pdfStream = pdf.OpenReadStream(MaxFileBytes, cancellationToken);
+        return await EstamparAsync(
+            pdfStream,
+            pdf.Name,
+            pdf.Size,
+            pdf.ContentType,
+            certificado,
+            clave,
+            razon,
+            ubicacion,
+            pagina,
+            xMm,
+            yMm,
+            anchoMm,
+            cancellationToken);
+    }
+
+    public async Task<FirmaStampApiResult> EstamparAsync(
+        Stream pdfStream,
+        string pdfFileName,
+        long pdfSize,
+        string? pdfContentType,
+        FirmaStampApiFile certificado,
+        string clave,
+        string? razon,
+        string? ubicacion,
+        int pagina,
+        double xMm,
+        double yMm,
+        double anchoMm,
+        CancellationToken cancellationToken = default)
+    {
         var baseUri = GetBaseUri();
         var apiKey = GetApiKey();
 
@@ -54,14 +86,12 @@ public sealed class FirmaStampApiService
         if (!TryValidateCertificate(certificado.Content, clave, out var certificateValidationError))
             return FirmaStampApiResult.Error(certificateValidationError);
 
-        await using var pdfStream = pdf.OpenReadStream(MaxFileBytes, cancellationToken);
-
         using var form = new MultipartFormDataContent();
-        using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
+        using var pdfContent = CreateFileContent(pdfStream, string.IsNullOrWhiteSpace(pdfContentType) ? "application/pdf" : pdfContentType);
         using var certificadoContent = CreateFileContent(certificado.Content, "application/x-pkcs12");
         var certificadoFileName = NormalizeCertificateFileName(certificado.FileName);
 
-        form.Add(pdfContent, "pdf", pdf.Name);
+        form.Add(pdfContent, "pdf", pdfFileName);
         form.Add(certificadoContent, "certificado", certificadoFileName);
         form.Add(new StringContent(clave), "clave");
         if (!string.IsNullOrWhiteSpace(razon))
@@ -84,7 +114,7 @@ public sealed class FirmaStampApiService
             "Enviando firma {CorrelationId} a {Endpoint}. Campos: pdf, certificado, clave. PDF bytes: {PdfBytes}. P12 bytes: {P12Bytes}. P12 SHA256: {P12Hash}. Clave presente: {ClavePresente}. Longitud de clave: {ClaveLength}.",
             correlationId,
             endpoint,
-            pdf.Size,
+            pdfSize,
             certificado.Content.Length,
             Convert.ToHexString(SHA256.HashData(certificado.Content)),
             !string.IsNullOrEmpty(clave),
@@ -95,7 +125,7 @@ public sealed class FirmaStampApiService
             Evento = "Solicitud",
             CorrelationId = correlationId,
             Endpoint = endpoint.ToString(),
-            Pdf = new { pdf.Name, pdf.Size, pdf.ContentType },
+            Pdf = new { Name = pdfFileName, Size = pdfSize, ContentType = pdfContentType },
             Certificado = new
             {
                 certificado.FileName,
@@ -342,6 +372,20 @@ public sealed class FirmaStampApiService
         IBrowserFile pdf,
         CancellationToken cancellationToken = default)
     {
+        await using var pdfStream = pdf.OpenReadStream(10 * 1024 * 1024, cancellationToken);
+        return await ValidarFirmaPdfAsync(
+            pdfStream,
+            pdf.Name,
+            pdf.ContentType,
+            cancellationToken);
+    }
+
+    public async Task<PdfSignatureValidationApiResult> ValidarFirmaPdfAsync(
+        Stream pdfStream,
+        string pdfFileName,
+        string? pdfContentType,
+        CancellationToken cancellationToken = default)
+    {
         var baseUri = GetBaseUri();
         var apiKey = GetApiKey();
 
@@ -351,11 +395,10 @@ public sealed class FirmaStampApiService
         if (string.IsNullOrWhiteSpace(apiKey))
             return PdfSignatureValidationApiResult.Error("La API key de estampado no esta configurada.");
 
-        await using var pdfStream = pdf.OpenReadStream(10 * 1024 * 1024, cancellationToken);
         using var form = new MultipartFormDataContent();
-        using var pdfContent = CreateFileContent(pdfStream, pdf.ContentType);
+        using var pdfContent = CreateFileContent(pdfStream, string.IsNullOrWhiteSpace(pdfContentType) ? "application/pdf" : pdfContentType);
 
-        form.Add(pdfContent, "pdf", pdf.Name);
+        form.Add(pdfContent, "pdf", pdfFileName);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildEndpointUri(baseUri, "ValidarFirmaPath", "api/documentos/validar-firma"));
         request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
@@ -725,7 +768,7 @@ public sealed class FirmaStampApiService
 
         if (input.Length > 12_000)
         {
-            error = "El valor del QR excede el tamano permitido.";
+            error = "El valor del QR excede el tamaño permitido.";
             return false;
         }
 
@@ -751,7 +794,7 @@ public sealed class FirmaStampApiService
 
         if (token.Length > 8_000)
         {
-            error = "El token del QR excede el tamano permitido.";
+            error = "El token del QR excede el tamaño permitido.";
             return false;
         }
 

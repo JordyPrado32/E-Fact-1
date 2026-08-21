@@ -288,26 +288,22 @@ export async function init(options, dotNetRef) {
         await renderPage();
     };
 
-    const onPdfChange = async () => {
-        const file = pdfInput.files?.[0];
+    const loadPdfBytes = async (arrayBuffer, preferredPage) => {
         selectedPosition = null;
         footprint.hidden = true;
         clearThumbnails();
 
-        if (!file) {
-            return;
-        }
-
-        if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-            setStatus("Selecciona un archivo PDF valido.", true);
+        if (!arrayBuffer) {
             return;
         }
 
         try {
             setStatus("Abriendo PDF...");
-            pdfDocument = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+            pdfDocument = await pdfjs.getDocument({ data: arrayBuffer }).promise;
             zoomPercent = 100;
-            pageNumber = autoApplyPreferred && preferredSelection?.page
+            pageNumber = preferredPage
+                ? Math.min(pdfDocument.numPages, Math.max(1, preferredPage))
+                : autoApplyPreferred && preferredSelection?.page
                 ? Math.min(pdfDocument.numPages, Math.max(1, preferredSelection.page))
                 : 1;
             await renderThumbnails();
@@ -320,6 +316,21 @@ export async function init(options, dotNetRef) {
             updateNavigation();
             clearThumbnails();
         }
+    };
+
+    const onPdfChange = async () => {
+        const file = pdfInput.files?.[0];
+
+        if (!file) {
+            return;
+        }
+
+        if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+            setStatus("Selecciona un archivo PDF valido.", true);
+            return;
+        }
+
+        await loadPdfBytes(await file.arrayBuffer());
     };
 
     const onCanvasPointerDown = async event => {
@@ -482,6 +493,38 @@ export async function init(options, dotNetRef) {
                     preferredSelection.xMm,
                     preferredSelection.yMm,
                     preferredSelection.widthMm);
+            }
+        },
+        async loadFromUrl(url) {
+            if (!url) {
+                pdfDocument = null;
+                pdfPage = null;
+                selectedPosition = null;
+                footprint.hidden = true;
+                canvas.hidden = true;
+                placeholder.hidden = false;
+                pageNumber = 1;
+                setStatus("Carga un PDF para seleccionar la posicion.");
+                updateNavigation();
+                clearThumbnails();
+                return;
+            }
+
+            try {
+                setStatus("Abriendo PDF guardado...");
+                const response = await fetch(url, { cache: "no-store" });
+                if (!response.ok) {
+                    throw new Error("No se pudo leer el documento.");
+                }
+
+                await loadPdfBytes(await response.arrayBuffer());
+            } catch {
+                pdfDocument = null;
+                canvas.hidden = true;
+                placeholder.hidden = false;
+                setStatus("No fue posible abrir el PDF guardado.", true);
+                updateNavigation();
+                clearThumbnails();
             }
         },
         dispose() {

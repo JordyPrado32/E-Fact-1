@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Hosting
 @using System.Security.Claims
 @using Microsoft.JSInterop
 @using Simetric.Services
@@ -12,6 +13,7 @@
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject FirmaStampApiService FirmaStampApiService
+@inject IWebHostEnvironment HostEnvironment
 @inject IJSRuntime JS
 
 <PageTitle>Validar firma digital | E-Rubrica</PageTitle>
@@ -41,17 +43,21 @@
                 <article class="validation-card validation-upload-card">
                     <div class="panel-heading">
                         <h2><i class="bi bi-file-earmark-lock"></i> Documento firmado en PDF</h2>
+                        <button type="button" class="history-documents-btn" @onclick="AbrirModalDocumentos">
+                            <i class="bi bi-folder2-open"></i>
+                            <span>Documentos</span>
+                        </button>
                     </div>
 
                     <div class="file-grid">
-                        <label class="signature-file-card @(pdfValidacionFirmaFile is null ? null : "is-ready")">
+                        <label class="signature-file-card @(pdfValidacionFirmaFile is null && documentoHistorialSeleccionado is null ? null : "is-ready")">
                             <InputFile id="validationPdfInput" class="file-input" accept="application/pdf,.pdf" OnChange="SeleccionarPdfValidacionFirma" />
                             <span class="pdf-illustration">
                                 <i class="bi bi-file-earmark-pdf"></i>
                                 <span class="upload-arrow"><i class="bi bi-arrow-up"></i></span>
                             </span>
                             <strong>Arrastra y suelta tu archivo PDF aquí</strong>
-                            <span>@(pdfValidacionFirmaFile?.Name ?? "o selecciona un archivo desde tu dispositivo")</span>
+                            <span>@NombreDocumentoActivo</span>
                             <span class="select-file-button">
                                 <i class="bi bi-file-earmark-arrow-up"></i>
                                 <span>Seleccionar PDF</span>
@@ -201,6 +207,50 @@
                 </div>
             }
         </section>
+
+        @if (mostrarModalDocumentos)
+        {
+            <div class="history-modal-backdrop" @onclick="CerrarModalDocumentos">
+                <section class="history-documents-modal" role="dialog" aria-modal="true" aria-labelledby="historyDocumentsTitle" @onclick:stopPropagation>
+                    <div class="history-modal-header">
+                        <div>
+                            <span>Historial de documentos</span>
+                            <h2 id="historyDocumentsTitle">Seleccionar documento firmado</h2>
+                        </div>
+                        <button type="button" @onclick="CerrarModalDocumentos" aria-label="Cerrar modal">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+
+                    @if (!documentosFirmados.Any())
+                    {
+                        <div class="history-empty-state">
+                            <i class="bi bi-file-earmark-lock"></i>
+                            <strong>No tienes documentos firmados.</strong>
+                            <span>Cuando firmes un PDF, aparecerá aquí para validarlo.</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="history-documents-list">
+                            @foreach (var doc in documentosFirmados)
+                            {
+                                <article class="history-document-item @(documentoHistorialSeleccionado?.Url == doc.Url ? "is-selected" : null)">
+                                    <span class="history-document-icon"><i class="bi bi-file-earmark-pdf"></i></span>
+                                    <div>
+                                        <strong title="@doc.NombreArchivo">@doc.Nombre</strong>
+                                        <small>@doc.Fecha.ToString("dd/MM/yyyy HH:mm") · @doc.Tamano</small>
+                                    </div>
+                                    <button type="button" @onclick="() => SeleccionarDocumentoHistorialAsync(doc)">
+                                        Usar
+                                    </button>
+                                </article>
+                            }
+                        </div>
+                    }
+                </section>
+            </div>
+        }
     }
 </div>
 
@@ -216,6 +266,14 @@
     private IJSObjectReference? pdfPreviewModule;
     private IJSObjectReference? pdfPreviewInstance;
     private bool pdfPreviewInitialized;
+    private bool mostrarModalDocumentos;
+    private int currentUserId;
+    private DocumentoFirmadoItem? documentoHistorialSeleccionado;
+    private readonly List<DocumentoFirmadoItem> documentosFirmados = new();
+    private string NombreDocumentoActivo =>
+        pdfValidacionFirmaFile?.Name
+        ?? documentoHistorialSeleccionado?.Nombre
+        ?? "o selecciona un archivo desde tu dispositivo";
 
     private static readonly IReadOnlyList<CriterioValidacion> CriteriosValidacion =
     [
@@ -237,7 +295,7 @@
             return;
         }
 
-        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out var currentUserId) || currentUserId <= 0)
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out currentUserId) || currentUserId <= 0)
         {
             NavManager.NavigateTo("/login", forceLoad: true);
             return;
@@ -256,6 +314,7 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
+        CargarDocumentosFirmados();
         cargando = false;
     }
 
@@ -286,7 +345,13 @@
             });
     }
 
-    private void SeleccionarPdfValidacionFirma(InputFileChangeEventArgs e) => pdfValidacionFirmaFile = e.File;
+    private void SeleccionarPdfValidacionFirma(InputFileChangeEventArgs e)
+    {
+        pdfValidacionFirmaFile = e.File;
+        documentoHistorialSeleccionado = null;
+        pdfFirmaMensaje = null;
+        pdfFirmaResultado = null;
+    }
 
     private async Task ValidarFirmaPdfAsync()
     {
@@ -294,21 +359,21 @@
         pdfFirmaEsError = false;
         pdfFirmaResultado = null;
 
-        if (pdfValidacionFirmaFile is null)
+        if (pdfValidacionFirmaFile is null && documentoHistorialSeleccionado is null)
         {
             pdfFirmaEsError = true;
             pdfFirmaMensaje = "Selecciona el PDF firmado.";
             return;
         }
 
-        if (pdfValidacionFirmaFile.Size <= 0 || pdfValidacionFirmaFile.Size > MaxPdfSize)
+        if (pdfValidacionFirmaFile is not null && (pdfValidacionFirmaFile.Size <= 0 || pdfValidacionFirmaFile.Size > MaxPdfSize))
         {
             pdfFirmaEsError = true;
             pdfFirmaMensaje = "El PDF debe pesar maximo 10 MB.";
             return;
         }
 
-        if (!EsExtension(pdfValidacionFirmaFile.Name, ".pdf"))
+        if (pdfValidacionFirmaFile is not null && !EsExtension(pdfValidacionFirmaFile.Name, ".pdf"))
         {
             pdfFirmaEsError = true;
             pdfFirmaMensaje = "El documento debe ser PDF.";
@@ -318,7 +383,10 @@
         procesandoValidacionFirmaPdf = true;
         try
         {
-            var apiResult = await FirmaStampApiService.ValidarFirmaPdfAsync(pdfValidacionFirmaFile);
+            var apiResult = pdfValidacionFirmaFile is not null
+                ? await FirmaStampApiService.ValidarFirmaPdfAsync(pdfValidacionFirmaFile)
+                : await ValidarDocumentoHistorialAsync(documentoHistorialSeleccionado!);
+
             if (!apiResult.Success || apiResult.Validation is null)
             {
                 pdfFirmaEsError = true;
@@ -366,6 +434,109 @@
     private static bool EsExtension(string fileName, string extension) =>
         string.Equals(Path.GetExtension(fileName), extension, StringComparison.OrdinalIgnoreCase);
 
+    private void AbrirModalDocumentos() => mostrarModalDocumentos = true;
+
+    private void CerrarModalDocumentos() => mostrarModalDocumentos = false;
+
+    private async Task SeleccionarDocumentoHistorialAsync(DocumentoFirmadoItem doc)
+    {
+        documentoHistorialSeleccionado = doc;
+        pdfValidacionFirmaFile = null;
+        pdfFirmaMensaje = null;
+        pdfFirmaResultado = null;
+        mostrarModalDocumentos = false;
+
+        if (pdfPreviewInstance is not null)
+            await pdfPreviewInstance.InvokeVoidAsync("loadFromUrl", doc.Url);
+    }
+
+    private async Task<PdfSignatureValidationApiResult> ValidarDocumentoHistorialAsync(DocumentoFirmadoItem doc)
+    {
+        var physicalPath = Path.Combine(
+            HostEnvironment.WebRootPath,
+            doc.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+
+        if (!File.Exists(physicalPath))
+            return PdfSignatureValidationApiResult.Error("No se encontró el PDF seleccionado.");
+
+        var fileInfo = new FileInfo(physicalPath);
+        if (fileInfo.Length <= 0 || fileInfo.Length > MaxPdfSize)
+            return PdfSignatureValidationApiResult.Error("El PDF debe pesar maximo 10 MB.");
+
+        await using var stream = File.OpenRead(physicalPath);
+        return await FirmaStampApiService.ValidarFirmaPdfAsync(stream, doc.NombreArchivo, "application/pdf");
+    }
+
+    private void CargarDocumentosFirmados()
+    {
+        documentosFirmados.Clear();
+        var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", currentUserId.ToString());
+        var physicalDirectory = Path.Combine(HostEnvironment.WebRootPath, relativeDirectory);
+        if (!Directory.Exists(physicalDirectory))
+            return;
+
+        foreach (var file in Directory.EnumerateFiles(physicalDirectory, "*.pdf")
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.CreationTime))
+        {
+            var relativePath = Path.Combine(relativeDirectory, file.Name).Replace('\\', '/');
+            documentosFirmados.Add(new DocumentoFirmadoItem(
+                CrearNombreVisible(file),
+                file.Name,
+                FormatearTamano(file.Length),
+                file.CreationTime,
+                "/" + relativePath,
+                relativePath));
+        }
+    }
+
+    private static string CrearNombreVisible(FileInfo file)
+    {
+        if (TryGetNombreDocumentoOriginal(file.Name, out var nombreOriginal))
+            return $"{nombreOriginal}.pdf";
+
+        var nombre = Path.GetFileNameWithoutExtension(file.Name);
+        var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length >= 3 &&
+            partes[0].Length == 14 &&
+            partes[^1].Equals("estampado", StringComparison.OrdinalIgnoreCase) &&
+            partes[1].Length >= 16)
+        {
+            return $"Documento estampado - {file.CreationTime:dd/MM/yyyy HH:mm}";
+        }
+
+        var index = nombre.IndexOf("_estampado", StringComparison.OrdinalIgnoreCase);
+        if (index > 0)
+            nombre = nombre[..index];
+
+        return $"{nombre.Replace('_', ' ').Trim()}.pdf";
+    }
+
+    private static bool TryGetNombreDocumentoOriginal(string fileName, out string nombreOriginal)
+    {
+        nombreOriginal = string.Empty;
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length < 4 ||
+            partes[0].Length != 14 ||
+            partes[1].Length != 32 ||
+            !partes[^1].Equals("firmado", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        nombreOriginal = string.Join("_", partes.Skip(2).Take(partes.Length - 3))
+            .Replace('_', ' ')
+            .Trim();
+
+        return !string.IsNullOrWhiteSpace(nombreOriginal);
+    }
+
+    private static string FormatearTamano(long bytes) =>
+        bytes >= 1024 * 1024
+            ? $"{bytes / 1024d / 1024d:0.##} MB"
+            : $"{Math.Max(1, bytes / 1024d):0.##} KB";
+
     public async ValueTask DisposeAsync()
     {
         if (pdfPreviewInstance is not null)
@@ -379,4 +550,5 @@
     }
 
     private sealed record CriterioValidacion(string Titulo, string Descripcion, string Detalle, string Icono);
+    private sealed record DocumentoFirmadoItem(string Nombre, string NombreArchivo, string Tamano, DateTime Fecha, string Url, string RelativePath);
 }
