@@ -9,6 +9,7 @@
 @inject SolicitudService SolicitudService
 @inject EmisorSistemaService EmisorSistemaService
 @inject IConfiguration Configuration
+@inject IJSRuntime JS
 
 <PageTitle>Uanacréditos | BackOffice</PageTitle>
 
@@ -211,6 +212,47 @@
                 <span>Solicitudes enviadas a Uanataca</span>
                 <strong>GET @CertificateRequestsEndpoint</strong>
             </div>
+            <div class="uanacredits-direct-query">
+                <div>
+                    <span>Consulta directa por UUID</span>
+                    <small>Autentica contra Uanataca y consulta únicamente la solicitud indicada.</small>
+                </div>
+                <div class="d-flex gap-2 flex-wrap mt-3">
+                    <input class="form-control"
+                           style="max-width:430px"
+                           placeholder="Pega aquí el UUID de la solicitud"
+                           @bind="uuidConsultaDirecta" />
+                    <button type="button"
+                            class="btn btn-primary"
+                            @onclick="ConsultarSolicitudPorUuidAsync"
+                            disabled="@(consultandoUuid || !UanatacaApiService.IsConfigured)">
+                        <i class="ri-search-line @(consultandoUuid ? "is-spinning" : string.Empty)"></i>
+                        @(consultandoUuid ? "Consultando..." : "Probar endpoint")
+                    </button>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(uuidConsultaDirecta))
+                {
+                    <small class="d-block text-muted mt-2 text-break">GET @GetUuidEndpoint()</small>
+                }
+                @if (!string.IsNullOrWhiteSpace(errorUuid))
+                {
+                    <p class="text-danger mt-2 mb-0">@errorUuid</p>
+                }
+                @if (solicitudUuid is not null)
+                {
+                    <div class="table-responsive mt-3">
+                        <table class="table table-sm align-middle mb-0">
+                            <tbody>
+                                <tr><th>UUID</th><td class="text-break">@solicitudUuid.Uuid</td></tr>
+                                <tr><th>Estado interno</th><td>@(solicitudUuid.Status ?? "-")</td></tr>
+                                <tr><th>Estado Uanataca</th><td>@(solicitudUuid.UanatacaStatus ?? "-")</td></tr>
+                                <tr><th>Fecha de solicitud</th><td>@(solicitudUuid.RequestDate?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "-")</td></tr>
+                                <tr><th>Comentarios</th><td>@(solicitudUuid.Comments ?? "-")</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
             <div class="d-flex gap-2 flex-wrap mt-3">
                 <input class="form-control" style="max-width:280px" placeholder="UUID, identificación o correo" @bind="filtroTexto" />
                 <select class="form-select" style="max-width:220px" @bind="filtroEstado">
@@ -238,7 +280,33 @@
                             @foreach (var solicitud in solicitudesRemotas)
                             {
                                 <tr>
-                                    <td>@(solicitud.Uuid ?? "Sin UUID")</td>
+                                    <td style="min-width:390px">
+                                        @if (!string.IsNullOrWhiteSpace(solicitud.Uuid))
+                                        {
+                                            <div class="input-group input-group-sm">
+                                                <input class="form-control"
+                                                       value="@solicitud.Uuid"
+                                                       readonly
+                                                       aria-label="UUID de la solicitud" />
+                                                <button type="button"
+                                                        class="btn btn-outline-secondary"
+                                                        title="Copiar UUID"
+                                                        @onclick="() => CopiarUuidAsync(solicitud.Uuid)">
+                                                    <i class="ri-file-copy-line"></i>
+                                                    Copiar
+                                                </button>
+                                                <button type="button"
+                                                        class="btn btn-outline-primary"
+                                                        @onclick="() => PrepararConsultaDirecta(solicitud.Uuid)">
+                                                    Probar
+                                                </button>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <span>Sin UUID</span>
+                                        }
+                                    </td>
                                     <td>@(solicitud.Identification ?? "-")</td>
                                     <td>@(solicitud.UanatacaStatus ?? solicitud.Status ?? "-")</td>
                                     <td>@(solicitud.RequestDate?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "-")</td>
@@ -260,14 +328,18 @@
     private bool sincronizandoPendientes;
     private bool consultandoProductos;
     private bool consultandoProductosStakeholder;
+    private bool consultandoUuid;
     private string? error;
     private string? errorSolicitudes;
     private string? errorProductos;
     private string? errorProductosStakeholder;
+    private string? errorUuid;
     private string? mensajePendientes;
     private string filtroTexto = string.Empty;
     private string filtroEstado = string.Empty;
+    private string uuidConsultaDirecta = string.Empty;
     private IReadOnlyList<BesCertificateRequestDto>? solicitudesRemotas;
+    private BesCertificateRequestDto? solicitudUuid;
     private IReadOnlyList<BesProductoDto>? productosDisponibles;
     private IReadOnlyList<BesStakeholderProductDto>? productosStakeholder;
     private Emisor? emisorMaestro;
@@ -285,6 +357,7 @@
     private string BaseUrlPruebas => Configuration["UanatacaApi:BaseUrl"] ?? "No configurada";
     private string BalanceEndpoint => $"{BaseUrlPruebas.TrimEnd('/')}{Configuration["UanatacaApi:BalancePath"]}";
     private string CertificateRequestsEndpoint => $"{BaseUrlPruebas.TrimEnd('/')}{Configuration["UanatacaApi:CertificateRequestsPath"]}";
+    private string GetUuidEndpoint() => $"{CertificateRequestsEndpoint}?uuid={Uri.EscapeDataString(uuidConsultaDirecta.Trim())}";
     private decimal EscalaGrafico => saldo is > 0m
         ? Math.Max(1000m, Math.Ceiling(saldo.Value / 1000m) * 1000m)
         : 1000m;
@@ -359,6 +432,60 @@
         {
             consultandoSolicitudes = false;
         }
+    }
+
+    private async Task ConsultarSolicitudPorUuidAsync()
+    {
+        if (consultandoUuid || !UanatacaApiService.IsConfigured)
+        {
+            return;
+        }
+
+        var uuid = uuidConsultaDirecta.Trim();
+        if (!Guid.TryParse(uuid, out _))
+        {
+            solicitudUuid = null;
+            errorUuid = "Ingresa un UUID válido de Uanataca.";
+            return;
+        }
+
+        consultandoUuid = true;
+        errorUuid = null;
+        solicitudUuid = null;
+
+        try
+        {
+            solicitudUuid = (await UanatacaApiService.BuscarSolicitudesAsync(uuid: uuid)).FirstOrDefault();
+            if (solicitudUuid is null)
+            {
+                errorUuid = "Uanataca no devolvió una solicitud para ese UUID.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorUuid = ex.Message;
+        }
+        finally
+        {
+            consultandoUuid = false;
+        }
+    }
+
+    private void PrepararConsultaDirecta(string? uuid)
+    {
+        uuidConsultaDirecta = uuid?.Trim() ?? string.Empty;
+        solicitudUuid = null;
+        errorUuid = null;
+    }
+
+    private async Task CopiarUuidAsync(string? uuid)
+    {
+        if (string.IsNullOrWhiteSpace(uuid))
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", uuid.Trim());
     }
 
     private async Task ConsultarProductosAsync()

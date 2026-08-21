@@ -216,6 +216,16 @@
                                             @GetEstadoUanataca(sol)
                                         </span>
                                         <small>@GetDetalleUanataca(sol)</small>
+                                        @if (!string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+                                        {
+                                            <button type="button"
+                                                    class="mis-pagos-status-refresh"
+                                                    @onclick="() => ConsultarEstadoUanatacaAsync(sol.SolId)"
+                                                    disabled="@(solicitudesConsultando.Contains(sol.SolId) || actualizandoUanataca)">
+                                                <i class="bi @(solicitudesConsultando.Contains(sol.SolId) ? "bi-arrow-repeat" : "bi-cloud-arrow-down")"></i>
+                                                @(solicitudesConsultando.Contains(sol.SolId) ? "Consultando..." : "Consultar estado")
+                                            </button>
+                                        }
                                     </div>
                                 </td>
                                 <td data-label="Soporte">
@@ -544,6 +554,30 @@
         color: #16324f;
     }
 
+    .mis-pagos-status-refresh {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin-top: 0.45rem;
+        padding: 0.35rem 0.6rem;
+        border: 1px solid #dbe5f0;
+        border-radius: 8px;
+        background: #f8fbff;
+        color: #24557d;
+        font-size: 0.78rem;
+        cursor: pointer;
+    }
+
+    .mis-pagos-status-refresh:hover:not(:disabled) {
+        background: #edf6ff;
+        border-color: #b8d5ee;
+    }
+
+    .mis-pagos-status-refresh:disabled {
+        opacity: 0.6;
+        cursor: wait;
+    }
+
     .mis-pagos-results-meta {
         display: flex;
         justify-content: space-between;
@@ -619,6 +653,7 @@
     private string? mensajeSincronizacion;
     private string? errorSincronizacion;
     private bool actualizandoUanataca;
+    private readonly HashSet<int> solicitudesConsultando = new();
     private int usuarioIdActual;
     private int? enviandoRespuestaId;
     private int? solicitudAvisoSeleccionadaId;
@@ -775,6 +810,44 @@
         finally
         {
             actualizandoUanataca = false;
+        }
+    }
+
+    private async Task ConsultarEstadoUanatacaAsync(int solId)
+    {
+        if (solId <= 0 || usuarioIdActual <= 0 || actualizandoUanataca || !solicitudesConsultando.Add(solId))
+        {
+            return;
+        }
+
+        mensajeSincronizacion = null;
+        errorSincronizacion = null;
+
+        try
+        {
+            var resultado = await SolicitudService.SincronizarSolicitudClienteUanatacaAsync(
+                solId,
+                usuarioIdActual);
+
+            if (!resultado.Success)
+            {
+                errorSincronizacion = resultado.Message;
+                return;
+            }
+
+            solicitudes = FiltrarSolicitudesDeCuenta(
+                await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
+            PaginaActual = Math.Min(PaginaActual, TotalPaginas);
+            mensajeSincronizacion = $"Estado actualizado: {resultado.ProviderStatusText ?? resultado.ProviderStatus ?? "registrada"}.";
+        }
+        catch (Exception ex)
+        {
+            errorSincronizacion = "No fue posible consultar el estado de esta solicitud. Intenta nuevamente.";
+            Console.WriteLine($"Error al consultar estado Uanataca para SolId {solId}: {ex.Message}");
+        }
+        finally
+        {
+            solicitudesConsultando.Remove(solId);
         }
     }
 

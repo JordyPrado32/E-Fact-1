@@ -46,7 +46,9 @@ public sealed class BesCertificateRequestDto
     public string? Names { get; set; }
     public string? LastName1 { get; set; }
     public string? LastName2 { get; set; }
-    public DateTime? BirthDate { get; set; }
+    // Uanataca devuelve este campo como dd/MM/yyyy y, en algunas respuestas,
+    // puede devolverlo enmascarado. No debe deserializarse automáticamente a DateTime.
+    public string? BirthDate { get; set; }
     public string? Nationality { get; set; }
     public string? Sex { get; set; }
     public string? PhoneNumber { get; set; }

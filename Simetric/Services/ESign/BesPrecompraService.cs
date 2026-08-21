@@ -98,12 +98,14 @@ public sealed class UanatacaApiService
             query["uuid"] = uuid;
         }
 
-        return await SendAsync<List<BesCertificateRequestDto>>(
+        var raw = await SendRawAsync(
             HttpMethod.Get,
             GetPath("CertificateRequestsPath", "/certificateRequests"),
             token,
             query,
-            cancellationToken) ?? [];
+            cancellationToken);
+
+        return DeserializarSolicitudes(raw);
     }
 
     public async Task<BesCreateCertificateResponseDto> CrearSolicitudAsync(
@@ -112,10 +114,10 @@ public sealed class UanatacaApiService
         CancellationToken cancellationToken = default)
     {
         var token = await ObtenerTokenSiAplicaAsync(cancellationToken);
-        var path = GetPath("CreateCertificateRequestPath", "/api/certificateRequests");
+        var path = GetPath("CreateCertificateRequestPath", "/piccolos/certificateRequests");
         var sendAsArray = bool.TryParse(_configuration["UanatacaApi:SendCreatePayloadAsArray"], out var value)
             ? value
-            : true;
+            : false;
 
         var payload = sendAsArray ? JsonSerializer.Serialize(new[] { request }, JsonOptions) : JsonSerializer.Serialize(request, JsonOptions);
         await GuardarJsonSolicitudAsync(payload, solicitudId, cancellationToken);
@@ -250,6 +252,25 @@ public sealed class UanatacaApiService
         }
 
         return JsonSerializer.Deserialize<T>(raw, JsonOptions);
+    }
+
+    private static IReadOnlyList<BesCertificateRequestDto> DeserializarSolicitudes(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return [];
+        }
+
+        using var document = JsonDocument.Parse(raw);
+        return document.RootElement.ValueKind switch
+        {
+            JsonValueKind.Array => JsonSerializer.Deserialize<List<BesCertificateRequestDto>>(raw, JsonOptions) ?? [],
+            JsonValueKind.Object =>
+                [JsonSerializer.Deserialize<BesCertificateRequestDto>(raw, JsonOptions)
+                    ?? throw new JsonException("Uanataca devolvió un objeto de solicitud vacío.")],
+            JsonValueKind.Null => [],
+            _ => throw new JsonException($"Formato de respuesta de solicitudes Uanataca no soportado: {document.RootElement.ValueKind}.")
+        };
     }
 
     private async Task<string?> SendRawAsync(
