@@ -124,7 +124,7 @@ export async function init(options, dotNetRef) {
             item.type = "button";
             item.className = "pdf-thumb";
             item.dataset.page = pageIndex.toString();
-            item.setAttribute("aria-label", `Ir a pagina ${pageIndex}`);
+            item.setAttribute("aria-label", `Ir a página ${pageIndex}`);
 
             const thumbCanvas = document.createElement("canvas");
             const label = document.createElement("strong");
@@ -219,7 +219,7 @@ export async function init(options, dotNetRef) {
 
         pageNumber = Math.min(pdfDocument.numPages, Math.max(1, pageNumber || 1));
         updateNavigation();
-        setStatus("Renderizando pagina...");
+        setStatus("Renderizando página...");
 
         if (renderTask) {
             renderTask.cancel();
@@ -262,7 +262,7 @@ export async function init(options, dotNetRef) {
             }
         } catch (error) {
             if (error?.name !== "RenderingCancelledException") {
-                setStatus("No se pudo mostrar esta pagina.", true);
+                setStatus("No se pudo mostrar esta página.", true);
             }
         } finally {
             renderTask = null;
@@ -504,7 +504,7 @@ export async function init(options, dotNetRef) {
                 canvas.hidden = true;
                 placeholder.hidden = false;
                 pageNumber = 1;
-                setStatus("Carga un PDF para seleccionar la posicion.");
+                setStatus("Carga un PDF para seleccionar la posición.");
                 updateNavigation();
                 clearThumbnails();
                 return;
@@ -534,7 +534,7 @@ export async function init(options, dotNetRef) {
             }
 
             if (!selectedPosition) {
-                setStatus("Selecciona la posicion de la firma para previsualizar.", true);
+                setStatus("Selecciona la posición de la firma para previsualizar.", true);
                 return false;
             }
 
