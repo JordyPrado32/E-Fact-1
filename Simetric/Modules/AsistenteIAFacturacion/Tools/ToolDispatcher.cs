@@ -70,6 +70,7 @@ public sealed class ToolDispatcher
             ToolDefinitions.ObtenerResumenFactura => await _tools.ObtenerResumenFacturaAsync(state),
             ToolDefinitions.EmitirFactura => await _tools.EmitirFacturaAsync(state, cancellationToken),
             ToolDefinitions.EmitirNotaCreditoDesdeFactura => await _tools.EmitirNotaCreditoDesdeFacturaAsync(state, GetString(root, "referenciaFactura") ?? string.Empty, GetString(root, "motivo"), cancellationToken),
+            ToolDefinitions.ConsultarFacturas => await _tools.ConsultarFacturasAsync(state, GetString(root, "filtro"), GetString(root, "periodo"), GetInt(root, "limite"), cancellationToken),
             _ => new ToolResultDto
             {
                 ToolName = toolName,

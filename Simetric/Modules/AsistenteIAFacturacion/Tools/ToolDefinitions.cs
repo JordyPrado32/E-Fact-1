@@ -25,6 +25,7 @@ public static class ToolDefinitions
     public const string ObtenerResumenFactura = "ObtenerResumenFactura";
     public const string EmitirFactura = "EmitirFactura";
     public const string EmitirNotaCreditoDesdeFactura = "EmitirNotaCreditoDesdeFactura";
+    public const string ConsultarFacturas = "ConsultarFacturas";
 
     private static readonly object[] CachedTools =
     [
@@ -114,7 +115,12 @@ public static class ToolDefinitions
         Function(EmitirNotaCreditoDesdeFactura, "Emite una nota de credito automatica desde una factura autorizada existente.",
             Properties(
                 ("referenciaFactura", "string", "Numero o referencia de la factura origen.", true),
-                ("motivo", "string", "Motivo de la nota de credito.", false)))
+                ("motivo", "string", "Motivo de la nota de credito.", false))),
+        Function(ConsultarFacturas, "Consulta facturas reales del usuario y resume cantidad, ventas, autorizacion, pagos y saldos.",
+            Properties(
+                ("filtro", "string", "Numero, cliente, identificacion o estado a buscar.", false),
+                ("periodo", "string", "Periodo: hoy, mes, mes pasado o todo.", false),
+                ("limite", "integer", "Cantidad maxima de resultados detallados, entre 1 y 20.", false)))
     ];
 
     public static object[] BuildTools() => CachedTools;

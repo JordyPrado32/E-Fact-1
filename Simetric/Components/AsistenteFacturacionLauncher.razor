@@ -9,7 +9,7 @@
 @inject NavigationManager NavManager
 @implements IAsyncDisposable
 
-<div class="ia-fact-launcher" @ref="launcherContainer">
+<div class="ia-fact-launcher @(EsContextoERubrica ? "ia-fact-launcher-erubrica" : string.Empty)" @ref="launcherContainer">
     @if (ShowOnboardingBubble)
     {
         <section class="ia-fact-bot-bubble" role="status" aria-live="polite">
@@ -37,10 +37,10 @@
             <header class="ia-fact-header">
                 <div class="ia-fact-brand-wrap">
                     <div class="ia-fact-brand">
-                        <img src="/images/LogoPrincipal.svg" alt="e-fact" />
+                        <img src="/images/LogoPrincipal.svg" alt="Numi" />
                         <div>
-                            <strong>Asistente IA</strong>
-                            <span>Facturas y notas de crédito</span>
+                            <strong>@AsistenteNombre</strong>
+                            <span>@AsistenteSubtitle</span>
                         </div>
                     </div>
                 </div>
@@ -65,7 +65,7 @@
                 @if (opcionesSeleccion.Any())
                 {
                     <section class="ia-fact-selection-box">
-                        <strong>Selecciona una opción</strong>
+                        <strong>@TextoSeleccion</strong>
                         @foreach (var opcion in opcionesSeleccion)
                         {
                             <button type="button" class="ia-fact-selection-option" @onclick="() => SeleccionarOpcionAsync(opcion)">
@@ -131,8 +131,8 @@
                     </div>
                 }
                 <div class="ia-fact-input-row">
-                    <input @bind="mensajeActual" @bind:event="oninput" placeholder="Escribe o habla tu factura o nota de crédito..." @onkeydown="HandleKeyDown" />
-                    <button type="button" class="ia-fact-send" @onclick="EnviarAsync" disabled="@enviando">Enviar</button>
+                    <input @bind="mensajeActual" @bind:event="oninput" placeholder="@AsistentePlaceholder" @onkeydown="HandleKeyDown" />
+                    <button type="button" class="ia-fact-send" @onclick="EnviarAsync" disabled="@enviando">@TextoEnviar</button>
                 </div>
                 <small>@estadoVoz</small>
             </footer>
@@ -142,8 +142,8 @@
     <button type="button"
             class="ia-fact-fab @(panelAbierto ? "is-open" : string.Empty)"
             @onclick="TogglePanelAsync"
-            title="Asistente de facturación"
-            aria-label="Abrir asistente de facturación">
+            title="@TituloBoton"
+            aria-label="@TituloBoton">
         <span class="ia-fact-orbit ia-fact-orbit-one" aria-hidden="true"></span>
         <span class="ia-fact-orbit ia-fact-orbit-two" aria-hidden="true"></span>
         <span class="ia-fact-robot" aria-hidden="true">
@@ -185,7 +185,7 @@
     private bool vozSalidaActiva = true;
     private bool manosLibresActivas;
     private bool vozInteractivaActiva;
-    private string estadoVoz = "Pulsa el botón azul para hablar con el asistente.";
+    private string estadoVoz = "Pulsa el botón para hablar con Numi.";
     private string? alertaMicrofono;
     private ChatFacturaResponse? respuestaActual;
     private DotNetObjectReference<AsistenteFacturacionLauncher>? dotNetRef;
@@ -195,6 +195,18 @@
     private List<SelectionOptionDto> opcionesSeleccion = new();
     private DateTime ultimoEnvioUtc = DateTime.MinValue;
     private readonly HashSet<string> vocabularioVoz = new(StringComparer.OrdinalIgnoreCase);
+    private NumiPreferences preferencias = new();
+    private bool EsContextoERubrica => NavManager.Uri.Contains("/e-sign", StringComparison.OrdinalIgnoreCase)
+        || NavManager.Uri.Contains("/esign", StringComparison.OrdinalIgnoreCase)
+        || NavManager.Uri.Contains("/solicitud", StringComparison.OrdinalIgnoreCase);
+    private string AsistenteNombre => EsContextoERubrica ? "Numi · e-Rúbrica" : "Numi";
+    private string AsistenteSubtitle => EsContextoERubrica ? "Tu copiloto de firma digital" : "Tu asistente de facturación";
+    private string TextoSeleccion => EsContextoERubrica ? "Elige qué necesitas hacer" : "Selecciona una opción";
+    private string TextoEnviar => EsContextoERubrica ? "Consultar" : "Enviar";
+    private string TituloBoton => EsContextoERubrica ? "Abrir Numi para e-Rúbrica" : "Abrir Numi";
+    private string AsistentePlaceholder => EsContextoERubrica
+        ? "Cuéntame qué quieres firmar, validar o revisar..."
+        : "Escribe o habla tu factura o nota de crédito...";
     private static readonly string[] FrasesBaseVoz =
     [
         "factura",
@@ -223,7 +235,18 @@
         "cartera",
         "saldo a favor",
         "registrar abono",
-        "clientes que deben"
+        "clientes que deben",
+        "comprobante de retención",
+        "comprobante de retencion",
+        "nota de débito",
+        "nota de debito",
+        "guía de remisión",
+        "guia de remision",
+        "E-Rúbrica",
+        "firma electrónica",
+        "validar firma",
+        "mis documentos firmados",
+        "renovar certificado"
     ];
 
     protected override void OnParametersSet()
@@ -234,7 +257,7 @@
             manosLibresActivas = false;
             vozInteractivaActiva = false;
             escuchando = false;
-            estadoVoz = "Completa los pasos pendientes para activar el asistente de facturacion.";
+            estadoVoz = "Completa los pasos pendientes para activar Numi.";
         }
     }
 
@@ -262,6 +285,13 @@
                 else
                 {
                     await JS.InvokeVoidAsync("localStorage.setItem", "numerica:ia-fact-session", sessionId);
+                }
+
+                var preferenciasGuardadas = await JS.InvokeAsync<string?>("localStorage.getItem", "numerica:numi-preferencias");
+                if (!string.IsNullOrWhiteSpace(preferenciasGuardadas))
+                {
+                    preferencias = JsonSerializer.Deserialize<NumiPreferences>(preferenciasGuardadas) ?? new NumiPreferences();
+                    vozSalidaActiva = preferencias.VozActiva;
                 }
 
                 await JS.InvokeVoidAsync(
@@ -297,7 +327,9 @@
             catch
             {
             }
-            var bienvenida = "Puedo ayudarte con facturas y también llevarte al flujo de notas de crédito. Escribe lo que necesitas y te guío.";
+            var bienvenida = EsContextoERubrica
+                ? "Estoy aquí para acompañarte con tus firmas: puedo ayudarte a firmar, validar documentos, revisar solicitudes y consultar tus certificados."
+                : "Puedo ayudarte con facturas, retenciones, notas, guías, reportes y cartera. Escribe lo que necesitas y te guío.";
             AgregarMensaje(false, bienvenida);
             debeDesplazarAlFinal = true;
             StateHasChanged();
@@ -324,7 +356,7 @@
             manosLibresActivas = false;
             vozInteractivaActiva = false;
             escuchando = false;
-            estadoVoz = "Completa los pasos pendientes para activar el asistente de facturacion.";
+            estadoVoz = "Completa los pasos pendientes para activar Numi.";
             await InvokeAsync(StateHasChanged);
             return;
         }
@@ -384,6 +416,8 @@
             if (respuestaActual is not null)
             {
                 opcionesSeleccion = respuestaActual.OpcionesSeleccion ?? new List<SelectionOptionDto>();
+                AprenderPreferenciasDesdeMensaje(texto, respuestaActual.RutaSugerida);
+                await GuardarPreferenciasAsync();
                 await AprenderVocabularioAsync(respuestaActual);
                 AgregarMensaje(false, respuestaActual.Respuesta);
                 if (!string.IsNullOrWhiteSpace(respuestaActual.RutaSugerida))
@@ -487,6 +521,8 @@
     private async Task ToggleVoiceOutputAsync()
     {
         vozSalidaActiva = !vozSalidaActiva;
+        preferencias.VozActiva = vozSalidaActiva;
+        await GuardarPreferenciasAsync();
         if (!vozSalidaActiva)
         {
             await JS.InvokeVoidAsync("numericaUi.stopSpeaking");
@@ -495,6 +531,36 @@
         else
         {
             estadoVoz = "Respuesta hablada activada.";
+        }
+    }
+
+    private void AprenderPreferenciasDesdeMensaje(string texto, string? rutaSugerida)
+    {
+        var normalizado = texto.ToLowerInvariant();
+        if (normalizado.Contains("crédito", StringComparison.OrdinalIgnoreCase) || normalizado.Contains("credito", StringComparison.OrdinalIgnoreCase))
+            preferencias.FormaPagoPreferida = "Crédito";
+        else if (normalizado.Contains("efectivo", StringComparison.OrdinalIgnoreCase) || normalizado.Contains("contado", StringComparison.OrdinalIgnoreCase))
+            preferencias.FormaPagoPreferida = "Efectivo";
+
+        var matchDias = System.Text.RegularExpressions.Regex.Match(normalizado, @"(?<dias>\d{1,3})\s*d[ií]as?");
+        if (matchDias.Success && int.TryParse(matchDias.Groups["dias"].Value, out var dias) && dias > 0)
+            preferencias.DiasCreditoPreferidos = dias;
+
+        if (!string.IsNullOrWhiteSpace(rutaSugerida))
+            preferencias.UltimoModulo = rutaSugerida;
+    }
+
+    private async Task GuardarPreferenciasAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync(
+                "localStorage.setItem",
+                "numerica:numi-preferencias",
+                JsonSerializer.Serialize(preferencias));
+        }
+        catch
+        {
         }
     }
 
@@ -867,6 +933,14 @@
             || normalizedMessage.Contains("micrófono", StringComparison.OrdinalIgnoreCase)
             || normalizedMessage.Contains("microfono", StringComparison.OrdinalIgnoreCase)
             || normalizedMessage.Contains("micrófono", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class NumiPreferences
+    {
+        public bool VozActiva { get; set; } = true;
+        public string? FormaPagoPreferida { get; set; }
+        public int? DiasCreditoPreferidos { get; set; }
+        public string? UltimoModulo { get; set; }
     }
 
     private sealed record UiChatMessage(bool EsUsuario, string Texto);
@@ -1921,6 +1995,63 @@
             padding: .72rem .82rem;
             border-radius: 16px;
         }
+    }
+
+    /* Numi adopta la identidad visual de e-Rúbrica cuando acompaña ese módulo. */
+    .ia-fact-launcher-erubrica .ia-fact-fab {
+        background:
+            radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.96), transparent 16%),
+            radial-gradient(circle at 50% 82%, rgba(185, 239, 202, 0.3), transparent 30%),
+            linear-gradient(160deg, #f7fff9 0%, #d9f3df 22%, #73c98b 52%, #2e8b57 76%, #14532d 100%);
+        box-shadow:
+            0 24px 46px rgba(20, 83, 45, 0.28),
+            0 10px 20px rgba(46, 139, 87, 0.18),
+            inset 0 0 0 5px rgba(255, 255, 255, 0.2),
+            inset 0 -18px 28px rgba(12, 75, 38, 0.22);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-fab::before {
+        border-color: rgba(76, 175, 80, 0.34);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-panel {
+        border-color: rgba(46, 139, 87, 0.22);
+        background: rgba(249, 253, 250, 0.98);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-header {
+        background:
+            radial-gradient(circle at 12% 18%, rgba(192, 239, 201, 0.24), transparent 28%),
+            radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.14), transparent 20%),
+            linear-gradient(135deg, #14532d 0%, #237a45 52%, #4caf50 100%);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-message.is-user .ia-fact-bubble,
+    .ia-fact-launcher-erubrica .ia-fact-send {
+        background: linear-gradient(135deg, #237a45, #4caf50);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-bubble {
+        background: #edf8ef;
+        color: #214d2d;
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-robot-antenna {
+        background: linear-gradient(180deg, #effff2, #9bd8a7);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-robot-antenna::before {
+        background: radial-gradient(circle at 35% 30%, #ffffff 0%, #b9efc2 34%, #4caf50 100%);
+        box-shadow: 0 0 0 4px rgba(185, 239, 194, 0.16), 0 0 14px rgba(76, 175, 80, 0.55);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-robot-core {
+        background: linear-gradient(180deg, #72d28a 0%, #237a45 100%);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.72), 0 4px 8px rgba(35, 122, 69, 0.22);
+    }
+
+    .ia-fact-launcher-erubrica .ia-fact-mic-badge {
+        background: linear-gradient(135deg, #2e8b57, #14532d);
     }
 </style>
 

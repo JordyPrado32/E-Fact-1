@@ -84,7 +84,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
     public Task<OpenAIAsistenteResult?> TryProcesarRapidoAsync(FacturaConversationState state, string mensaje, CancellationToken cancellationToken = default)
     {
-        var normalized = mensaje.Trim().ToLowerInvariant();
+        var normalized = NormalizarMensaje(mensaje);
         if (!ShouldUseLocalFastPath(state, normalized))
             return Task.FromResult<OpenAIAsistenteResult?>(null);
 
@@ -210,7 +210,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
     private async Task<OpenAIAsistenteResult> ProcesarConFallbackAsync(FacturaConversationState state, string mensaje, CancellationToken cancellationToken)
     {
-        var normalized = mensaje.Trim().ToLowerInvariant();
+        var normalized = NormalizarMensaje(mensaje);
 
         if (ContainsAny(normalized, "cancela", "cancelar", "me equivoque", "no"))
         {
@@ -233,6 +233,22 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                 AccionDetectada = "confirmar_emision"
             };
         }
+
+        var navigationResult = TryHandleNavigationCommand(normalized);
+        if (navigationResult is not null)
+            return navigationResult;
+
+        var helpResult = TryHandleHelpCommand(normalized);
+        if (helpResult is not null)
+            return helpResult;
+
+        var draftStatusResult = await TryHandleDraftStatusCommandAsync(state, normalized, cancellationToken);
+        if (draftStatusResult is not null)
+            return draftStatusResult;
+
+        var invoiceQueryResult = await TryHandleInvoiceQueryCommandAsync(state, mensaje, normalized, cancellationToken);
+        if (invoiceQueryResult is not null)
+            return invoiceQueryResult;
 
         var notaCreditoResult = await TryHandleNotaCreditoCommandAsync(state, mensaje, normalized, cancellationToken);
         if (notaCreditoResult is not null)
@@ -545,6 +561,9 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             return true;
 
         if (ContainsAny(normalized, "cuentas por cobrar", "cartera", "facturas pendientes", "saldo a favor", "abono", "abonar", "registrar pago", "registrar abono", "clientes que deben", "clientes con cartera", "clientes con saldo pendiente", "quienes deben", "quien me debe"))
+            return true;
+
+        if (ContainsAny(normalized, "mis facturas", "consultar facturas", "facturas del mes", "reporte de facturas", "reporte de ventas", "cuantas facturas", "cuántas facturas", "ventas del mes", "facturas de", "abrir facturas", "ir a facturas", "crear guia", "crear guía", "guia de remision", "guía de remisión", "abrir guia", "abrir guía", "crear retencion", "crear retención", "retenciones generadas", "ver retenciones", "crear nota de debito", "crear nota de débito", "notas de debito generadas", "notas de débito generadas", "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital", "que puedes hacer", "qué puedes hacer", "ayuda", "que falta", "qué falta", "puedo emitir", "esta lista", "está lista"))
             return true;
 
         if (state.Draft.Cliente is not null && state.Draft.Items.Count > 0 &&
@@ -969,6 +988,181 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         }
 
         return null;
+    }
+
+    private static OpenAIAsistenteResult? TryHandleHelpCommand(string normalized)
+    {
+        if (!ContainsAny(normalized, "ayuda", "que puedes hacer", "qué puedes hacer", "opciones", "funciones"))
+            return null;
+
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = "Puedo ayudarte con facturas, clientes, productos, IVA, descuentos, pagos, cartera, abonos, notas de crédito y débito, retenciones, guías de remisión y E-Rúbrica. Ejemplos: “consulta mis ventas del mes”, “crea una factura para Ana”, “abre mis retenciones”, “quiero firmar un documento” o “valida esta firma”.",
+            AccionDetectada = "mostrar_ayuda"
+        };
+    }
+
+    private async Task<OpenAIAsistenteResult?> TryHandleDraftStatusCommandAsync(
+        FacturaConversationState state,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        if (!ContainsAny(normalized, "que falta", "qué falta", "puedo emitir", "esta lista", "está lista", "revisar factura", "validala", "valídala"))
+            return null;
+
+        if (state.Draft.Cliente is null || state.Draft.Items.Count == 0)
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "La factura todavía no está lista. Necesito un cliente y al menos un producto o servicio. Puedes decir: “crear factura para [cliente] con [cantidad] [producto]”.",
+                AccionDetectada = "datos_faltantes_factura"
+            };
+        }
+
+        var validation = await _toolDispatcher.DispatchAsync(ToolDefinitions.ValidarFactura, "{}", state, cancellationToken);
+        var summary = await _toolDispatcher.DispatchAsync(ToolDefinitions.ObtenerResumenFactura, "{}", state, cancellationToken);
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = validation.Success
+                ? $"{summary.Message}\nLa factura está lista para confirmación. Si deseas emitirla, responde: “confirmo”."
+                : $"{summary.Message}\nTodavía falta: {validation.Message}",
+            AccionDetectada = validation.Success ? "factura_lista" : "validar_factura"
+        };
+    }
+
+    private static string NormalizarMensaje(string mensaje)
+    {
+        var texto = (mensaje ?? string.Empty).Trim().ToLowerInvariant();
+        return texto
+            .Replace("comprobante de retenciones", "retenciones", StringComparison.Ordinal)
+            .Replace("comprobantes de retencion", "retenciones", StringComparison.Ordinal)
+            .Replace("comprobantes de retención", "retenciones", StringComparison.Ordinal)
+            .Replace("nota débito", "nota de débito", StringComparison.Ordinal)
+            .Replace("nota debito", "nota de debito", StringComparison.Ordinal)
+            .Replace("e rubrica", "e-rubrica", StringComparison.Ordinal);
+    }
+
+    private static OpenAIAsistenteResult? TryHandleNavigationCommand(string normalized)
+    {
+        if (ContainsAny(normalized, "crear retencion", "crear retención", "nueva retencion", "nueva retención", "importar retencion", "importar retención", "cargar xml de retencion", "cargar xml de retención"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al flujo de retenciones para cargar el XML de sustento y completar el comprobante.",
+                AccionDetectada = "navegar_retencion",
+                RutaSugerida = "/compras/importar-xml"
+            };
+        }
+
+        if (ContainsAny(normalized, "ver retenciones", "listar retenciones", "retenciones generadas", "historial de retenciones", "abrir retenciones"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al listado de retenciones generadas para revisar estados, XML, PDF y reenvíos al SRI.",
+                AccionDetectada = "navegar_retenciones_generadas",
+                RutaSugerida = "/facturacion/retenciones-generadas"
+            };
+        }
+
+        if (ContainsAny(normalized, "crear nota de debito", "crear nota de débito", "nueva nota de debito", "nueva nota de débito"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al flujo de creación de la nota de débito.",
+                AccionDetectada = "navegar_nota_debito",
+                RutaSugerida = "/facturacion/nota-debito"
+            };
+        }
+
+        if (ContainsAny(normalized, "ver notas de debito", "ver notas de débito", "notas de debito generadas", "notas de débito generadas", "historial de notas de debito", "historial de notas de débito"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al listado de notas de débito generadas.",
+                AccionDetectada = "navegar_notas_debito",
+                RutaSugerida = "/facturacion/notas-debito-generadas"
+            };
+        }
+
+        if (ContainsAny(normalized, "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital"))
+        {
+            var ruta = ContainsAny(normalized, "firmar", "firma un documento")
+                ? "/e-sign/documentos/firmar"
+                : ContainsAny(normalized, "validar", "validación", "validacion")
+                    ? "/e-sign/documentos/validar-firma"
+                    : ContainsAny(normalized, "mis documentos", "documentos firmados", "historial")
+                        ? "/e-sign/documentos"
+                        : ContainsAny(normalized, "renovar", "comprar", "solicitud", "solicitudes")
+                            ? "/solicitud"
+                            : "/e-sign";
+
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo a E-Rúbrica para gestionar ese proceso.",
+                AccionDetectada = "navegar_erubrica",
+                RutaSugerida = ruta
+            };
+        }
+
+        if (ContainsAny(normalized, "crear guia", "crear guía", "nueva guia", "nueva guía", "guia de remision", "guía de remisión", "abrir guia", "abrir guía", "ir a guia", "ir a guía"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al módulo de guías de remisión para completar transportista, destinatario y traslado.",
+                AccionDetectada = "navegar_guia_remision",
+                RutaSugerida = "/facturacion/guia-remision"
+            };
+        }
+
+        if (ContainsAny(normalized, "abrir facturas", "ir a facturas", "ver pantalla de facturas", "módulo de facturas", "modulo de facturas"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al listado de facturas para que puedas filtrar, revisar y descargar documentos.",
+                AccionDetectada = "navegar_facturas",
+                RutaSugerida = "/facturas"
+            };
+        }
+
+        if (ContainsAny(normalized, "abrir reportes", "ir a reportes", "ver reportes", "módulo de reportes", "modulo de reportes"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al módulo de reportes de documentos.",
+                AccionDetectada = "navegar_reportes",
+                RutaSugerida = "/reportes/documentos"
+            };
+        }
+
+        return null;
+    }
+
+    private async Task<OpenAIAsistenteResult?> TryHandleInvoiceQueryCommandAsync(
+        FacturaConversationState state,
+        string mensaje,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        if (!ContainsAny(normalized, "mis facturas", "consultar facturas", "facturas del mes", "reporte de facturas", "reporte de ventas", "cuantas facturas", "cuántas facturas", "ventas del mes", "facturas de"))
+            return null;
+
+        var periodo = ContainsAny(normalized, "mes pasado")
+            ? "mes pasado"
+            : ContainsAny(normalized, "mes", "ventas del mes") ? "mes" : "todo";
+        var filtro = TryExtractInvoiceFilter(mensaje);
+        var result = await _toolDispatcher.DispatchAsync(
+            ToolDefinitions.ConsultarFacturas,
+            JsonSerializer.Serialize(new { filtro, periodo, limite = 10 }),
+            state,
+            cancellationToken);
+
+        return BuildResult(result, "consultar_facturas");
+    }
+
+    private static string? TryExtractInvoiceFilter(string mensaje)
+    {
+        var match = Regex.Match(mensaje, @"(?:facturas?|ventas?)\s+(?:de|del|para)\s+(?<filtro>[\p{L}0-9][\p{L}0-9 .\-']+?)(?=\s+(?:en|del|de|este|mes|hoy|por)\b|$)", RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups["filtro"].Value.Trim(' ', '.', ',', ';', ':') : null;
     }
 
     private static OpenAIAsistenteResult BuildResult(ToolResultDto result, string action)

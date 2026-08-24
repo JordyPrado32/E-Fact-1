@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
+using Simetric.DTOs;
 using Simetric.Models;
 using Simetric.Modules.AsistenteIAFacturacion.DTOs;
 using Simetric.Services;
@@ -45,6 +46,12 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         FormasPagoCache = new CachedValue<IReadOnlyList<string>>(result, DateTimeOffset.UtcNow.Add(FormasPagoCacheLifetime));
         return result;
     }
+
+    public async Task<IReadOnlyList<FacturaListDto>> ListarFacturasUsuarioAsync(
+        int userId,
+        int top = 200,
+        CancellationToken cancellationToken = default)
+        => await _facturacionService.ListarFacturasUsuarioAsync(userId, top);
 
     public async Task<IReadOnlyList<FacturaReferenciaDto>> BuscarFacturasParaNotaCreditoAsync(int userId, string query, CancellationToken cancellationToken = default)
     {

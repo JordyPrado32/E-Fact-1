@@ -1,9 +1,11 @@
 using Simetric.Modules.AsistenteIAFacturacion.DTOs;
+using Simetric.DTOs;
 
 namespace Simetric.Modules.AsistenteIAFacturacion.Services;
 
 public interface IFacturacionService
 {
+    Task<IReadOnlyList<FacturaListDto>> ListarFacturasUsuarioAsync(int userId, int top = 200, CancellationToken cancellationToken = default);
     // TODO: Conectar con el servicio real de emisión de facturas
     Task<IReadOnlyList<string>> ObtenerFormasPagoAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FacturaReferenciaDto>> BuscarFacturasParaNotaCreditoAsync(int userId, string query, CancellationToken cancellationToken = default);

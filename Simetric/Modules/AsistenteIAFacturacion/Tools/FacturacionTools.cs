@@ -1,4 +1,5 @@
 using System.Globalization;
+using Simetric.DTOs;
 using Simetric.Modules.AsistenteIAFacturacion.DTOs;
 using Simetric.Modules.AsistenteIAFacturacion.Services;
 using Simetric.Modules.AsistenteIAFacturacion.State;
@@ -62,6 +63,62 @@ public sealed class FacturacionTools
             },
             Data = productos
         };
+    }
+
+    public async Task<ToolResultDto> ConsultarFacturasAsync(
+        FacturaConversationState state,
+        string? filtro,
+        string? periodo,
+        int? limite,
+        CancellationToken cancellationToken)
+    {
+        var facturas = (await _facturacionService.ListarFacturasUsuarioAsync(state.UserId, 200, cancellationToken)).ToList();
+        var ahora = DateTime.Today;
+        var periodoNormalizado = (periodo ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (periodoNormalizado.Contains("hoy", StringComparison.OrdinalIgnoreCase))
+            facturas = facturas.Where(x => x.FechaEmision?.Date == ahora).ToList();
+        else if (periodoNormalizado.Contains("mes pasado", StringComparison.OrdinalIgnoreCase))
+        {
+            var anterior = ahora.AddMonths(-1);
+            facturas = facturas.Where(x => x.FechaEmision?.Year == anterior.Year && x.FechaEmision?.Month == anterior.Month).ToList();
+        }
+        else if (periodoNormalizado.Contains("mes", StringComparison.OrdinalIgnoreCase))
+            facturas = facturas.Where(x => x.FechaEmision?.Year == ahora.Year && x.FechaEmision?.Month == ahora.Month).ToList();
+
+        if (!string.IsNullOrWhiteSpace(filtro))
+        {
+            var texto = filtro.Trim();
+            facturas = facturas.Where(x =>
+                (x.NumeroCompleto?.Contains(texto, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (x.Cliente?.Contains(texto, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (x.IdentificacionCliente?.Contains(texto, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (x.EstadoSri?.Contains(texto, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (x.EstadoPago?.Contains(texto, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+
+        var total = facturas.Sum(x => x.Total ?? 0m);
+        var autorizado = facturas.Count(x => x.Autorizado == true || string.Equals(x.EstadoSri, "AUTORIZADO", StringComparison.OrdinalIgnoreCase));
+        var pendiente = facturas.Sum(x => x.SaldoPendiente);
+        var cantidadDetalle = Math.Clamp(limite ?? 10, 1, 20);
+        var detalle = facturas.Take(cantidadDetalle).Select(x =>
+            $"{x.NumeroCompleto} | {x.Cliente ?? "Sin cliente"} | ${(x.Total ?? 0m):0.00} | {ResolverEstadoFactura(x)}");
+
+        var mensaje = facturas.Count == 0
+            ? "No encontré facturas con esos filtros."
+            : $"Encontré {facturas.Count} factura(s). Total: ${total:0.00}. Autorizadas: {autorizado}. Saldo pendiente: ${pendiente:0.00}." +
+              (detalle.Any() ? $"\nDetalle:\n- {string.Join("\n- ", detalle)}" : string.Empty);
+
+        state.UltimaIntencion = "consultar_facturas";
+        return Ok(ToolDefinitions.ConsultarFacturas, mensaje, facturas.Take(cantidadDetalle).ToList());
+    }
+
+    private static string ResolverEstadoFactura(FacturaListDto factura)
+    {
+        if (factura.Autorizado == true || string.Equals(factura.EstadoSri, "AUTORIZADO", StringComparison.OrdinalIgnoreCase))
+            return factura.SaldoPendiente > 0 ? "autorizada, saldo pendiente" : "autorizada, pagada";
+
+        return string.IsNullOrWhiteSpace(factura.EstadoSri) ? "pendiente de autorización" : factura.EstadoSri!;
     }
 
     public async Task<ToolResultDto> CrearClienteAsync(FacturaConversationState state, ClienteCreateRequestDto request, CancellationToken cancellationToken)
