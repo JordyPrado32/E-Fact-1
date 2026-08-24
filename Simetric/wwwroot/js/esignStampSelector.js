@@ -252,7 +252,7 @@ export async function init(options, dotNetRef) {
             canvas.hidden = false;
             selectedPosition = pageNumber === selectedPosition?.page ? selectedPosition : null;
             updateFootprint();
-            setStatus("Haz clic o arrastra el recuadro para ubicar el sello. El ancho se mantiene fijo en 60 mm.");
+            setStatus("Haz clic o arrastra el recuadro para ubicar la firma. El ancho se mantiene fijo en 60 mm.");
             await dotNetRef.invokeMethodAsync("OnStampPageChanged", pageNumber);
             if (!selectedPosition && autoApplyPreferred && preferredSelection?.page === pageNumber) {
                 await applySelection(
@@ -360,7 +360,7 @@ export async function init(options, dotNetRef) {
 
         footprint.setPointerCapture(event.pointerId);
         stage.classList.add("is-dragging");
-        setStatus("Arrastra el recuadro para ajustar la ubicacion del sello.");
+        setStatus("Arrastra el recuadro para ajustar la ubicacion de la firma.");
     };
 
     const onFootprintPointerMove = async event => {
@@ -407,7 +407,7 @@ export async function init(options, dotNetRef) {
             yMm: selectedPosition.yMm
         };
         stage.classList.add("is-resizing");
-        setStatus("El ancho del sello se mantiene fijo en 60 mm.");
+        setStatus("El ancho de la firma se mantiene fijo en 60 mm.");
     };
 
     const onWindowPointerMove = async event => {
@@ -526,6 +526,44 @@ export async function init(options, dotNetRef) {
                 updateNavigation();
                 clearThumbnails();
             }
+        },
+        async previewCurrentSelection() {
+            if (!pdfDocument) {
+                setStatus("Carga un PDF para previsualizar.", true);
+                return false;
+            }
+
+            if (!selectedPosition) {
+                setStatus("Selecciona la posicion de la firma para previsualizar.", true);
+                return false;
+            }
+
+            updateFootprint();
+            setStatus("Previsualizacion activa: asi quedara ubicada la firma.");
+            return true;
+        },
+        async getPreviewSnapshot() {
+            if (!pdfDocument || !selectedPosition || canvas.hidden) {
+                return null;
+            }
+
+            const displayedWidth = canvas.clientWidth;
+            const displayedHeight = canvas.clientHeight;
+            const left = (selectedPosition.xMm / pageWidthMm) * displayedWidth;
+            const top = (selectedPosition.yMm / pageHeightMm) * displayedHeight;
+            const stampWidth = (selectedPosition.widthMm / pageWidthMm) * displayedWidth;
+            const stampHeight = ((selectedPosition.widthMm * 0.4) / pageHeightMm) * displayedHeight;
+
+            return {
+                imageDataUrl: canvas.toDataURL("image/png"),
+                width: displayedWidth,
+                height: displayedHeight,
+                left,
+                top,
+                stampWidth,
+                stampHeight,
+                page: selectedPosition.page
+            };
         },
         dispose() {
             clearThumbnails();
