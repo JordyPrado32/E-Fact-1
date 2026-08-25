@@ -563,7 +563,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         if (ContainsAny(normalized, "cuentas por cobrar", "cartera", "facturas pendientes", "saldo a favor", "abono", "abonar", "registrar pago", "registrar abono", "clientes que deben", "clientes con cartera", "clientes con saldo pendiente", "quienes deben", "quien me debe"))
             return true;
 
-        if (ContainsAny(normalized, "mis facturas", "consultar facturas", "facturas del mes", "reporte de facturas", "reporte de ventas", "cuantas facturas", "cuántas facturas", "ventas del mes", "facturas de", "abrir facturas", "ir a facturas", "crear guia", "crear guía", "guia de remision", "guía de remisión", "abrir guia", "abrir guía", "crear retencion", "crear retención", "retenciones generadas", "ver retenciones", "crear nota de debito", "crear nota de débito", "notas de debito generadas", "notas de débito generadas", "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital", "que puedes hacer", "qué puedes hacer", "ayuda", "que falta", "qué falta", "puedo emitir", "esta lista", "está lista"))
+        if (ContainsAny(normalized, "mis facturas", "consultar facturas", "facturas del mes", "reporte de facturas", "reporte de ventas", "cuantas facturas", "cuántas facturas", "ventas del mes", "facturas de", "abrir facturas", "ir a facturas", "crear guia", "crear guía", "guia de remision", "guía de remisión", "abrir guia", "abrir guía", "crear retencion", "crear retención", "retenciones generadas", "ver retenciones", "crear nota de debito", "crear nota de débito", "notas de debito generadas", "notas de débito generadas", "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital", "llenar solicitud", "nueva solicitud", "solicitud de firma", "firmar documentos", "validar firmas", "documentos firmados", "historial solicitudes", "configurar firma", "mis firmas", "que puedes hacer", "qué puedes hacer", "ayuda", "que falta", "qué falta", "puedo emitir", "esta lista", "está lista"))
             return true;
 
         if (state.Draft.Cliente is not null && state.Draft.Items.Count > 0 &&
@@ -997,7 +997,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
         return new OpenAIAsistenteResult
         {
-            Respuesta = "Puedo ayudarte con facturas, clientes, productos, IVA, descuentos, pagos, cartera, abonos, notas de crédito y débito, retenciones, guías de remisión y E-Rúbrica. Ejemplos: “consulta mis ventas del mes”, “crea una factura para Ana”, “abre mis retenciones”, “quiero firmar un documento” o “valida esta firma”.",
+            Respuesta = "Puedo ayudarte con facturas, clientes, productos, IVA, descuentos, pagos, cartera, abonos, notas de crédito y débito, retenciones, guías de remisión y E-Rúbrica. En E-Rúbrica puedo abrir la solicitud de firma, guiarte para cargar documentos, firmarlos, revisar documentos firmados, validar firmas y consultar o configurar tu certificado. Ejemplos: “llévame a llenar la solicitud de firma”, “quiero firmar documentos” o “valida esta firma”.",
             AccionDetectada = "mostrar_ayuda"
         };
     }
@@ -1039,6 +1039,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             .Replace("comprobantes de retención", "retenciones", StringComparison.Ordinal)
             .Replace("nota débito", "nota de débito", StringComparison.Ordinal)
             .Replace("nota debito", "nota de debito", StringComparison.Ordinal)
+            .Replace("e-rúbrica", "e-rubrica", StringComparison.Ordinal)
             .Replace("e rubrica", "e-rubrica", StringComparison.Ordinal);
     }
 
@@ -1084,17 +1085,26 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             };
         }
 
-        if (ContainsAny(normalized, "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital"))
+        if (ContainsAny(normalized,
+            "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital",
+            "llenar solicitud", "nueva solicitud", "solicitud de firma", "solicitar firma", "firmar documento", "firmar documentos",
+            "validar firma", "validar firmas", "documento firmado", "documentos firmados", "mis firmas", "historial solicitudes", "mis solicitudes", "configurar firma"))
         {
-            var ruta = ContainsAny(normalized, "firmar", "firma un documento")
-                ? "/e-sign/documentos/firmar"
+            var ruta = ContainsAny(normalized, "historial solicitudes", "mis solicitudes", "historial de solicitudes", "mis pagos")
+                ? "/solicitud/pagos"
+                : ContainsAny(normalized, "configurar firma", "configuración de firma", "configuracion de firma")
+                    ? "/e-rubrica/configuracion/firma"
+                    : ContainsAny(normalized, "consultar certificado", "estado de mi firma", "mis firmas")
+                        ? "/e-rubrica/mis-firmas"
+                        : ContainsAny(normalized, "llenar solicitud", "nueva solicitud", "solicitud de firma", "solicitar firma", "renovar", "comprar", "solicitud", "solicitudes")
+                            ? "/solicitud/nueva"
+                : ContainsAny(normalized, "firmar", "firma un documento")
+                ? "/e-rubrica/documentos/firmar"
                 : ContainsAny(normalized, "validar", "validación", "validacion")
-                    ? "/e-sign/documentos/validar-firma"
+                    ? "/e-rubrica/documentos/validar-firma"
                     : ContainsAny(normalized, "mis documentos", "documentos firmados", "historial")
-                        ? "/e-sign/documentos"
-                        : ContainsAny(normalized, "renovar", "comprar", "solicitud", "solicitudes")
-                            ? "/solicitud"
-                            : "/e-sign";
+                        ? "/e-rubrica/documentos"
+                        : "/e-rubrica";
 
             return new OpenAIAsistenteResult
             {
