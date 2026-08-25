@@ -293,6 +293,8 @@ if (builder.Configuration.GetValue<bool>("FirmaRenovacion:NotificacionesCorreoHa
 
 var app = builder.Build();
 
+if (builder.Configuration.GetValue<bool>("DatabaseSchema:EnsureAtStartup"))
+{
 try
 {
     await using var scope = app.Services.CreateAsyncScope();
@@ -332,6 +334,7 @@ try
 catch (Exception ex)
 {
     Console.WriteLine($"No se pudo asegurar la inicialización de catálogos: {ex.Message}");
+}
 }
 
 if (!app.Environment.IsDevelopment())

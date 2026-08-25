@@ -44,6 +44,7 @@ namespace Simetric.Services
         private readonly ILogger<SolicitudService> _logger;
         public string? UltimoErrorCrearSolicitud { get; private set; }
         public bool UltimoCorreoProcesadaEnviado { get; private set; }
+        public bool UltimoCorreoRechazoEnviado { get; private set; }
         public string? UltimoErrorActualizarEstado { get; private set; }
 
         public SolicitudService(
@@ -2317,9 +2318,112 @@ namespace Simetric.Services
         private static string? FirstNonEmpty(params string?[] values) =>
             values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
+        public async Task<UsuSolicitudFirma?> ObtenerSolicitudRechazadaClienteAsync(int solId, int usuarioClienteId)
+        {
+            if (solId <= 0 || usuarioClienteId <= 0) return null;
+
+            await using var context = await _contextFactory.CreateDbContextAsync();
+            return await context.UsuSolicitudFirma
+                .Include(s => s.Documentos.Where(d => d.DocVigente))
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.SolId == solId &&
+                                          s.SolIdUsuarioCliente == usuarioClienteId &&
+                                          s.SolActivo &&
+                                          s.SolIdEstadoNumerica == 4);
+        }
+
+        public async Task<bool> ActualizarSolicitudRechazadaAsync(
+            UsuSolicitudFirma datos,
+            IReadOnlyCollection<(string TempFileName, string Tipo)> archivos,
+            int usuarioClienteId)
+        {
+            if (datos.SolId <= 0 || usuarioClienteId <= 0) return false;
+
+            await using var context = await _contextFactory.CreateDbContextAsync();
+            await using var transaction = await context.Database.BeginTransactionAsync();
+            try
+            {
+                var solicitud = await context.UsuSolicitudFirma
+                    .Include(s => s.Documentos)
+                    .FirstOrDefaultAsync(s => s.SolId == datos.SolId &&
+                                              s.SolIdUsuarioCliente == usuarioClienteId &&
+                                              s.SolActivo &&
+                                              s.SolIdEstadoNumerica == 4);
+                if (solicitud is null) return false;
+
+                var pagoExitoso = solicitud.SolPagoExitoso;
+                var transaccionPago = solicitud.SolIdTransaccionPago;
+                var fechaPago = solicitud.SolFechaPago;
+                context.Entry(solicitud).CurrentValues.SetValues(datos);
+                solicitud.SolId = datos.SolId;
+                solicitud.SolIdUsuarioCliente = usuarioClienteId;
+                solicitud.SolPagoExitoso = pagoExitoso;
+                solicitud.SolIdTransaccionPago = transaccionPago;
+                solicitud.SolFechaPago = fechaPago;
+                solicitud.SolIdEstadoNumerica = EstadoSolicitudPendiente;
+                solicitud.SolIdEstadoUanataca = null;
+                solicitud.SolUanatacaUuid = null;
+                solicitud.SolUanatacaStatus = null;
+                solicitud.SolUanatacaStatusText = null;
+                solicitud.SolUanatacaComments = null;
+                solicitud.SolFechaActualizacion = DateTime.Now;
+                solicitud.SolFechaRevision = null;
+                solicitud.SolFechaAprobacion = null;
+                solicitud.SolIdUsuarioSoporte = null;
+
+                foreach (var archivo in archivos)
+                {
+                    var existentes = solicitud.Documentos.Where(d => d.DocTipo.Equals(archivo.Tipo, StringComparison.OrdinalIgnoreCase) && d.DocVigente).ToList();
+                    foreach (var existente in existentes) existente.DocVigente = false;
+
+                    var tempPath = Path.Combine(_env.WebRootPath, "uploads", "temp", archivo.TempFileName);
+                    if (!File.Exists(tempPath)) throw new FileNotFoundException("No se encontró el archivo temporal.", tempPath);
+                    var extension = Path.GetExtension(archivo.TempFileName);
+                    var nombre = $"{solicitud.SolId}_{archivo.Tipo}_{Guid.NewGuid()}{extension}";
+                    var destino = Path.Combine(_env.WebRootPath, "uploads", "solicitudes", nombre);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destino)!);
+                    File.Move(tempPath, destino);
+                    var info = new FileInfo(destino);
+                    context.UsuSolicitudDocumento.Add(new UsuSolicitudDocumento
+                    {
+                        DocIdSolicitud = solicitud.SolId,
+                        DocTipo = archivo.Tipo,
+                        DocNombreArchivo = nombre,
+                        DocRutaArchivo = "/uploads/solicitudes/" + nombre,
+                        DocExtension = extension,
+                        DocTamanoArchivo = info.Length,
+                        DocFechaCarga = DateTime.Now,
+                        DocVigente = true,
+                        DocVersion = existentes.Select(d => d.DocVersion).DefaultIfEmpty(0).Max() + 1
+                    });
+                }
+
+                context.UsuSolicitudEstadoHistorial.Add(new UsuSolicitudEstadoHistorial
+                {
+                    HisIdSolicitud = solicitud.SolId,
+                    HisIdEstadoAnterior = 4,
+                    HisIdEstadoNuevo = EstadoSolicitudPendiente,
+                    HisOrigenEstado = "NUMERICA",
+                    HisComentario = "El cliente corrigió la solicitud rechazada y la reenvió para revisión.",
+                    HisFechaCambio = DateTime.Now,
+                    HisIdUsuarioResponsable = usuarioClienteId
+                });
+                await context.SaveChangesAsync();
+                await transaction.CommitAsync();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "No se pudo actualizar la solicitud rechazada {SolId}.", datos.SolId);
+                return false;
+            }
+        }
+
         public async Task<bool> ActualizarEstadoAsync(int solId, int nuevoEstadoId, string comentario, int usuarioSoporteId)
         {
             UltimoCorreoProcesadaEnviado = false;
+            UltimoCorreoRechazoEnviado = false;
             UltimoErrorActualizarEstado = null;
             await using var strategyContext = await _contextFactory.CreateDbContextAsync();
             var strategy = strategyContext.Database.CreateExecutionStrategy();
@@ -2334,8 +2438,9 @@ namespace Simetric.Services
                     var solicitud = await context.UsuSolicitudFirma.FindAsync(solId);
                     if (solicitud == null) return false;
 
-                    int? anteriorEstado = solicitud.SolIdEstadoNumerica;
-                    var debeNotificarProcesada = nuevoEstadoId == 3 && anteriorEstado != 3;
+            int? anteriorEstado = solicitud.SolIdEstadoNumerica;
+            var debeNotificarProcesada = nuevoEstadoId == 3 && anteriorEstado != 3;
+                    var debeNotificarRechazo = nuevoEstadoId == 4 && anteriorEstado != 4;
 
                     solicitud.SolIdEstadoNumerica = nuevoEstadoId;
                     solicitud.SolFechaActualizacion = DateTime.Now;
@@ -2379,6 +2484,21 @@ namespace Simetric.Services
                         {
                             UltimoErrorActualizarEstado = "La solicitud quedo procesada, pero no se pudo enviar el correo al cliente.";
                             _logger.LogError(ex, "No se pudo notificar por correo la solicitud procesada {SolId}.", solicitud.SolId);
+                        }
+                    }
+
+                    if (debeNotificarRechazo)
+                    {
+                        try
+                        {
+                            var nombreCliente = string.Join(" ", new[] { solicitud.SolNombres, solicitud.SolPrimerApellido, solicitud.SolSegundoApellido }.Where(valor => !string.IsNullOrWhiteSpace(valor)));
+                            await _emailService.EnviarSolicitudFirmaRechazadaAsync(solicitud.SolCorreo1, nombreCliente, solicitud.SolId, comentario);
+                            UltimoCorreoRechazoEnviado = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            UltimoErrorActualizarEstado = "La solicitud quedo rechazada, pero no se pudo enviar el correo al cliente.";
+                            _logger.LogError(ex, "No se pudo notificar por correo el rechazo de la solicitud {SolId}.", solicitud.SolId);
                         }
                     }
 

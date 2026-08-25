@@ -103,6 +103,11 @@ public interface IEmailService
         string emailDestino,
         string? nombreCliente,
         int solicitudId);
+    Task EnviarSolicitudFirmaRechazadaAsync(
+        string emailDestino,
+        string? nombreCliente,
+        int solicitudId,
+        string? motivo);
     Task EnviarAvisoRenovacionFirmaAsync(
         string emailDestino,
         string? nombreCliente,
@@ -146,6 +151,7 @@ public class EmailService : IEmailService
     private readonly string _urlRecargasDesdeLogin;
     private readonly string _urlSoportePlataforma;
     private readonly string _urlConfiguracionFirma;
+    private readonly string _urlSolicitudesFirma;
     private readonly string _asesoraComercial;
     private readonly string _telefonoAsesoraComercial;
     private readonly string _webRootPath;
@@ -187,6 +193,7 @@ public class EmailService : IEmailService
         _urlAccesoPlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "login").ToString();
         _urlSoportePlataforma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "soporte").ToString();
         _urlConfiguracionFirma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "e-sign/configuracion/firma").ToString();
+        _urlSolicitudesFirma = new Uri(new Uri(appBaseUrl.TrimEnd('/') + "/"), "solicitud/pagos").ToString();
         var appRootUrl = new Uri(appBaseUrl.TrimEnd('/') + "/");
         _urlAccesoPlataforma = new Uri(appRootUrl, "login").ToString();
         _urlRecargasDesdeLogin = new Uri(appRootUrl, "login?returnUrl=%2Frecargas").ToString();
@@ -1588,6 +1595,38 @@ Atentamente,
   </table>
 </body>
 </html>"
+        }.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarSolicitudFirmaRechazadaAsync(
+        string emailDestino,
+        string? nombreCliente,
+        int solicitudId,
+        string? motivo)
+    {
+        if (string.IsNullOrWhiteSpace(emailDestino))
+            throw new ArgumentException("La solicitud rechazada no tiene un correo de destino.", nameof(emailDestino));
+
+        var destinatario = MailboxAddress.Parse(emailDestino.Trim());
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Estimado cliente" : nombreCliente.Trim());
+        var motivoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(motivo) ? "Revisa los datos y documentos enviados." : motivo.Trim());
+        var urlRevisionSegura = WebUtility.HtmlEncode(_urlSolicitudesFirma);
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(destinatario);
+        mensaje.Subject = $"Tu solicitud #{solicitudId} fue rechazada | E-Rubrica";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = $@"
+<!doctype html><html lang='es'><body style='margin:0;padding:0;background:#f1f7f2;font-family:Segoe UI,Arial,sans-serif;color:#173524;'>
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='background:#f1f7f2;'><tr><td align='center' style='padding:28px 12px;'>
+<table role='presentation' width='620' cellpadding='0' cellspacing='0' style='width:100%;max-width:620px;background:#fff;border:1px solid #ead0d0;'>
+<tr><td style='padding:28px 32px;background:#a52a2a;color:#fff;'><div style='font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;'>Numerica E-Rubrica</div><div style='margin-top:8px;font-size:26px;font-weight:850;'>Solicitud rechazada</div></td></tr>
+<tr><td style='padding:30px 32px;font-size:15px;line-height:1.7;color:#405748;'><p style='margin:0 0 16px;'>Hola <strong>{clienteSeguro}</strong>, tu solicitud <strong>#{solicitudId}</strong> fue rechazada y requiere revisión.</p><p style='margin:0 0 20px;'><strong>Detalle:</strong> {motivoSeguro}</p><table role='presentation' cellpadding='0' cellspacing='0'><tr><td bgcolor='#a52a2a' style='border-radius:7px;'><a href='{urlRevisionSegura}' target='_blank' style='display:inline-block;padding:13px 22px;color:#fff;text-decoration:none;font-weight:800;'>Revisar y editar mi solicitud</a></td></tr></table><p style='margin:22px 0 0;font-size:13px;color:#64766a;'>Podrás corregir únicamente los datos o archivos necesarios y volver a enviar la solicitud.</p></td></tr>
+</table></td></tr></table></body></html>"
         }.ToMessageBody();
 
         await SendMessageAsync(mensaje);

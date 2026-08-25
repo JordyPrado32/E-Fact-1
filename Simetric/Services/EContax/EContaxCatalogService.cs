@@ -565,12 +565,13 @@ public sealed class EContaxCatalogService
 
     private IQueryable<Cliente> BuildClientesEmpresaQuery(AppDbContext context, EContaxUserContext userContext) =>
         context.Clientes
-            .Where(c => c.Idempresa == userContext.IdEmpresa);
+            .ExcluirClientesExclusivosBackOffice()
+            .Where(c => c.Usuario == userContext.IdUsuarioTitular && c.Idempresa == userContext.IdEmpresa);
 
     private IQueryable<Producto> BuildProductosPermitidosQuery(AppDbContext context, EContaxUserContext userContext, int? sucursalId)
     {
         var query = context.Productos
-            .Where(p => p.Idempresa == userContext.IdEmpresa);
+            .Where(p => p.Idusuario == userContext.IdUsuarioTitular && p.Idempresa == userContext.IdEmpresa);
 
         if (userContext.EsJefeEmpresa)
         {

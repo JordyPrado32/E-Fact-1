@@ -23,8 +23,8 @@
     <header class="solicitud-page-head" data-tour="solicitud.hero">
         <div>
             <span class="solicitud-page-kicker">Firma electrónica</span>
-            <h2>Nueva solicitud de firma</h2>
-            <p>Completa la información para generar tu solicitud de firma electrónica.</p>
+            <h2>@(modoEdicionRechazada ? "Corregir solicitud de firma" : "Nueva solicitud de firma")</h2>
+            <p>@(modoEdicionRechazada ? "La solicitud fue precargada. Modifica únicamente el campo o archivo observado y vuelve a enviarla." : "Completa la información para generar tu solicitud de firma electrónica.")</p>
         </div>
         <div class="solicitud-head-actions">
             <button type="button" class="solicitud-draft-btn" @onclick="AbrirHistorialBorradoresAsync" disabled="@(!tieneBorrador)">
@@ -174,21 +174,18 @@
                 {
                     <section class="solicitud-persona-panel">
                         <div class="solicitud-persona-header">
-                            <span class="solicitud-section-kicker">Tipo de persona</span>
-                            <h4>Selecciona el titular</h4>
+                            <span class="solicitud-section-kicker">Tipo de firma</span>
+                            <h4>Selecciona el flujo de compra</h4>
                         </div>
 
                         <div class="solicitud-persona-grid">
                             @foreach (var tipoPersona in TiposPersonaDisponibles)
                             {
-                                var tipoPersonaSeleccionado = string.Equals(
-                                    solicitud.SolTipoPersona,
-                                    tipoPersona.Valor,
-                                    StringComparison.OrdinalIgnoreCase);
+                                var tipoPersonaSeleccionado = EsTipoFirmaSeleccionado(tipoPersona);
 
                                 <button type="button"
                                         class="solicitud-persona-card @(tipoPersonaSeleccionado ? "is-selected" : string.Empty)"
-                                        @onclick='() => SeleccionarTipoPersona(tipoPersona.Valor)'>
+                                        @onclick='() => SeleccionarTipoPersona(tipoPersona)'>
                                     <span class="solicitud-persona-icon">
                                         <i class="@tipoPersona.Icono"></i>
                                     </span>
@@ -789,14 +786,14 @@
                             <i class="bi bi-person-check"></i> Conservar solicitud del cliente
                         </button>
 
-                        <button type="submit" class="primary-btn solicitud-action-main" disabled="@enviando">
+                        <button type="submit" class="primary-btn solicitud-action-main" disabled="@(enviando || edicionNoDisponible)">
                             @if (enviando)
                             {
                                 <span>Enviando solicitud...</span>
                             }
                             else
                             {
-                                <span>@(solicitud.SolId > 0 ? "Continuar con el pago" : "Finalizar y enviar")</span>
+                                <span>@(modoEdicionRechazada ? "Corregir y reenviar" : solicitud.SolId > 0 ? "Continuar con el pago" : "Finalizar y enviar")</span>
                             }
                             <i class="bi bi-arrow-right"></i>
                         </button>
@@ -968,7 +965,8 @@
         string Valor,
         string Titulo,
         string Descripcion,
-        string Icono);
+        string Icono,
+        bool TieneRuc);
 
     private sealed class SolicitudFirmaDraftItem
     {
@@ -1276,14 +1274,22 @@
     [
         new(
             TipoPersonaNatural,
-            "Persona natural",
-            "RUC opcional",
-            "bi bi-person-badge"),
+            "Persona natural con cédula",
+            "Certificado para una persona natural sin RUC.",
+            "bi bi-person-badge",
+            false),
+        new(
+            TipoPersonaNatural,
+            "Persona natural con RUC",
+            "Incluye RUC y su archivo de respaldo.",
+            "bi bi-person-vcard",
+            true),
         new(
             TipoPersonaJuridica,
-            "Persona jurídica",
-            "RUC obligatorio",
-            "bi bi-building")
+            "Representante legal",
+            "Incluye datos de empresa, RUC y documentos legales.",
+            "bi bi-building",
+            true)
     ];
 
     private readonly Dictionary<string, DocumentoConfig> documentos = new(StringComparer.OrdinalIgnoreCase)
@@ -1391,6 +1397,7 @@
 
     private sealed record ArchivoTemporal(string TempFileName, string NombreOriginal);
     private readonly Dictionary<string, ArchivoTemporal> archivosTemporales = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> documentosExistentes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> erroresDocumentos = new(StringComparer.OrdinalIgnoreCase);
 
     private int paso = 1;
@@ -1417,6 +1424,10 @@
     private bool mostrarModalBorradores;
     private List<SolicitudFirmaDraftItem> borradoresGuardados = new();
     private int usuarioActualId;
+    private bool modoEdicionRechazada;
+    private bool edicionNoDisponible;
+    [SupplyParameterFromQuery(Name = "editar")]
+    private int? SolicitudEditarId { get; set; }
     private List<string> catalogoNacionalidades = new();
     private IReadOnlyList<ProvinciaEcuador> provinciasEcuador = Array.Empty<ProvinciaEcuador>();
     private List<string> cantonesDisponibles = new();
@@ -1582,8 +1593,8 @@
 
     private string GetTipoPersonaResumen() =>
         string.Equals(solicitud.SolTipoPersona, TipoPersonaJuridica, StringComparison.OrdinalIgnoreCase)
-            ? "Persona jurídica"
-            : "Persona natural";
+            ? "Representante legal"
+            : solicitud.SolTieneRuc ? "Persona natural con RUC" : "Persona natural con cédula";
 
     private string NombreTitularResumen
     {
@@ -1629,6 +1640,23 @@
         solicitud.SolVigencia = "7 DIAS";
         solicitud.SolMontoPago = 10.00m;
         solicitud.SolTipoPersona = TipoPersonaNatural;
+        if (SolicitudEditarId is > 0)
+        {
+            var rechazada = await SolicitudService.ObtenerSolicitudRechazadaClienteAsync(SolicitudEditarId.Value, usuarioActualId);
+            if (rechazada is not null)
+            {
+                modoEdicionRechazada = true;
+                CopiarSolicitudEditable(rechazada);
+                foreach (var documento in rechazada.Documentos.Where(d => d.DocVigente))
+                    documentosExistentes[documento.DocTipo] = documento.DocNombreArchivo;
+                mensajeGeneralFormulario = "Solicitud rechazada cargada. Corrige únicamente los datos o archivos necesarios.";
+            }
+            else
+            {
+                edicionNoDisponible = true;
+                mensajeGeneralFormulario = "Esta solicitud ya no está disponible para edición o no pertenece a tu cuenta.";
+            }
+        }
         SincronizarTipoPersonaConRuc();
         ActualizarCantonesDisponibles();
     }
@@ -1814,27 +1842,34 @@
             edad--;
         }
 
-        solicitud.SolEsMayor65 = edad >= 65;
+        solicitud.SolEsMayor65 = edad > 65;
     }
-    private void SeleccionarTipoPersona(string tipoPersona)
-    {
-        solicitud.SolTipoPersona = tipoPersona;
+    private bool EsTipoFirmaSeleccionado(TipoPersonaConfig tipoPersona) =>
+        string.Equals(solicitud.SolTipoPersona, tipoPersona.Valor, StringComparison.OrdinalIgnoreCase) &&
+        solicitud.SolTieneRuc == tipoPersona.TieneRuc;
 
-        if (tipoPersona == TipoPersonaJuridica && (solicitud.SolVigencia is "7 DIAS" or "30 DIAS"))
+    private void SeleccionarTipoPersona(TipoPersonaConfig tipoPersona)
+    {
+        solicitud.SolTipoPersona = tipoPersona.Valor;
+        solicitud.SolTieneRuc = tipoPersona.TieneRuc;
+
+        if (tipoPersona.Valor == TipoPersonaJuridica && (solicitud.SolVigencia is "7 DIAS" or "30 DIAS"))
         {
             solicitud.SolVigencia = "1 ANIO";
             solicitud.SolMontoPago = ObtenerMontoVigencia(solicitud.SolVigencia);
             editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolVigencia));
         }
 
-        if (tipoPersona == TipoPersonaJuridica)
+        if (tipoPersona.Valor == TipoPersonaJuridica)
         {
             solicitud.SolTieneRuc = true;
         }
         else
         {
-            solicitud.SolTieneRuc = false;
-            solicitud.SolNroRuc = null;
+            if (!tipoPersona.TieneRuc)
+            {
+                solicitud.SolNroRuc = null;
+            }
         }
 
         editContext.NotifyFieldChanged(FieldIdentifier.Create(() => solicitud.SolTipoPersona));
@@ -1938,14 +1973,14 @@
                 continue;
             }
 
-            if (!archivosTemporales.ContainsKey(item.Tipo) && !erroresDocumentos.ContainsKey(item.Tipo))
+            if (!TieneArchivo(item.Tipo) && !erroresDocumentos.ContainsKey(item.Tipo))
             {
                 erroresDocumentos[item.Tipo] = $"Adjunte {item.Titulo.ToLowerInvariant()}.";
             }
         }
 
         var hayErrores = ObtenerDocumentosVisibles().Any(item =>
-            (item.EsObligatorio && !archivosTemporales.ContainsKey(item.Tipo)) ||
+            (item.EsObligatorio && !TieneArchivo(item.Tipo)) ||
             erroresDocumentos.ContainsKey(item.Tipo));
 
         if (hayErrores)
@@ -1967,6 +2002,46 @@
         if (authState.User.Identity?.IsAuthenticated != true)
         {
             Navigation.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (edicionNoDisponible)
+        {
+            return;
+        }
+
+        if (modoEdicionRechazada && solicitud.SolId == SolicitudEditarId)
+        {
+            NormalizarSolicitud();
+            VerificarEdad();
+            if (!ValidarArchivos()) return;
+            enviando = true;
+            try
+            {
+                solicitud.SolIdUsuarioCliente = usuarioActualId;
+                var actualizada = await SolicitudService.ActualizarSolicitudRechazadaAsync(
+                    solicitud,
+                    archivosTemporales.Select(x => (x.Value.TempFileName, x.Key)).ToList(),
+                    usuarioActualId);
+                if (!actualizada)
+                {
+                    mensajeGeneralFormulario = "No se pudo actualizar la solicitud rechazada. Verifica que aún esté disponible para edición.";
+                    return;
+                }
+
+                var reenviada = await SolicitudService.SincronizarSolicitudUanatacaAsync(solicitud.SolId, true);
+                if (!reenviada.Success)
+                {
+                    mensajeGeneralFormulario = $"La solicitud fue corregida, pero no pudo reenviarse todavía: {reenviada.Message}";
+                    return;
+                }
+
+                Navigation.NavigateTo("/solicitud/pagos");
+            }
+            finally
+            {
+                enviando = false;
+            }
             return;
         }
 
@@ -2239,10 +2314,25 @@
         yield return documentos["ARCHIVO_ADICIONAL"];
     }
 
-    private bool TieneArchivo(string tipo) => archivosTemporales.ContainsKey(tipo);
+    private bool TieneArchivo(string tipo) => archivosTemporales.ContainsKey(tipo) || documentosExistentes.ContainsKey(tipo);
 
     private string ObtenerNombreArchivo(string tipo)
-        => archivosTemporales.TryGetValue(tipo, out var archivo) ? archivo.NombreOriginal : string.Empty;
+        => archivosTemporales.TryGetValue(tipo, out var archivo)
+            ? archivo.NombreOriginal
+            : documentosExistentes.TryGetValue(tipo, out var nombre) ? nombre : string.Empty;
+
+    private void CopiarSolicitudEditable(UsuSolicitudFirma origen)
+    {
+        foreach (var propiedad in typeof(UsuSolicitudFirma).GetProperties()
+                     .Where(p => p.CanWrite && (p.PropertyType.IsValueType || p.PropertyType == typeof(string))))
+        {
+            if (propiedad.Name is nameof(UsuSolicitudFirma.SolIdEstadoNumerica)
+                or nameof(UsuSolicitudFirma.SolIdEstadoUanataca)
+                or nameof(UsuSolicitudFirma.SolActivo))
+                continue;
+            propiedad.SetValue(solicitud, propiedad.GetValue(origen));
+        }
+    }
 
     private string GetFormatoFirmaLabel() => solicitud.SolFormatoFirma switch
     {

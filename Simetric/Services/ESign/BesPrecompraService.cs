@@ -10,6 +10,7 @@ namespace Simetric.Services.ESign;
 
 public sealed class UanatacaApiService
 {
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -124,8 +125,9 @@ public sealed class UanatacaApiService
         using var httpRequest = BuildRequest(HttpMethod.Post, path, token, null);
         httpRequest.Content = new StringContent(payload, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var requestTimeout = CrearRequestTimeout(cancellationToken);
+        using var response = await _httpClient.SendAsync(httpRequest, requestTimeout.Token);
+        var body = await response.Content.ReadAsStringAsync(requestTimeout.Token);
         var location = response.Headers.Location?.ToString();
         var responseBody = BuildResponseDiagnostic(response, body);
 
@@ -221,8 +223,9 @@ public sealed class UanatacaApiService
         using var httpRequest = BuildRequest(HttpMethod.Post, GetPath("LoginPath", "/auth/login"), bearerToken: null, query: null);
         httpRequest.Content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var requestTimeout = CrearRequestTimeout(cancellationToken);
+        using var response = await _httpClient.SendAsync(httpRequest, requestTimeout.Token);
+        var body = await response.Content.ReadAsStringAsync(requestTimeout.Token);
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogError("Uanataca auth fallo. Status: {Status}. Body: {Body}", (int)response.StatusCode, body);
@@ -281,8 +284,9 @@ public sealed class UanatacaApiService
         CancellationToken cancellationToken)
     {
         using var request = BuildRequest(method, path, bearerToken, query);
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var requestTimeout = CrearRequestTimeout(cancellationToken);
+        using var response = await _httpClient.SendAsync(request, requestTimeout.Token);
+        var body = await response.Content.ReadAsStringAsync(requestTimeout.Token);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -291,6 +295,13 @@ public sealed class UanatacaApiService
         }
 
         return body;
+    }
+
+    private static CancellationTokenSource CrearRequestTimeout(CancellationToken cancellationToken)
+    {
+        var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(RequestTimeout);
+        return timeout;
     }
 
     private HttpRequestMessage BuildRequest(
