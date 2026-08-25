@@ -1,4 +1,5 @@
 using Microsoft.JSInterop;
+using System.Text.Json;
 
 namespace Simetric.Services;
 
@@ -35,6 +36,46 @@ public sealed class SweetAlertService
 
     public ValueTask ShowWarningAsync(string text, string title = "Atencion")
         => ShowAsync(title, text, "warning");
+
+    public async ValueTask<bool> ConfirmAsync(
+        string text,
+        string title = "Confirmar acción",
+        string confirmButtonText = "Confirmar",
+        string cancelButtonText = "Cancelar",
+        string icon = "warning")
+    {
+        try
+        {
+            var result = await _js.InvokeAsync<JsonElement>("Swal.fire", new
+            {
+                title,
+                text,
+                icon,
+                showCancelButton = true,
+                confirmButtonText,
+                cancelButtonText,
+                allowOutsideClick = false
+            });
+
+            return result.TryGetProperty("isConfirmed", out var confirmed) && confirmed.GetBoolean();
+        }
+        catch (TaskCanceledException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.Contains("JavaScript interop calls cannot be issued", StringComparison.OrdinalIgnoreCase) ||
+            ex.Message.Contains("disconnected", StringComparison.OrdinalIgnoreCase))
+        {
+        }
+
+        return false;
+    }
 
     public async ValueTask ShowLoadingAsync(string title, string text)
     {
