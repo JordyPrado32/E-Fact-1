@@ -7,7 +7,7 @@ namespace Simetric.Controllers;
 
 [Authorize]
 [ApiController]
-[Route("api/e-sign/uanataca")]
+[Route("api/e-rubrica/uanataca")]
 public sealed class ESignUanatacaController : ControllerBase
 {
     private readonly UanatacaApiService _uanatacaApiService;

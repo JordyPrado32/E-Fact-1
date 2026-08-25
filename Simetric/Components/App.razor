@@ -461,6 +461,101 @@
         };
 
         window.numericaUi.patchSweetAlert();
+        window.numericaUi.isESignPath = function () {
+            const path = (window.location.pathname || "").toLowerCase();
+            return path === "/e-rubrica" || path.startsWith("/e-rubrica/");
+        };
+
+        window.numericaUi.showESignAlert = function () {
+            const settings = arguments.length === 1 && arguments[0] && typeof arguments[0] === "object"
+                ? { ...arguments[0] }
+                : { title: arguments[0], html: arguments[1], icon: arguments[2] };
+            const icon = (settings.icon || "info").toString().toLowerCase();
+            const showCancel = settings.showCancelButton === true;
+            const title = settings.title || (icon === "success" ? "Proceso completado" : icon === "error" ? "Revisa la información" : icon === "warning" ? "Atención" : "Información");
+            const message = settings.html || settings.text || "";
+
+            document.querySelector(".esign-alert-backdrop")?.remove();
+
+            return new Promise(resolve => {
+                const backdrop = document.createElement("div");
+                backdrop.className = `esign-alert-backdrop is-${icon}`;
+                const dialog = document.createElement("section");
+                dialog.className = "esign-alert-dialog";
+                dialog.setAttribute("role", "dialog");
+                dialog.setAttribute("aria-modal", "true");
+                dialog.innerHTML = `
+                    <div class="esign-alert-icon">${icon === "success" ? "✓" : icon === "error" || icon === "warning" ? "!" : "i"}</div>
+                    <h2>${title}</h2>
+                    ${message ? `<div class="esign-alert-body">${message}</div>` : ""}
+                    <div class="esign-alert-actions"></div>`;
+
+                const finish = value => {
+                    backdrop.remove();
+                    resolve(value);
+                };
+
+                const actions = dialog.querySelector(".esign-alert-actions");
+                if (showCancel) {
+                    const cancel = document.createElement("button");
+                    cancel.type = "button";
+                    cancel.className = "esign-alert-btn is-cancel";
+                    cancel.textContent = settings.cancelButtonText || "Cancelar";
+                    cancel.addEventListener("click", () => finish({ isConfirmed: false, isDismissed: true }));
+                    actions.appendChild(cancel);
+                }
+
+                const confirm = document.createElement("button");
+                confirm.type = "button";
+                confirm.className = `esign-alert-btn ${icon === "error" || icon === "warning" ? "is-danger" : "is-primary"}`;
+                confirm.textContent = settings.confirmButtonText || "Entendido";
+                confirm.addEventListener("click", () => finish({ isConfirmed: true, value: true }));
+                actions.appendChild(confirm);
+
+                backdrop.addEventListener("click", event => {
+                    if (event.target === backdrop && settings.allowOutsideClick !== false) {
+                        finish({ isConfirmed: false, isDismissed: true });
+                    }
+                });
+
+                backdrop.appendChild(dialog);
+                document.body.appendChild(backdrop);
+                confirm.focus();
+
+                if (Number(settings.timer || 0) > 0) {
+                    window.setTimeout(() => finish({ isConfirmed: false, isDismissed: true }), Number(settings.timer));
+                }
+            });
+        };
+
+        if (!window.numericaUi.__eSignAlertsPatched) {
+            const nativeConfirm = window.confirm.bind(window);
+            const swalFire = window.Swal?.fire?.bind(window.Swal);
+
+            if (window.Swal && typeof swalFire === "function") {
+                window.Swal.fire = function () {
+                    return window.numericaUi.isESignPath()
+                        ? window.numericaUi.showESignAlert.apply(null, arguments)
+                        : swalFire.apply(null, arguments);
+                };
+            }
+
+            window.confirm = function (message) {
+                return window.numericaUi.isESignPath()
+                    ? window.numericaUi.showESignAlert({
+                        title: "Confirmar acción",
+                        text: String(message || ""),
+                        icon: "warning",
+                        showCancelButton: true,
+                        confirmButtonText: "Confirmar",
+                        cancelButtonText: "Cancelar"
+                    }).then(result => result?.isConfirmed === true)
+                    : nativeConfirm(message);
+            };
+
+            window.numericaUi.__eSignAlertsPatched = true;
+        }
+
         window.numericaUi.enableBackdropDismiss();
 
         window.numericaUi.enableButtonLoadingFeedback = function () {

@@ -692,7 +692,7 @@ namespace Simetric.Controllers
             if (userId <= 0)
             {
                 _logger.LogWarning("Registro tarjeta ESIGN retorno sin customValue valido. Datos: {Datos}", JsonSerializer.Serialize(data));
-                return Redirect("/e-sign/mis-firmas");
+                return Redirect("/e-rubrica/mis-firmas");
             }
 
             var registroAprobado = EsPagoAprobado(status) || 
@@ -754,7 +754,7 @@ namespace Simetric.Controllers
                 }
             }
 
-            return Redirect($"/e-sign/mis-firmas?registro={(registroAprobado ? "exito" : "error")}");
+            return Redirect($"/e-rubrica/mis-firmas?registro={(registroAprobado ? "exito" : "error")}");
         }
 
         private static (int userId, string plan, string ciclo) ParseSuscripcionCustomValue(string? customValue)

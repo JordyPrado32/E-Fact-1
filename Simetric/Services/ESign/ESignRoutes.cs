@@ -5,11 +5,11 @@ namespace Simetric.Services.ESign;
 public static class ESignRoutes
 {
     public const string ServiceKey = "e-sign";
-    public const string Root = "/e-sign";
-    public const string Dashboard = "/e-sign";
-    public const string Firmas = "/e-sign/firmas";
-    public const string Documentos = "/e-sign/documentos";
-    public const string Soporte = "/e-sign/soporte";
+    public const string Root = "/e-rubrica";
+    public const string Dashboard = "/e-rubrica";
+    public const string Firmas = "/e-rubrica/mis-firmas";
+    public const string Documentos = "/e-rubrica/documentos";
+    public const string Soporte = "/e-rubrica/soporte";
 
     public static bool IsESignPath(NavigationManager navigationManager, string location)
     {
@@ -17,8 +17,8 @@ public static class ESignRoutes
         var separatorIndex = relativePath.IndexOfAny(new[] { '?', '#' });
         var pathOnly = (separatorIndex >= 0 ? relativePath[..separatorIndex] : relativePath).Trim('/');
 
-        return pathOnly.Equals("e-sign", StringComparison.OrdinalIgnoreCase) ||
-               pathOnly.StartsWith("e-sign/", StringComparison.OrdinalIgnoreCase) ||
+        return pathOnly.Equals("e-rubrica", StringComparison.OrdinalIgnoreCase) ||
+               pathOnly.StartsWith("e-rubrica/", StringComparison.OrdinalIgnoreCase) ||
                pathOnly.Equals("solicitud", StringComparison.OrdinalIgnoreCase) ||
                pathOnly.StartsWith("solicitud/", StringComparison.OrdinalIgnoreCase);
     }

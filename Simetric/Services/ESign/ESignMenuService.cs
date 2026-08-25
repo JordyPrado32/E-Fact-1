@@ -154,10 +154,10 @@ namespace Simetric.Services.ESign
                 SET IDENTITY_INSERT [dbo].[ESIGN_MENUS] ON;
                 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 1)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (1, NULL, 'Inicio', 1, '/e-sign', 'ri-home-4-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (1, NULL, 'Inicio', 1, '/e-rubrica', 'ri-home-4-line');
                 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 2)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (2, NULL, 'Documentos firmados', 1, '/e-sign/documentos', 'ri-file-shield-2-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (2, NULL, 'Documentos firmados', 1, '/e-rubrica/documentos', 'ri-file-shield-2-line');
                 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 3)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (3, NULL, N'Firma Electr' + NCHAR(243) + N'nica', 1, '', 'ri-pen-nib-line');
@@ -172,25 +172,25 @@ namespace Simetric.Services.ESign
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (6, NULL, 'Configuracion', 1, '', 'ri-settings-3-line');
 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 7)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (7, NULL, 'Soporte', 1, '/e-sign/soporte', 'ri-customer-service-2-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (7, NULL, 'Soporte', 1, '/e-rubrica/soporte', 'ri-customer-service-2-line');
 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 9)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (9, 6, 'Plan disponible', 1, '/e-sign/configuracion/plan', 'ri-bill-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (9, 6, 'Plan disponible', 1, '/e-rubrica/configuracion/plan', 'ri-bill-line');
 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 10)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (10, NULL, 'Mis firmas', 1, '/e-sign/mis-firmas', 'ri-key-2-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (10, NULL, 'Mis firmas', 1, '/e-rubrica/mis-firmas', 'ri-key-2-line');
 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 11)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (11, 3, 'Mis firmas', 0, '/e-sign/mis-firmas', 'ri-shield-user-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (11, 3, 'Mis firmas', 0, '/e-rubrica/mis-firmas', 'ri-shield-user-line');
 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 12)
                     INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (12, NULL, 'Administracion', 1, '', 'ri-settings-3-line');
 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 13)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (13, 12, 'Roles y permisos', 1, '/e-sign/administracion/roles', 'ri-key-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (13, 12, 'Roles y permisos', 1, '/e-rubrica/administracion/roles', 'ri-key-line');
 
                 IF NOT EXISTS (SELECT 1 FROM [dbo].[ESIGN_MENUS] WHERE [IDMENU] = 14)
-                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (14, 12, 'Usuarios', 1, '/e-sign/administracion/usuarios', 'ri-user-shared-line');
+                    INSERT INTO [dbo].[ESIGN_MENUS] ([IDMENU], [IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU]) VALUES (14, 12, 'Usuarios', 1, '/e-rubrica/administracion/usuarios', 'ri-user-shared-line');
 
                 SET IDENTITY_INSERT [dbo].[ESIGN_MENUS] OFF;";
                 await db.ExecuteAsync(seedMenus);
