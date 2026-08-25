@@ -3,7 +3,6 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.AspNetCore.Hosting
-@using Microsoft.JSInterop
 @using System.Security.Claims
 @using Simetric.Services
 @using Simetric.Services.ESign
@@ -12,7 +11,7 @@
 @inject NavigationManager NavManager
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
-@inject IJSRuntime JS
+@inject SweetAlertService AlertService
 
 <PageTitle>Firmar documentos | E-Rubrica</PageTitle>
 
@@ -25,17 +24,6 @@
     }
     else
     {
-        @if (!string.IsNullOrWhiteSpace(mensaje))
-        {
-            <div class="pending-alert @(esError ? "is-error" : "is-ok")" role="alert">
-                <i class="bi @(esError ? "bi-exclamation-triangle" : "bi-check-circle")"></i>
-                <span>@mensaje</span>
-                <button type="button" @onclick="CerrarMensaje" aria-label="Cerrar alerta">
-                    <i class="bi bi-x-lg"></i>
-                </button>
-            </div>
-        }
-
         <header class="pending-heading">
             <div>
                 <span class="header-kicker">Documentos Electronicos</span>
@@ -279,14 +267,12 @@
     private bool cargando = true;
     private bool mostrarModalDocumentos;
     private bool subiendoDocumento;
-    private bool esError;
     private int currentUserId;
     private int paginaActual = 1;
     private string currentUserName = "Usuario";
     private string busqueda = string.Empty;
     private DateTime? fechaFiltro;
     private string estadoFiltro = string.Empty;
-    private string? mensaje;
     private DocumentoPorFirmarItem? documentoSeleccionado;
     private readonly List<DocumentoPorFirmarItem> documentos = [];
 
@@ -360,8 +346,6 @@
 
     private void CerrarModalDocumentos() => mostrarModalDocumentos = false;
 
-    private void CerrarMensaje() => mensaje = null;
-
     private void LimpiarSeleccion() => documentoSeleccionado = null;
 
     private void SeleccionarDocumento(DocumentoPorFirmarItem doc) => documentoSeleccionado = doc;
@@ -370,20 +354,19 @@
     {
         documentoSeleccionado = doc;
         mostrarModalDocumentos = false;
-        SetMensaje($"Documento seleccionado: {doc.Nombre}", false);
     }
 
-    private void FirmarDocumento(DocumentoPorFirmarItem doc)
+    private async Task FirmarDocumento(DocumentoPorFirmarItem doc)
     {
         documentoSeleccionado = doc;
-        IrAEstampar();
+        await IrAEstampar();
     }
 
-    private void IrAEstampar()
+    private async Task IrAEstampar()
     {
         if (documentoSeleccionado is null)
         {
-            SetMensaje("Selecciona un documento para firmar.", true);
+            await MostrarMensajeAsync("Selecciona un documento para firmar.", true);
             return;
         }
 
@@ -417,7 +400,7 @@
 
         if (!EsPdf(file.Name) || file.Size <= 0 || file.Size > MaxPdfSize)
         {
-            SetMensaje("Selecciona un PDF valido de maximo 10 MB.", true);
+            await MostrarMensajeAsync("Selecciona un PDF valido de maximo 10 MB.", true);
             return;
         }
 
@@ -437,17 +420,14 @@
 
             CargarDocumentos();
             documentoSeleccionado = null;
-            var cargarOtro = await JS.InvokeAsync<bool>("confirm", "Documento guardado. ¿Desea añadir otro documento?");
+            var cargarOtro = await AlertService.ConfirmAsync(
+                "Documento guardado. ¿Desea añadir otro documento?",
+                "Confirmar acción");
             mostrarModalDocumentos = cargarOtro;
-            SetMensaje(
-                cargarOtro
-                    ? "Documento guardado. Puedes añadir otro PDF."
-                    : "Documento guardado para firmar.",
-                false);
         }
         catch (Exception ex)
         {
-            SetMensaje($"No se pudo guardar el documento: {ex.Message}", true);
+            await MostrarMensajeAsync($"No se pudo guardar el documento: {ex.Message}", true);
         }
         finally
         {
@@ -485,7 +465,7 @@
             var path = Path.GetFullPath(doc.RutaFisica);
             if (!path.StartsWith(directory, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
             {
-                SetMensaje("No se encontro el documento para borrar.", true);
+                await MostrarMensajeAsync("No se encontro el documento para borrar.", true);
                 return;
             }
 
@@ -494,14 +474,12 @@
             if (documentoSeleccionado?.NombreArchivo == doc.NombreArchivo)
                 documentoSeleccionado = null;
 
-            SetMensaje("Documento eliminado.", false);
+            await MostrarMensajeAsync("Documento eliminado.", false);
         }
         catch (Exception ex)
         {
-            SetMensaje($"No se pudo borrar el documento: {ex.Message}", true);
+            await MostrarMensajeAsync($"No se pudo borrar el documento: {ex.Message}", true);
         }
-
-        await Task.CompletedTask;
     }
 
     private string ObtenerDirectorioFisico() =>
@@ -540,10 +518,12 @@
             ? $"{bytes / 1024d / 1024d:0.##} MB"
             : $"{Math.Max(1, bytes / 1024d):0.##} KB";
 
-    private void SetMensaje(string texto, bool error)
+    private async Task MostrarMensajeAsync(string texto, bool error)
     {
-        mensaje = texto;
-        esError = error;
+        if (error)
+            await AlertService.ShowErrorAsync(texto);
+        else
+            await AlertService.ShowSuccessAsync(texto);
     }
 
     private sealed record DocumentoPorFirmarItem(
