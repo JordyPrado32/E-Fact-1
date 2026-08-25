@@ -236,6 +236,12 @@ export async function init(options, dotNetRef) {
         canvas.height = Math.floor(viewport.height * outputScale);
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        const shell = stage.closest(".pdf-view-shell");
+        shell?.style.setProperty(
+            "--stamp-pdf-page-height",
+            `${Math.max(390, Math.floor(viewport.height) + 32)}px`);
+
         pageWidthMm = (baseViewport.width * 25.4) / 72;
         pageHeightMm = (baseViewport.height * 25.4) / 72;
 
