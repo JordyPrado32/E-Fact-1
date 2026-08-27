@@ -5,9 +5,12 @@
 @using Simetric.DTOs
 @using Simetric.Services
 @using System.Security.Claims
+@using Microsoft.JSInterop
 @inject SolicitudService SolicitudService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
 
 <PageTitle>Historial de firmas | Numerica E-Rúbrica</PageTitle>
 
@@ -223,6 +226,14 @@
                                             @GetEstadoUanataca(sol)
                                         </span>
                                         <small>@GetDetalleUanataca(sol)</small>
+                                        @if (PuedeRenovar(sol))
+                                        {
+                                            <button type="button"
+                                                    class="mis-pagos-status-refresh mis-pagos-renew-button"
+                                                    @onclick="() => IniciarRenovacionAsync(sol.SolId)">
+                                                <i class="bi bi-arrow-clockwise"></i> Renovar firma
+                                            </button>
+                                        }
                                         @if (!string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
                                         {
                                             <button type="button"
@@ -710,6 +721,33 @@
                 .Where(notificacion => notificacion.SolId == solicitudAvisoSeleccionadaId)
                 .OrderByDescending(notificacion => notificacion.ObsFechaObservacion);
     private int paginaActual = 1;
+
+    private static bool PuedeRenovar(SolicitudPagoClienteDto sol)
+    {
+        if (!sol.SolPagoExitoso || sol.SolIdEstadoNumerica != 3)
+            return false;
+
+        var inicio = sol.SolFechaAprobacion ?? sol.SolFechaPago ?? sol.SolFechaSolicitud;
+        var vencimiento = sol.SolVigencia?.Trim().ToUpperInvariant() switch
+        {
+            "1 ANIO" => inicio.AddYears(1),
+            "2 ANIOS" => inicio.AddYears(2),
+            "3 ANIOS" => inicio.AddYears(3),
+            "4 ANIOS" => inicio.AddYears(4),
+            "5 ANIOS" => inicio.AddYears(5),
+            _ => inicio.AddDays(30)
+        };
+
+        var diasRestantes = vencimiento - DateTime.Now;
+        return diasRestantes >= TimeSpan.Zero && diasRestantes <= TimeSpan.FromDays(15);
+    }
+
+    private async Task IniciarRenovacionAsync(int solId)
+    {
+        var usarDatos = await JS.InvokeAsync<bool>("confirm",
+            "Tu firma está próxima a vencer. ¿Deseas usar los mismos datos de la solicitud anterior?\n\nAceptar: reutilizar datos y documentos.\nCancelar: crear una solicitud nueva.");
+        NavManager.NavigateTo($"/solicitud/nueva?renovar={solId}&usarDatos={usarDatos.ToString().ToLowerInvariant()}");
+    }
     private string Busqueda
     {
         get => busqueda;

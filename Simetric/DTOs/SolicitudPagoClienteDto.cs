@@ -13,6 +13,7 @@ public sealed class SolicitudPagoClienteDto
     public string SolTipoIdentificacion { get; set; } = string.Empty;
     public string SolIdentificacion { get; set; } = string.Empty;
     public DateTime SolFechaSolicitud { get; set; }
+    public DateTime? SolFechaAprobacion { get; set; }
     public string SolFormatoFirma { get; set; } = string.Empty;
     public string SolVigencia { get; set; } = string.Empty;
     public decimal? SolMontoPago { get; set; }

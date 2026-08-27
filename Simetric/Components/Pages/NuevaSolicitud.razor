@@ -23,8 +23,8 @@
     <header class="solicitud-page-head" data-tour="solicitud.hero">
         <div>
             <span class="solicitud-page-kicker">Firma electrónica</span>
-            <h2>@(modoEdicionRechazada ? "Corregir solicitud de firma" : "Nueva solicitud de firma")</h2>
-            <p>@(modoEdicionRechazada ? "La solicitud fue precargada. Modifica únicamente el campo o archivo observado y vuelve a enviarla." : "Completa la información para generar tu solicitud de firma electrónica.")</p>
+            <h2>@(modoEdicionRechazada ? "Corregir solicitud de firma" : esRenovacion ? "Renovar firma electrónica" : "Nueva solicitud de firma")</h2>
+            <p>@(modoEdicionRechazada ? "La solicitud fue precargada. Modifica únicamente el campo o archivo observado y vuelve a enviarla." : esRenovacion ? "Revisa los datos, realiza los cambios necesarios y paga para enviar la renovación." : "Completa la información para generar tu solicitud de firma electrónica.")</p>
         </div>
         <div class="solicitud-head-actions">
             <button type="button" class="solicitud-draft-btn" @onclick="AbrirHistorialBorradoresAsync" disabled="@(!tieneBorrador)">
@@ -256,6 +256,8 @@
                             <ValidationMessage For="@(() => solicitud.SolIdentificacion)" class="solicitud-field-error" />
                         </div>
 
+                        @if (solicitud.SolTieneRuc || solicitud.SolTipoPersona == TipoPersonaJuridica)
+                        {
                         <div class="solicitud-field-card solicitud-ruc-card">
                             <div class="solicitud-field-top solicitud-field-top-ruc">
                                 <span class="solicitud-field-label">Posee RUC?</span>
@@ -291,6 +293,7 @@
                             </div>
                             <ValidationMessage For="@(() => solicitud.SolNroRuc)" class="solicitud-field-error" />
                         </div>
+                        }
 
                         @if (solicitud.SolTipoIdentificacion == "CEDULA")
                         {
@@ -1425,9 +1428,15 @@
     private List<SolicitudFirmaDraftItem> borradoresGuardados = new();
     private int usuarioActualId;
     private bool modoEdicionRechazada;
+    private bool esRenovacion;
+    private int? solicitudOrigenId;
     private bool edicionNoDisponible;
     [SupplyParameterFromQuery(Name = "editar")]
     private int? SolicitudEditarId { get; set; }
+    [SupplyParameterFromQuery(Name = "renovar")]
+    private int? SolicitudRenovarId { get; set; }
+    [SupplyParameterFromQuery(Name = "usarDatos")]
+    private bool UsarDatosRenovacion { get; set; }
     private List<string> catalogoNacionalidades = new();
     private IReadOnlyList<ProvinciaEcuador> provinciasEcuador = Array.Empty<ProvinciaEcuador>();
     private List<string> cantonesDisponibles = new();
@@ -1655,6 +1664,33 @@
             {
                 edicionNoDisponible = true;
                 mensajeGeneralFormulario = "Esta solicitud ya no está disponible para edición o no pertenece a tu cuenta.";
+            }
+        }
+        else if (SolicitudRenovarId is > 0)
+        {
+            esRenovacion = true;
+            var anterior = await SolicitudService.ObtenerSolicitudRenovacionClienteAsync(SolicitudRenovarId.Value, usuarioActualId);
+            if (anterior is null)
+            {
+                edicionNoDisponible = true;
+                mensajeGeneralFormulario = "La solicitud no está disponible para renovación.";
+            }
+            else if (UsarDatosRenovacion)
+            {
+                CopiarSolicitudEditable(anterior);
+                solicitudOrigenId = anterior.SolId;
+                solicitud.SolId = 0;
+                solicitud.SolIdUsuarioCliente = usuarioActualId;
+                solicitud.SolIdTransaccionPago = null;
+                solicitud.SolPagoExitoso = false;
+                solicitud.SolFechaSolicitud = DateTime.Now;
+                foreach (var documento in anterior.Documentos.Where(d => d.DocVigente))
+                    documentosExistentes[documento.DocTipo] = documento.DocNombreArchivo;
+                mensajeGeneralFormulario = "Datos y documentos de la solicitud anterior cargados. Revisa y modifica lo necesario antes de pagar.";
+            }
+            else
+            {
+                mensajeGeneralFormulario = "Solicitud de renovación iniciada. Completa los datos y adjunta los documentos requeridos.";
             }
         }
         SincronizarTipoPersonaConRuc();
@@ -2078,7 +2114,7 @@
                 .Select(x => (x.Value.TempFileName, x.Key))
                 .ToList();
 
-            var ok = await SolicitudService.CrearSolicitudFullAsync(solicitud, archivosEnviar);
+            var ok = await SolicitudService.CrearSolicitudFullAsync(solicitud, archivosEnviar, solicitudOrigenId);
             if (ok)
             {
                 metodoPagoFirma = "online";

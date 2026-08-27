@@ -71,14 +71,26 @@ namespace Simetric.Services
 
         // --- MÉTODOS PARA EL USUARIO (CLIENTE) ---
 
-        public async Task<bool> CrearSolicitudFullAsync(UsuSolicitudFirma solicitud, List<(string TempFileName, string Tipo)> archivos)
+        public async Task<bool> CrearSolicitudFullAsync(
+            UsuSolicitudFirma solicitud,
+            List<(string TempFileName, string Tipo)> archivos,
+            int? solicitudOrigenId = null)
         {
             using var context = await _contextFactory.CreateDbContextAsync();
             UltimoErrorCrearSolicitud = null;
 
+            var tiposDocumentosOrigen = solicitudOrigenId is > 0
+                ? await context.UsuSolicitudDocumento
+                    .AsNoTracking()
+                    .Where(d => d.DocIdSolicitud == solicitudOrigenId.Value && d.DocVigente)
+                    .Select(d => d.DocTipo)
+                    .ToListAsync()
+                : new List<string>();
+
             if (!TryValidarSolicitudCreacion(
                     solicitud,
                     archivos,
+                    tiposDocumentosOrigen,
                     out var archivosNormalizados,
                     out var mensajeValidacion))
             {
@@ -122,6 +134,10 @@ namespace Simetric.Services
                     string uploadPath = Path.Combine(_env.WebRootPath, "uploads", "solicitudes");
                     if (!Directory.Exists(uploadPath)) Directory.CreateDirectory(uploadPath);
 
+                    var tiposConArchivoNuevo = archivosNormalizados
+                        .Select(item => item.Tipo)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
                     foreach (var item in archivosNormalizados)
                     {
                         string tempFullPath = Path.Combine(_env.WebRootPath, "uploads", "temp", item.TempFileName);
@@ -155,6 +171,42 @@ namespace Simetric.Services
                             DocObservacion = string.Empty
                         };
                         context.UsuSolicitudDocumento.Add(nuevoDoc);
+                    }
+
+                    if (solicitudOrigenId is > 0)
+                    {
+                        var documentosOrigen = await context.UsuSolicitudDocumento
+                            .AsNoTracking()
+                            .Where(d => d.DocIdSolicitud == solicitudOrigenId.Value && d.DocVigente)
+                            .ToListAsync();
+
+                        foreach (var documentoOrigen in documentosOrigen.Where(d => !tiposConArchivoNuevo.Contains(d.DocTipo)))
+                        {
+                            var nombreOrigen = Path.GetFileName(documentoOrigen.DocNombreArchivo);
+                            var rutaOrigen = Path.Combine(uploadPath, nombreOrigen);
+                            if (!File.Exists(rutaOrigen))
+                                throw new FileNotFoundException($"No se encontró el documento original {documentoOrigen.DocNombreArchivo}.");
+
+                            var extension = Path.GetExtension(nombreOrigen);
+                            var nombreNuevo = $"{solicitud.SolId}_{documentoOrigen.DocTipo}_{Guid.NewGuid()}{extension}";
+                            var rutaNueva = Path.Combine(uploadPath, nombreNuevo);
+                            File.Copy(rutaOrigen, rutaNueva);
+                            var info = new FileInfo(rutaNueva);
+
+                            context.UsuSolicitudDocumento.Add(new UsuSolicitudDocumento
+                            {
+                                DocIdSolicitud = solicitud.SolId,
+                                DocTipo = documentoOrigen.DocTipo,
+                                DocNombreArchivo = nombreNuevo,
+                                DocRutaArchivo = "/uploads/solicitudes/" + nombreNuevo,
+                                DocExtension = extension,
+                                DocTamanoArchivo = info.Length,
+                                DocFechaCarga = DateTime.Now,
+                                DocVigente = true,
+                                DocVersion = 1,
+                                DocObservacion = "Documento reutilizado de la solicitud anterior."
+                            });
+                        }
                     }
 
                     // 4. Registrar historial inicial
@@ -237,6 +289,7 @@ namespace Simetric.Services
         private bool TryValidarSolicitudCreacion(
             UsuSolicitudFirma solicitud,
             IEnumerable<(string TempFileName, string Tipo)> archivos,
+            IEnumerable<string>? tiposDocumentosExistentes,
             out List<(string TempFileName, string Tipo)> archivosNormalizados,
             out string mensajeError)
         {
@@ -266,6 +319,10 @@ namespace Simetric.Services
 
             var tiposRequeridos = ObtenerTiposDocumentoRequeridos(solicitud);
             var tiposRecibidos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var tiposExistentes = (tiposDocumentosExistentes ?? Enumerable.Empty<string>())
+                .Where(tipo => !string.IsNullOrWhiteSpace(tipo))
+                .Select(tipo => tipo.Trim().ToUpperInvariant())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             foreach (var archivo in archivos ?? Enumerable.Empty<(string TempFileName, string Tipo)>())
             {
@@ -316,7 +373,7 @@ namespace Simetric.Services
             }
 
             var faltantes = tiposRequeridos
-                .Where(tipo => !tiposRecibidos.Contains(tipo))
+                .Where(tipo => !tiposRecibidos.Contains(tipo) && !tiposExistentes.Contains(tipo))
                 .ToList();
 
             if (faltantes.Count > 0)
@@ -407,6 +464,7 @@ namespace Simetric.Services
                     s.SOL_TIPO_IDENTIFICACION AS SolTipoIdentificacion,
                     s.SOL_IDENTIFICACION AS SolIdentificacion,
                     s.SOL_FECHA_SOLICITUD AS SolFechaSolicitud,
+                    s.SOL_FECHA_APROBACION AS SolFechaAprobacion,
                     s.SolFormatoFirma AS SolFormatoFirma,
                     s.SolTiempoVigencia AS SolVigencia,
                     s.SolMontoPago AS SolMontoPago,
@@ -943,6 +1001,40 @@ namespace Simetric.Services
                 .Where(d => d.DocIdSolicitud == id && d.DocVigente)
                 .OrderBy(d => d.DocTipo)
                 .ToListAsync();
+        }
+
+        public async Task<UsuSolicitudFirma?> ObtenerSolicitudRenovacionClienteAsync(int solId, int usuarioClienteId)
+        {
+            if (solId <= 0 || usuarioClienteId <= 0)
+                return null;
+
+            using var context = await _contextFactory.CreateDbContextAsync();
+            var solicitud = await context.UsuSolicitudFirma
+                .AsNoTracking()
+                .Include(s => s.Documentos.Where(d => d.DocVigente))
+                .FirstOrDefaultAsync(s => s.SolId == solId &&
+                                          s.SolIdUsuarioCliente == usuarioClienteId &&
+                                          s.SolActivo &&
+                                          s.SolPagoExitoso == true &&
+                                          s.SolIdEstadoNumerica == 3);
+
+            if (solicitud is null)
+                return null;
+
+            var inicio = solicitud.SolFechaAprobacion ?? solicitud.SolFechaPago ?? solicitud.SolFechaSolicitud;
+            var vencimiento = (solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant() switch
+            {
+                "1 ANIO" => inicio.AddYears(1),
+                "2 ANIOS" => inicio.AddYears(2),
+                "3 ANIOS" => inicio.AddYears(3),
+                "4 ANIOS" => inicio.AddYears(4),
+                "5 ANIOS" => inicio.AddYears(5),
+                _ => inicio.AddDays(30)
+            };
+
+            return vencimiento >= DateTime.Now && vencimiento - DateTime.Now <= TimeSpan.FromDays(15)
+                ? solicitud
+                : null;
         }
 
         public async Task<bool> GuardarFirmaP12Async(
