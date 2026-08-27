@@ -1,0 +1,638 @@
+@page "/backoffice/reportes/usuarios-registrados"
+@namespace Simetric.Components.Pages.BackOffice
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Models
+@using Simetric.Services
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<PageTitle>Reporte usuarios registrados - BackOffice</PageTitle>
+
+<link href="css/reportes-compartido.css" rel="stylesheet" />
+
+<style>
+    .registered-chart-wrap {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 0.75rem;
+        min-height: 320px;
+    }
+
+    .registered-chart-axis {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: flex-end;
+        padding: 0.4rem 0 2.4rem;
+        color: #334155;
+        font-size: 0.76rem;
+        font-weight: 800;
+    }
+
+    .registered-chart-scroll {
+        overflow-x: auto;
+        overflow-y: visible;
+        padding: 0.4rem 0.25rem 0.2rem;
+    }
+
+    .registered-chart-bars {
+        position: relative;
+        display: grid;
+        align-items: end;
+        gap: 0.65rem;
+        min-height: 292px;
+        padding: 0 0.25rem;
+        background:
+            linear-gradient(to bottom, #e5e7eb 1px, transparent 1px) 0 0 / 100% 20%;
+    }
+
+    .registered-chart-item {
+        position: relative;
+        display: grid;
+        grid-template-rows: 24px 220px 34px;
+        align-items: end;
+        justify-items: center;
+        min-width: 34px;
+    }
+
+    .registered-chart-value {
+        align-self: center;
+        color: #334155;
+        font-size: 0.74rem;
+        font-weight: 800;
+    }
+
+    .registered-chart-bar {
+        width: min(100%, 42px);
+        min-height: 4px;
+        border-radius: 10px 10px 4px 4px;
+        background: linear-gradient(180deg, #38bdf8, #0284c7);
+        box-shadow: 0 10px 18px rgba(2, 132, 199, 0.18);
+        cursor: pointer;
+        transition: transform 0.16s ease, filter 0.16s ease, box-shadow 0.16s ease;
+    }
+
+    .registered-chart-item:hover .registered-chart-bar {
+        transform: translateY(-3px);
+        filter: saturate(1.15);
+        box-shadow: 0 14px 24px rgba(2, 132, 199, 0.28);
+    }
+
+    .registered-chart-label {
+        align-self: center;
+        max-width: 58px;
+        color: #475569;
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1.15;
+        text-align: center;
+        white-space: normal;
+    }
+
+    .registered-chart-tooltip {
+        position: absolute;
+        top: 32px;
+        bottom: auto;
+        left: 50%;
+        z-index: 10;
+        min-width: 190px;
+        padding: 0.7rem 0.8rem;
+        border-radius: 10px;
+        background: #0f172a;
+        color: #ffffff;
+        box-shadow: 0 16px 34px rgba(15, 23, 42, 0.24);
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, -4px);
+        transition: opacity 0.16s ease, transform 0.16s ease;
+    }
+
+    .registered-chart-tooltip strong,
+    .registered-chart-tooltip span {
+        display: block;
+    }
+
+    .registered-chart-tooltip strong {
+        margin-bottom: 0.35rem;
+        font-size: 0.82rem;
+    }
+
+    .registered-chart-tooltip span {
+        color: #cbd5e1;
+        font-size: 0.74rem;
+        line-height: 1.45;
+    }
+
+    .registered-chart-item:hover .registered-chart-tooltip {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+
+    @@media (max-width: 760px) {
+        .registered-chart-wrap {
+            grid-template-columns: 34px minmax(0, 1fr);
+        }
+    }
+</style>
+
+<div class="reports-container">
+    <div class="report-header-card animate__animated animate__fadeIn">
+        <div class="report-header-top">
+            <h2 class="report-page-title">
+                <i class="bi bi-bar-chart-line-fill"></i> Reporte usuarios registrados
+            </h2>
+        </div>
+        <div class="report-header-filters">
+            <div class="filter-group">
+                <span class="filter-label">Desde:</span>
+                <input type="date" @bind="fechaInicio" @bind:after="OnFiltersChanged" class="filter-input" />
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Hasta:</span>
+                <input type="date" @bind="fechaFin" @bind:after="OnFiltersChanged" class="filter-input" />
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(agrupacion == ReportGroup.Day ? "active" : "")" @onclick="() => SetAgrupacion(ReportGroup.Day)">Días</button>
+                <button type="button" class="btn-preset @(agrupacion == ReportGroup.Month ? "active" : "")" @onclick="() => SetAgrupacion(ReportGroup.Month)">Meses</button>
+                <button type="button" class="btn-preset @(agrupacion == ReportGroup.Year ? "active" : "")" @onclick="() => SetAgrupacion(ReportGroup.Year)">Años</button>
+            </div>
+            <div class="filter-presets">
+                <button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este mes</button>
+                <button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este año</button>
+                <button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="reports-viewport printable-report" id="report-view-area">
+        <div class="report-slide report-slide-active">
+            <div class="visual-header">
+                <h3 class="visual-title">Registros por @AgrupacionTexto</h3>
+                <p class="visual-subtitle">Usuarios que crearon cuenta dentro del rango seleccionado.</p>
+            </div>
+
+            @if (loading)
+            {
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando datos...</span>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="kpis-grid">
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-blue"><i class="bi bi-people-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Usuarios registrados</span>
+                            <strong class="kpi-card-value">@usuariosFiltrados.Count</strong>
+                            <span class="kpi-card-trend trend-neutral">En el período</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-green"><i class="bi bi-cart-check-fill"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Con compras</span>
+                            <strong class="kpi-card-value">@usuariosFiltrados.Count(u => u.Compras > 0)</strong>
+                            <span class="kpi-card-trend trend-neutral">Usuarios con actividad comercial</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-orange"><i class="bi bi-graph-up-arrow"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Mayor registro</span>
+                            <strong class="kpi-card-value">@(picoRegistro?.TotalUsuarios ?? 0)</strong>
+                            <span class="kpi-card-trend trend-up">@(picoRegistro?.Etiqueta ?? "Sin datos")</span>
+                        </div>
+                    </div>
+                    <div class="bo-kpi-card">
+                        <div class="kpi-icon-container kpi-icon-purple"><i class="bi bi-currency-dollar"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-card-title">Total comprado</span>
+                            <strong class="kpi-card-value">$ @usuariosFiltrados.Sum(u => u.TotalComprado).ToString("N2")</strong>
+                            <span class="kpi-card-trend trend-neutral">Ventas asociadas</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-visual-card">
+                    <div class="visual-header">
+                        <h4 class="visual-title">Tendencia de registros</h4>
+                        <p class="visual-subtitle">Comparativo estadístico de usuarios registrados por @AgrupacionTexto.</p>
+                    </div>
+                    <div class="chart-container">
+                        @if (chartData.Any())
+                        {
+                            <div class="registered-chart-wrap">
+                                <div class="registered-chart-axis" aria-hidden="true">
+                                    @for (var i = 5; i >= 0; i--)
+                                    {
+                                        <span>@Math.Round(maxChart * i / 5.0)</span>
+                                    }
+                                </div>
+                                <div class="registered-chart-scroll">
+                                    <div class="registered-chart-bars" style="grid-template-columns: repeat(@chartData.Count, minmax(40px, 1fr)); min-width: @(Math.Max(720, chartData.Count * 54))px;">
+                                        @foreach (var item in chartData)
+                                        {
+                                            <div class="registered-chart-item">
+                                                <span class="registered-chart-value">@item.TotalUsuarios</span>
+                                                <div class="registered-chart-bar"
+                                                     style="height: @GetBarHeightPercent(item);"
+                                                     title="@GetTooltipText(item)"></div>
+                                                <span class="registered-chart-label">@item.EtiquetaCorta</span>
+                                                <div class="registered-chart-tooltip">
+                                                    <strong>@item.Etiqueta</strong>
+                                                    <span>Usuarios registrados: @item.TotalUsuarios</span>
+                                                    <span>Con compras: @item.ConCompras</span>
+                                                    <span>Sin compras: @item.SinCompras</span>
+                                                    <span>Total comprado: $ @item.TotalComprado.ToString("N2")</span>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="text-center text-muted py-4">No hay registros para graficar en este rango.</div>
+                        }
+                    </div>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row">
+                        <h4 class="table-title">Días, meses o años con más registros</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead>
+                            <tr>
+                                <th>Período</th>
+                                <th>Usuarios registrados</th>
+                                <th>Con compras</th>
+                                <th>Sin compras</th>
+                                <th>Total comprado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (resumenOrdenado.Any())
+                            {
+                                @foreach (var item in resumenOrdenado.Take(10))
+                                {
+                                    <tr>
+                                        <td><strong>@item.Etiqueta</strong></td>
+                                        <td>@item.TotalUsuarios</td>
+                                        <td>@item.ConCompras</td>
+                                        <td>@item.SinCompras</td>
+                                        <td>$ @item.TotalComprado.ToString("N2")</td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted py-4">No hay usuarios registrados en este período.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="report-table-card">
+                    <div class="table-header-row">
+                        <h4 class="table-title">Detalle de usuarios registrados</h4>
+                    </div>
+                    <table class="bo-table">
+                        <thead>
+                            <tr>
+                                <th>Usuario</th>
+                                <th>Identificación</th>
+                                <th>Fecha registro</th>
+                                <th>Vendedor</th>
+                                <th>Compras</th>
+                                <th>Total comprado</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (usuariosPagina.Any())
+                            {
+                                @foreach (var usuario in usuariosPagina)
+                                {
+                                    <tr>
+                                        <td><strong>@usuario.Nombre</strong><br /><span class="text-muted">@usuario.Email</span></td>
+                                        <td>@DisplayOrDash(usuario.Identificacion)</td>
+                                        <td>@(usuario.FechaRegistro?.ToString("dd/MM/yyyy HH:mm") ?? "-")</td>
+                                        <td>@DisplayOrDash(usuario.Vendedor)</td>
+                                        <td>@usuario.Compras</td>
+                                        <td>$ @usuario.TotalComprado.ToString("N2")</td>
+                                        <td>
+                                            <span class="status-pill @(usuario.Activo ? "status-pill-success" : "status-pill-danger")">
+                                                @(usuario.Activo ? "Activo" : "Inactivo")
+                                            </span>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                <tr>
+                                    <td colspan="7" class="text-center text-muted py-4">No hay usuarios para mostrar.</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="pagination-controls">
+                        <span class="page-indicator">Página @(pageUsuarios + 1) de @MaxPaginaUsuarios</span>
+                        <div class="pagination-btn-group">
+                            <button type="button" class="btn-pagination" disabled="@(pageUsuarios == 0)" @onclick="() => CambiarPaginaUsuarios(-1)">
+                                <i class="bi bi-chevron-left"></i> Ant.
+                            </button>
+                            <button type="button" class="btn-pagination" disabled="@(pageUsuarios >= MaxPaginaUsuarios - 1)" @onclick="() => CambiarPaginaUsuarios(1)">
+                                Sig. <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private DateTime fechaInicio = new(DateTime.Now.Year, DateTime.Now.Month, 1);
+    private DateTime fechaFin = DateTime.Now;
+    private string presetActivo = "mes";
+    private ReportGroup agrupacion = ReportGroup.Day;
+    private bool loading = true;
+
+    private readonly List<UsuarioRegistradoRow> usuarios = new();
+    private List<UsuarioRegistradoRow> usuariosFiltrados = new();
+    private List<RegistroResumenRow> resumen = new();
+    private List<RegistroResumenRow> chartData = new();
+    private int maxChart = 10;
+
+    private int pageUsuarios;
+    private const int PageSize = 12;
+    private int MaxPaginaUsuarios => Math.Max(1, (int)Math.Ceiling(usuariosFiltrados.Count / (double)PageSize));
+    private List<UsuarioRegistradoRow> usuariosPagina => usuariosFiltrados.Skip(pageUsuarios * PageSize).Take(PageSize).ToList();
+    private List<RegistroResumenRow> resumenOrdenado => resumen
+        .OrderByDescending(r => r.TotalUsuarios)
+        .ThenByDescending(r => r.Periodo)
+        .ToList();
+    private RegistroResumenRow? picoRegistro => resumenOrdenado.FirstOrDefault();
+    private string AgrupacionTexto => agrupacion switch
+    {
+        ReportGroup.Month => "mes",
+        ReportGroup.Year => "año",
+        _ => "día"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CargarUsuariosAsync();
+        AplicarFiltros();
+    }
+
+    private async Task OnFiltersChanged()
+    {
+        presetActivo = string.Empty;
+        if (fechaInicio.Date > fechaFin.Date)
+        {
+            fechaFin = fechaInicio;
+        }
+
+        AplicarFiltros();
+        await Task.CompletedTask;
+    }
+
+    private void SetAgrupacion(ReportGroup group)
+    {
+        agrupacion = group;
+        AplicarFiltros();
+    }
+
+    private void AplicarPreset(string preset)
+    {
+        presetActivo = preset;
+        var hoy = DateTime.Now;
+        if (preset == "mes")
+        {
+            fechaInicio = new DateTime(hoy.Year, hoy.Month, 1);
+            fechaFin = hoy;
+            agrupacion = ReportGroup.Day;
+        }
+        else if (preset == "anio")
+        {
+            fechaInicio = new DateTime(hoy.Year, 1, 1);
+            fechaFin = hoy;
+            agrupacion = ReportGroup.Month;
+        }
+        else if (preset == "todo")
+        {
+            fechaInicio = usuarios.Where(u => u.FechaRegistro.HasValue).Select(u => u.FechaRegistro!.Value.Date).DefaultIfEmpty(new DateTime(2020, 1, 1)).Min();
+            fechaFin = hoy;
+            agrupacion = ReportGroup.Year;
+        }
+
+        AplicarFiltros();
+    }
+
+    private async Task CargarUsuariosAsync()
+    {
+        loading = true;
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuariosDb = await context.Usuarios
+                .AsNoTracking()
+                .Where(u => u.IdTipoUsuario == 1)
+                .OrderByDescending(u => u.FechaCreacion)
+                .ToListAsync();
+
+            usuariosDb = usuariosDb
+                .Where(u => !BackOfficeReportDataFilter.IsTestData(u))
+                .ToList();
+
+            var ventas = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(v => v.Estado != "anulada")
+                .ToListAsync();
+
+            ventas = ventas
+                .Where(v => !BackOfficeReportDataFilter.IsTestData(v))
+                .ToList();
+
+            var vendedores = await context.VendedoresBackOffice
+                .AsNoTracking()
+                .ToDictionaryAsync(v => v.IdVendedor, v => v.Nombre);
+
+            usuarios.Clear();
+            usuarios.AddRange(usuariosDb.Select(usuario =>
+            {
+                var ventasUsuario = ventas.Where(venta => CoincideVenta(usuario, venta.Cliente)).ToList();
+                return new UsuarioRegistradoRow
+                {
+                    IdUsuario = usuario.IdUsuario,
+                    Nombre = ObtenerNombreUsuario(usuario),
+                    Email = usuario.Email ?? string.Empty,
+                    Identificacion = usuario.Identificacion,
+                    FechaRegistro = usuario.FechaCreacion,
+                    Vendedor = usuario.IdVendedor.HasValue && vendedores.TryGetValue(usuario.IdVendedor.Value, out var vendedor)
+                        ? vendedor
+                        : null,
+                    Compras = ventasUsuario.Count,
+                    TotalComprado = ventasUsuario.Sum(v => v.Valor),
+                    Activo = usuario.Estado == true && usuario.CuentaBloqueada != true
+                };
+            }));
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void AplicarFiltros()
+    {
+        var inicio = fechaInicio.Date;
+        var finExclusivo = fechaFin.Date.AddDays(1);
+
+        usuariosFiltrados = usuarios
+            .Where(u => u.FechaRegistro.HasValue && u.FechaRegistro.Value >= inicio && u.FechaRegistro.Value < finExclusivo)
+            .OrderByDescending(u => u.FechaRegistro)
+            .ToList();
+
+        resumen = usuariosFiltrados
+            .GroupBy(u => ObtenerPeriodo(u.FechaRegistro!.Value))
+            .OrderBy(g => g.Key)
+            .Select(g => new RegistroResumenRow
+            {
+                Periodo = g.Key,
+                Etiqueta = FormatearPeriodo(g.Key),
+                EtiquetaCorta = FormatearPeriodoCorto(g.Key),
+                TotalUsuarios = g.Count(),
+                ConCompras = g.Count(u => u.Compras > 0),
+                SinCompras = g.Count(u => u.Compras == 0),
+                TotalComprado = g.Sum(u => u.TotalComprado)
+            })
+            .ToList();
+
+        chartData = resumen.Count > 24
+            ? resumen.Skip(resumen.Count - 24).ToList()
+            : resumen.ToList();
+
+        maxChart = chartData.Any()
+            ? Math.Max(1, chartData.Max(item => item.TotalUsuarios))
+            : 10;
+
+        pageUsuarios = 0;
+    }
+
+    private DateTime ObtenerPeriodo(DateTime fecha) =>
+        agrupacion switch
+        {
+            ReportGroup.Month => new DateTime(fecha.Year, fecha.Month, 1),
+            ReportGroup.Year => new DateTime(fecha.Year, 1, 1),
+            _ => fecha.Date
+        };
+
+    private string FormatearPeriodo(DateTime fecha) =>
+        agrupacion switch
+        {
+            ReportGroup.Month => fecha.ToString("MMMM yyyy", System.Globalization.CultureInfo.GetCultureInfo("es-EC")),
+            ReportGroup.Year => fecha.ToString("yyyy"),
+            _ => fecha.ToString("dd/MM/yyyy")
+        };
+
+    private string FormatearPeriodoCorto(DateTime fecha) =>
+        agrupacion switch
+        {
+            ReportGroup.Month => fecha.ToString("MMM yy", System.Globalization.CultureInfo.GetCultureInfo("es-EC")),
+            ReportGroup.Year => fecha.ToString("yyyy"),
+            _ => fecha.ToString("dd/MM")
+        };
+
+    private void CambiarPaginaUsuarios(int step)
+    {
+        pageUsuarios += step;
+        if (pageUsuarios < 0) pageUsuarios = 0;
+        if (pageUsuarios >= MaxPaginaUsuarios) pageUsuarios = MaxPaginaUsuarios - 1;
+    }
+
+    private static string ObtenerNombreUsuario(Usuario usuario)
+    {
+        var nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim();
+        if (!string.IsNullOrWhiteSpace(nombre))
+            return nombre;
+
+        return !string.IsNullOrWhiteSpace(usuario.NombreEmpresa)
+            ? usuario.NombreEmpresa
+            : $"Usuario #{usuario.IdUsuario}";
+    }
+
+    private static bool CoincideVenta(Usuario usuario, string? cliente)
+    {
+        if (string.IsNullOrWhiteSpace(cliente))
+            return false;
+
+        var parts = cliente.Split('|');
+        var emailPart = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+        var nombrePart = parts[0].Trim();
+
+        return (!string.IsNullOrWhiteSpace(usuario.Email) &&
+                (string.Equals(usuario.Email.Trim(), emailPart, StringComparison.OrdinalIgnoreCase) ||
+                 cliente.Contains(usuario.Email.Trim(), StringComparison.OrdinalIgnoreCase))) ||
+               (!string.IsNullOrWhiteSpace(usuario.Identificacion) &&
+                cliente.Contains(usuario.Identificacion.Trim(), StringComparison.OrdinalIgnoreCase)) ||
+               (!string.IsNullOrWhiteSpace(nombrePart) &&
+                string.Equals(nombrePart, ObtenerNombreUsuario(usuario), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string DisplayOrDash(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
+
+    private string GetBarHeightPercent(RegistroResumenRow item)
+    {
+        var percent = maxChart > 0
+            ? Math.Max(2.0, item.TotalUsuarios / (double)maxChart * 100.0)
+            : 2.0;
+
+        return $"{percent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%";
+    }
+
+    private static string GetTooltipText(RegistroResumenRow item) =>
+        $"{item.Etiqueta}: {item.TotalUsuarios} registrados, {item.ConCompras} con compras, {item.SinCompras} sin compras";
+
+    private enum ReportGroup
+    {
+        Day,
+        Month,
+        Year
+    }
+
+    private sealed class UsuarioRegistradoRow
+    {
+        public int IdUsuario { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string? Identificacion { get; set; }
+        public DateTime? FechaRegistro { get; set; }
+        public string? Vendedor { get; set; }
+        public int Compras { get; set; }
+        public decimal TotalComprado { get; set; }
+        public bool Activo { get; set; }
+    }
+
+    private sealed class RegistroResumenRow
+    {
+        public DateTime Periodo { get; set; }
+        public string Etiqueta { get; set; } = string.Empty;
+        public string EtiquetaCorta { get; set; } = string.Empty;
+        public int TotalUsuarios { get; set; }
+        public int ConCompras { get; set; }
+        public int SinCompras { get; set; }
+        public decimal TotalComprado { get; set; }
+    }
+}
