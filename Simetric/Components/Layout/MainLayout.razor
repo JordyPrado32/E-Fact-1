@@ -76,7 +76,7 @@ else
                                                 role="menuitem"
                                                 class="service-switcher-item @(activo ? "is-active" : string.Empty)"
                                                 @onclick="() => IrAlServicioHeaderAsync(servicio)">
-                                            <img src="@ResolveServiceMark(servicio.Clave)" alt="" aria-hidden="true" />
+                                            <img class="service-switcher-mark service-switcher-mark-@NormalizeServiceKey(servicio.Clave)" src="@ResolveServiceMark(servicio.Clave)" alt="" aria-hidden="true" />
                                             <span>@GetServiceDisplayName(servicio)</span>
                                             @if (activo)
                                             {
@@ -1021,7 +1021,7 @@ else
                             "Numerica e-fact IA";
 
     private string CurrentServiceMark =>
-        IsBackOfficeContext ? "/images/LogoNumerica.svg" :
+        IsBackOfficeContext ? "/images/services/n-backoffice.png" :
         IsEContaxContext ? "/images/services/n-econtax.png" :
         IsEDeclaraContext ? "/images/services/n-edeclara.png" :
         IsESignContext ? "/images/services/n-erubrica.png" :
@@ -1433,6 +1433,7 @@ else
             return;
 
         var esSuperAdmin = EsAdministradorNumerica(user);
+        var esBackOffice = EsUsuarioBackOffice(user);
         _puedeCambiarServicioHeader = true;
 
         _cargandoServiciosHeader = true;
@@ -1441,7 +1442,7 @@ else
             var catalogo = await AppAccessService.GetCatalogForUserAsync(userId.Value, esSuperAdmin);
             _serviciosHeader.Clear();
             _serviciosHeader.AddRange(catalogo.Where(item =>
-                ServicioVisibleEnHeader(item) && (esSuperAdmin || item.TieneAcceso)));
+                ServicioVisibleEnHeader(item, esSuperAdmin, esBackOffice) && (esSuperAdmin || item.TieneAcceso)));
         }
         catch (Exception ex)
         {
@@ -1516,8 +1517,10 @@ else
         _ => false
     };
 
-    private static bool ServicioVisibleEnHeader(AppServiceCatalogItem item) =>
-        !string.Equals(item.Clave, "backoffice", StringComparison.OrdinalIgnoreCase);
+    private static bool ServicioVisibleEnHeader(AppServiceCatalogItem item, bool esSuperAdmin, bool esBackOffice) =>
+        !string.Equals(item.Clave, BackOfficeRoutes.ServiceKey, StringComparison.OrdinalIgnoreCase) ||
+        esSuperAdmin ||
+        esBackOffice;
 
     private static bool EsAdministradorNumerica(ClaimsPrincipal user) =>
         user.Identity?.IsAuthenticated == true &&
@@ -1526,15 +1529,27 @@ else
             AppAccessService.AdminRoleId,
             StringComparison.OrdinalIgnoreCase);
 
+    private static bool EsUsuarioBackOffice(ClaimsPrincipal user) =>
+        user.Identity?.IsAuthenticated == true &&
+        string.Equals(
+            user.FindFirst("IdTipoUsuario")?.Value,
+            BackOfficePermissionHelper.BackOfficeRoleId.ToString(),
+            StringComparison.OrdinalIgnoreCase);
+
     private static string ResolveServiceMark(string? clave) => clave?.ToLowerInvariant() switch
     {
         "e-conta" or "e-contax" or "econtax" => "/images/services/n-econtax.png",
         "e-declara" or "edeclara" => "/images/services/n-edeclara.png",
         "e-people" or "epeople" => "/images/services/n-epeople.png",
         "e-sign" or "esign" => "/images/services/n-erubrica.png",
-        "backoffice" => "/images/LogoNumerica.svg",
+        "backoffice" => "/images/services/n-backoffice.png",
         _ => "/images/LogoNumerica.svg"
     };
+
+    private static string NormalizeServiceKey(string? clave) =>
+        string.IsNullOrWhiteSpace(clave)
+            ? "default"
+            : clave.Trim().ToLowerInvariant().Replace("_", "-");
 
     private static string GetServiceDisplayName(AppServiceCatalogItem item)
     {
