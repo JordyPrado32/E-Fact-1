@@ -36,4 +36,10 @@ public sealed class ChatFacturaResponse
 
     [JsonPropertyName("opcionesSeleccion")]
     public List<SelectionOptionDto> OpcionesSeleccion { get; set; } = new();
+
+    [JsonPropertyName("progreso")]
+    public List<BotProgressStepDto> Progreso { get; set; } = new();
+
+    [JsonPropertyName("datosFaltantes")]
+    public List<string> DatosFaltantes { get; set; } = new();
 }

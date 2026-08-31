@@ -76,9 +76,81 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             RutaSugerida = result.RutaSugerida,
             SeleccionPendienteTipo = state.SeleccionPendiente?.Tipo,
             SeleccionPendienteMensaje = state.SeleccionPendiente?.Mensaje,
-            OpcionesSeleccion = state.SeleccionPendiente?.Opciones ?? new List<SelectionOptionDto>()
+            OpcionesSeleccion = state.SeleccionPendiente?.Opciones ?? new List<SelectionOptionDto>(),
+            Progreso = BuildProgress(state, result.AccionDetectada, result.Respuesta),
+            DatosFaltantes = BuildMissingData(state, result.Respuesta)
         };
     }
+
+    private static List<BotProgressStepDto> BuildProgress(FacturaConversationState state, string? action, string response)
+    {
+        var normalizedAction = action?.Trim().ToLowerInvariant() ?? state.UltimaIntencion?.Trim().ToLowerInvariant();
+        var steps = normalizedAction switch
+        {
+            "crear_cliente" => new List<BotProgressStepDto>
+            {
+                Step("interpretar", "Entendiendo los datos del cliente", "Analizando nombre, identificación y contacto.", "completed"),
+                Step("buscar_cliente", "Buscando coincidencias", "Comparando con clientes existentes para evitar duplicados.", "completed"),
+                Step("validar_identificacion", "Validando identificación", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "No encontré una coincidencia con esa identificación." : "Revisando el formato y la disponibilidad.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("crear_cliente", "Preparando registro", "Solo se solicitarán los datos obligatorios que falten.", "pending")
+            },
+            "crear_producto" => new List<BotProgressStepDto>
+            {
+                Step("interpretar", "Entendiendo los datos del producto", "Analizando nombre, código, precio e IVA.", "completed"),
+                Step("buscar_producto", "Buscando coincidencias", "Revisando el catálogo para evitar duplicados.", "completed"),
+                Step("validar_producto", "Validando precio e IVA", "Comprobando los datos necesarios para facturar.", "completed"),
+                Step("crear_producto", "Preparando registro", "Solo se solicitarán los datos obligatorios que falten.", "pending")
+            },
+            "agregar_item" or "producto_seleccionado" => new List<BotProgressStepDto>
+            {
+                Step("buscar_producto", "Buscando producto", "Comparando nombre y código en tu catálogo.", "completed"),
+                Step("validar_item", "Validando precio e IVA", "Usando la configuración real del producto.", "completed"),
+                Step("calcular", "Calculando línea", "Actualizando cantidad, descuento y total.", "completed")
+            },
+            "crear_factura" or "preparar_emision" or "validar_factura" => new List<BotProgressStepDto>
+            {
+                Step("cliente", "Buscando cliente", state.Draft.Cliente is null ? "Falta seleccionar un cliente." : $"Cliente encontrado: {state.Draft.Cliente.Nombre}.", state.Draft.Cliente is null ? "warning" : "completed"),
+                Step("items", "Revisando productos", state.Draft.Items.Count == 0 ? "Falta agregar al menos un producto o servicio." : $"{state.Draft.Items.Count} producto(s) listos para revisar.", state.Draft.Items.Count == 0 ? "warning" : "completed"),
+                Step("totales", "Calculando factura", $"Total actual: ${state.Draft.Total:0.00}.", "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá nada sin tu autorización explícita.", state.RequiereConfirmacion ? "pending" : "completed")
+            },
+            "consultar_facturas" => new List<BotProgressStepDto>
+            {
+                Step("buscar", "Buscando comprobantes", "Consultando facturas reales de tu cuenta.", "completed"),
+                Step("resumir", "Preparando resumen", "Ordenando resultados y estados.", "completed")
+            },
+            _ => new List<BotProgressStepDto>
+            {
+                Step("interpretar", "Entendiendo tu solicitud", "Identificando la acción que necesitas.", "completed"),
+                Step("consultar", "Consultando la información", "Revisando el contexto de tu conversación.", "completed"),
+                Step("responder", "Preparando respuesta", "Tengo el siguiente paso listo para ti.", "completed")
+            }
+        };
+
+        return steps;
+    }
+
+    private static List<string> BuildMissingData(FacturaConversationState state, string response)
+    {
+        var missing = new List<string>();
+        if (state.UltimaIntencion is "crear_factura" or "preparar_emision" or "validar_factura")
+        {
+            if (state.Draft.Cliente is null) missing.Add("cliente");
+            if (state.Draft.Items.Count == 0) missing.Add("producto o servicio");
+            if (state.RequiereConfirmacion) missing.Add("confirmación para emitir");
+        }
+
+        foreach (var field in new[] { "nombre", "identificación", "cedula", "cédula", "correo", "dirección", "precio", "cantidad" })
+        {
+            if (response.Contains($"falta {field}", StringComparison.OrdinalIgnoreCase) || response.Contains($"faltan {field}", StringComparison.OrdinalIgnoreCase))
+                missing.Add(field);
+        }
+
+        return missing.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static BotProgressStepDto Step(string id, string label, string detail, string status)
+        => new() { Id = id, Label = label, Detail = detail, Status = status };
 
     private static Task<ChatFacturaResponse?> TryResolvePendingSelectionAsync(
         FacturaConversationState state,
