@@ -13,12 +13,18 @@ public class CajasController : ControllerBase
     private readonly AppDbContext _context;
     private readonly ConfiguracionService _configuracionService;
     private readonly FacturacionService _facturacionService;
+    private readonly InitialSequencePromptService _initialSequencePromptService;
 
-    public CajasController(AppDbContext context, ConfiguracionService configuracionService, FacturacionService facturacionService)
+    public CajasController(
+        AppDbContext context,
+        ConfiguracionService configuracionService,
+        FacturacionService facturacionService,
+        InitialSequencePromptService initialSequencePromptService)
     {
         _context = context;
         _configuracionService = configuracionService;
         _facturacionService = facturacionService;
+        _initialSequencePromptService = initialSequencePromptService;
     }
 
     [HttpGet]
@@ -44,7 +50,7 @@ public class CajasController : ControllerBase
                 idEmpresa = emisor.IdEmpresa,
                 idSucursal = emisor.IdSucursal
             },
-            cajas = cajas.Select(ToDto)
+            cajas = await Task.WhenAll(cajas.Select(caja => ToDtoAsync(idUsuario.Value, caja, emisor?.Codigo)))
         });
     }
 
@@ -87,7 +93,7 @@ public class CajasController : ControllerBase
         if (!await _configuracionService.SaveCajaAsync(caja, idUsuario.Value))
             return BadRequest("No se pudo guardar el punto de emisión.");
 
-        return Ok(ToDto(caja));
+        return Ok(await ToDtoAsync(idUsuario.Value, caja, emisor?.Codigo));
     }
 
     [HttpPut("{sec:int}")]
@@ -120,7 +126,8 @@ public class CajasController : ControllerBase
         if (!await _configuracionService.SaveCajaAsync(caja, idUsuario.Value))
             return BadRequest("No se pudo actualizar el punto de emisión.");
 
-        return Ok(ToDto(caja));
+        var emisor = (await _facturacionService.GetEmisoresActivosAsync(idUsuario.Value)).FirstOrDefault();
+        return Ok(await ToDtoAsync(idUsuario.Value, caja, emisor?.Codigo));
     }
 
     [HttpPut("{sec:int}/principal")]
@@ -154,23 +161,67 @@ public class CajasController : ControllerBase
         return Ok();
     }
 
-    private static object ToDto(Caja caja) => new
+    private async Task<object> ToDtoAsync(int idUsuario, Caja caja, int? codEmisor)
     {
-        sec = caja.Sec,
-        numCaja = caja.NumCaja,
-        idUsuario = caja.IdUsuario,
-        idEmpresa = caja.IdEmpresa,
-        idSucursal = caja.IdSucursal,
-        serieFactura = FormatearSerie(caja.SerieFactura),
-        serieGuia = FormatearSerie(caja.SerieGuia),
-        serieNotasCred = FormatearSerie(caja.SerieNotasCred),
-        estado = caja.Estado,
-        esPrincipal = caja.NumCaja == 1,
-        establecimiento = ExtraerEstablecimiento(caja.SerieFactura),
-        puntoEmision = ExtraerPuntoEmision(caja.SerieFactura)
-    };
+        var serieFactura = FormatearSerie(caja.SerieFactura);
+        var serieGuia = FormatearSerie(caja.SerieGuia);
+        var serieNotasCred = FormatearSerie(caja.SerieNotasCred);
+        var serieNotasDeb = FormatearSerie(caja.SerieDebitos);
+        var serieLiquidacion = FormatearSerie(caja.SerieCompras);
+        var factura = await GetSequenceStateAsync(idUsuario, "factura", ToSerieRaw(serieFactura), codEmisor);
+        var guia = await GetSequenceStateAsync(idUsuario, "guia-remision", ToSerieRaw(serieGuia), codEmisor);
+        var notaCredito = await GetSequenceStateAsync(idUsuario, "nota-credito", ToSerieRaw(serieNotasCred), codEmisor);
+        var notaDebito = await GetSequenceStateAsync(idUsuario, "nota-debito", ToSerieRaw(serieNotasDeb), codEmisor);
+        var liquidacion = await GetSequenceStateAsync(idUsuario, "liquidacion-compra", ToSerieRaw(serieLiquidacion), codEmisor);
+        var retencion = await GetSequenceStateAsync(idUsuario, "retencion", ToSerieRaw(serieLiquidacion), codEmisor);
+
+        return new
+        {
+            sec = caja.Sec,
+            numCaja = caja.NumCaja,
+            idUsuario = caja.IdUsuario,
+            idEmpresa = caja.IdEmpresa,
+            idSucursal = caja.IdSucursal,
+            serieFactura,
+            serieGuia,
+            serieNotasCred,
+            serieNotasDeb,
+            serieLiquidacion,
+            serieLiquidacionCompra = serieLiquidacion,
+            serieRetencion = serieLiquidacion,
+            secFactura = factura.PreviousSequence,
+            secGuia = guia.PreviousSequence,
+            secNotaCredito = notaCredito.PreviousSequence,
+            secNotaDebito = notaDebito.PreviousSequence,
+            secLiquidacion = liquidacion.PreviousSequence,
+            secRetencion = retencion.PreviousSequence,
+            secuenciaFacturaInicializada = factura.Initialized,
+            secuenciaGuiaInicializada = guia.Initialized,
+            secuenciaNotaCreditoInicializada = notaCredito.Initialized,
+            secuenciaNotaDebitoInicializada = notaDebito.Initialized,
+            secuenciaLiquidacionInicializada = liquidacion.Initialized,
+            secuenciaRetencionInicializada = retencion.Initialized,
+            estado = caja.Estado,
+            esPrincipal = caja.NumCaja == 1,
+            establecimiento = ExtraerEstablecimiento(caja.SerieFactura),
+            puntoEmision = ExtraerPuntoEmision(caja.SerieFactura)
+        };
+    }
+
+    private async Task<InitialSequencePromptState> GetSequenceStateAsync(int idUsuario, string documentKey, string serieRaw, int? codEmisor)
+    {
+        try
+        {
+            return await _initialSequencePromptService.GetStateAsync(idUsuario, documentKey, serieRaw, codEmisor);
+        }
+        catch
+        {
+            return new InitialSequencePromptState();
+        }
+    }
 
     private static string FormatearSerie(string? serie) => $"{ExtraerEstablecimiento(serie)}-{ExtraerPuntoEmision(serie)}";
+    private static string ToSerieRaw(string serie) => serie.Replace("-", string.Empty);
     private static string ExtraerEstablecimiento(string? serie)
     {
         var digitos = LimpiarDigitos(serie);
