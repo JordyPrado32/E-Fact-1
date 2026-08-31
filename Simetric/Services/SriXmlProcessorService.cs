@@ -15,15 +15,18 @@ public sealed class SriXmlProcessorService
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
     private readonly FirmaPathResolver _firmaPathResolver;
+    private readonly EmisorCertificadoProtector _certificadoProtector;
 
     public SriXmlProcessorService(
         HttpClient httpClient,
         IConfiguration configuration,
-        FirmaPathResolver firmaPathResolver)
+        FirmaPathResolver firmaPathResolver,
+        EmisorCertificadoProtector certificadoProtector)
     {
         _httpClient = httpClient;
         _configuration = configuration;
         _firmaPathResolver = firmaPathResolver;
+        _certificadoProtector = certificadoProtector;
     }
 
     public async Task<mensajeSRI> ProcessXmlAsync(
@@ -43,11 +46,15 @@ public sealed class SriXmlProcessorService
             if (string.IsNullOrWhiteSpace(rutaCertificadoReal) || !File.Exists(rutaCertificadoReal))
                 throw new FileNotFoundException($"No se encontro el archivo de firma (.p12): {rutaCertificado}");
 
+            var claveCertificadoReal = _certificadoProtector.DesprotegerClave(passwordFirma);
+            if (string.IsNullOrWhiteSpace(claveCertificadoReal))
+                throw new InvalidOperationException("No se pudo obtener la clave de la firma electronica configurada.");
+
             var payload = new
             {
                 RutaXml = rutaXml,
                 RutaFirma = rutaCertificadoReal,
-                PasswordFirma = passwordFirma ?? string.Empty
+                PasswordFirma = claveCertificadoReal.Trim()
             };
 
             using var request = new HttpRequestMessage(HttpMethod.Post, "api/xml/process")

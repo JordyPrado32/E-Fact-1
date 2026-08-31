@@ -63,6 +63,11 @@ public sealed class EmisorCertificadoValidator
             return CertificadoEmisorValidationResult.Fail("No se encontro el archivo .p12 configurado para el emisor.");
 
         var clave = _certificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
+        if (string.IsNullOrWhiteSpace(clave) && !string.IsNullOrWhiteSpace(emisor.ClaveCertificado))
+            clave = emisor.ClaveCertificado.StartsWith("CfDJ", StringComparison.Ordinal)
+                ? null
+                : emisor.ClaveCertificado;
+
         if (string.IsNullOrWhiteSpace(clave))
             return CertificadoEmisorValidationResult.Fail("No se pudo obtener la clave de la firma electronica.");
 

@@ -134,12 +134,36 @@ public sealed class EmisionControlService
     }
 
     public async Task AsegurarPuedeEmitirAsync(AppDbContext context, int? idUsuario)
+        => await AsegurarPuedeEmitirAsync(context, idUsuario, null);
+
+    public async Task AsegurarPuedeEmitirAsync(
+        AppDbContext context,
+        int? idUsuario,
+        Emisor? emisorParaValidar)
     {
         var estado = await ObtenerEstadoAsync(context, idUsuario);
 
         if (!estado.PuedeEmitir)
         {
             throw new EmisionBloqueadaException(estado.Mensaje);
+        }
+
+        // La existencia de ruta y clave no demuestra que el certificado siga vigente.
+        // Esta validacion se ejecuta en el ultimo control antes de generar/guardar el
+        // comprobante para evitar emitir con una firma caducada o invalida.
+        var emisor = emisorParaValidar ?? await ObtenerEmisorActivoAsync(context, idUsuario!.Value);
+        if (emisor?.EsEmisorSistema == true)
+        {
+            return;
+        }
+
+        var validacionFirma = await _emisorCertificadoValidator.ValidarConApiAsync(emisor);
+        if (!validacionFirma.IsValid)
+        {
+            throw new EmisionBloqueadaException(
+                string.IsNullOrWhiteSpace(validacionFirma.Message)
+                    ? MensajeFirmaRequerida
+                    : validacionFirma.Message);
         }
     }
 
@@ -346,6 +370,17 @@ public sealed class EmisionControlService
             EmisionPermitidaPorConfiguracion = true,
             SaldoDocumentosDisponibles = saldoDisponible
         };
+    }
+
+    private async Task<Emisor?> ObtenerEmisorActivoAsync(AppDbContext context, int idUsuario)
+    {
+        var usuarioInfo = await ObtenerUsuarioEmisionInfoAsync(context, idUsuario);
+        return await context.Emisores
+            .AsNoTracking()
+            .Where(e => e.IdUsuario == usuarioInfo.IdUsuarioTitularCuenta && e.Estado == true)
+            .OrderBy(e => e.EsEmisorSistema)
+            .ThenByDescending(e => e.Codigo)
+            .FirstOrDefaultAsync();
     }
 
     private static string ConstruirMensajeSaldoBajo(int saldoDisponible)

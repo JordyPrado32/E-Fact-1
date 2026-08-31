@@ -2125,7 +2125,11 @@ namespace Simetric.Services
             var tipoPersona = (solicitud.SolTipoPersona ?? string.Empty).Trim().ToUpperInvariant();
             var formato = (solicitud.SolFormatoFirma ?? string.Empty).Trim().ToUpperInvariant();
             var vigencia = (solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant();
-            var mappingKey = $"{(string.IsNullOrWhiteSpace(tipoPersona) ? "NATURAL" : tipoPersona)}|{formato}|{vigencia}";
+            var tipoPersonaMapping = string.IsNullOrWhiteSpace(tipoPersona) ? "NATURAL" : tipoPersona;
+            if (tipoPersonaMapping == "NATURAL" && solicitud.SolTieneRuc)
+                tipoPersonaMapping = "NATURAL_RUC";
+
+            var mappingKey = $"{tipoPersonaMapping}|{formato}|{vigencia}";
             var mappedProductUuid = _configuration[$"UanatacaApi:ProductMappings:{mappingKey}"];
             var stakeholderConfigured = !string.IsNullOrWhiteSpace(_configuration["UanatacaApi:StakeholderUuid"]);
 
@@ -2314,7 +2318,9 @@ namespace Simetric.Services
                 BackIdentification = await BuildFilePayloadAsync(documentos, "CEDULA_POSTERIOR", cancellationToken),
                 Selfie = await BuildFilePayloadAsync(documentos, "SELFIE_CEDULA", cancellationToken),
                 SeniorVideo = await BuildOptionalFilePayloadAsync(documentos, "VIDEO_ACEPTACION", cancellationToken),
-                RucFile = await BuildOptionalFilePayloadAsync(documentos, "RUC_FILE", cancellationToken),
+                RucFile = solicitud.SolTieneRuc
+                    ? await BuildFilePayloadAsync(documentos, "RUC_FILE", cancellationToken)
+                    : null,
                 Constitution = await BuildOptionalFilePayloadAsync(documentos, "CONSTITUCION", cancellationToken),
                 Appointment = await BuildOptionalFilePayloadAsync(documentos, "NOMBRAMIENTO", cancellationToken),
                 AcceptanceAppointment = await BuildOptionalFilePayloadAsync(documentos, "ACEPTACION_NOMBRAMIENTO", cancellationToken),

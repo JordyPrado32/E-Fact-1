@@ -1044,13 +1044,7 @@ namespace Simetric.Services
                                 e.Codigo == factura.Codemisor &&
                                 (e.EsEmisorSistema || e.IdUsuario == idUsuarioEmisor) &&
                                 e.Estado)
-                            .Select(e => new
-                            {
-                                e.Codigo,
-                                e.EsEmisorSistema,
-                                e.PathCertificado,
-                                e.ClaveCertificado
-                            })
+                            .Select(e => e)
                             .FirstOrDefaultAsync();
 
                         if (emisor is null)
@@ -1077,20 +1071,8 @@ namespace Simetric.Services
                             throw new Exception(EmisionControlService.MensajeFirmaRequerida);
                         }
 
-                        var estadoEmision = emisor.EsEmisorSistema
-                            ? new EmisionEstado
-                            {
-                                TieneEmisorActivo = true,
-                                TieneFirmaElectronica = true,
-                                PuedeEmitir = true,
-                                EmisionPermitidaPorConfiguracion = true,
-                                PlanIlimitadoActivo = true
-                            }
-                            : await _emisionControlService.ObtenerEstadoAsync(context, idUsuario);
-                        if (!estadoEmision.PuedeEmitir)
-                        {
-                            throw new EmisionBloqueadaException(estadoEmision.Mensaje);
-                        }
+                        var estadoEmision = await _emisionControlService.ObtenerEstadoAsync(context, idUsuario);
+                        await _emisionControlService.AsegurarPuedeEmitirAsync(context, idUsuario, emisor);
 
                         // La serie se toma de la seleccion activa y se valida contra las cajas habilitadas.
                         // El secuencial se recalcula desde esa serie al momento de guardar

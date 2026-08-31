@@ -149,14 +149,20 @@ public sealed class UanatacaApiService
             ResponseBody = responseBody,
             ErrorMessage = response.IsSuccessStatusCode
                 ? null
-                : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}".Trim(),
+                : response.StatusCode == System.Net.HttpStatusCode.Forbidden
+                    ? "Uanataca rechazó la creación (403 Forbidden): el usuario autenticado no tiene permisos para este endpoint. Verifica el rol, stakeholder y UanatacaApi:CreateCertificateRequestPath."
+                    : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}".Trim(),
             Uuid = uuid
         };
     }
 
     public async Task<string> ResolverProductoUuidAsync(UsuSolicitudFirma solicitud, CancellationToken cancellationToken = default)
     {
-        var mappingKey = $"{(solicitud.SolTipoPersona ?? "NATURAL").Trim().ToUpperInvariant()}|{(solicitud.SolFormatoFirma ?? string.Empty).Trim().ToUpperInvariant()}|{(solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant()}";
+        var tipoPersona = (solicitud.SolTipoPersona ?? "NATURAL").Trim().ToUpperInvariant();
+        if (tipoPersona == "NATURAL" && solicitud.SolTieneRuc)
+            tipoPersona = "NATURAL_RUC";
+
+        var mappingKey = $"{tipoPersona}|{(solicitud.SolFormatoFirma ?? string.Empty).Trim().ToUpperInvariant()}|{(solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant()}";
         var explicitMapping = _configuration[$"UanatacaApi:ProductMappings:{mappingKey}"];
         if (!string.IsNullOrWhiteSpace(explicitMapping))
         {
