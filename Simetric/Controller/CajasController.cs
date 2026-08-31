@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.Models;
 using Simetric.Services;
+using System.Globalization;
 
 namespace Simetric.Controllers;
 
@@ -142,6 +143,84 @@ public class CajasController : ControllerBase
         return Ok();
     }
 
+    [HttpGet("siguiente-secuencial")]
+    public async Task<IActionResult> GetSiguienteSecuencial(
+        [FromQuery] int? idUsuario,
+        [FromQuery] string? documento,
+        [FromQuery] string? serie,
+        [FromQuery] int? codEmisor = null)
+    {
+        if (idUsuario is null or <= 0)
+            return BadRequest("Id de usuario requerido.");
+
+        var documentKey = NormalizarDocumento(documento);
+        if (string.IsNullOrWhiteSpace(documentKey))
+            return BadRequest("Tipo de documento requerido.");
+
+        var serieRaw = ToSerieRaw(FormatearSerie(serie));
+        var emisor = codEmisor is > 0
+            ? codEmisor
+            : (await _facturacionService.GetEmisoresActivosAsync(idUsuario.Value)).FirstOrDefault()?.Codigo;
+        var state = await GetSequenceStateAsync(idUsuario.Value, documentKey, serieRaw, emisor);
+        var proximo = await ResolveNextDocumentSequenceAsync(
+            idUsuario.Value,
+            documentKey,
+            serieRaw,
+            emisor,
+            state);
+
+        return Ok(new
+        {
+            documento = documentKey,
+            serie = FormatearSerie(serieRaw),
+            inicializada = state.Initialized || !string.IsNullOrWhiteSpace(proximo),
+            secuenciaAnterior = state.PreviousSequence,
+            proximo
+        });
+    }
+
+    [HttpPost("secuencia-inicial")]
+    public async Task<IActionResult> GuardarSecuenciaInicial([FromQuery] int? idUsuario, [FromBody] CajaSecuenciaInicialDto model)
+    {
+        if (idUsuario is null or <= 0)
+            return BadRequest("Id de usuario requerido.");
+
+        var documentKey = NormalizarDocumento(model.Documento);
+        if (string.IsNullOrWhiteSpace(documentKey))
+            return BadRequest("Tipo de documento requerido.");
+
+        var serieRaw = ToSerieRaw(FormatearSerie(model.Serie));
+        var previousSequence = string.Empty;
+        if (model.HabiaGenerado)
+        {
+            if (!_initialSequencePromptService.TryNormalizeSequence(model.SecuenciaAnterior, out previousSequence))
+                return BadRequest("Ingresa el secuencial anterior con hasta 9 digitos.");
+        }
+
+        var emisor = model.CodEmisor is > 0
+            ? model.CodEmisor
+            : (await _facturacionService.GetEmisoresActivosAsync(idUsuario.Value)).FirstOrDefault()?.Codigo;
+        var state = new InitialSequencePromptState
+        {
+            Initialized = true,
+            HadPreviousDocuments = model.HabiaGenerado,
+            PreviousSequence = previousSequence,
+            ConfiguredAt = DateTimeOffset.UtcNow
+        };
+
+        await _initialSequencePromptService.SaveStateAsync(idUsuario.Value, documentKey, serieRaw, state, emisor);
+        var proximo = _initialSequencePromptService.ResolveNextSequence(null, state);
+
+        return Ok(new
+        {
+            documento = documentKey,
+            serie = FormatearSerie(serieRaw),
+            inicializada = true,
+            secuenciaAnterior = previousSequence,
+            proximo
+        });
+    }
+
     [HttpDelete("{sec:int}")]
     public async Task<IActionResult> Delete(int sec, [FromQuery] int? idUsuario)
     {
@@ -220,8 +299,148 @@ public class CajasController : ControllerBase
         }
     }
 
+    private async Task<string> ResolveNextDocumentSequenceAsync(
+        int idUsuario,
+        string documentKey,
+        string serieRaw,
+        int? codEmisor,
+        InitialSequencePromptState state)
+    {
+        var automatico = await GetNextExistingDocumentSequenceAsync(idUsuario, documentKey, serieRaw, codEmisor);
+        var siguiente = _initialSequencePromptService.ResolveNextSequence(automatico, state);
+        return string.IsNullOrWhiteSpace(siguiente) ? string.Empty : siguiente;
+    }
+
+    private async Task<string?> GetNextExistingDocumentSequenceAsync(int idUsuario, string documentKey, string serieRaw, int? codEmisor)
+    {
+        var usuariosCuenta = await GetUsuariosCuentaIdsAsync(idUsuario);
+        var serieVisual = FormatearSerie(serieRaw);
+        List<string?> secuenciales;
+
+        switch (documentKey)
+        {
+            case "factura":
+                secuenciales = await _context.Facturas
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.Idusuario.HasValue &&
+                        usuariosCuenta.Contains(x.Idusuario.Value) &&
+                        x.Serie != null &&
+                        x.Serie.Replace("-", "") == serieRaw &&
+                        (!codEmisor.HasValue || x.Codemisor == codEmisor.Value))
+                    .Select(x => x.Numfactura)
+                    .ToListAsync();
+                break;
+
+            case "nota-credito":
+                secuenciales = await _context.NotaCreditos
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.Usuario.HasValue &&
+                        usuariosCuenta.Contains(x.Usuario.Value) &&
+                        x.Serie != null &&
+                        x.Serie.Replace("-", "") == serieRaw &&
+                        (!codEmisor.HasValue || x.CodEmisor == codEmisor.Value))
+                    .Select(x => x.NumNotaCredito)
+                    .ToListAsync();
+                break;
+
+            case "nota-debito":
+                secuenciales = await _context.NotaDebitos
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.Usuario.HasValue &&
+                        usuariosCuenta.Contains(x.Usuario.Value) &&
+                        x.Serie != null &&
+                        x.Serie.Replace("-", "") == serieRaw &&
+                        (!codEmisor.HasValue || x.CodEmisor == codEmisor.Value))
+                    .Select(x => x.NumNotaDebito)
+                    .ToListAsync();
+                break;
+
+            case "guia-remision":
+                secuenciales = await _context.GuiasRemision
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.IdUsuario.HasValue &&
+                        usuariosCuenta.Contains(x.IdUsuario.Value) &&
+                        x.Serie != null &&
+                        x.Serie.Replace("-", "") == serieRaw)
+                    .Select(x => x.NumGuiaRemision)
+                    .ToListAsync();
+                break;
+
+            case "liquidacion-compra":
+                secuenciales = await _context.ComprasFacturas
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.Estado == true &&
+                        x.CodDocumento == "03" &&
+                        x.Usuario.HasValue &&
+                        usuariosCuenta.Contains(x.Usuario.Value) &&
+                        x.Serie == serieVisual &&
+                        (!codEmisor.HasValue || x.CodEmisor == codEmisor.Value))
+                    .Select(x => x.NumFactura)
+                    .ToListAsync();
+                break;
+
+            default:
+                return null;
+        }
+
+        var maximo = 0;
+        foreach (var valor in secuenciales)
+        {
+            var digitos = LimpiarDigitos(valor);
+            if (int.TryParse(digitos, out var numero) && numero > maximo)
+                maximo = numero;
+        }
+
+        return maximo > 0
+            ? (maximo + 1).ToString("D9", CultureInfo.InvariantCulture)
+            : null;
+    }
+
+    private async Task<List<int>> GetUsuariosCuentaIdsAsync(int idUsuario)
+    {
+        var usuario = await _context.Usuarios
+            .AsNoTracking()
+            .Where(u => u.IdUsuario == idUsuario)
+            .Select(u => new { u.IdUsuario, u.idJefe, u.estadoAsociado })
+            .FirstOrDefaultAsync();
+
+        var titularId = usuario?.estadoAsociado == true && usuario.idJefe is > 0
+            ? usuario.idJefe.Value
+            : idUsuario;
+
+        var usuarios = await _context.Usuarios
+            .AsNoTracking()
+            .Where(u => u.IdUsuario == titularId || (u.idJefe == titularId && u.estadoAsociado == true))
+            .Select(u => u.IdUsuario)
+            .ToListAsync();
+
+        if (!usuarios.Contains(idUsuario))
+            usuarios.Add(idUsuario);
+
+        return usuarios;
+    }
+
     private static string FormatearSerie(string? serie) => $"{ExtraerEstablecimiento(serie)}-{ExtraerPuntoEmision(serie)}";
     private static string ToSerieRaw(string serie) => serie.Replace("-", string.Empty);
+    private static string NormalizarDocumento(string? documento)
+    {
+        var key = (documento ?? string.Empty).Trim().ToLowerInvariant();
+        return key switch
+        {
+            "factura" or "fac" => "factura",
+            "guia" or "guia-remision" or "guiaremision" or "gui" => "guia-remision",
+            "nota-credito" or "notacredito" or "notaCredito" or "nc" => "nota-credito",
+            "nota-debito" or "notadebito" or "notaDebito" or "nd" => "nota-debito",
+            "liquidacion" or "liquidacion-compra" or "liquidacioncompra" or "liq" => "liquidacion-compra",
+            "retencion" or "ret" => "retencion",
+            _ => string.Empty
+        };
+    }
     private static string ExtraerEstablecimiento(string? serie)
     {
         var digitos = LimpiarDigitos(serie);
@@ -245,5 +464,14 @@ public class CajasController : ControllerBase
     {
         public string? Establecimiento { get; set; }
         public string? PuntoEmision { get; set; }
+    }
+
+    public sealed class CajaSecuenciaInicialDto
+    {
+        public string? Documento { get; set; }
+        public string? Serie { get; set; }
+        public int? CodEmisor { get; set; }
+        public bool HabiaGenerado { get; set; }
+        public string? SecuenciaAnterior { get; set; }
     }
 }
