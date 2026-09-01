@@ -16,6 +16,7 @@
 @inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
 @inject Simetric.Services.VendedorBackOfficeService VendedorBackOfficeService
 @inject IEmailService EmailService
+@inject SolicitudService SolicitudService
 
 <PageTitle>Registro y Control de Ventas - BackOffice</PageTitle>
 
@@ -421,7 +422,7 @@
                                 <th>Fecha Registro</th>
                                 <th class="text-center">Compras</th>
                                 <th class="text-end">Total Comprado</th>
-                                <th>Estado</th>
+                        <th>Estado</th>
                                 <th class="text-center" style="width: 160px;">Acciones</th>
                             </tr>
                         </thead>
@@ -475,7 +476,7 @@
                 }
                 else
                 {
-                    <table class="table ventas-table mb-0">
+                    <table class="table ventas-table ventas-table-main mb-0">
                         <thead>
                             <tr>
                                 <th>Fecha</th>
@@ -485,7 +486,7 @@
                                 <th class="text-end">Valor</th>
                                 <th>Canal / Vendedor</th>
                                 <th>Forma Pago</th>
-                                <th>Estado</th>
+                                <th>Estados</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -559,10 +560,27 @@
                                             </div>
                                         </td>
                                         <td>
-                                            <span class="status-badge @(v.Estado == "pagada" ? "pagada" : v.Estado == "pendiente" ? "pendiente" : "anulada")">
-                                                <i class="bi @(v.Estado == "pagada" ? "bi-check-circle-fill" : v.Estado == "pendiente" ? "bi-clock-fill" : v.Estado == "anulada" ? "bi-x-circle-fill" : "bi-exclamation-triangle-fill")"></i>
-                                                @v.Estado
-                                            </span>
+                                            @if (v.Producto == "e-sign")
+                                            {
+                                                var estadosFirma = ObtenerEstadosFirma(v);
+                                                <div class="dual-status-cell">
+                                                    <div class="dual-status-item">
+                                                        <small>Solicitud</small>
+                                                        <span class="status-badge @estadosFirma.EstadoSolicitudClase"><i class="bi @estadosFirma.EstadoSolicitudIcono"></i>@estadosFirma.EstadoSolicitud</span>
+                                                    </div>
+                                                    <div class="dual-status-item">
+                                                        <small>Pago</small>
+                                                        <span class="status-badge @estadosFirma.EstadoPagoClase"><i class="bi @estadosFirma.EstadoPagoIcono"></i>@estadosFirma.EstadoPago</span>
+                                                    </div>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <span class="status-badge @(v.Estado == "pagada" ? "pagada" : v.Estado == "pendiente" ? "pendiente" : "anulada")">
+                                                    <i class="bi @(v.Estado == "pagada" ? "bi-check-circle-fill" : v.Estado == "pendiente" ? "bi-clock-fill" : v.Estado == "anulada" ? "bi-x-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+                                                    @v.Estado
+                                                </span>
+                                            }
                                         </td>
 </tr>
                                 }
@@ -791,12 +809,13 @@
                                     <option value="Ilimitados durante 1 año">Ilimitados durante 1 año</option>
                                     <option value="CUSTOM">Personalizado (Ingreso manual)</option>
                                 }
-                                else
-                                {
-                                    <option value="1 año">1 año</option>
-                                    <option value="2 años">2 años</option>
-                                    <option value="3 años">3 años</option>
-                                    <option value="4 años">4 años</option>
+                else
+                {
+                    <option value="1 año">1 año</option>
+                    <option value="2 años">2 años</option>
+                    <option value="3 años">3 años</option>
+                    <option value="4 años">4 años</option>
+                    <option value="5 años">5 años</option>
                                 }
                             </select>
                         </div>
@@ -985,6 +1004,54 @@
     private List<ReporteVentaBackOffice> ventasList = new();
     private List<ReporteVentaBackOffice> filteredVentas = new();
     private List<ReporteVentaBackOffice> paginatedVentas = new();
+    private List<SolicitudPagoClienteDto> solicitudesFirmaApi = new();
+
+    private (string EstadoSolicitud, string EstadoSolicitudClase, string EstadoSolicitudIcono, string EstadoPago, string EstadoPagoClase, string EstadoPagoIcono) ObtenerEstadosFirma(ReporteVentaBackOffice venta)
+    {
+        var email = ExtraerEmailClienteReporte(venta.Cliente);
+        var solicitud = solicitudesFirmaApi
+            .Where(item => !string.IsNullOrWhiteSpace(email) && string.Equals(item.SolCorreo1?.Trim(), email, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(item => Math.Abs((item.SolFechaSolicitud - venta.Fecha).TotalDays))
+            .FirstOrDefault();
+
+        var estadoSolicitud = solicitud is null
+            ? "Sin dato API"
+            : !SolicitudEnviadaAProveedor(solicitud)
+                ? "No enviado"
+                : string.IsNullOrWhiteSpace(solicitud.EstadoSolicitud)
+                    ? ObtenerEstadoSolicitudPorId(solicitud.SolIdEstadoNumerica)
+                    : solicitud.EstadoSolicitud.Trim();
+        var pagoConfirmado = solicitud?.SolPagoExitoso == true || (solicitud is null && venta.Estado == "pagada");
+
+        return (
+            estadoSolicitud,
+            ObtenerClaseEstadoSolicitud(estadoSolicitud),
+            ObtenerIconoEstadoSolicitud(estadoSolicitud),
+            pagoConfirmado ? "Pagada" : "Pendiente",
+            pagoConfirmado ? "pagada" : "pendiente",
+            pagoConfirmado ? "bi-check-circle-fill" : "bi-clock-fill");
+    }
+
+    private static bool SolicitudEnviadaAProveedor(SolicitudPagoClienteDto solicitud) =>
+        !string.IsNullOrWhiteSpace(solicitud.SolUanatacaStatus) ||
+        !string.IsNullOrWhiteSpace(solicitud.SolUanatacaUuid);
+
+    private static string ObtenerEstadoSolicitudPorId(int id) => id switch
+    {
+        3 => "Aprobada",
+        4 => "Anulada",
+        2 => "Pendiente",
+        _ => "En revisión"
+    };
+
+    private static string ObtenerClaseEstadoSolicitud(string estado) =>
+        estado.Contains("no enviado", StringComparison.OrdinalIgnoreCase) ? "no-enviado" :
+        estado.Contains("anul", StringComparison.OrdinalIgnoreCase) || estado.Contains("rechaz", StringComparison.OrdinalIgnoreCase) ? "anulada" :
+        estado.Contains("aprob", StringComparison.OrdinalIgnoreCase) || estado.Contains("emit", StringComparison.OrdinalIgnoreCase) ? "pagada" : "pendiente";
+
+    private static string ObtenerIconoEstadoSolicitud(string estado) =>
+        estado.Contains("anul", StringComparison.OrdinalIgnoreCase) || estado.Contains("rechaz", StringComparison.OrdinalIgnoreCase) ? "bi-x-circle-fill" :
+        estado.Contains("aprob", StringComparison.OrdinalIgnoreCase) || estado.Contains("emit", StringComparison.OrdinalIgnoreCase) ? "bi-check-circle-fill" : "bi-clock-fill";
 
     // File Upload and alerts fields
     private Microsoft.AspNetCore.Components.Forms.IBrowserFile? selectedFile;
@@ -1199,6 +1266,18 @@
 
                 ventasList = ventasTask.Result;
                 vendedoresList = vendedoresTask.Result;
+                if (ventasList.Any(v => v.Producto == "e-sign"))
+                {
+                    try
+                    {
+                        solicitudesFirmaApi = await SolicitudService.ObtenerSolicitudesAsync() ?? new List<SolicitudPagoClienteDto>();
+                    }
+                    catch (Exception apiEx)
+                    {
+                        solicitudesFirmaApi = new List<SolicitudPagoClienteDto>();
+                        Console.WriteLine($"No se pudieron cargar estados de firma desde API: {apiEx.Message}");
+                    }
+                }
             }
 
             ComputeMetrics();
@@ -1495,7 +1574,7 @@
         // Map plan dropdown
         var standardPlans = new List<string> { 
             "25 documentos", "120 documentos", "600 documentos", "Ilimitados durante 1 año",
-            "1 año", "2 años", "3 años", "4 años"
+            "1 año", "2 años", "3 años", "4 años", "5 años"
         };
 
         if (standardPlans.Contains(venta.PlanPaquete))
@@ -1579,14 +1658,15 @@
         }
         else if (modalVenta.Producto == "e-sign")
         {
-            modalVenta.Valor = planSeleccionado switch
+            modalVenta.Valor = ESignPricing.ObtenerPrecioFinal(planSeleccionado switch
             {
-                "1 año" => 21.91m,
-                "2 años" => 34.60m,
-                "3 años" => 46.14m,
-                "4 años" => 57.68m,
-                _ => modalVenta.Valor
-            };
+                "1 año" => "1 ANIO",
+                "2 años" => "2 ANIOS",
+                "3 años" => "3 ANIOS",
+                "4 años" => "4 ANIOS",
+                "5 años" => "5 ANIOS",
+                _ => planSeleccionado
+            });
         }
     }
 

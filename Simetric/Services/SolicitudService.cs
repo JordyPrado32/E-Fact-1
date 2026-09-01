@@ -2304,16 +2304,16 @@ namespace Simetric.Services
                     ? null
                     : solicitud.SolUanatacaOfferUuid ?? _configuration["UanatacaApi:DefaultOfferUuid"],
                 Ruc = solicitud.SolTieneRuc ? solicitud.SolNroRuc : null,
-                Company = solicitud.SolCompanyName,
-                Department = solicitud.SolDepartment,
-                Position = solicitud.SolPosition,
-                Reason = solicitud.SolReason,
-                IdentificationTypeManager = string.IsNullOrWhiteSpace(solicitud.SolIdentificationTypeManager)
-                    ? null
-                    : MapIdentificationType(solicitud.SolIdentificationTypeManager),
-                IdentificationManager = solicitud.SolIdentificationManager,
-                NamesManager = solicitud.SolNamesManager,
-                LastNameManager = solicitud.SolLastNameManager,
+                Company = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolCompanyName : null,
+                Department = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolDepartment : null,
+                Position = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolPosition : null,
+                Reason = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolReason : null,
+                IdentificationTypeManager = EsSolicitudPersonaJuridica(solicitud) && !string.IsNullOrWhiteSpace(solicitud.SolIdentificationTypeManager)
+                    ? MapIdentificationType(solicitud.SolIdentificationTypeManager)
+                    : null,
+                IdentificationManager = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolIdentificationManager : null,
+                NamesManager = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolNamesManager : null,
+                LastNameManager = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolLastNameManager : null,
                 FrontIdentification = await BuildFilePayloadAsync(documentos, "CEDULA_FRONTAL", cancellationToken),
                 BackIdentification = await BuildFilePayloadAsync(documentos, "CEDULA_POSTERIOR", cancellationToken),
                 Selfie = await BuildFilePayloadAsync(documentos, "SELFIE_CEDULA", cancellationToken),
@@ -2321,14 +2321,17 @@ namespace Simetric.Services
                 RucFile = solicitud.SolTieneRuc
                     ? await BuildFilePayloadAsync(documentos, "RUC_FILE", cancellationToken)
                     : null,
-                Constitution = await BuildOptionalFilePayloadAsync(documentos, "CONSTITUCION", cancellationToken),
-                Appointment = await BuildOptionalFilePayloadAsync(documentos, "NOMBRAMIENTO", cancellationToken),
-                AcceptanceAppointment = await BuildOptionalFilePayloadAsync(documentos, "ACEPTACION_NOMBRAMIENTO", cancellationToken),
-                Authorization = await BuildOptionalFilePayloadAsync(documentos, "AUTORIZACION", cancellationToken),
-                ManagerIdentification = await BuildOptionalFilePayloadAsync(documentos, "CEDULA_REPRESENTANTE", cancellationToken),
+                Constitution = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "CONSTITUCION", cancellationToken) : null,
+                Appointment = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "NOMBRAMIENTO", cancellationToken) : null,
+                AcceptanceAppointment = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "ACEPTACION_NOMBRAMIENTO", cancellationToken) : null,
+                Authorization = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "AUTORIZACION", cancellationToken) : null,
+                ManagerIdentification = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "CEDULA_REPRESENTANTE", cancellationToken) : null,
                 AdditionalFile = await BuildOptionalFilePayloadAsync(documentos, "ARCHIVO_ADICIONAL", cancellationToken)
             };
         }
+
+        private static bool EsSolicitudPersonaJuridica(UsuSolicitudFirma solicitud)
+            => string.Equals(solicitud.SolTipoPersona, "JURIDICA", StringComparison.OrdinalIgnoreCase);
 
         private async Task<BesArchivoAdjuntoDto> BuildFilePayloadAsync(
             IReadOnlyDictionary<string, UsuSolicitudDocumento> documentos,
@@ -2363,19 +2366,48 @@ namespace Simetric.Services
                 return null;
             }
 
-            var uploadsPath = Path.Combine(_env.WebRootPath, "uploads", "solicitudes", documento.DocNombreArchivo);
-            if (!File.Exists(uploadsPath))
-            {
-                throw new FileNotFoundException($"No se encontro el documento {documento.DocNombreArchivo} asociado a la solicitud.");
-            }
-
-            var bytes = await File.ReadAllBytesAsync(uploadsPath, cancellationToken);
+            var bytes = await LeerDocumentoDesdeServidorAsync(documento, cancellationToken);
             return new BesArchivoAdjuntoDto
             {
                 Name = documento.DocNombreArchivo,
                 Type = ObtenerMimeType(documento.DocExtension),
                 Base64 = Convert.ToBase64String(bytes)
             };
+        }
+
+        private async Task<byte[]> LeerDocumentoDesdeServidorAsync(
+            UsuSolicitudDocumento documento,
+            CancellationToken cancellationToken)
+        {
+            foreach (var ruta in ObtenerRutasDocumentoServidor(documento))
+            {
+                if (File.Exists(ruta))
+                    return await File.ReadAllBytesAsync(ruta, cancellationToken);
+            }
+
+            throw new FileNotFoundException(
+                $"No se encontro el documento {documento.DocNombreArchivo} en el servidor ni en el almacenamiento local.");
+        }
+
+        private IEnumerable<string> ObtenerRutasDocumentoServidor(UsuSolicitudDocumento documento)
+        {
+            var nombre = Path.GetFileName(documento.DocNombreArchivo);
+            var rutaRegistrada = documento.DocRutaArchivo?.Trim().Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+            var rutas = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(rutaRegistrada) && Path.IsPathRooted(rutaRegistrada))
+                rutas.Add(rutaRegistrada);
+
+            if (!string.IsNullOrWhiteSpace(rutaRegistrada))
+            {
+                var relativa = rutaRegistrada.TrimStart(Path.DirectorySeparatorChar);
+                rutas.Add(Path.Combine(_env.ContentRootPath, relativa));
+                rutas.Add(Path.Combine(_env.WebRootPath, relativa));
+            }
+
+            rutas.Add(Path.Combine(_env.WebRootPath, "uploads", "solicitudes", nombre));
+            rutas.Add(Path.Combine(_env.ContentRootPath, "wwwroot", "uploads", "solicitudes", nombre));
+            return rutas.Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
         private static string MapIdentificationType(string? tipo)

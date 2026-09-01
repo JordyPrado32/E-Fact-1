@@ -173,7 +173,8 @@ public sealed class UanatacaApiService
         var products = await ObtenerProductosAsync(cancellationToken);
 
         var vigenciaTexto = ObtenerVigenciaTextoBusqueda(solicitud.SolVigencia);
-        var requiereEmpresa = string.Equals(solicitud.SolTipoPersona, "JURIDICA", StringComparison.OrdinalIgnoreCase);
+        var esPersonaNatural = tipoPersona is "NATURAL" or "NATURAL_RUC";
+        var requiereEmpresa = tipoPersona == "JURIDICA";
 
         var match = (from stakeholderProduct in stakeholderProducts
                      join product in products on stakeholderProduct.ProductUuid equals product.Uuid
@@ -181,11 +182,15 @@ public sealed class UanatacaApiService
                         && product.Active
                         && product.Name.Contains("ARCHIVO", StringComparison.OrdinalIgnoreCase)
                         && product.Name.Contains(vigenciaTexto, StringComparison.OrdinalIgnoreCase)
-                        && (requiereEmpresa
-                            ? product.Name.Contains("EMPRESA", StringComparison.OrdinalIgnoreCase)
-                              || product.Name.Contains("REPRESENTANTE", StringComparison.OrdinalIgnoreCase)
-                              || product.Name.Contains("MIEMBRO", StringComparison.OrdinalIgnoreCase)
-                            : true)
+                         && (requiereEmpresa
+                             ? product.Name.Contains("EMPRESA", StringComparison.OrdinalIgnoreCase)
+                               || product.Name.Contains("REPRESENTANTE", StringComparison.OrdinalIgnoreCase)
+                               || product.Name.Contains("MIEMBRO", StringComparison.OrdinalIgnoreCase)
+                             : esPersonaNatural
+                                 ? !product.Name.Contains("EMPRESA", StringComparison.OrdinalIgnoreCase)
+                                   && !product.Name.Contains("REPRESENTANTE", StringComparison.OrdinalIgnoreCase)
+                                   && !product.Name.Contains("MIEMBRO", StringComparison.OrdinalIgnoreCase)
+                                 : true)
                      orderby stakeholderProduct.Price, product.Price
                      select product.Uuid)
                     .FirstOrDefault();

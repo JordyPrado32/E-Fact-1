@@ -74,6 +74,13 @@ public sealed class DemoCatalogService
             "ri-coins-line",
             "Interactivo"),
         new(
+            "erubrica",
+            "eRúbrica",
+            "Recorre el proceso completo: solicita tu firma, revisa el pago, aprobación y firma de documentos.",
+            "/demo/erubrica",
+            "ri-shield-keyhole-line",
+            "Interactivo"),
+        new(
             "soporte",
             "Centro de soporte",
             "Consulta respuestas frecuentes y conoce los canales de ayuda disponibles para usuarios de e-fact.",
