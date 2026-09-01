@@ -37,6 +37,12 @@ public class CajasController : ControllerBase
         var cajas = await _configuracionService.GetCajasCuentaActivasAsync(idUsuario.Value);
         var emisor = (await _facturacionService.GetEmisoresActivosAsync(idUsuario.Value)).FirstOrDefault();
 
+        var cajaDtos = new List<object>();
+        foreach (var caja in cajas)
+        {
+            cajaDtos.Add(await ToDtoAsync(idUsuario.Value, caja, emisor?.Codigo));
+        }
+
         return Ok(new
         {
             emisor = emisor is null ? null : new
@@ -51,7 +57,7 @@ public class CajasController : ControllerBase
                 idEmpresa = emisor.IdEmpresa,
                 idSucursal = emisor.IdSucursal
             },
-            cajas = await Task.WhenAll(cajas.Select(caja => ToDtoAsync(idUsuario.Value, caja, emisor?.Codigo)))
+            cajas = cajaDtos
         });
     }
 
