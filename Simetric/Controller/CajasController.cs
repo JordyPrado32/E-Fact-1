@@ -162,20 +162,23 @@ public class CajasController : ControllerBase
             ? codEmisor
             : (await _facturacionService.GetEmisoresActivosAsync(idUsuario.Value)).FirstOrDefault()?.Codigo;
         var state = await GetSequenceStateAsync(idUsuario.Value, documentKey, serieRaw, emisor);
-        var proximo = await ResolveNextDocumentSequenceAsync(
-            idUsuario.Value,
-            documentKey,
-            serieRaw,
-            emisor,
-            state);
+        var proximo = state.Initialized
+            ? await ResolveNextDocumentSequenceAsync(
+                idUsuario.Value,
+                documentKey,
+                serieRaw,
+                emisor,
+                state)
+            : string.Empty;
 
         return Ok(new
         {
             documento = documentKey,
             serie = FormatearSerie(serieRaw),
-            inicializada = state.Initialized || !string.IsNullOrWhiteSpace(proximo),
+            inicializada = state.Initialized,
             secuenciaAnterior = state.PreviousSequence,
-            proximo
+            proximo,
+            requiereConfiguracionInicial = !state.Initialized
         });
     }
 
@@ -253,11 +256,11 @@ public class CajasController : ControllerBase
         var notaDebito = await GetSequenceStateAsync(idUsuario, "nota-debito", ToSerieRaw(serieNotasDeb), codEmisor);
         var liquidacion = await GetSequenceStateAsync(idUsuario, "liquidacion-compra", ToSerieRaw(serieLiquidacion), codEmisor);
         var retencion = await GetSequenceStateAsync(idUsuario, "retencion", ToSerieRaw(serieLiquidacion), codEmisor);
-        var secFactura = await ResolveNextDocumentSequenceAsync(idUsuario, "factura", ToSerieRaw(serieFactura), codEmisor, factura);
-        var secGuia = await ResolveNextDocumentSequenceAsync(idUsuario, "guia-remision", ToSerieRaw(serieGuia), codEmisor, guia);
-        var secNotaCredito = await ResolveNextDocumentSequenceAsync(idUsuario, "nota-credito", ToSerieRaw(serieNotasCred), codEmisor, notaCredito);
-        var secNotaDebito = await ResolveNextDocumentSequenceAsync(idUsuario, "nota-debito", ToSerieRaw(serieNotasDeb), codEmisor, notaDebito);
-        var secLiquidacion = await ResolveNextDocumentSequenceAsync(idUsuario, "liquidacion-compra", ToSerieRaw(serieLiquidacion), codEmisor, liquidacion);
+        var secFactura = factura.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "factura", ToSerieRaw(serieFactura), codEmisor, factura) : string.Empty;
+        var secGuia = guia.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "guia-remision", ToSerieRaw(serieGuia), codEmisor, guia) : string.Empty;
+        var secNotaCredito = notaCredito.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "nota-credito", ToSerieRaw(serieNotasCred), codEmisor, notaCredito) : string.Empty;
+        var secNotaDebito = notaDebito.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "nota-debito", ToSerieRaw(serieNotasDeb), codEmisor, notaDebito) : string.Empty;
+        var secLiquidacion = liquidacion.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "liquidacion-compra", ToSerieRaw(serieLiquidacion), codEmisor, liquidacion) : string.Empty;
         var secRetencion = _initialSequencePromptService.ResolveNextSequence(null, retencion) ?? string.Empty;
 
         return new
@@ -280,11 +283,11 @@ public class CajasController : ControllerBase
             secNotaDebito,
             secLiquidacion,
             secRetencion,
-            secuenciaFacturaInicializada = factura.Initialized || !string.IsNullOrWhiteSpace(secFactura),
-            secuenciaGuiaInicializada = guia.Initialized || !string.IsNullOrWhiteSpace(secGuia),
-            secuenciaNotaCreditoInicializada = notaCredito.Initialized || !string.IsNullOrWhiteSpace(secNotaCredito),
-            secuenciaNotaDebitoInicializada = notaDebito.Initialized || !string.IsNullOrWhiteSpace(secNotaDebito),
-            secuenciaLiquidacionInicializada = liquidacion.Initialized || !string.IsNullOrWhiteSpace(secLiquidacion),
+            secuenciaFacturaInicializada = factura.Initialized,
+            secuenciaGuiaInicializada = guia.Initialized,
+            secuenciaNotaCreditoInicializada = notaCredito.Initialized,
+            secuenciaNotaDebitoInicializada = notaDebito.Initialized,
+            secuenciaLiquidacionInicializada = liquidacion.Initialized,
             secuenciaRetencionInicializada = retencion.Initialized || !string.IsNullOrWhiteSpace(secRetencion),
             estado = caja.Estado,
             esPrincipal = caja.NumCaja == 1,
