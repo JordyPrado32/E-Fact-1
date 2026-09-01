@@ -117,7 +117,7 @@ public sealed class InitialSequencePromptService
                 if (string.IsNullOrWhiteSpace(currentSeries))
                     return null;
 
-                var currentCajaSecs = await GetCajaSecsAsync(context, userId, currentSeries, emisorId, usuariosSincronizados);
+                var currentCajaSecs = await GetCajaSecsAsync(context, userId, normalizedDocumentKey, currentSeries, emisorId, usuariosSincronizados);
                 if (currentCajaSecs.Count == 0)
                     return null;
 
@@ -216,7 +216,7 @@ public sealed class InitialSequencePromptService
 
         await using var context = await _dbFactory.CreateDbContextAsync();
         var usuariosSincronizados = await GetUsuariosSincronizadosPorEmisorRucAsync(context, userId, emisorId);
-        var cajaSecs = await GetCajaSecsAsync(context, userId, series, emisorId, usuariosSincronizados);
+        var cajaSecs = await GetCajaSecsAsync(context, userId, NormalizeDocumentKey(documentKey), series, emisorId, usuariosSincronizados);
         if (cajaSecs.Count == 0)
             return;
 
@@ -273,7 +273,7 @@ public sealed class InitialSequencePromptService
 
         await using var context = await _dbFactory.CreateDbContextAsync();
         var usuariosSincronizados = await GetUsuariosSincronizadosPorEmisorRucAsync(context, userId, emisorId);
-        var cajaSecs = await GetCajaSecsAsync(context, userId, series, emisorId, usuariosSincronizados);
+        var cajaSecs = await GetCajaSecsAsync(context, userId, NormalizeDocumentKey(documentKey), series, emisorId, usuariosSincronizados);
         if (cajaSecs.Count == 0)
             return;
 
@@ -462,13 +462,13 @@ WHERE [titularUserId] = @titularUserId
         return nextNumber.ToString("D9", CultureInfo.InvariantCulture);
     }
 
-    private async Task<List<int>> GetCajaSecsAsync(AppDbContext context, int userId, string? seriesKey = null, int? emisorId = null, List<int>? usuariosSincronizados = null)
+    private async Task<List<int>> GetCajaSecsAsync(AppDbContext context, int userId, string documentKey, string? seriesKey = null, int? emisorId = null, List<int>? usuariosSincronizados = null)
     {
         try
         {
             if (await EsEmisorSistemaAsync(context, emisorId))
             {
-                return await GetCajaSistemaSecsAsync(context, seriesKey);
+                return await GetCajaSistemaSecsAsync(context, documentKey, seriesKey);
             }
 
             usuariosSincronizados ??= await GetUsuariosSincronizadosPorEmisorRucAsync(context, userId, emisorId);
@@ -478,17 +478,23 @@ WHERE [titularUserId] = @titularUserId
                 var targetSeriesVisual = $"{normalizedSeries[..3]}-{normalizedSeries[3..]}";
                 if (usuariosSincronizados.Count > 0)
                 {
-                    var cajasPorSerie = await context.Caja
+                    var cajasPorSerieQuery = context.Caja
                         .AsNoTracking()
                         .Where(c =>
                             c.Estado == true &&
                             c.IdUsuario.HasValue &&
-                            usuariosSincronizados.Contains(c.IdUsuario.Value) &&
-                            (c.SerieFactura == targetSeriesVisual ||
-                             c.SerieNotasCred == targetSeriesVisual ||
-                             c.SerieGuia == targetSeriesVisual ||
-                             c.SerieDebitos == targetSeriesVisual ||
-                             c.SerieCompras == targetSeriesVisual))
+                            usuariosSincronizados.Contains(c.IdUsuario.Value));
+
+                    cajasPorSerieQuery = documentKey switch
+                    {
+                        "guia-remision" => cajasPorSerieQuery.Where(c => c.SerieGuia == targetSeriesVisual),
+                        "nota-credito" => cajasPorSerieQuery.Where(c => c.SerieNotasCred == targetSeriesVisual),
+                        "nota-debito" => cajasPorSerieQuery.Where(c => c.SerieDebitos == targetSeriesVisual),
+                        "liquidacion-compra" or "compra-manual" or "retencion" => cajasPorSerieQuery.Where(c => c.SerieCompras == targetSeriesVisual),
+                        _ => cajasPorSerieQuery.Where(c => c.SerieFactura == targetSeriesVisual),
+                    };
+
+                    var cajasPorSerie = await cajasPorSerieQuery
                         .OrderBy(c => c.NumCaja)
                         .ThenBy(c => c.Sec)
                         .Select(c => c.Sec)
@@ -910,7 +916,7 @@ WHERE NOT EXISTS (
             .AnyAsync(e => e.Codigo == emisorId.Value && e.Estado && e.EsEmisorSistema);
     }
 
-    private static async Task<List<int>> GetCajaSistemaSecsAsync(AppDbContext context, string? seriesKey = null)
+    private static async Task<List<int>> GetCajaSistemaSecsAsync(AppDbContext context, string documentKey, string? seriesKey = null)
     {
         var normalizedSeries = NormalizeSeriesLookupKey(seriesKey);
         var query = context.Caja
@@ -920,12 +926,14 @@ WHERE NOT EXISTS (
         if (!string.IsNullOrWhiteSpace(normalizedSeries))
         {
             var targetSeriesVisual = $"{normalizedSeries[..3]}-{normalizedSeries[3..]}";
-            query = query.Where(c =>
-                c.SerieFactura == targetSeriesVisual ||
-                c.SerieNotasCred == targetSeriesVisual ||
-                c.SerieGuia == targetSeriesVisual ||
-                c.SerieDebitos == targetSeriesVisual ||
-                c.SerieCompras == targetSeriesVisual);
+            query = documentKey switch
+            {
+                "guia-remision" => query.Where(c => c.SerieGuia == targetSeriesVisual),
+                "nota-credito" => query.Where(c => c.SerieNotasCred == targetSeriesVisual),
+                "nota-debito" => query.Where(c => c.SerieDebitos == targetSeriesVisual),
+                "liquidacion-compra" or "compra-manual" or "retencion" => query.Where(c => c.SerieCompras == targetSeriesVisual),
+                _ => query.Where(c => c.SerieFactura == targetSeriesVisual),
+            };
         }
 
         return await query
