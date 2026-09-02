@@ -354,8 +354,7 @@ public class CajasController : ControllerBase
                         x.Usuario.HasValue &&
                         usuariosCuenta.Contains(x.Usuario.Value) &&
                         x.Serie != null &&
-                        x.Serie.Replace("-", "") == serieRaw &&
-                        (!codEmisor.HasValue || x.CodEmisor == codEmisor.Value))
+                        x.Serie.Replace("-", "") == serieRaw)
                     .Select(x => x.NumNotaCredito)
                     .ToListAsync();
                 break;
@@ -367,8 +366,7 @@ public class CajasController : ControllerBase
                         x.Usuario.HasValue &&
                         usuariosCuenta.Contains(x.Usuario.Value) &&
                         x.Serie != null &&
-                        x.Serie.Replace("-", "") == serieRaw &&
-                        (!codEmisor.HasValue || x.CodEmisor == codEmisor.Value))
+                        x.Serie.Replace("-", "") == serieRaw)
                     .Select(x => x.NumNotaDebito)
                     .ToListAsync();
                 break;
