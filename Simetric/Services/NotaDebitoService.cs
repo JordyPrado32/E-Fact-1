@@ -48,9 +48,9 @@ public class NotaDebitoService
     private async Task<CajaSerieResolucion> ResolverSerieNotaDebitoAsync(int userId, string? serieRaw = null)
     {
         if (!string.IsNullOrWhiteSpace(serieRaw))
-            return await _cajaSerieResolver.ResolverAsync(userId, serieRaw);
+            return await _cajaSerieResolver.ResolverNotaDebitoAsync(userId, serieRaw);
 
-        var resolucionBase = await _cajaSerieResolver.ResolverAsync(userId);
+        var resolucionBase = await _cajaSerieResolver.ResolverNotaDebitoAsync(userId);
         var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
             userId,
             "nota-debito",
@@ -59,7 +59,7 @@ public class NotaDebitoService
         if (!string.IsNullOrWhiteSpace(seriePreferida) &&
             !string.Equals(seriePreferida, resolucionBase.SerieRaw, StringComparison.Ordinal))
         {
-            return await _cajaSerieResolver.ResolverAsync(userId, seriePreferida);
+            return await _cajaSerieResolver.ResolverNotaDebitoAsync(userId, seriePreferida);
         }
 
         return resolucionBase;

@@ -474,6 +474,21 @@ namespace Simetric.Services
             return _cajaSerieResolver.ListarSeriesFacturaAsync(idUsuario);
         }
 
+        public Task<List<CajaSerieResolucion>> GetSeriesComprasHabilitadasAsync(int idUsuario)
+        {
+            return _cajaSerieResolver.ListarSeriesComprasAsync(idUsuario);
+        }
+
+        public Task<List<CajaSerieResolucion>> GetSeriesNotaCreditoHabilitadasAsync(int idUsuario)
+        {
+            return _cajaSerieResolver.ListarSeriesNotaCreditoAsync(idUsuario);
+        }
+
+        public Task<List<CajaSerieResolucion>> GetSeriesNotaDebitoHabilitadasAsync(int idUsuario)
+        {
+            return _cajaSerieResolver.ListarSeriesNotaDebitoAsync(idUsuario);
+        }
+
         public Task SavePreferredFacturaSeriesKeyAsync(int idUsuario, string? serieRaw)
         {
             return _initialSequencePromptService.SavePreferredSeriesKeyAsync(idUsuario, "factura", serieRaw);
@@ -687,7 +702,7 @@ namespace Simetric.Services
 
         private async Task<CajaSerieResolucion> ResolverSerieNotaCreditoAsync(int idUsuario)
         {
-            var resolucionBase = await _cajaSerieResolver.ResolverAsync(idUsuario);
+            var resolucionBase = await _cajaSerieResolver.ResolverNotaCreditoAsync(idUsuario);
             var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
                 idUsuario,
                 "nota-credito",
@@ -696,7 +711,7 @@ namespace Simetric.Services
             if (!string.IsNullOrWhiteSpace(seriePreferida) &&
                 !string.Equals(seriePreferida, resolucionBase.SerieRaw, StringComparison.Ordinal))
             {
-                return await _cajaSerieResolver.ResolverAsync(idUsuario, seriePreferida);
+                return await _cajaSerieResolver.ResolverNotaCreditoAsync(idUsuario, seriePreferida);
             }
 
             return resolucionBase;
@@ -704,7 +719,7 @@ namespace Simetric.Services
 
         private async Task<CajaSerieResolucion> ResolverSerieNotaDebitoAsync(int idUsuario)
         {
-            var resolucionBase = await _cajaSerieResolver.ResolverAsync(idUsuario);
+            var resolucionBase = await _cajaSerieResolver.ResolverNotaDebitoAsync(idUsuario);
             var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
                 idUsuario,
                 "nota-debito",
@@ -713,7 +728,7 @@ namespace Simetric.Services
             if (!string.IsNullOrWhiteSpace(seriePreferida) &&
                 !string.Equals(seriePreferida, resolucionBase.SerieRaw, StringComparison.Ordinal))
             {
-                return await _cajaSerieResolver.ResolverAsync(idUsuario, seriePreferida);
+                return await _cajaSerieResolver.ResolverNotaDebitoAsync(idUsuario, seriePreferida);
             }
 
             return resolucionBase;

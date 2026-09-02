@@ -51,9 +51,9 @@ public class NotaCreditoService
     private async Task<CajaSerieResolucion> ResolverSerieNotaCreditoAsync(int userId, string? serieSolicitadaRaw = null)
     {
         if (!string.IsNullOrWhiteSpace(serieSolicitadaRaw))
-            return await _cajaSerieResolver.ResolverAsync(userId, serieSolicitadaRaw);
+            return await _cajaSerieResolver.ResolverNotaCreditoAsync(userId, serieSolicitadaRaw);
 
-        var resolucionBase = await _cajaSerieResolver.ResolverAsync(userId);
+        var resolucionBase = await _cajaSerieResolver.ResolverNotaCreditoAsync(userId);
         var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
             userId,
             "nota-credito",
@@ -62,7 +62,7 @@ public class NotaCreditoService
         if (!string.IsNullOrWhiteSpace(seriePreferida) &&
             !string.Equals(seriePreferida, resolucionBase.SerieRaw, StringComparison.Ordinal))
         {
-            return await _cajaSerieResolver.ResolverAsync(userId, seriePreferida);
+            return await _cajaSerieResolver.ResolverNotaCreditoAsync(userId, seriePreferida);
         }
 
         return resolucionBase;

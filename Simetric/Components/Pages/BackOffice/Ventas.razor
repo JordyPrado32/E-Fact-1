@@ -1022,6 +1022,21 @@
     private List<SolicitudPagoClienteDto> solicitudesFirmaApi = new();
     private CancellationTokenSource? sincronizacionCts;
     private Task? tareaSincronizacion;
+    private static readonly Expression<Func<ReporteVentaBackOffice, ReporteVentaBackOffice>> VentaListadoProjection = v => new ReporteVentaBackOffice
+    {
+        IdReporte = v.IdReporte,
+        Cliente = v.Cliente,
+        Producto = v.Producto,
+        PlanPaquete = v.PlanPaquete,
+        Valor = v.Valor,
+        Fecha = v.Fecha,
+        Canal = v.Canal,
+        Vendedor = v.Vendedor,
+        Estado = v.Estado,
+        FormaPago = v.FormaPago,
+        Observacion = v.Observacion,
+        TieneComprobanteArchivo = v.ComprobanteArchivo != null
+    };
 
     private (string EstadoSolicitud, string EstadoSolicitudClase, string EstadoSolicitudIcono, string EstadoPago, string EstadoPagoClase, string EstadoPagoIcono, string EstadoUanataca, string EstadoUanatacaClase, string EstadoUanatacaIcono) ObtenerEstadosFirma(ReporteVentaBackOffice venta)
     {
@@ -1117,6 +1132,7 @@
     private bool feedbackIsSuccess = true;
     private string? previewImageUrl;
     private string comprobanteRef = "";
+    private bool eliminarComprobanteActual = false;
 
     // Filters and Search
     private string searchString = "";
@@ -1352,6 +1368,7 @@
 
                 var ventasTask = ventasContext.ReporteVentasBackOffice
                     .AsNoTracking()
+                    .Select(VentaListadoProjection)
                     .OrderByDescending(v => v.Fecha)
                     .ToListAsync();
 
@@ -1467,6 +1484,7 @@
             var chunkVentas = await context.ReporteVentasBackOffice
                 .AsNoTracking()
                 .Where(predicate)
+                .Select(VentaListadoProjection)
                 .OrderByDescending(v => v.Fecha)
                 .ToListAsync();
 
@@ -1607,6 +1625,7 @@
         modalError = null;
         modalSuccess = null;
         isSaving = false;
+        eliminarComprobanteActual = false;
 
         modalVenta = new ReporteVentaBackOffice
         {
@@ -1636,6 +1655,7 @@
         modalError = null;
         modalSuccess = null;
         isSaving = false;
+        eliminarComprobanteActual = false;
         comprobanteRef = GetComprobanteRef(venta.Observacion);
         if (comprobanteRef == "S/N") comprobanteRef = "";
 
@@ -1652,7 +1672,8 @@
             Vendedor = venta.Vendedor,
             Estado = venta.Estado,
             FormaPago = venta.FormaPago,
-            Observacion = venta.Observacion
+            Observacion = venta.Observacion,
+            TieneComprobanteArchivo = venta.TieneComprobanteArchivo
         };
 
         // Try to locate selected user by parsing client email
@@ -1900,7 +1921,7 @@
                     {
                         dbVenta.ComprobanteArchivo = fileBytes;
                     }
-                    else if (modalVenta.ComprobanteArchivo == null)
+                    else if (eliminarComprobanteActual)
                     {
                         dbVenta.ComprobanteArchivo = null;
                     }
@@ -2202,6 +2223,8 @@
     private void EliminarComprobanteExistente()
     {
         modalVenta.ComprobanteArchivo = null;
+        modalVenta.TieneComprobanteArchivo = false;
+        eliminarComprobanteActual = true;
         var cleanObs = GetObservacionLimpia(modalVenta.Observacion);
         var compRef = GetComprobanteRef(modalVenta.Observacion);
         var compTag = compRef != "S/N" ? $"[Comprobante: {compRef}]" : "";
@@ -2210,7 +2233,7 @@
 
     private bool HasComprobanteImage(ReporteVentaBackOffice row)
     {
-        if (row.ComprobanteArchivo != null && row.ComprobanteArchivo.Length > 0) return true;
+        if ((row.ComprobanteArchivo != null && row.ComprobanteArchivo.Length > 0) || row.TieneComprobanteArchivo) return true;
         var obs = row.Observacion;
         if (string.IsNullOrEmpty(obs)) return false;
         return obs.Contains("[Imagen:") && obs.Contains("/uploads/comprobantes/");
@@ -2276,12 +2299,25 @@
         return workingObs;
     }
 
-    private void ShowEvidencePreview(ReporteVentaBackOffice row)
+    private async Task ShowEvidencePreview(ReporteVentaBackOffice row)
     {
         if (row.ComprobanteArchivo != null && row.ComprobanteArchivo.Length > 0)
         {
             var base64 = Convert.ToBase64String(row.ComprobanteArchivo);
             previewImageUrl = $"data:image/png;base64,{base64}";
+        }
+        else if (row.TieneComprobanteArchivo)
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var archivo = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(v => v.IdReporte == row.IdReporte)
+                .Select(v => v.ComprobanteArchivo)
+                .FirstOrDefaultAsync();
+
+            previewImageUrl = archivo is { Length: > 0 }
+                ? $"data:image/png;base64,{Convert.ToBase64String(archivo)}"
+                : GetEvidenceImageUrl(row.Observacion);
         }
         else
         {
