@@ -158,9 +158,9 @@ public sealed class UanatacaApiService
 
     public async Task<string> ResolverProductoUuidAsync(UsuSolicitudFirma solicitud, CancellationToken cancellationToken = default)
     {
-        var tipoPersona = (solicitud.SolTipoPersona ?? "NATURAL").Trim().ToUpperInvariant();
-        if (tipoPersona == "NATURAL" && solicitud.SolTieneRuc)
-            tipoPersona = "NATURAL_RUC";
+        // Uanataca procesa tanto persona natural como miembro de empresa con
+        // el producto de persona natural. El RUC no cambia esta selección.
+        const string tipoPersona = "NATURAL";
 
         var mappingKey = $"{tipoPersona}|{(solicitud.SolFormatoFirma ?? string.Empty).Trim().ToUpperInvariant()}|{(solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant()}";
         var explicitMapping = _configuration[$"UanatacaApi:ProductMappings:{mappingKey}"];
@@ -173,24 +173,15 @@ public sealed class UanatacaApiService
         var products = await ObtenerProductosAsync(cancellationToken);
 
         var vigenciaTexto = ObtenerVigenciaTextoBusqueda(solicitud.SolVigencia);
-        var esPersonaNatural = tipoPersona is "NATURAL" or "NATURAL_RUC";
-        var requiereEmpresa = tipoPersona == "JURIDICA";
-
         var match = (from stakeholderProduct in stakeholderProducts
                      join product in products on stakeholderProduct.ProductUuid equals product.Uuid
                      where stakeholderProduct.Active
                         && product.Active
                         && product.Name.Contains("ARCHIVO", StringComparison.OrdinalIgnoreCase)
                         && product.Name.Contains(vigenciaTexto, StringComparison.OrdinalIgnoreCase)
-                         && (requiereEmpresa
-                             ? product.Name.Contains("EMPRESA", StringComparison.OrdinalIgnoreCase)
-                               || product.Name.Contains("REPRESENTANTE", StringComparison.OrdinalIgnoreCase)
-                               || product.Name.Contains("MIEMBRO", StringComparison.OrdinalIgnoreCase)
-                             : esPersonaNatural
-                                 ? !product.Name.Contains("EMPRESA", StringComparison.OrdinalIgnoreCase)
-                                   && !product.Name.Contains("REPRESENTANTE", StringComparison.OrdinalIgnoreCase)
-                                   && !product.Name.Contains("MIEMBRO", StringComparison.OrdinalIgnoreCase)
-                                 : true)
+                         && !product.Name.Contains("EMPRESA", StringComparison.OrdinalIgnoreCase)
+                         && !product.Name.Contains("REPRESENTANTE", StringComparison.OrdinalIgnoreCase)
+                         && !product.Name.Contains("MIEMBRO", StringComparison.OrdinalIgnoreCase)
                      orderby stakeholderProduct.Price, product.Price
                      select product.Uuid)
                     .FirstOrDefault();

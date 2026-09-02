@@ -907,6 +907,86 @@ namespace Simetric.Services
             return resultado;
         }
 
+        public async Task<PagoFirmaReconciliationResult> SincronizarSolicitudesExternasUanatacaAsync(
+            CancellationToken cancellationToken = default)
+        {
+            var remotas = await _uanatacaApiService.BuscarSolicitudesAsync(cancellationToken: cancellationToken);
+            var resultado = new PagoFirmaReconciliationResult
+            {
+                ExternalRequestsRead = remotas.Count
+            };
+
+            if (remotas.Count == 0)
+                return resultado;
+
+            await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+            var locales = await context.UsuSolicitudFirma
+                .Where(s => s.SolActivo && s.SolPagoExitoso == true)
+                .ToListAsync(cancellationToken);
+            var solicitudesParaNotificar = new List<UsuSolicitudFirma>();
+
+            foreach (var remota in remotas.Where(r => !string.IsNullOrWhiteSpace(r.Uuid)))
+            {
+                var local = locales.FirstOrDefault(s =>
+                    string.Equals(s.SolUanatacaUuid, remota.Uuid, StringComparison.OrdinalIgnoreCase));
+
+                if (local is null)
+                {
+                    var porIdentificacion = locales.Where(s =>
+                        string.IsNullOrWhiteSpace(s.SolUanatacaUuid) &&
+                        Coincide(s.SolIdentificacion, remota.Identification)).ToList();
+
+                    local = porIdentificacion.FirstOrDefault(s =>
+                        Coincide(s.SolCorreo1, remota.Email))
+                        ?? (porIdentificacion.Count == 1 ? porIdentificacion[0] : null);
+                }
+
+                if (local is null)
+                    continue;
+
+                var estabaPendienteDeNotificacion =
+                    !string.Equals(remota.Status, "APPROVED", StringComparison.OrdinalIgnoreCase) ||
+                    local.SolIdEstadoNumerica == 3;
+                AplicarDatosSolicitudRemota(local, remota);
+                if (!estabaPendienteDeNotificacion)
+                    solicitudesParaNotificar.Add(local);
+                resultado.LinkedExternalRequests++;
+            }
+
+            if (resultado.LinkedExternalRequests > 0)
+                await context.SaveChangesAsync(cancellationToken);
+
+            foreach (var solicitud in solicitudesParaNotificar)
+            {
+                try
+                {
+                    var nombreCliente = string.Join(" ", new[]
+                    {
+                        solicitud.SolNombres,
+                        solicitud.SolPrimerApellido,
+                        solicitud.SolSegundoApellido
+                    }.Where(valor => !string.IsNullOrWhiteSpace(valor)));
+
+                    await _emailService.EnviarSolicitudFirmaProcesadaAsync(
+                        solicitud.SolCorreo1,
+                        nombreCliente,
+                        solicitud.SolId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "La solicitud externa {SolId} fue aprobada, pero no se pudo enviar la notificación al cliente.",
+                        solicitud.SolId);
+                }
+            }
+
+            _logger.LogInformation(
+                "Sincronización global Uanataca completada. Remotas: {Remotas}. Vinculadas: {Vinculadas}",
+                resultado.ExternalRequestsRead,
+                resultado.LinkedExternalRequests);
+            return resultado;
+        }
+
         // --- MÉTODOS PARA SOPORTE (ADMIN) ---
 
         public async Task<List<SolicitudPagoClienteDto>> ObtenerSolicitudesAsync()
@@ -933,6 +1013,10 @@ namespace Simetric.Services
                     s.SolPagoExitoso AS SolPagoExitoso,
                     s.SolIdTransaccionPago AS SolIdTransaccionPago,
                     s.SolFechaPago AS SolFechaPago,
+                    s.SOL_UANATACA_UUID AS SolUanatacaUuid,
+                    s.SOL_UANATACA_STATUS AS SolUanatacaStatus,
+                    s.SOL_UANATACA_STATUS_TEXT AS SolUanatacaStatusText,
+                    s.SOL_UANATACA_COMMENTS AS SolUanatacaComments,
                     (
                         SELECT COUNT(1)
                         FROM USU_SOLICITUD_OBSERVACION o
@@ -2125,9 +2209,9 @@ namespace Simetric.Services
             var tipoPersona = (solicitud.SolTipoPersona ?? string.Empty).Trim().ToUpperInvariant();
             var formato = (solicitud.SolFormatoFirma ?? string.Empty).Trim().ToUpperInvariant();
             var vigencia = (solicitud.SolVigencia ?? string.Empty).Trim().ToUpperInvariant();
-            var tipoPersonaMapping = string.IsNullOrWhiteSpace(tipoPersona) ? "NATURAL" : tipoPersona;
-            if (tipoPersonaMapping == "NATURAL" && solicitud.SolTieneRuc)
-                tipoPersonaMapping = "NATURAL_RUC";
+            // El RUC no cambia el producto: todas las solicitudes usan la
+            // familia de productos de persona natural.
+            const string tipoPersonaMapping = "NATURAL";
 
             var mappingKey = $"{tipoPersonaMapping}|{formato}|{vigencia}";
             var mappedProductUuid = _configuration[$"UanatacaApi:ProductMappings:{mappingKey}"];
@@ -2237,18 +2321,7 @@ namespace Simetric.Services
                 };
             }
 
-            solicitud.SolUanatacaUuid = remote.Uuid ?? solicitud.SolUanatacaUuid;
-            solicitud.SolUanatacaStatus = remote.Status;
-            solicitud.SolUanatacaToken = remote.Token;
-            solicitud.SolUanatacaStatusText = remote.UanatacaStatus;
-            solicitud.SolUanatacaComments = TruncateText(remote.Comments, 4000);
-            solicitud.SolUanatacaProductUuid = remote.ProductUuid ?? solicitud.SolUanatacaProductUuid;
-            solicitud.SolUanatacaStakeholderUuid = remote.StakeholderUuid;
-            solicitud.SolUanatacaCreatedBy = remote.CreatedBy;
-            solicitud.SolUanatacaActive = remote.Active;
-            solicitud.SolUanatacaCountable = remote.Countable;
-            solicitud.SolUanatacaRenovation = remote.Renovation;
-            solicitud.SolUanatacaOfferUuid = remote.OfferUuid ?? solicitud.SolUanatacaOfferUuid;
+            AplicarDatosSolicitudRemota(solicitud, remote);
             solicitud.SolFechaActualizacion = DateTime.Now;
 
             if (string.Equals(remote.Status, "APPROVED", StringComparison.OrdinalIgnoreCase) &&
@@ -2328,6 +2401,40 @@ namespace Simetric.Services
                 ManagerIdentification = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "CEDULA_REPRESENTANTE", cancellationToken) : null,
                 AdditionalFile = await BuildOptionalFilePayloadAsync(documentos, "ARCHIVO_ADICIONAL", cancellationToken)
             };
+        }
+
+        private static bool Coincide(string? local, string? remoto) =>
+            !string.IsNullOrWhiteSpace(local) &&
+            !string.IsNullOrWhiteSpace(remoto) &&
+            string.Equals(local.Trim(), remoto.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        private static void AplicarDatosSolicitudRemota(
+            UsuSolicitudFirma solicitud,
+            BesCertificateRequestDto remote)
+        {
+            solicitud.SolUanatacaUuid = remote.Uuid ?? solicitud.SolUanatacaUuid;
+            solicitud.SolUanatacaStatus = remote.Status;
+            solicitud.SolUanatacaToken = remote.Token;
+            solicitud.SolUanatacaStatusText = remote.UanatacaStatus;
+            solicitud.SolUanatacaComments = TruncateText(remote.Comments, 4000);
+            solicitud.SolUanatacaProductUuid = remote.ProductUuid ?? solicitud.SolUanatacaProductUuid;
+            solicitud.SolUanatacaStakeholderUuid = remote.StakeholderUuid;
+            solicitud.SolUanatacaCreatedBy = remote.CreatedBy;
+            solicitud.SolUanatacaActive = remote.Active;
+            solicitud.SolUanatacaCountable = remote.Countable;
+            solicitud.SolUanatacaRenovation = remote.Renovation;
+            solicitud.SolUanatacaOfferUuid = remote.OfferUuid ?? solicitud.SolUanatacaOfferUuid;
+            solicitud.SolFechaActualizacion = DateTime.Now;
+
+            if (string.Equals(remote.Status, "APPROVED", StringComparison.OrdinalIgnoreCase))
+            {
+                // El estado de Uanataca también debe reflejarse en el estado
+                // interno para que E-Rúbrica y Backoffice no muestren
+                // "No enviado" o "Pendiente" después de una aprobación externa.
+                solicitud.SolIdEstadoNumerica = 3;
+                if (solicitud.SolFechaAprobacion is null)
+                    solicitud.SolFechaAprobacion = remote.ApprovedDate?.ToLocalTime() ?? DateTime.Now;
+            }
         }
 
         private static bool EsSolicitudPersonaJuridica(UsuSolicitudFirma solicitud)

@@ -1,6 +1,7 @@
 @page "/soporte/solicitudes"
 @using Simetric.DTOs
 @using Simetric.Services
+@implements IAsyncDisposable
 @inject SolicitudService SolicitudService
 @inject NavigationManager Navigation
 
@@ -76,9 +77,8 @@
                         <tr>
                             <th>Fecha</th>
                             <th>Cliente</th>
-                            <th>Identificacion</th>
-                            <th>Tipo firma / Vigencia</th>
-                            <th>Estado actual</th>
+                            <th>Estado interno</th>
+                            <th>Estado Uanataca</th>
                             <th>Pago</th>
                             <th class="soporte-table-actions">Acciones</th>
                         </tr>
@@ -100,22 +100,16 @@
                                         <span>@GetCorreoPrincipal(sol)</span>
                                     </div>
                                 </td>
-                                <td data-label="Identificacion">
-                                    <div class="soporte-identificacion">
-                                        <span class="soporte-id-chip">@sol.SolIdentificacion</span>
-                                        <small>@sol.SolTipoIdentificacion</small>
-                                    </div>
-                                </td>
-                                <td data-label="Tipo firma / Vigencia">
-                                    <div class="soporte-firma">
-                                        <strong>@GetFormatoFirma(sol.SolFormatoFirma)</strong>
-                                        <span class="soporte-vigencia-chip">@sol.SolVigencia</span>
-                                    </div>
-                                </td>
-                                <td data-label="Estado actual">
+                                <td data-label="Estado interno">
                                     <span class="soporte-status @GetStatusClass(sol)">
                                         <i class="bi bi-circle-fill"></i>
                                         @GetNombreEstado(sol)
+                                    </span>
+                                </td>
+                                <td data-label="Estado Uanataca">
+                                    <span class="soporte-status @GetUanatacaStatusClass(sol)">
+                                        <i class="bi bi-circle-fill"></i>
+                                        @GetEstadoUanataca(sol)
                                     </span>
                                 </td>
                                 <td data-label="Pago">
@@ -131,9 +125,8 @@
                                     <button type="button"
                                             class="soporte-action-btn"
                                             data-tour="@(solicitudEntry.Index == 0 ? "soporte.action" : null)"
-                                            @onclick="() => VerDetalle(sol.SolId)">
-                                        <i class="bi bi-eye"></i>
-                                        Gestionar
+                                        @onclick="() => VerDetalle(sol.SolId)">
+                                        Ver
                                     </button>
                                 </td>
                             </tr>
@@ -152,6 +145,8 @@
     private List<SolicitudPagoClienteDto>? listaSolicitudes;
     private string? errorCarga;
     private string filtroPago = "todos";
+    private CancellationTokenSource? sincronizacionCts;
+    private Task? tareaSincronizacion;
 
     private List<SolicitudPagoClienteDto> SolicitudesFiltradas =>
         (listaSolicitudes ?? new List<SolicitudPagoClienteDto>())
@@ -168,6 +163,7 @@
         try
         {
             listaSolicitudes = await SolicitudService.ObtenerSolicitudesAsync() ?? new List<SolicitudPagoClienteDto>();
+            IniciarSincronizacionAutomatica();
         }
         catch (Exception ex)
         {
@@ -200,34 +196,34 @@
             : sol.SolCorreo1;
     }
 
-    private static string GetFormatoFirma(string? formatoFirma)
-    {
-        return (formatoFirma ?? string.Empty).Trim().ToUpperInvariant() switch
-        {
-            "ARCHIVO_P12" => "Archivo .P12",
-            "ARCHIVO .P12" => "Archivo .P12",
-            "NUBE" => "Firma en la nube",
-            "FIRMA EN LA NUBE" => "Firma en la nube",
-            _ => string.IsNullOrWhiteSpace(formatoFirma) ? "No definido" : formatoFirma
-        };
-    }
-
     private static string GetNombreEstado(SolicitudPagoClienteDto sol)
     {
-        if (string.IsNullOrWhiteSpace(sol.SolUanatacaStatus) && string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
-        {
-            return "NO ENVIADO";
-        }
+        // Uanataca devuelve el estado interno (por ejemplo, APPROVED) en
+        // SOL_UANATACA_STATUS. Ese es el valor que debe ver BackOffice.
+        if (!string.IsNullOrWhiteSpace(sol.SolUanatacaStatus))
+            return sol.SolUanatacaStatus.ToUpperInvariant();
+
+        if (string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+            return "NO ENVIADA";
 
         return (sol.EstadoSolicitud ?? "Sin estado").ToUpperInvariant();
     }
 
     private static string GetStatusClass(SolicitudPagoClienteDto sol)
     {
-        if (string.IsNullOrWhiteSpace(sol.SolUanatacaStatus) && string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+        if (!string.IsNullOrWhiteSpace(sol.SolUanatacaStatus))
         {
-            return "is-not-sent";
+            return sol.SolUanatacaStatus.Trim().ToUpperInvariant() switch
+            {
+                "APPROVED" or "ISSUED" or "ACTIVE" => "is-approved",
+                "REJECTED" or "DENIED" or "CANCELLED" => "is-rejected",
+                "PENDING" or "IN_REVIEW" => "is-pending",
+                _ => "is-review"
+            };
         }
+
+        if (string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+            return "is-not-sent";
 
         return sol.SolIdEstadoNumerica switch
         {
@@ -237,6 +233,86 @@
             4 => "is-rejected",
             _ => "is-neutral"
         };
+    }
+
+    private static string GetEstadoUanataca(SolicitudPagoClienteDto sol)
+    {
+        // El estado operativo de Uanataca viene en uanatacaStatus, persistido
+        // como SOL_UANATACA_STATUS_TEXT; no confundirlo con status interno.
+        var estado = (sol.SolUanatacaStatusText ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(estado) && string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+            return "NO ENVIADA";
+
+        if (string.IsNullOrWhiteSpace(estado))
+            return "SIN ESTADO";
+
+        return estado switch
+        {
+            "ENROLLREADY" => "POR CONFIGURAR",
+            "ENROLLED" or "CONFIGURED" or "ACTIVE" => "CONFIGURADA",
+            "ISSUED" or "CERTIFICATE_ISSUED" or "READY" => "LISTA",
+            _ => string.IsNullOrWhiteSpace(sol.SolUanatacaStatusText)
+                ? estado.Replace('_', ' ')
+                : sol.SolUanatacaStatusText.ToUpperInvariant()
+        };
+    }
+
+    private static string GetUanatacaStatusClass(SolicitudPagoClienteDto sol)
+    {
+        var estado = (sol.SolUanatacaStatusText ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(estado) && string.IsNullOrWhiteSpace(sol.SolUanatacaUuid))
+            return "is-not-sent";
+
+        return estado switch
+        {
+            "ENROLLREADY" => "is-uanataca-pending",
+            "ENROLLED" or "CONFIGURED" or "ACTIVE" => "is-approved",
+            "ISSUED" or "CERTIFICATE_ISSUED" or "READY" => "is-uanataca-ready",
+            _ => "is-neutral"
+        };
+    }
+
+    private void IniciarSincronizacionAutomatica()
+    {
+        if (tareaSincronizacion is not null)
+            return;
+
+        sincronizacionCts = new CancellationTokenSource();
+        tareaSincronizacion = SincronizarPeriodicamenteAsync(sincronizacionCts.Token);
+    }
+
+    private async Task SincronizarPeriodicamenteAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken).ContinueWith(
+                task => !task.IsCanceled, CancellationToken.None))
+            {
+                await SolicitudService.SincronizarSolicitudesExternasUanatacaAsync(cancellationToken);
+                var actualizadas = await SolicitudService.ObtenerSolicitudesAsync();
+                await InvokeAsync(() =>
+                {
+                    listaSolicitudes = actualizadas ?? new List<SolicitudPagoClienteDto>();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            // La sincronizacion hospedada continuara intentando actualizar los datos.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (sincronizacionCts is not null)
+        {
+            await sincronizacionCts.CancelAsync();
+            sincronizacionCts.Dispose();
+        }
     }
 
     private static string GetPagoClass(SolicitudPagoClienteDto sol) =>

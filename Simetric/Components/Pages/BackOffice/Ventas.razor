@@ -10,6 +10,7 @@
 @using System.Text.Json
 @using System.IO
 @using System.Linq.Expressions
+@implements IAsyncDisposable
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthStateProvider
@@ -486,14 +487,15 @@
                                 <th class="text-end">Valor</th>
                                 <th>Canal / Vendedor</th>
                                 <th>Forma Pago</th>
-                                <th>Estados</th>
+                                <th>Estados internos</th>
+                                <th>Estado Uanataca</th>
                             </tr>
                         </thead>
                         <tbody>
                             @if (!paginatedVentas.Any())
                             {
                                 <tr>
-                                    <td colspan="8" class="text-center py-5">
+                                    <td colspan="9" class="text-center py-5">
                                         <div class="table-empty">
                                             <i class="bi bi-coin"></i>
                                             <strong>Sin registros de ventas</strong>
@@ -580,6 +582,19 @@
                                                     <i class="bi @(v.Estado == "pagada" ? "bi-check-circle-fill" : v.Estado == "pendiente" ? "bi-clock-fill" : v.Estado == "anulada" ? "bi-x-circle-fill" : "bi-exclamation-triangle-fill")"></i>
                                                     @v.Estado
                                                 </span>
+                                            }
+                                        </td>
+                                        <td>
+                                            @if (v.Producto == "e-sign")
+                                            {
+                                                var estadosFirma = ObtenerEstadosFirma(v);
+                                                <span class="status-badge @estadosFirma.EstadoUanatacaClase">
+                                                    <i class="bi @estadosFirma.EstadoUanatacaIcono"></i>@estadosFirma.EstadoUanataca
+                                                </span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-muted">-</span>
                                             }
                                         </td>
 </tr>
@@ -1005,8 +1020,10 @@
     private List<ReporteVentaBackOffice> filteredVentas = new();
     private List<ReporteVentaBackOffice> paginatedVentas = new();
     private List<SolicitudPagoClienteDto> solicitudesFirmaApi = new();
+    private CancellationTokenSource? sincronizacionCts;
+    private Task? tareaSincronizacion;
 
-    private (string EstadoSolicitud, string EstadoSolicitudClase, string EstadoSolicitudIcono, string EstadoPago, string EstadoPagoClase, string EstadoPagoIcono) ObtenerEstadosFirma(ReporteVentaBackOffice venta)
+    private (string EstadoSolicitud, string EstadoSolicitudClase, string EstadoSolicitudIcono, string EstadoPago, string EstadoPagoClase, string EstadoPagoIcono, string EstadoUanataca, string EstadoUanatacaClase, string EstadoUanatacaIcono) ObtenerEstadosFirma(ReporteVentaBackOffice venta)
     {
         var email = ExtraerEmailClienteReporte(venta.Cliente);
         var solicitud = solicitudesFirmaApi
@@ -1021,6 +1038,9 @@
                 : string.IsNullOrWhiteSpace(solicitud.EstadoSolicitud)
                     ? ObtenerEstadoSolicitudPorId(solicitud.SolIdEstadoNumerica)
                     : solicitud.EstadoSolicitud.Trim();
+        var estadoUanataca = solicitud is null
+            ? "Sin dato"
+            : ObtenerEstadoUanataca(solicitud.SolUanatacaStatus, solicitud.SolUanatacaStatusText, solicitud.SolUanatacaUuid);
         var pagoConfirmado = solicitud?.SolPagoExitoso == true || (solicitud is null && venta.Estado == "pagada");
 
         return (
@@ -1029,7 +1049,10 @@
             ObtenerIconoEstadoSolicitud(estadoSolicitud),
             pagoConfirmado ? "Pagada" : "Pendiente",
             pagoConfirmado ? "pagada" : "pendiente",
-            pagoConfirmado ? "bi-check-circle-fill" : "bi-clock-fill");
+            pagoConfirmado ? "bi-check-circle-fill" : "bi-clock-fill",
+            estadoUanataca,
+            ObtenerClaseEstadoUanataca(estadoUanataca),
+            ObtenerIconoEstadoUanataca(estadoUanataca));
     }
 
     private static bool SolicitudEnviadaAProveedor(SolicitudPagoClienteDto solicitud) =>
@@ -1042,6 +1065,37 @@
         4 => "Anulada",
         2 => "Pendiente",
         _ => "En revisión"
+    };
+
+    private static string ObtenerEstadoUanataca(string? status, string? statusText, string? uuid)
+    {
+        if (string.IsNullOrWhiteSpace(uuid) && string.IsNullOrWhiteSpace(status))
+            return "No enviada";
+
+        var estado = (status ?? string.Empty).Trim().ToUpperInvariant();
+        return estado switch
+        {
+            "ENROLLREADY" => "Por configurar",
+            "ENROLLED" or "CONFIGURED" or "ACTIVE" => "Configurada",
+            "ISSUED" or "CERTIFICATE_ISSUED" or "READY" => "Lista",
+            _ => string.IsNullOrWhiteSpace(statusText) ? (status ?? "En proceso") : statusText.Trim()
+        };
+    }
+
+    private static string ObtenerClaseEstadoUanataca(string estado) => estado switch
+    {
+        "Por configurar" => "uanataca-configurar",
+        "Configurada" or "Lista" => "uanataca-ok",
+        "No enviada" => "uanataca-no-enviada",
+        _ => "uanataca-proceso"
+    };
+
+    private static string ObtenerIconoEstadoUanataca(string estado) => estado switch
+    {
+        "Por configurar" => "bi-gear",
+        "Configurada" or "Lista" => "bi-check-circle-fill",
+        "No enviada" => "bi-dash-circle",
+        _ => "bi-arrow-repeat"
     };
 
     private static string ObtenerClaseEstadoSolicitud(string estado) =>
@@ -1137,6 +1191,51 @@
             var name = user.Identity.Name ?? "";
             var surname = user.FindFirst(ClaimTypes.Surname)?.Value ?? "";
             currentOperatorName = $"{name} {surname}".Trim();
+        }
+
+        IniciarSincronizacionAutomatica();
+    }
+
+    private void IniciarSincronizacionAutomatica()
+    {
+        if (tareaSincronizacion is not null)
+            return;
+
+        sincronizacionCts = new CancellationTokenSource();
+        tareaSincronizacion = SincronizarPeriodicamenteAsync(sincronizacionCts.Token);
+    }
+
+    private async Task SincronizarPeriodicamenteAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken).ContinueWith(
+                task => !task.IsCanceled, CancellationToken.None))
+            {
+                await SolicitudService.SincronizarSolicitudesExternasUanatacaAsync(cancellationToken);
+                solicitudesFirmaApi = await SolicitudService.ObtenerSolicitudesAsync() ?? new List<SolicitudPagoClienteDto>();
+                await InvokeAsync(() =>
+                {
+                    ApplyFilters();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            // El servicio hospedado continuará intentando sincronizar.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (sincronizacionCts is not null)
+        {
+            await sincronizacionCts.CancelAsync();
+            sincronizacionCts.Dispose();
         }
     }
 

@@ -286,6 +286,7 @@ builder.Services.AddScoped<IAsistenteFacturacionService, AsistenteFacturacionSer
 
 builder.Services.AddHostedService<ComprobanteCorreoDispatcherService>();
 builder.Services.AddHostedService<FacturaSriReintentoDispatcherService>();
+builder.Services.AddHostedService<UanatacaRequestSyncService>();
 if (builder.Configuration.GetValue<bool>("FirmaRenovacion:NotificacionesCorreoHabilitadas"))
 {
     builder.Services.AddHostedService<FirmaRenovacionNotificationService>();
