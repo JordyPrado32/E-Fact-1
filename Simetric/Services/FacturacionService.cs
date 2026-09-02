@@ -474,6 +474,11 @@ namespace Simetric.Services
             return _cajaSerieResolver.ListarSeriesFacturaAsync(idUsuario);
         }
 
+        public Task<List<CajaSerieResolucion>> GetSeriesComprasHabilitadasAsync(int idUsuario)
+        {
+            return _cajaSerieResolver.ListarSeriesComprasAsync(idUsuario);
+        }
+
         public Task SavePreferredFacturaSeriesKeyAsync(int idUsuario, string? serieRaw)
         {
             return _initialSequencePromptService.SavePreferredSeriesKeyAsync(idUsuario, "factura", serieRaw);

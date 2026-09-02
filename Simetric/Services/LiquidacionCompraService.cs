@@ -45,7 +45,7 @@ public class LiquidacionCompraService
 
     private async Task<CajaSerieResolucion> ResolverSerieLiquidacionAsync(int userId)
     {
-        var resolucionBase = await _cajaSerieResolver.ResolverAsync(userId);
+        var resolucionBase = await _cajaSerieResolver.ResolverComprasAsync(userId);
         var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
             userId,
             "liquidacion-compra",
@@ -54,7 +54,7 @@ public class LiquidacionCompraService
         if (!string.IsNullOrWhiteSpace(seriePreferida) &&
             !string.Equals(seriePreferida, resolucionBase.SerieRaw, StringComparison.Ordinal))
         {
-            return await _cajaSerieResolver.ResolverAsync(userId, seriePreferida);
+            return await _cajaSerieResolver.ResolverComprasAsync(userId, seriePreferida);
         }
 
         return resolucionBase;

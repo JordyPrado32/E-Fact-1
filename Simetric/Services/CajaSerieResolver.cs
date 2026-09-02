@@ -11,6 +11,7 @@ public interface ICajaSerieResolver
     /// que tiene asignada en la tabla CAJA.
     /// </summary>
     Task<CajaSerieResolucion> ResolverAsync(int idUsuario, string? preferredSeriesRaw = null);
+    Task<CajaSerieResolucion> ResolverComprasAsync(int idUsuario, string? preferredSeriesRaw = null);
 
     /// <summary>
     /// Obtiene la entidad Caja activa del usuario autenticado.
@@ -21,6 +22,7 @@ public interface ICajaSerieResolver
     /// Lista las series de factura activas disponibles para la cuenta del usuario.
     /// </summary>
     Task<List<CajaSerieResolucion>> ListarSeriesFacturaAsync(int idUsuario);
+    Task<List<CajaSerieResolucion>> ListarSeriesComprasAsync(int idUsuario);
 }
 
 public sealed record CajaSerieResolucion(
@@ -43,13 +45,19 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
     }
 
     public async Task<CajaSerieResolucion> ResolverAsync(int idUsuario, string? preferredSeriesRaw = null)
+        => await ResolverPorDocumentoAsync(idUsuario, preferredSeriesRaw, usarSerieCompras: false);
+
+    public async Task<CajaSerieResolucion> ResolverComprasAsync(int idUsuario, string? preferredSeriesRaw = null)
+        => await ResolverPorDocumentoAsync(idUsuario, preferredSeriesRaw, usarSerieCompras: true);
+
+    private async Task<CajaSerieResolucion> ResolverPorDocumentoAsync(int idUsuario, string? preferredSeriesRaw, bool usarSerieCompras)
     {
         if (idUsuario <= 0)
             throw new Exception("No se pudo identificar al usuario actual para resolver la serie.");
 
         await using var context = await _dbFactory.CreateDbContextAsync();
 
-        var caja = await BuscarCajaAsync(context, idUsuario, preferredSeriesRaw, tracking: false);
+        var caja = await BuscarCajaAsync(context, idUsuario, preferredSeriesRaw, tracking: false, usarSerieCompras);
 
         if (caja == null)
             throw new Exception("El usuario no tiene una caja activa asignada.");
@@ -58,7 +66,7 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
         if (numeroCaja <= 0)
             throw new Exception("La caja asignada no tiene un numero valido.");
 
-        var serieVisual = NormalizarSerieVisual(caja.SerieFactura, numeroCaja);
+        var serieVisual = NormalizarSerieVisual(usarSerieCompras ? caja.SerieCompras : caja.SerieFactura, numeroCaja);
         var establecimiento = ExtraerEstablecimiento(serieVisual);
         var puntoEmision = ExtraerPuntoEmision(serieVisual);
 
@@ -90,6 +98,12 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
     }
 
     public async Task<List<CajaSerieResolucion>> ListarSeriesFacturaAsync(int idUsuario)
+        => await ListarSeriesAsync(idUsuario, usarSerieCompras: false);
+
+    public async Task<List<CajaSerieResolucion>> ListarSeriesComprasAsync(int idUsuario)
+        => await ListarSeriesAsync(idUsuario, usarSerieCompras: true);
+
+    private async Task<List<CajaSerieResolucion>> ListarSeriesAsync(int idUsuario, bool usarSerieCompras)
     {
         if (idUsuario <= 0)
             return new List<CajaSerieResolucion>();
@@ -105,8 +119,8 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
                 c.Estado == true &&
                 c.IdUsuario.HasValue &&
                 usuariosCuenta.Contains(c.IdUsuario.Value) &&
-                c.SerieFactura != null &&
-                c.SerieFactura != string.Empty)
+                (usarSerieCompras ? c.SerieCompras : c.SerieFactura) != null &&
+                (usarSerieCompras ? c.SerieCompras : c.SerieFactura) != string.Empty)
             .OrderBy(c => c.NumCaja == 1 ? 0 : 1)
             .ThenBy(c => c.NumCaja)
             .ThenBy(c => c.Sec)
@@ -116,7 +130,7 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
             .Select(c =>
             {
                 var numeroCaja = c.NumCaja ?? 0;
-                var serieVisual = NormalizarSerieVisual(c.SerieFactura, numeroCaja);
+                var serieVisual = NormalizarSerieVisual(usarSerieCompras ? c.SerieCompras : c.SerieFactura, numeroCaja);
                 return new CajaSerieResolucion(
                     IdUsuario: idUsuario,
                     CajaSec: c.Sec,
@@ -136,7 +150,8 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
         AppDbContext context,
         int idUsuario,
         string? preferredSeriesRaw,
-        bool tracking)
+        bool tracking,
+        bool usarSerieCompras = false)
     {
         IQueryable<Caja> query = context.Caja;
         if (!tracking)
@@ -161,7 +176,7 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
                     .ToListAsync();
 
                 var cajaPreferida = cajasCandidatas.FirstOrDefault(c =>
-                    SoloDigitos(c.SerieFactura) == preferredSeries);
+                    SoloDigitos(usarSerieCompras ? c.SerieCompras : c.SerieFactura) == preferredSeries);
 
                 if (cajaPreferida != null)
                 {
@@ -173,13 +188,13 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
                 .Where(c =>
                     c.Estado == true &&
                     c.EsCajaSistema == true &&
-                    c.SerieFactura != null)
+                    (usarSerieCompras ? c.SerieCompras : c.SerieFactura) != null)
                 .OrderBy(c => c.NumCaja)
                 .ThenBy(c => c.Sec)
                 .ToListAsync();
 
             var cajaSistemaPreferida = cajasSistemaPreferidas
-                .FirstOrDefault(c => SoloDigitos(c.SerieFactura) == preferredSeries);
+                .FirstOrDefault(c => SoloDigitos(usarSerieCompras ? c.SerieCompras : c.SerieFactura) == preferredSeries);
 
             if (cajaSistemaPreferida != null)
             {
