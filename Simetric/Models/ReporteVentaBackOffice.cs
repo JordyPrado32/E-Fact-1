@@ -46,5 +46,8 @@ public class ReporteVentaBackOffice
     public string? Observacion { get; set; } // observación
 
     public byte[]? ComprobanteArchivo { get; set; } // comprobante binario (varbinary)
+
+    [NotMapped]
+    public bool TieneComprobanteArchivo { get; set; }
 }
 
