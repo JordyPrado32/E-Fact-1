@@ -136,7 +136,10 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
             return new List<CajaSerieResolucion>();
 
         await using var context = await _dbFactory.CreateDbContextAsync();
-        var usuariosCuenta = await GetUsuariosSincronizadosPorEmisorRucAsync(context, idUsuario);
+        // Las series disponibles deben pertenecer únicamente a la cuenta actual.
+        // No usar la sincronización por RUC aquí: puede incluir usuarios de otra
+        // cuenta que reutiliza el mismo RUC y contaminar el selector de emisión.
+        var usuariosCuenta = await GetUsuariosCuentaIdsAsync(context, idUsuario);
         if (usuariosCuenta.Count == 0)
             return new List<CajaSerieResolucion>();
 
