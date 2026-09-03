@@ -384,6 +384,7 @@
     private string? errorCarga;
     private string? expandedMovimientoId;
     private List<HistorialCompraItem> movimientos = new();
+    private HashSet<string> idsTransferenciasPendientes = new(StringComparer.OrdinalIgnoreCase);
     private string filtroEstado = FiltroTodos;
     private string textoBusqueda = string.Empty;
     private DateTime? fechaDesde;
@@ -528,6 +529,17 @@
                     HistorialComprasDocumentosJson = item.HistorialComprasDocumentosJson
                 })
                 .ToListAsync();
+
+            idsTransferenciasPendientes = (await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(item => item.Estado == "pendiente" &&
+                               item.Canal.Contains("Transferencia Web") &&
+                               item.Observacion != null)
+                .Select(item => item.Observacion!)
+                .ToListAsync())
+                .Select(ObtenerIdCompraDesdeTransferencia)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             movimientos = usuarios
                 .SelectMany(usuario => LeerHistorialDocumentos(usuario.HistorialComprasDocumentosJson)
@@ -705,7 +717,7 @@
         };
     }
 
-    private static List<CompraDocumentosHistorialItem> LeerHistorialDocumentos(string? historialJson)
+    private List<CompraDocumentosHistorialItem> LeerHistorialDocumentos(string? historialJson)
     {
         if (string.IsNullOrWhiteSpace(historialJson))
         {
@@ -715,6 +727,7 @@
         try
         {
             return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(historialJson, HistorialJsonOptions)
+                ?.Where(item => !EsCompraDeUnaNoPagada(item))
                 ?.OrderByDescending(item => item.Fecha)
                 .ToList()
                 ?? new List<CompraDocumentosHistorialItem>();
@@ -735,6 +748,24 @@
         return (item.Estado ?? string.Empty).Contains("aprob", StringComparison.OrdinalIgnoreCase) ||
                (item.Estado ?? string.Empty).Contains("autoriz", StringComparison.OrdinalIgnoreCase) ||
                (item.Estado ?? string.Empty).Contains("pag", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool EsCompraDeUnaNoPagada(CompraDocumentosHistorialItem item) =>
+        !item.SaldoAplicado &&
+        !EsCompraDocumentoAprobada(item) &&
+        !string.IsNullOrWhiteSpace(item.CustomValue) &&
+        (string.Equals(item.FormaPago, "DeUna", StringComparison.OrdinalIgnoreCase) ||
+         (string.IsNullOrWhiteSpace(item.FormaPago) && !idsTransferenciasPendientes.Contains(item.Id))) &&
+        item.CustomValue.StartsWith("recarga-documentos|", StringComparison.OrdinalIgnoreCase);
+
+    private static string ObtenerIdCompraDesdeTransferencia(string observacion)
+    {
+        const string prefijo = "[CompraDocs:";
+        var inicio = observacion.IndexOf(prefijo, StringComparison.OrdinalIgnoreCase);
+        if (inicio < 0) return string.Empty;
+        inicio += prefijo.Length;
+        var fin = observacion.IndexOf(']', inicio);
+        return fin > inicio ? observacion[inicio..fin] : string.Empty;
     }
 
     private static string ObtenerClaseEstadoPago(HistorialCompraItem item)

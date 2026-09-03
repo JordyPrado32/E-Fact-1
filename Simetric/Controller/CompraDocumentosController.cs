@@ -125,6 +125,7 @@ public class CompraDocumentosController : UsuarioApiControllerBase
             Descripcion = model.EsIlimitado ? "Plan de documentos ilimitados por 1 año" : $"Recarga de {model.Documentos} documentos E-FACT",
             EmailDestino = usuario.Email.Trim().ToLowerInvariant(),
             CustomValue = customValue,
+            FormaPago = "DeUna",
             EsIlimitado = model.EsIlimitado,
             EsPermanente = model.EsPermanente
         });
@@ -204,14 +205,28 @@ public class CompraDocumentosController : UsuarioApiControllerBase
 
         try
         {
-            return JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(historialJson, HistorialJsonOptions)
-                ?? new List<CompraDocumentosHistorialItem>();
+            return (JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(historialJson, HistorialJsonOptions)
+                ?? new List<CompraDocumentosHistorialItem>())
+                .Where(item => !EsCompraDeUnaNoPagada(item))
+                .ToList();
         }
         catch (JsonException)
         {
             return new List<CompraDocumentosHistorialItem>();
         }
     }
+
+    private static bool EsCompraDeUnaNoPagada(CompraDocumentosHistorialItem item) =>
+        !item.SaldoAplicado &&
+        !EsCompraAprobada(item) &&
+        !string.IsNullOrWhiteSpace(item.CustomValue) &&
+        string.Equals(item.FormaPago, "DeUna", StringComparison.OrdinalIgnoreCase) &&
+        item.CustomValue.StartsWith("recarga-documentos|", StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsCompraAprobada(CompraDocumentosHistorialItem item) =>
+        (item.Estado ?? string.Empty).Contains("aprob", StringComparison.OrdinalIgnoreCase) ||
+        (item.Estado ?? string.Empty).Contains("autoriz", StringComparison.OrdinalIgnoreCase) ||
+        (item.Estado ?? string.Empty).Contains("pag", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class CompraDocumentosMobileDto

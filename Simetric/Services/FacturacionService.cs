@@ -1122,7 +1122,16 @@ namespace Simetric.Services
                                 idUsuarioEmisor,
                                 identificacionCliente);
 
-                        var clienteDb = await context.Clientes
+                        // Si la factura partió de un cliente existente, su ID es la
+                        // referencia principal. Así los cambios del formulario no
+                        // crean otro cliente cuando se modifica la identificación.
+                        var clienteDb = clienteData.Codcliente > 0
+                            ? await context.Clientes.FirstOrDefaultAsync(c =>
+                                c.Codcliente == clienteData.Codcliente &&
+                                c.Usuario == idUsuarioEmisor)
+                            : null;
+
+                        clienteDb ??= await context.Clientes
                             .Where(c =>
                                 c.Usuario == idUsuarioEmisor &&
                                 c.Numeroidentificacion != null &&
@@ -3390,7 +3399,17 @@ IF @resultado < 0
         }
 
         private static string ObtenerCodigoPorcentajeFacturaSri(int tarifa)
-            => tarifa <= 0 ? "0" : "4";
+            => tarifa switch
+            {
+                0 => "0",
+                5 => "5",
+                8 => "8",
+                12 => "2",
+                13 => "10",
+                14 => "3",
+                15 => "4",
+                _ => "0"
+            };
 
         private static string ResolverAmbienteSriFactura(Factura factura)
         {
@@ -3428,6 +3447,43 @@ IF @resultado < 0
             decimal totalDescuentoLinea = detalles.Sum(d => Math.Round(d.Descuento ?? 0m, 2));
             decimal totalDescuentoXml = Math.Round(totalDescuentoLinea + (usarDescuentoGlobalXml ? descuentoGlobalTotal : 0m), 2);
             totalDescuentoXml = Math.Max(0m, Math.Min(totalDescuentoXml, baseDescuentoGlobal));
+
+            // El SRI recibe los impuestos agrupados por tarifa. El XML no puede
+            // declarar una sola base usando la primera tarifa encontrada.
+            var detallesXml = new List<(Detallefactura Detalle, decimal Descuento, decimal Base, decimal Iva)>();
+            foreach (var detalle in detalles)
+            {
+                var baseLinea = Math.Max(0m, Math.Round(detalle.Valortproducto, 2, MidpointRounding.AwayFromZero));
+                var descuentoLinea = Math.Max(0m, Math.Min(baseLinea, Math.Round(detalle.Descuento ?? 0m, 2, MidpointRounding.AwayFromZero)));
+                var descuentoGlobalLinea = 0m;
+
+                if (usarDescuentoGlobalXml)
+                {
+                    descuentoGlobalLinea = detallesXml.Count == detalles.Count - 1
+                        ? descuentoGlobalPendiente
+                        : Math.Round(baseDescuentoGlobal <= 0m ? 0m : descuentoGlobalTotal * (baseLinea / baseDescuentoGlobal), 2, MidpointRounding.AwayFromZero);
+                    descuentoGlobalLinea = Math.Max(0m, Math.Min(descuentoGlobalLinea, baseLinea - descuentoLinea));
+                    descuentoGlobalPendiente = Math.Max(0m, Math.Round(descuentoGlobalPendiente - descuentoGlobalLinea, 2, MidpointRounding.AwayFromZero));
+                }
+
+                var descuento = Math.Round(descuentoLinea + descuentoGlobalLinea, 2, MidpointRounding.AwayFromZero);
+                var baseImponible = Math.Max(0m, Math.Round(baseLinea - descuento, 2, MidpointRounding.AwayFromZero));
+                var iva = Math.Round(baseImponible * Math.Max(0, detalle.Tarifa) / 100m, 2, MidpointRounding.AwayFromZero);
+                detallesXml.Add((detalle, descuento, baseImponible, iva));
+            }
+
+            var totalSinImpuestosXml = detallesXml.Sum(x => x.Base);
+            var impuestosXml = detallesXml
+                .GroupBy(x => Math.Max(0, x.Detalle.Tarifa))
+                .OrderBy(x => x.Key)
+                .Select(x => new
+                {
+                    Tarifa = x.Key,
+                    Base = Math.Round(x.Sum(item => item.Base), 2, MidpointRounding.AwayFromZero),
+                    Iva = Math.Round(x.Sum(item => item.Iva), 2, MidpointRounding.AwayFromZero)
+                })
+                .ToList();
+            totalDescuentoXml = Math.Round(detallesXml.Sum(x => x.Descuento), 2, MidpointRounding.AwayFromZero);
 
             ValidarDatosAutorizacionFactura(factura);
 
@@ -3504,15 +3560,14 @@ IF @resultado < 0
                     !string.IsNullOrWhiteSpace(guiaRemisionXml)
                         ? new XElement("guiaRemision", guiaRemisionXml)
                         : null,
-                    new XElement("totalSinImpuestos", (factura.Subtotal ?? 0).ToString("F2", cultura)),
+                    new XElement("totalSinImpuestos", totalSinImpuestosXml.ToString("F2", cultura)),
                     new XElement("totalDescuento", totalDescuentoXml.ToString("F2", cultura)),
                     new XElement("totalConImpuestos",
-                        new XElement("totalImpuesto",
+                        impuestosXml.Select(impuesto => new XElement("totalImpuesto",
                             new XElement("codigo", "2"),
-                            new XElement("codigoPorcentaje", ObtenerCodigoPorcentajeFacturaSri(detalles.FirstOrDefault(d => d.Tarifa > 0)?.Tarifa ?? 0)),
-                            new XElement("baseImponible", (factura.Subtotal ?? 0).ToString("F2", cultura)),
-                            new XElement("valor", (factura.Iva ?? 0).ToString("F2", cultura))
-                        )
+                            new XElement("codigoPorcentaje", ObtenerCodigoPorcentajeFacturaSri(impuesto.Tarifa)),
+                            new XElement("baseImponible", impuesto.Base.ToString("F2", cultura)),
+                            new XElement("valor", impuesto.Iva.ToString("F2", cultura))))
                     ),
                      new XElement("propina", "0.00"),
                     new XElement("importeTotal", (factura.Valortotal ?? 0).ToString("F2", cultura)),
@@ -3531,27 +3586,11 @@ IF @resultado < 0
                     )
                 ),
                 new XElement("detalles",
-                    detalles.Select((d, index) =>
+                    detallesXml.Select((item, index) =>
                     {
-                        var descuentoLinea = Math.Round(d.Descuento ?? 0m, 2);
-                        var baseLinea = Math.Round(d.Valortproducto, 2);
-                        var descuentoXml = descuentoLinea;
-
-                        if (usarDescuentoGlobalXml && descuentoXml <= 0m)
-                        {
-                            var descuentoGlobalLinea = index == detalles.Count - 1
-                                ? Math.Round(descuentoGlobalPendiente, 2)
-                                : Math.Round(
-                                    baseDescuentoGlobal <= 0m ? 0m : descuentoGlobalTotal * (baseLinea / baseDescuentoGlobal),
-                                    2,
-                                    MidpointRounding.AwayFromZero);
-
-                            descuentoGlobalLinea = Math.Max(0m, Math.Min(descuentoGlobalLinea, baseLinea));
-                            descuentoGlobalPendiente = Math.Max(0m, Math.Round(descuentoGlobalPendiente - descuentoGlobalLinea, 2));
-                            descuentoXml = descuentoGlobalLinea;
-                        }
-
-                        var baseImponibleXml = Math.Max(0m, Math.Round(baseLinea - descuentoXml, 2));
+                        var d = item.Detalle;
+                        var descuentoXml = item.Descuento;
+                        var baseImponibleXml = item.Base;
                         var codigoPrincipal = ResolverCodigoDetalleXml(d, index, factura);
                         var codigoAuxiliar = string.IsNullOrWhiteSpace(d.Codauxiliar)
                             ? codigoPrincipal
@@ -3574,7 +3613,7 @@ IF @resultado < 0
                                     new XElement("codigoPorcentaje", ObtenerCodigoPorcentajeFacturaSri(d.Tarifa)),
                                     new XElement("tarifa", d.Tarifa.ToString("F0", cultura)),
                                     new XElement("baseImponible", baseImponibleXml.ToString("F2", cultura)),
-                                    new XElement("valor", d.Valoriva.ToString("F2", cultura))
+                                    new XElement("valor", item.Iva.ToString("F2", cultura))
                                 )
                             )
                         );

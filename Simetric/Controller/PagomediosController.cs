@@ -356,6 +356,16 @@ namespace Simetric.Controllers
 
                     pagoAprobado = compraHistorial.SaldoAplicado || EsPagoAprobado(status);
 
+                    if (!pagoAprobado && EsPagoFallido(status))
+                    {
+                        historial.Remove(compraHistorial);
+                        usuario.HistorialComprasDocumentosJson = SerializarHistorial(historial);
+                        saldoActual = usuario.SaldoDocumentos;
+                        historialActualizado = true;
+                        await context.SaveChangesAsync();
+                        return ConstruirRedirectCompraDocumentos("rechazado", compraId, reference, authorizationCode, saldoActual, false);
+                    }
+
                     compraHistorial.Reference = FirstNonEmpty(reference, compraHistorial.Reference);
                     compraHistorial.AuthorizationCode = FirstNonEmpty(authorizationCode, compraHistorial.AuthorizationCode);
                     compraHistorial.CustomValue = FirstNonEmpty(customValue, compraHistorial.CustomValue);
@@ -893,6 +903,21 @@ namespace Simetric.Controllers
                    status.Contains("approved", StringComparison.OrdinalIgnoreCase) ||
                    status.Contains("authorized", StringComparison.OrdinalIgnoreCase) ||
                    status.Contains("paid", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool EsPagoFallido(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                return false;
+            }
+
+            return status.Contains("rechaz", StringComparison.OrdinalIgnoreCase) ||
+                   status.Contains("declin", StringComparison.OrdinalIgnoreCase) ||
+                   status.Contains("cancel", StringComparison.OrdinalIgnoreCase) ||
+                   status.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                   status.Contains("expired", StringComparison.OrdinalIgnoreCase) ||
+                   status.Contains("revers", StringComparison.OrdinalIgnoreCase);
         }
 
         private static CompraDocumentosCustomData? ParseCompraCustomValue(string? customValue)

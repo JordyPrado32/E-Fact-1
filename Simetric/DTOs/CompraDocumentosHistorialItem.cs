@@ -11,6 +11,7 @@ public class CompraDocumentosHistorialItem
     public string? Reference { get; set; }
     public string? AuthorizationCode { get; set; }
     public string? CustomValue { get; set; }
+    public string? FormaPago { get; set; }
     public string? EmailDestino { get; set; }
     public bool SaldoAplicado { get; set; }
     public bool EsIlimitado { get; set; }

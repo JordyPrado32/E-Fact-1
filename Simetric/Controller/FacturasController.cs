@@ -84,7 +84,9 @@ namespace Simetric.Controllers
                 foreach (var detalle in dto.Detalles)
                 {
                     // Aseguramos que el total de cada línea sea correcto: (Cant * Precio) - Descuento
-                    decimal subtotalLinea = (detalle.Cantproducto * (detalle.Precioproducto)) - (detalle.Descuento ?? 0);
+                    decimal subtotalLinea = Math.Max(
+                        0m,
+                        (detalle.Cantproducto * detalle.Precioproducto) - Math.Max(0m, detalle.Descuento ?? 0m));
                     var tarifa = TaxRateHelper.NormalizePercentInt(detalle.Tarifa);
                     detalle.Tarifa = tarifa;
                     detalle.Valortproducto = Math.Round(subtotalLinea, 2, MidpointRounding.AwayFromZero);
@@ -115,12 +117,17 @@ namespace Simetric.Controllers
                 }
 
                 // 4. Respuesta exitosa
+                // La respuesta del guardado incluye el resultado real del envío
+                // firmado al SRI; la app no debe asumir que guardar = autorizar.
+                var respuestaSri = await _service.ReintentarEnvioSriFacturaAsync(dto.Factura.Codfactura);
+
                 return Ok(new
                 {
                     mensaje = "Factura procesada y guardada correctamente.",
                     codfactura = dto.Factura.Codfactura,
                     numeroComprobante = dto.Factura.Numfactura,
-                    clienteId = dto.Cliente.Codcliente
+                    clienteId = dto.Cliente.Codcliente,
+                    sri = respuestaSri
                 });
             }
             catch (Exception ex)
