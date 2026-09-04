@@ -180,7 +180,7 @@ namespace Simetric.Controllers
                         "4 AÑOS" => "4 años",
                         _ => solicitud.SolVigencia ?? "1 año"
                     }, 100),
-                    Valor = solicitud.SolMontoPago ?? 0m,
+                    Valor = decimal.Round((solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero),
                     Fecha = solicitud.SolFechaPago ?? DateTime.Now,
                     Canal = "Web",
                     Vendedor = vendedorNombre,
@@ -203,7 +203,7 @@ namespace Simetric.Controllers
                         solicitud.SolCorreo1,
                         solicitud.SolFormatoFirma,
                         solicitud.SolVigencia,
-                        solicitud.SolMontoPago ?? 0m,
+                        decimal.Round((solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero),
                         reference,
                         authorizationCode,
                         solicitud.SolId);

@@ -12,6 +12,14 @@ public class FacturaListDto
     public string? MensajeSri { get; set; }
     public DateTime? FechaAutorizacion { get; set; }
     public decimal? Total { get; set; }
+    public decimal? Subtotal { get; set; }
+    public decimal? SubtotalIva { get; set; }
+    public decimal? SubtotalCero { get; set; }
+    public decimal? SubtotalNoObjeto { get; set; }
+    public decimal? SubtotalExento { get; set; }
+    public decimal? Descuentos { get; set; }
+    public decimal? Iva { get; set; }
+    public decimal? Ice { get; set; }
     public decimal TotalAbonado { get; set; }
     public string? Tipopago { get; set; }
     public string? EstadoPago { get; set; }

@@ -49,5 +49,20 @@ public class ReporteVentaBackOffice
 
     [NotMapped]
     public bool TieneComprobanteArchivo { get; set; }
+
+    [NotMapped]
+    public int? CodFactura { get; set; }
+
+    [NotMapped]
+    public string? NumeroFactura { get; set; }
+
+    [NotMapped]
+    public string? EstadoFactura { get; set; }
+
+    [NotMapped]
+    public bool FacturaAutorizada { get; set; }
+
+    [NotMapped]
+    public string? NumeroAutorizacionFactura { get; set; }
 }
 

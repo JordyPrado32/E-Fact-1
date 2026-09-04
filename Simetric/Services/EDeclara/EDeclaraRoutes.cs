@@ -17,13 +17,27 @@ public static class EDeclaraRoutes
     public const string TiposDeclaracion = "/e-declara/configuracion/tipos-declaracion";
     public const string Roles = "/e-declara/administracion/roles";
 
+    public static string PreserveContext(NavigationManager navigationManager, string route)
+    {
+        if (string.IsNullOrWhiteSpace(route) ||
+            !IsEDeclaraPath(navigationManager, navigationManager.Uri) ||
+            route.Contains("contexto=edeclara", StringComparison.OrdinalIgnoreCase))
+        {
+            return route;
+        }
+
+        return $"{route}{(route.Contains('?') ? '&' : '?')}contexto=edeclara";
+    }
+
     public static bool IsEDeclaraPath(NavigationManager navigationManager, string location)
     {
         var relativePath = navigationManager.ToBaseRelativePath(location);
         var separatorIndex = relativePath.IndexOfAny(new[] { '?', '#' });
         var pathOnly = (separatorIndex >= 0 ? relativePath[..separatorIndex] : relativePath).Trim('/');
+        var hasEDeclaraContext = relativePath.Contains("contexto=edeclara", StringComparison.OrdinalIgnoreCase);
 
         return pathOnly.Equals("e-declara", StringComparison.OrdinalIgnoreCase) ||
-               pathOnly.StartsWith("e-declara/", StringComparison.OrdinalIgnoreCase);
+               pathOnly.StartsWith("e-declara/", StringComparison.OrdinalIgnoreCase) ||
+               hasEDeclaraContext;
     }
 }

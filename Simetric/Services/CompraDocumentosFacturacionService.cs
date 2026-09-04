@@ -222,12 +222,16 @@ public sealed class CompraDocumentosFacturacionService
             return CompraDocumentosFacturaResultado.Error("La solicitud de firma aun no tiene un pago aprobado.");
 
         reference ??= solicitud.SolIdTransaccionPago;
+        var montoRegistrado = solicitud.SolMontoPago ?? 0m;
+        var montoTotal = Math.Abs(montoRegistrado - ESignPricing.ObtenerPrecioFinal(solicitud.SolVigencia)) < 0.01m
+            ? montoRegistrado
+            : Math.Round(montoRegistrado * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
         var compra = new CompraDocumentosHistorialItem
         {
             Id = $"ESIGN-{solicitud.SolId}",
             Fecha = solicitud.SolFechaPago ?? DateTime.Now,
             Documentos = 1,
-            MontoTotal = solicitud.SolMontoPago ?? 0m,
+            MontoTotal = montoTotal,
             Estado = "Aprobado",
             Descripcion = $"Firma electronica E-Sign {solicitud.SolFormatoFirma} - {solicitud.SolVigencia}",
             Reference = reference,

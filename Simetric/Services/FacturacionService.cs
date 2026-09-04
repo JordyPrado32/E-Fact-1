@@ -112,7 +112,9 @@ namespace Simetric.Services
             cliente.Nombrerazonsocial = LimpiarTextoOpcional(cliente.Nombrerazonsocial);
             cliente.Nombrecomercial = LimpiarTextoOpcional(cliente.Nombrecomercial);
             cliente.Referencia = LimpiarTextoOpcional(cliente.Referencia);
-            cliente.Oblgconta = cliente.Oblgconta?.Trim().ToUpperInvariant();
+            cliente.Oblgconta = string.IsNullOrWhiteSpace(cliente.Oblgconta)
+                ? "NO"
+                : cliente.Oblgconta.Trim().ToUpperInvariant();
 
             if (cliente.Oblgconta is not ("SI" or "NO"))
                 throw new InvalidOperationException("Debes indicar si el cliente está obligado a llevar contabilidad.");

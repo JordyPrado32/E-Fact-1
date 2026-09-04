@@ -3,14 +3,13 @@
 @using System.Globalization
 @implements IDisposable
 @using Simetric.Services
+@using Simetric.Services.EDeclara
 @using Simetric.Components.Layout.EContax
 @using Simetric.Services.EContax
-@using Simetric.Services.EDeclara
 @using Simetric.Components.Layout.ESign
 @using Simetric.Services.ESign
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IMenuService MenuService
-@inject IEDeclaraMenuService EDeclaraMenuService
 @inject EmisorOnboardingService EmisorOnboardingService
 @inject EmisionControlService EmisionControlService
 @inject MenuStateService MenuStateService 
@@ -458,6 +457,7 @@
     private bool? _lastIsEDeclaraContext;
     private bool? _lastIsEContaxContext;
     private bool? _lastIsESignContext;
+    private bool _menuSchemaReady;
     private bool IsEContaxContext => IsEContaxPath(NavManager.Uri);
     private bool IsEDeclaraContext => IsEDeclaraPath(NavManager.Uri);
     private bool IsESignContext => IsESignPath(NavManager.Uri);
@@ -571,14 +571,15 @@
             ? "Clientes / Proveedores"
             : menu.NombreMenu;
 
-    private static string? GetRutaMenuVisible(Simetric.Models.Menu menu)
+    private string? GetRutaMenuVisible(Simetric.Models.Menu menu)
     {
-        if (EsMenuClientesProveedores(menu))
-        {
-            return "/clientes";
-        }
-
-        return string.IsNullOrWhiteSpace(menu.RutaMenu) ? null : menu.RutaMenu.Trim();
+        var ruta = EsMenuClientesProveedores(menu)
+            ? "/clientes"
+            : menu.RutaMenu?.Trim();
+        if (string.IsNullOrWhiteSpace(ruta)) return null;
+        return IsEDeclaraContext && !ruta.Contains("contexto=edeclara", StringComparison.OrdinalIgnoreCase)
+            ? $"{ruta}{(ruta.Contains('?') ? '&' : '?')}contexto=edeclara"
+            : ruta;
     }
 
     private static bool EsMenuClientesProveedores(Simetric.Models.Menu menu) =>
@@ -604,6 +605,14 @@
 
             if (user.Identity?.IsAuthenticated ?? false)
             {
+                // Las columnas de visibilidad pueden no existir cuando el esquema de arranque está desactivado.
+                // Asegurarlas aquí evita que una consulta fallida deje E-Fact/E-Declara sin menú.
+                if (!_menuSchemaReady)
+                {
+                    await MenuService.EnsureSchemaAsync();
+                    _menuSchemaReady = true;
+                }
+
                 isSuperAdmin = string.Equals(
                     user.FindFirst("IdTipoUsuario")?.Value,
                     AppAccessService.AdminRoleId,
@@ -620,21 +629,14 @@
 
                 if (int.TryParse(claimValue, out int idTipoUsuario))
                 {
-                    if (IsEDeclaraContext)
-                    {
-                        listadoMenus.AddRange(await EDeclaraMenuService.GetMenusByRol(idTipoUsuario));
-                    }
-                    else
-                    {
-                        var efactMenus = await MenuService.GetMenusByRol(idTipoUsuario);
-                        listadoMenus.AddRange(efactMenus.Where(m => 
-                            !string.Equals(m.NombreMenu, "Firma Electronica", StringComparison.OrdinalIgnoreCase) &&
-                            !string.Equals(m.NombreMenu, "Firma Electrónica", StringComparison.OrdinalIgnoreCase) &&
-                            (m.RutaMenu == null || 
-                             (!m.RutaMenu.Contains("/solicitud", StringComparison.OrdinalIgnoreCase) && 
-                              !m.RutaMenu.Contains("/e-rubrica", StringComparison.OrdinalIgnoreCase)))
-                        ));
-                    }
+                    var efactMenus = await MenuService.GetMenusByRol(idTipoUsuario, IsEDeclaraContext);
+                    listadoMenus.AddRange(efactMenus.Where(m =>
+                        !string.Equals(m.NombreMenu, "Firma Electronica", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(m.NombreMenu, "Firma Electrónica", StringComparison.OrdinalIgnoreCase) &&
+                        (m.RutaMenu == null ||
+                         (!m.RutaMenu.Contains("/solicitud", StringComparison.OrdinalIgnoreCase) &&
+                          !m.RutaMenu.Contains("/e-rubrica", StringComparison.OrdinalIgnoreCase)))
+                    ));
                 }
 
                 // â† SIEMPRE, independiente de si hay menÃºs en BD o no

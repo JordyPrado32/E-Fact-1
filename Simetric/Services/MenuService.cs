@@ -10,6 +10,7 @@ namespace Simetric.Services
     {
         // Consultas de Lectura
         Task<List<Menu>> GetMenusByRol(int idTipoUsuario);
+        Task<List<Menu>> GetMenusByRol(int idTipoUsuario, bool esEDeclara);
         Task<List<TipoUsuario>> GetTiposUsuario();
         Task<List<Rol>> GetAllRoles();
         Task<List<Menu>> GetAllMenus();
@@ -25,6 +26,7 @@ namespace Simetric.Services
         Task<bool> AsignarMenusARol(int idRol, List<int> idMenus);
         Task<bool> CrearTipoYRolSimultaneo(string nombrePerfil);
         Task<bool> ActualizarOrdenMenus(List<Menu> menus);
+        Task EnsureSchemaAsync();
     }
 
     public class MenuService : IMenuService
@@ -120,7 +122,8 @@ namespace Simetric.Services
         private static async Task<Menu?> ObtenerMenuPorIdAsync(IDbConnection db, int idMenu, IDbTransaction? trans = null)
         {
             const string sql = @"
-                SELECT TOP 1 IDMENU, IDMENUPADRE, NOMBREMENU, ESTADOMENU, RUTAMENU, ICONOMENU
+                SELECT TOP 1 IDMENU, IDMENUPADRE, NOMBREMENU, ESTADOMENU, RUTAMENU, ICONOMENU,
+                    ISNULL(MOSTRAR_EFACT, 1) AS MostrarEnEFact, ISNULL(MOSTRAR_EDECLARA, 1) AS MostrarEnEDeclara
                 FROM MENUS
                 WHERE IDMENU = @idMenu";
 
@@ -130,7 +133,8 @@ namespace Simetric.Services
         private static async Task<List<Menu>> ObtenerMenusRelacionadosAsync(IDbConnection db, int idMenu, IDbTransaction? trans = null)
         {
             const string sql = @"
-                SELECT IDMENU, IDMENUPADRE, NOMBREMENU, ESTADOMENU, RUTAMENU, ICONOMENU
+                SELECT IDMENU, IDMENUPADRE, NOMBREMENU, ESTADOMENU, RUTAMENU, ICONOMENU,
+                    ISNULL(MOSTRAR_EFACT, 1) AS MostrarEnEFact, ISNULL(MOSTRAR_EDECLARA, 1) AS MostrarEnEDeclara
                 FROM MENUS
                 WHERE IDMENU = @idMenu OR IDMENUPADRE = @idMenu
                 ORDER BY IDMENU";
@@ -235,31 +239,54 @@ namespace Simetric.Services
                 valorNuevo,
                 detalles);
         }
+        public async Task EnsureSchemaAsync()
+        {
+            using var db = Connection;
+            const string sql = @"
+IF COL_LENGTH('dbo.MENUS', 'MOSTRAR_EFACT') IS NULL
+    ALTER TABLE dbo.MENUS ADD MOSTRAR_EFACT bit NOT NULL CONSTRAINT DF_MENUS_MOSTRAR_EFACT DEFAULT(1);
+IF COL_LENGTH('dbo.MENUS', 'MOSTRAR_EDECLARA') IS NULL
+    ALTER TABLE dbo.MENUS ADD MOSTRAR_EDECLARA bit NOT NULL CONSTRAINT DF_MENUS_MOSTRAR_EDECLARA DEFAULT(1);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_MENUS_ESTADO_PADRE_ORDEN' AND object_id = OBJECT_ID(N'dbo.MENUS'))
+    CREATE INDEX IX_MENUS_ESTADO_PADRE_ORDEN ON dbo.MENUS (ESTADOMENU, IDMENUPADRE, orden_menu, IDMENU) INCLUDE (NOMBREMENU, RUTAMENU, ICONOMENU, MOSTRAR_EFACT, MOSTRAR_EDECLARA);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ROL_MENU_IDROL_IDMENU' AND object_id = OBJECT_ID(N'dbo.ROL_MENU'))
+    CREATE INDEX IX_ROL_MENU_IDROL_IDMENU ON dbo.ROL_MENU (IDROL, IDMENU);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ROLES_TIPO_ESTADO' AND object_id = OBJECT_ID(N'dbo.ROLES'))
+    CREATE INDEX IX_ROLES_TIPO_ESTADO ON dbo.ROLES (IDTIPOUSUARIO, ESTADOROL, IDROL);";
+            await db.ExecuteAsync(sql);
+        }
+
         #region Consultas
 
-        public async Task<List<Menu>> GetMenusByRol(int idTipoUsuario)
+        public Task<List<Menu>> GetMenusByRol(int idTipoUsuario) => GetMenusByRol(idTipoUsuario, false);
+
+        public async Task<List<Menu>> GetMenusByRol(int idTipoUsuario, bool esEDeclara)
         {
             using var db = Connection;
             const string sql = @"
                 SELECT DISTINCT m.IDMENU, m.NOMBREMENU, m.RUTAMENU, m.ICONOMENU, m.IDMENUPADRE, m.ESTADOMENU, 
                                 m.orden_menu AS OrdenMenu,
-                                ISNULL(m.orden_menu, m.IDMENU) AS orden_para_sort 
+                                ISNULL(m.orden_menu, m.IDMENU) AS orden_para_sort,
+                                ISNULL(m.MOSTRAR_EFACT, 1) AS MostrarEnEFact,
+                                ISNULL(m.MOSTRAR_EDECLARA, 1) AS MostrarEnEDeclara
                 FROM MENUS m
                 INNER JOIN ROL_MENU rm ON m.IDMENU = rm.IDMENU
                 INNER JOIN ROLES r ON rm.IDROL = r.IDROL
                 WHERE r.IDTIPOUSUARIO = @idTipoUsuario 
                 AND m.ESTADOMENU = 1 
+                AND ((@esEDeclara = 1 AND ISNULL(m.MOSTRAR_EDECLARA, 1) = 1) OR
+                     (@esEDeclara = 0 AND ISNULL(m.MOSTRAR_EFACT, 1) = 1))
                 AND r.ESTADOROL = 1
                 ORDER BY m.IDMENUPADRE ASC, ISNULL(m.orden_menu, m.IDMENU) ASC";
 
-            return (await db.QueryAsync<Menu>(sql, new { idTipoUsuario })).ToList();
+            return (await db.QueryAsync<Menu>(sql, new { idTipoUsuario, esEDeclara })).ToList();
         }
 
         public async Task<List<Menu>> GetAllMenus()
         {
             using var db = Connection;
             // Importante traer IDMENUPADRE para la lógica del árbol en el Front
-            const string sql = "SELECT IDMENU, IDMENUPADRE, NOMBREMENU, ESTADOMENU, RUTAMENU, ICONOMENU, orden_menu AS OrdenMenu FROM MENUS WHERE ESTADOMENU = 1 ORDER BY ISNULL(IDMENUPADRE, 0), ISNULL(orden_menu, IDMENU)";
+            const string sql = "SELECT IDMENU, IDMENUPADRE, NOMBREMENU, ESTADOMENU, RUTAMENU, ICONOMENU, orden_menu AS OrdenMenu, ISNULL(MOSTRAR_EFACT, 1) AS MostrarEnEFact, ISNULL(MOSTRAR_EDECLARA, 1) AS MostrarEnEDeclara FROM MENUS WHERE ESTADOMENU = 1 ORDER BY ISNULL(IDMENUPADRE, 0), ISNULL(orden_menu, IDMENU)";
             return (await db.QueryAsync<Menu>(sql)).ToList();
         }
 
@@ -443,11 +470,13 @@ namespace Simetric.Services
             if (menuPrevio is not null)
             {
                 const string sqlUpdate = @"
-                    UPDATE MENUS
+                UPDATE MENUS
                     SET NOMBREMENU = @NombreMenu,
                         RUTAMENU = @RutaMenu,
                         ICONOMENU = @IconoMenu,
-                        IDMENUPADRE = @idPadre
+                        IDMENUPADRE = @idPadre,
+                        MOSTRAR_EFACT = @MostrarEnEFact,
+                        MOSTRAR_EDECLARA = @MostrarEnEDeclara
                     WHERE IDMENU = @IdMenu";
 
                 var actualizado = await db.ExecuteAsync(sqlUpdate, new
@@ -456,6 +485,8 @@ namespace Simetric.Services
                     menu.NombreMenu,
                     menu.RutaMenu,
                     menu.IconoMenu,
+                    menu.MostrarEnEFact,
+                    menu.MostrarEnEDeclara,
                     idPadre
                 }) > 0;
 
@@ -471,8 +502,8 @@ namespace Simetric.Services
             }
 
             const string sqlInsert = @"
-                INSERT INTO MENUS (NOMBREMENU, RUTAMENU, ICONOMENU, IDMENUPADRE, ESTADOMENU)
-                VALUES (@NombreMenu, @RutaMenu, @IconoMenu, @idPadre, 1);
+                INSERT INTO MENUS (NOMBREMENU, RUTAMENU, ICONOMENU, IDMENUPADRE, ESTADOMENU, MOSTRAR_EFACT, MOSTRAR_EDECLARA)
+                VALUES (@NombreMenu, @RutaMenu, @IconoMenu, @idPadre, 1, @MostrarEnEFact, @MostrarEnEDeclara);
                 SELECT CAST(SCOPE_IDENTITY() as int);";
 
             var nuevoIdMenu = await db.ExecuteScalarAsync<int>(sqlInsert, new
@@ -480,6 +511,8 @@ namespace Simetric.Services
                 menu.NombreMenu,
                 menu.RutaMenu,
                 menu.IconoMenu,
+                menu.MostrarEnEFact,
+                menu.MostrarEnEDeclara,
                 idPadre
             });
 

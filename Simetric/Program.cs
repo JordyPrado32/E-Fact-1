@@ -302,6 +302,9 @@ try
     var initialSequencePromptService = scope.ServiceProvider.GetRequiredService<InitialSequencePromptService>();
     await initialSequencePromptService.EnsureSchemaAsync();
 
+    var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
+    await menuService.EnsureSchemaAsync();
+
     var adminCajaSecuenciaService = scope.ServiceProvider.GetRequiredService<AdminCajaSecuenciaService>();
     await adminCajaSecuenciaService.EnsureMenuAsync();
 
@@ -355,7 +358,18 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
 });
 
 app.UseHttpsRedirection();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        if (string.Equals(context.File.Name, "Simetric.styles.css", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+            context.Context.Response.Headers.Pragma = "no-cache";
+            context.Context.Response.Headers.Expires = "0";
+        }
+    }
+});
 
 app.UseRequestLocalization();
 app.UseSession();

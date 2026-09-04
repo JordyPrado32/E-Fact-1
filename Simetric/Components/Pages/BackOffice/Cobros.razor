@@ -19,6 +19,7 @@
 @inject AuditService AuditService
 @inject IJSRuntime JS
 @inject ILogger<Cobros> Logger
+@inject ISimpleExcelExportService ExcelExportService
 
 <PageTitle>Cobros y Caja - BackOffice | Numerica</PageTitle>
 
@@ -161,10 +162,13 @@
                     <span>Desde:</span>
                     <input type="date" class="filter-date" @bind="filterFechaInicio" @bind:after="OnFiltersChanged" />
                 </div>
-                <div class="date-filter-group">
-                    <span>Hasta:</span>
-                    <input type="date" class="filter-date" @bind="filterFechaFin" @bind:after="OnFiltersChanged" />
-                </div>
+                    <div class="date-filter-group">
+                        <span>Hasta:</span>
+                        <input type="date" class="filter-date" @bind="filterFechaFin" @bind:after="OnFiltersChanged" />
+                    </div>
+                    <button type="button" class="btn-action collect" @onclick="DescargarReporteVentasAsync" disabled="@isLoading">
+                        <i class="bi bi-file-earmark-spreadsheet"></i> Reporte total
+                    </button>
                 @if (HasActiveFilters())
                 {
                     <button type="button" class="btn-clear-filters" @onclick="ClearFilters">
@@ -204,7 +208,9 @@
                                 <th>Cliente</th>
                                 <th>Servicio</th>
                                 <th>Paquete / Plan</th>
-                                <th>Valor</th>
+                                <th>Subtotal</th>
+                                <th>IVA</th>
+                                <th>Total</th>
                                 <th>Fecha Venta</th>
                                 <th>Canal</th>
                                 <th>Vendedor</th>
@@ -218,7 +224,9 @@
                                 <th>Fecha / Hora</th>
                                 <th>Cliente</th>
                                 <th>Servicio</th>
-                                <th>Valor</th>
+                                <th>Subtotal</th>
+                                <th>IVA</th>
+                                <th>Total</th>
                                 <th>Comprobante</th>
                                 <th>Factura</th>
                                 <th>Resultado</th>
@@ -230,10 +238,13 @@
                                 <th>Cliente</th>
                                 <th>Servicio</th>
                                 <th>Paquete / Plan</th>
-                                <th>Monto Cobrado</th>
+                                <th>Subtotal</th>
+                                <th>IVA</th>
+                                <th>Total cobrado</th>
                                 <th>Fecha Pago</th>
                                 <th>Método Pago</th>
                                 <th>Comprobante</th>
+                                <th>Factura / SRI</th>
                                 <th>Observaciones</th>
                             </tr>
                         }
@@ -244,7 +255,7 @@
                             @if (!paginatedAuditRows.Any())
                             {
                                 <tr>
-                                    <td colspan="8" class="table-empty">
+                                <td colspan="10" class="table-empty">
                                         <i class="bi bi-info-circle"></i>
                                         No se encontraron aprobaciones de transferencia con los filtros actuales.
                                     </td>
@@ -278,7 +289,13 @@
                                             <div class="audit-plan">@GetCleanPlanName(audit.PlanPaquete)</div>
                                         </td>
                                         <td>
-                                            <span class="value-bold text-success">$@audit.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</span>
+                                            <span class="value-bold">$@FormatearMonto(ObtenerSubtotalMonto(audit.Valor, audit.Producto))</span>
+                                        </td>
+                                        <td>
+                                            <span class="value-bold">$@FormatearMonto(ObtenerIvaMonto(audit.Valor, audit.Producto))</span>
+                                        </td>
+                                        <td>
+                                            <span class="value-bold text-success">$@FormatearMonto(audit.Valor)</span>
                                         </td>
                                         <td>
                                             <span class="comprobante-ref">@audit.Comprobante</span>
@@ -310,7 +327,7 @@
                         else if (!paginatedRows.Any())
                         {
                             <tr>
-                                <td colspan="@(activeTab == "pendientes" ? 8 : 8)" class="table-empty">
+                                <td colspan="@(activeTab == "pendientes" ? 10 : 11)" class="table-empty">
                                     <i class="bi bi-info-circle"></i>
                                     No se encontraron registros de cobros que coincidan con los filtros.
                                 </td>
@@ -337,8 +354,14 @@
                                         <span class="value-bold">@GetCleanPlanName(row.PlanPaquete)</span>
                                     </td>
                                     <td>
+                                        <span class="value-bold">$@FormatearMonto(ObtenerSubtotalVenta(row))</span>
+                                    </td>
+                                    <td>
+                                        <span class="value-bold">$@FormatearMonto(ObtenerIvaVenta(row))</span>
+                                    </td>
+                                    <td>
                                         <span class="value-bold @(activeTab == "pendientes" ? "text-warning" : "text-success")">
-                                            $@row.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)
+                                            $@FormatearMonto(ObtenerTotalVenta(row))
                                         </span>
                                     </td>
                                     <td>
@@ -399,6 +422,29 @@
                                                     </button>
                                                 }
                                             </div>
+                                        </td>
+                                        <td>
+                                            @if (row.CodFactura is > 0)
+                                            {
+                                                <div class="client-cell">
+                                                    <span class="status-badge pagada"><i class="bi bi-receipt"></i> Emitida</span>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="invoice-status-cell">
+                                                    @if (row.Estado.Equals("pagada", StringComparison.OrdinalIgnoreCase) && EsSolicitudTransferenciaPendiente(row))
+                                                    {
+                                                        <button type="button"
+                                                                class="btn-action collect"
+                                                                @onclick="() => GenerarFacturaVentaAsync(row)"
+                                                                disabled="@(generandoFacturaVentaId.HasValue)">
+                                                            <i class="bi bi-receipt"></i>
+                                                            @(generandoFacturaVentaId == row.IdReporte ? "Generando..." : "Emitir factura")
+                                                        </button>
+                                                    }
+                                                </div>
+                                            }
                                         </td>
                                         <td>
                                             <span class="date-text observacion-text" title="@GetObservacionLimpia(row.Observacion)">@GetObservacionLimpia(row.Observacion)</span>
@@ -666,7 +712,7 @@
 
     // Pagination
     private int currentPage = 1;
-    private const int pageSize = 5;
+    private const int pageSize = 10;
     private int totalPages = 0;
     private int totalFilteredVentasCount = 0;
     private bool hasMoreVentasPages;
@@ -694,6 +740,7 @@
     private int? currentUserId;
     private int? aprobandoTransferenciaId;
     private int? generandoFacturaAuditoriaId;
+    private int? generandoFacturaVentaId;
     private string? facturaAutorizadaPdfUrl;
     private bool mostrarConfirmacionAprobacion;
     private ReporteVentaBackOffice? ventaPendienteConfirmacion;
@@ -756,10 +803,15 @@
             var filteredQuery = BuildVentasQuery(context);
             if (currentPage < 1) currentPage = 1;
 
+            totalFilteredVentasCount = await filteredQuery.CountAsync();
+            totalPages = Math.Max(1, (int)Math.Ceiling(totalFilteredVentasCount / (double)pageSize));
+            if (currentPage > totalPages)
+                currentPage = totalPages;
+
             var pageRows = await filteredQuery
                 .OrderByDescending(v => v.Fecha)
                 .Skip((currentPage - 1) * pageSize)
-                .Take(pageSize + 1)
+                .Take(pageSize)
                 .Select(v => new ReporteVentaBackOffice
                 {
                     IdReporte = v.IdReporte,
@@ -776,13 +828,10 @@
                 })
                 .ToListAsync();
 
-            hasMoreVentasPages = pageRows.Count > pageSize;
-            paginatedRows = hasMoreVentasPages
-                ? pageRows.Take(pageSize).ToList()
-                : pageRows;
+            hasMoreVentasPages = currentPage < totalPages;
+            paginatedRows = pageRows;
             filteredRows = paginatedRows.ToList();
-            totalFilteredVentasCount = ((currentPage - 1) * pageSize) + paginatedRows.Count + (hasMoreVentasPages ? 1 : 0);
-            totalPages = hasMoreVentasPages ? currentPage + 1 : currentPage;
+            await CargarFacturasVentasAsync(context, paginatedRows);
 
             var currentIds = paginatedRows
                 .Select(v => v.IdReporte)
@@ -1314,6 +1363,12 @@
                 resultadoFactura = CompraDocumentosFacturaResultado.Error(ex.Message);
             }
 
+            if (EsSolicitudTransferenciaFirma(dbVenta) && !resultadoFactura.Exito)
+            {
+                ShowFeedback($"La transferencia no se aprobó porque la factura automática no pudo generarse: {resultadoFactura.Mensaje}", false);
+                return;
+            }
+
             var observacionAprobada = TruncateStr($"Aprobado por BackOffice. {observacionOriginal}", 500);
             context.Database.SetCommandTimeout(10);
             var filasActualizadas = await context.ReporteVentasBackOffice
@@ -1665,6 +1720,125 @@
         return await EmitirFacturaTransferenciaDocumentosAsync(venta);
     }
 
+    private async Task CargarFacturasVentasAsync(AppDbContext context, IEnumerable<ReporteVentaBackOffice> ventas)
+    {
+        var ids = ventas.Select(v => v.IdReporte).Where(id => id > 0).ToList();
+        if (ids.Count == 0)
+            return;
+
+        var facturas = await context.Facturas
+            .AsNoTracking()
+            .Where(f => f.Notas != null && f.Notas.Contains("BO-"))
+            .Select(f => new { f.Codfactura, f.Numfactura, f.Numautorizacion, f.Estadoenviosri, f.Autorizado, f.Notas })
+            .ToListAsync();
+
+        foreach (var venta in ventas)
+        {
+            var factura = facturas
+                .Where(f => f.Notas!.Contains($"BO-{venta.IdReporte}", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(f => f.Codfactura)
+                .FirstOrDefault();
+
+            if (factura is null)
+                continue;
+
+            venta.CodFactura = factura.Codfactura;
+            venta.NumeroFactura = factura.Numfactura;
+            venta.NumeroAutorizacionFactura = factura.Numautorizacion;
+            venta.EstadoFactura = factura.Estadoenviosri;
+            venta.FacturaAutorizada = factura.Autorizado == true;
+        }
+    }
+
+    private async Task DescargarReporteVentasAsync()
+    {
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var ventas = await BuildVentasQuery(context)
+                .OrderByDescending(v => v.Fecha)
+                .Select(v => new ReporteVentaBackOffice
+                {
+                    IdReporte = v.IdReporte, Cliente = v.Cliente, Producto = v.Producto,
+                    PlanPaquete = v.PlanPaquete, Valor = v.Valor, Fecha = v.Fecha,
+                    Canal = v.Canal, Vendedor = v.Vendedor, Estado = v.Estado,
+                    FormaPago = v.FormaPago, Observacion = v.Observacion
+                })
+                .ToListAsync();
+
+            await CargarFacturasVentasAsync(context, ventas);
+            if (ventas.Count == 0)
+            {
+                ShowFeedback("No hay ventas para exportar con los filtros actuales.", false);
+                return;
+            }
+
+            var rows = new List<ExcelRowData>
+            {
+                new([
+                    new ExcelCellData("REPORTE TOTAL DE VENTAS BACKOFFICE", 1, ExcelCellType.Text, 18)]),
+                new([
+                    new ExcelCellData($"Generado el {DateTime.Now:dd/MM/yyyy HH:mm:ss}", 2, ExcelCellType.Text, 18)]),
+                new([
+                    new ExcelCellData("ID VENTA", 3), new ExcelCellData("FECHA", 3),
+                    new ExcelCellData("CLIENTE", 3), new ExcelCellData("CORREO", 3),
+                    new ExcelCellData("SERVICIO", 3), new ExcelCellData("PLAN / PAQUETE", 3),
+                    new ExcelCellData("SUBTOTAL", 3), new ExcelCellData("IVA", 3), new ExcelCellData("TOTAL", 3), new ExcelCellData("ESTADO VENTA", 3),
+                    new ExcelCellData("CANAL", 3), new ExcelCellData("VENDEDOR", 3),
+                    new ExcelCellData("FORMA DE PAGO", 3), new ExcelCellData("COMPROBANTE", 3),
+                    new ExcelCellData("CÓDIGO FACTURA", 3), new ExcelCellData("NÚMERO FACTURA", 3),
+                    new ExcelCellData("ESTADO SRI", 3), new ExcelCellData("AUTORIZADA", 3),
+                    new ExcelCellData("OBSERVACIONES", 3)
+                ])
+            };
+
+            foreach (var venta in ventas)
+            {
+                rows.Add(new ExcelRowData([
+                    new ExcelCellData(venta.IdReporte.ToString()),
+                    new ExcelCellData(venta.Fecha.ToString("dd/MM/yyyy HH:mm:ss")),
+                    new ExcelCellData(GetClientCleanName(venta.Cliente)),
+                    new ExcelCellData(GetClientEmail(venta.Cliente)),
+                    new ExcelCellData(GetProductoDisplayName(venta.Producto)),
+                    new ExcelCellData(GetCleanPlanName(venta.PlanPaquete)),
+                    new ExcelCellData(ObtenerSubtotalVenta(venta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 5, ExcelCellType.Number),
+                    new ExcelCellData(ObtenerIvaVenta(venta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 5, ExcelCellType.Number),
+                    new ExcelCellData(ObtenerTotalVenta(venta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 5, ExcelCellType.Number),
+                    new ExcelCellData(venta.Estado), new ExcelCellData(venta.Canal),
+                    new ExcelCellData(venta.Vendedor ?? "Sistema"), new ExcelCellData(venta.FormaPago),
+                    new ExcelCellData(GetComprobanteRef(venta.Observacion)),
+                    new ExcelCellData(venta.CodFactura?.ToString() ?? string.Empty),
+                    new ExcelCellData(venta.NumeroFactura ?? string.Empty),
+                    new ExcelCellData(venta.EstadoFactura ?? (venta.CodFactura is > 0 ? "PENDIENTE" : "SIN FACTURA")),
+                    new ExcelCellData(venta.FacturaAutorizada ? "SI" : "NO"),
+                    new ExcelCellData(GetObservacionLimpia(venta.Observacion))
+                ]));
+            }
+
+            rows.Add(new ExcelRowData([
+                new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
+                new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData("TOTAL", 4),
+                new ExcelCellData(ventas.Sum(ObtenerSubtotalVenta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 6, ExcelCellType.Number),
+                new ExcelCellData(ventas.Sum(ObtenerIvaVenta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 6, ExcelCellType.Number),
+                new ExcelCellData(ventas.Sum(ObtenerTotalVenta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 6, ExcelCellType.Number)
+            ]));
+
+            var archivo = ExcelExportService.Create(
+                $"reporte_ventas_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+                new ExcelSheetData(
+                    "VENTAS",
+                    Array.Empty<string>(), Array.Empty<IReadOnlyList<string>>(), rows,
+                    [12, 21, 28, 32, 18, 28, 14, 14, 14, 16, 22, 24, 20, 22, 16, 22, 16, 12, 42]));
+
+            using var streamRef = new DotNetStreamReference(new MemoryStream(archivo.Content));
+            await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"No se pudo generar el reporte de ventas: {ex.Message}", false);
+        }
+    }
+
     private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaFirmaAsync(ReporteVentaBackOffice venta)
     {
         var solicitudId = ObtenerSolicitudFirmaId(venta);
@@ -1689,6 +1863,16 @@
             solicitudId.Value,
             $"BO-{venta.IdReporte}",
             GetComprobanteRef(venta.Observacion));
+
+        if (resultado.Exito)
+        {
+            var ventaDb = await context.ReporteVentasBackOffice.FirstOrDefaultAsync(v => v.IdReporte == venta.IdReporte);
+            if (ventaDb is not null)
+            {
+                ventaDb.Valor = ObtenerTotalVenta(venta);
+                await context.SaveChangesAsync();
+            }
+        }
 
         if (resultado.CodFactura > 0)
         {
@@ -1856,6 +2040,33 @@
             .Select(u => u.Email.Trim())
             .Distinct()
             .ToListAsync();
+    }
+
+    private async Task GenerarFacturaVentaAsync(ReporteVentaBackOffice venta)
+    {
+        if (generandoFacturaVentaId.HasValue || venta.IdReporte <= 0)
+            return;
+
+        generandoFacturaVentaId = venta.IdReporte;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var resultado = await EmitirFacturaTransferenciaBackOfficeAsync(venta);
+            ShowFeedback(
+                resultado.Exito
+                    ? $"Factura {resultado.NumeroFactura ?? resultado.CodFactura.ToString()} generada correctamente."
+                    : $"No se pudo generar la factura: {resultado.Mensaje}",
+                resultado.Exito);
+            await LoadVentasPageAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"No se pudo emitir la factura: {ex.Message}", false);
+        }
+        finally
+        {
+            generandoFacturaVentaId = null;
+        }
     }
 
     private async Task GenerarFacturaAprobadaAsync(AuditoriaTransferenciaDto audit)
@@ -2108,11 +2319,38 @@
                !string.IsNullOrWhiteSpace(ObtenerCompraDocumentosId(row));
     }
 
+    private static decimal ObtenerSubtotalVenta(ReporteVentaBackOffice venta) =>
+        !venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase)
+            ? ObtenerTotalVenta(venta)
+            : decimal.Round(ObtenerTotalVenta(venta) / (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
+
+    private static decimal ObtenerIvaVenta(ReporteVentaBackOffice venta) =>
+        !venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase)
+            ? 0m
+            : decimal.Round(ObtenerTotalVenta(venta) - ObtenerSubtotalVenta(venta), 2, MidpointRounding.AwayFromZero);
+
+    private static decimal ObtenerTotalVenta(ReporteVentaBackOffice venta) =>
+        venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase) && Math.Abs(venta.Valor - 20m) < 0.01m
+            ? 23m
+            : venta.Valor;
+
+    private static decimal ObtenerSubtotalMonto(decimal monto, string? producto) =>
+        !string.Equals(producto, "e-sign", StringComparison.OrdinalIgnoreCase)
+            ? monto
+            : decimal.Round(monto / (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
+
+    private static decimal ObtenerIvaMonto(decimal monto, string? producto) =>
+        !string.Equals(producto, "e-sign", StringComparison.OrdinalIgnoreCase)
+            ? 0m
+            : decimal.Round(monto - ObtenerSubtotalMonto(monto, producto), 2, MidpointRounding.AwayFromZero);
+
+    private static string FormatearMonto(decimal monto) =>
+        monto.ToString("N2", System.Globalization.CultureInfo.InvariantCulture);
+
     private static bool EsSolicitudTransferenciaFirma(ReporteVentaBackOffice? row)
     {
         return row is not null &&
                row.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase) &&
-               row.Canal.Contains("Transferencia Web", StringComparison.OrdinalIgnoreCase) &&
                ObtenerSolicitudFirmaId(row).HasValue;
     }
 

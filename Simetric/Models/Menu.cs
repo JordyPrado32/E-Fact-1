@@ -31,9 +31,15 @@ namespace Simetric.Models
         [Column("orden_menu")]
         public int? OrdenMenu { get; set; }
 
+        [Column("MOSTRAR_EFACT")]
+        public bool MostrarEnEFact { get; set; } = true;
+
+        [Column("MOSTRAR_EDECLARA")]
+        public bool MostrarEnEDeclara { get; set; } = true;
+
         // Propiedad para saber si está seleccionado en la interfaz de "vistos"
         // No está en la DB, por eso usamos [NotMapped]
         [NotMapped]
         public bool IsSelected { get; set; }
     }
-}
+}

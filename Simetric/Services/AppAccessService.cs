@@ -68,7 +68,9 @@ public sealed class AppAccessService
         var catalog = new List<AppServiceCatalogItem>(services.Count);
         foreach (var service in services)
         {
-            var access = await EvaluateAccessAsync(context, userId, service, isSuperAdmin);
+            // El catálogo debe ser solo de lectura: no debe iniciar cobros automáticos
+            // mientras se está cargando el Portal de Servicios.
+            var access = await EvaluateAccessAsync(context, userId, service, isSuperAdmin, permitirCobroAutomatico: false);
             catalog.Add(new AppServiceCatalogItem
             {
                 ServicioId = service.ServicioId,
@@ -121,7 +123,7 @@ public sealed class AppAccessService
             };
         }
 
-        var access = await EvaluateAccessAsync(context, userId, service, isSuperAdmin);
+        var access = await EvaluateAccessAsync(context, userId, service, isSuperAdmin, permitirCobroAutomatico: true);
         access.Route = ResolveRoute(service);
         return access;
     }
@@ -234,7 +236,8 @@ public sealed class AppAccessService
         AppDbContext context,
         int userId,
         AppServicio service,
-        bool isSuperAdmin)
+        bool isSuperAdmin,
+        bool permitirCobroAutomatico)
     {
         if (string.Equals(service.Clave, "backoffice", StringComparison.OrdinalIgnoreCase))
         {
@@ -307,7 +310,7 @@ public sealed class AppAccessService
         }
 
         // 2. Si no hay suscripción estrictamente futura, pero hay una que vence hoy o ya venció, intentar cobro automático en E-Declara
-        if (string.Equals(service.Clave, EDeclaraServiceKey, StringComparison.OrdinalIgnoreCase))
+        if (permitirCobroAutomatico && string.Equals(service.Clave, EDeclaraServiceKey, StringComparison.OrdinalIgnoreCase))
         {
             var subscription = await context.UsuarioServicioSuscripciones
                 .FirstOrDefaultAsync(x => x.IdUsuario == userId && x.ServicioId == service.ServicioId);

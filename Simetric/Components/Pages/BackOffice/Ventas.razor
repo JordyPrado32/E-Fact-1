@@ -18,6 +18,7 @@
 @inject Simetric.Services.VendedorBackOfficeService VendedorBackOfficeService
 @inject IEmailService EmailService
 @inject SolicitudService SolicitudService
+@inject ISimpleExcelExportService ExcelExportService
 
 <PageTitle>Registro y Control de Ventas - BackOffice</PageTitle>
 
@@ -25,6 +26,7 @@
     <!-- Header Block -->
     <header class="ventas-header">
         <div class="header-text">
+            <span class="section-kicker">ANALÍTICA DE VENTAS</span>
             <h2>@(esVendedor ? "Mis Ventas" : "Registro y Control de Ventas")</h2>
             <p>@(esVendedor ? "Historial de compras de tus clientes afiliados y estadísticas." : "Historial de transacciones de clientes, canales de comercialización y activación de servicios.")</p>
         </div>
@@ -94,6 +96,26 @@
                         <i class="bi bi-graph-up-arrow"></i>
                     </div>
                 </div>
+                <div class="kpi-card is-info">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Ventas Registradas</span>
+                        <strong class="kpi-value text-info">@ventasList.Count(v => v.Estado != "anulada")</strong>
+                        <span class="kpi-desc">Transacciones activas visibles</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-receipt"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-danger">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">IVA Generado</span>
+                        <strong class="kpi-value text-danger">$@ventasList.Where(v => v.Estado != "anulada").Sum(ObtenerIvaVenta).ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                        <span class="kpi-desc">Impuesto separado de firmas</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-percent"></i>
+                    </div>
+                </div>
             }
             else
             {
@@ -135,6 +157,26 @@
                     </div>
                     <div class="kpi-icon-wrapper">
                         <i class="bi bi-hourglass-split"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-info">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">Ventas Registradas</span>
+                        <strong class="kpi-value text-info">@ventasList.Count(v => v.Estado != "anulada")</strong>
+                        <span class="kpi-desc">Transacciones activas visibles</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-receipt"></i>
+                    </div>
+                </div>
+                <div class="kpi-card is-danger">
+                    <div class="kpi-card-content">
+                        <span class="kpi-title">IVA Generado</span>
+                        <strong class="kpi-value text-danger">$@ventasList.Where(v => v.Estado != "anulada").Sum(ObtenerIvaVenta).ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                        <span class="kpi-desc">Impuesto separado de firmas</span>
+                    </div>
+                    <div class="kpi-icon-wrapper">
+                        <i class="bi bi-percent"></i>
                     </div>
                 </div>
             }
@@ -358,10 +400,29 @@
 
         <!-- Filters card -->
         <section class="filters-card">
+            <div class="filters-heading">
+                <div>
+                    <span class="filters-kicker">FILTROS COMBINADOS</span>
+                    <h3>Refina el reporte por producto, fechas, estado y cliente</h3>
+                </div>
+                @if (!esVendedor)
+                {
+                    <div class="filter-actions">
+                        <button type="button" class="btn-action collect" @onclick="DescargarReporteVentasGeneralAsync" disabled="@isLoading">
+                            <i class="bi bi-file-earmark-spreadsheet"></i>
+                            Reporte general Excel
+                        </button>
+                        <button type="button" class="btn-action refresh" @onclick="LoadVentasData" disabled="@isLoading">
+                            <i class="bi bi-arrow-clockwise"></i>
+                            Actualizar datos
+                        </button>
+                    </div>
+                }
+            </div>
             @if (esVendedor)
             {
                 <div class="filters-grid" style="grid-template-columns: 1fr;">
-                    <div class="filter-input-wrap">
+                    <div class="filter-input-wrap filter-search">
                         <i class="bi bi-search filter-input-icon"></i>
                         <input type="text" 
                                class="filter-input" 
@@ -375,7 +436,7 @@
             else
             {
                 <div class="filters-grid">
-                    <div class="filter-input-wrap">
+                    <div class="filter-input-wrap filter-search">
                         <i class="bi bi-search filter-input-icon"></i>
                         <input type="text" 
                                class="filter-input" 
@@ -406,6 +467,35 @@
                             <option value="anulada">Anulada</option>
                         </select>
                     </div>
+                    <div>
+                        <select class="filter-select" @bind="filterFormaPago" @bind:after="OnFiltersChangedAsync">
+                            <option value="ALL">Todas las formas de pago</option>
+                            <option value="Transferencia">Transferencia</option>
+                            <option value="Transferencia Bancaria">Transferencia bancaria</option>
+                            <option value="Tarjeta de Crédito">Tarjeta de crédito</option>
+                            <option value="Efectivo">Efectivo</option>
+                            <option value="Depósito Bancario">Depósito bancario</option>
+                        </select>
+                    </div>
+                    <div>
+                        <select class="filter-select" @bind="filterVendedor" @bind:after="OnFiltersChangedAsync">
+                            <option value="ALL">Todos los vendedores</option>
+                            <option value="Sistema">Sistema</option>
+                            @foreach (var vendedor in vendedoresList)
+                            {
+                                var nombreVendedor = $"{vendedor.Nombres} {vendedor.Apellidos}".Trim();
+                                <option value="@nombreVendedor">@nombreVendedor</option>
+                            }
+                        </select>
+                    </div>
+                    <label class="date-filter">
+                        <span>Fecha desde</span>
+                        <input type="date" class="filter-input filter-date-input" @bind="filterFechaInicio" @bind:after="OnFiltersChangedAsync" />
+                    </label>
+                    <label class="date-filter">
+                        <span>Fecha hasta</span>
+                        <input type="date" class="filter-input filter-date-input" @bind="filterFechaFin" @bind:after="OnFiltersChangedAsync" />
+                    </label>
                 </div>
             }
         </section>
@@ -484,7 +574,9 @@
                                 <th>Cliente</th>
                                 <th>Producto</th>
                                 <th>Plan / Paquete</th>
-                                <th class="text-end">Valor</th>
+                                <th class="text-end">Subtotal</th>
+                                <th class="text-end">IVA</th>
+                                <th class="text-end">Total</th>
                                 <th>Canal / Vendedor</th>
                                 <th>Forma Pago</th>
                                 <th>Estados internos</th>
@@ -535,7 +627,13 @@
                                             <strong class="text-dark">@v.PlanPaquete</strong>
                                         </td>
                                         <td class="text-end">
-                                            <span class="valor-text">$@v.Valor.ToString("F2")</span>
+                                            <span class="valor-text">$@ObtenerSubtotalVenta(v).ToString("F2")</span>
+                                        </td>
+                                        <td class="text-end">
+                                            <span class="valor-text">$@ObtenerIvaVenta(v).ToString("F2")</span>
+                                        </td>
+                                        <td class="text-end">
+                                            <span class="valor-text">$@ObtenerTotalVenta(v).ToString("F2")</span>
                                         </td>
                                         <td>
                                             <div class="canal-cell">
@@ -669,7 +767,9 @@
                                 <th>Fecha</th>
                                 <th>Producto</th>
                                 <th>Plan / Paquete</th>
-                                <th class="text-end">Monto</th>
+                                <th class="text-end">Subtotal</th>
+                                <th class="text-end">IVA</th>
+                                <th class="text-end">Total</th>
                                 <th>Forma Pago</th>
                                 <th>Estado</th>
                             </tr>
@@ -678,7 +778,7 @@
                             @if (!clienteSeleccionadoVer.Transacciones.Any())
                             {
                                 <tr>
-                                    <td colspan="6" class="text-center py-4 text-muted">
+                                    <td colspan="8" class="text-center py-4 text-muted">
                                         No se registran compras para este usuario en el sistema.
                                     </td>
                                 </tr>
@@ -695,7 +795,9 @@
                                             </span>
                                         </td>
                                         <td>@t.PlanPaquete</td>
-                                        <td class="text-end fw-bold">$@t.Valor.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</td>
+                                        <td class="text-end fw-bold">$@ObtenerSubtotalVenta(t).ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</td>
+                                        <td class="text-end fw-bold">$@ObtenerIvaVenta(t).ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</td>
+                                        <td class="text-end fw-bold">$@ObtenerTotalVenta(t).ToString("N2", System.Globalization.CultureInfo.InvariantCulture)</td>
                                         <td>@t.FormaPago</td>
                                         <td>
                                             <span class="status-badge @(t.Estado == "pagada" ? "pagada" : t.Estado == "pendiente" ? "pendiente" : "anulada")">
@@ -1038,6 +1140,21 @@
         TieneComprobanteArchivo = v.ComprobanteArchivo != null
     };
 
+    private static decimal ObtenerSubtotalVenta(ReporteVentaBackOffice venta) =>
+        !venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase)
+            ? venta.Valor
+            : decimal.Round(ObtenerTotalVenta(venta) / (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
+
+    private static decimal ObtenerIvaVenta(ReporteVentaBackOffice venta) =>
+        !venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase)
+            ? 0m
+            : decimal.Round(ObtenerTotalVenta(venta) - ObtenerSubtotalVenta(venta), 2, MidpointRounding.AwayFromZero);
+
+    private static decimal ObtenerTotalVenta(ReporteVentaBackOffice venta) =>
+        venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase) && Math.Abs(venta.Valor - 20m) < 0.01m
+            ? 23m
+            : venta.Valor;
+
     private (string EstadoSolicitud, string EstadoSolicitudClase, string EstadoSolicitudIcono, string EstadoPago, string EstadoPagoClase, string EstadoPagoIcono, string EstadoUanataca, string EstadoUanatacaClase, string EstadoUanatacaIcono) ObtenerEstadosFirma(ReporteVentaBackOffice venta)
     {
         var email = ExtraerEmailClienteReporte(venta.Cliente);
@@ -1139,6 +1256,10 @@
     private string filterProducto = "ALL";
     private string filterCanal = "ALL";
     private string filterEstado = "ALL";
+    private string filterFormaPago = "ALL";
+    private string filterVendedor = "ALL";
+    private DateTime? filterFechaInicio;
+    private DateTime? filterFechaFin;
 
     // Pager
     private int currentPage = 1;
@@ -1349,7 +1470,7 @@
                         Identificacion = u.Identificacion ?? "",
                         FechaRegistro = u.FechaCreacion,
                         ComprasCount = ventasUsuario.Count,
-                        TotalGastado = ventasUsuario.Sum(v => v.Valor),
+                        TotalGastado = ventasUsuario.Sum(ObtenerTotalVenta),
                         Transacciones = ventasUsuario
                     };
                 }).ToList();
@@ -1425,9 +1546,9 @@
 
         // Compute KPIs (Only from valid active/paid sales, except pending which is shown separately)
         var paidSales = ventasList.Where(v => v.Estado == "pagada").ToList();
-        totalRecaudado = paidSales.Sum(v => v.Valor);
-        ventasAsesores = paidSales.Where(v => v.Canal == "Números Asesores").Sum(v => v.Valor);
-        ventasWeb = paidSales.Where(v => v.Canal == "Web").Sum(v => v.Valor);
+        totalRecaudado = paidSales.Sum(ObtenerTotalVenta);
+        ventasAsesores = paidSales.Where(v => v.Canal == "Números Asesores").Sum(ObtenerTotalVenta);
+        ventasWeb = paidSales.Where(v => v.Canal == "Web").Sum(ObtenerTotalVenta);
         countPendientes = ventasList.Count(v => v.Estado == "pendiente");
 
         totalCanales = ventasAsesores + ventasWeb;
@@ -1534,7 +1655,10 @@
             return;
         }
 
-        var query = ventasList.AsQueryable();
+        // Las transferencias anuladas no forman parte del listado ni de los reportes.
+        var query = ventasList
+            .Where(v => !EsTransferenciaAnulada(v))
+            .AsQueryable();
 
         // Product filter
         if (filterProducto != "ALL")
@@ -1552,6 +1676,27 @@
         if (filterEstado != "ALL")
         {
             query = query.Where(v => v.Estado == filterEstado);
+        }
+
+        // Payment method, seller and date range filters
+        if (filterFormaPago != "ALL")
+        {
+            query = query.Where(v => v.FormaPago == filterFormaPago);
+        }
+
+        if (filterVendedor != "ALL")
+        {
+            query = query.Where(v => (v.Vendedor ?? "Sistema") == filterVendedor);
+        }
+
+        if (filterFechaInicio.HasValue)
+        {
+            query = query.Where(v => v.Fecha.Date >= filterFechaInicio.Value.Date);
+        }
+
+        if (filterFechaFin.HasValue)
+        {
+            query = query.Where(v => v.Fecha.Date <= filterFechaFin.Value.Date);
         }
 
         // Search text
@@ -1610,6 +1755,88 @@
     {
         currentPage = page;
         UpdatePaginatedList();
+    }
+
+    private async Task DescargarReporteVentasGeneralAsync()
+    {
+        if (filteredVentas.Count == 0)
+        {
+            feedbackMessage = "No hay ventas para exportar con los filtros actuales.";
+            feedbackIsSuccess = false;
+            return;
+        }
+
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var facturas = await context.Facturas
+                .AsNoTracking()
+                .Where(f => f.Notas != null && f.Notas.Contains("BO-"))
+                .Select(f => new { f.Codfactura, f.Numfactura, f.Estadoenviosri, f.Autorizado, f.Notas })
+                .ToListAsync();
+
+            var rows = new List<ExcelRowData>
+            {
+                new([new ExcelCellData("REPORTE GENERAL DE VENTAS BACKOFFICE", 1, ExcelCellType.Text, 17)]),
+                new([new ExcelCellData($"Generado el {DateTime.Now:dd/MM/yyyy HH:mm:ss} | Registros: {filteredVentas.Count}", 2, ExcelCellType.Text, 17)]),
+                new([
+                    new ExcelCellData("ID VENTA", 3), new ExcelCellData("NÚMERO FACTURA", 3), new ExcelCellData("COMPROBANTE", 3),
+                    new ExcelCellData("FECHA", 3), new ExcelCellData("CLIENTE", 3), new ExcelCellData("CORREO", 3),
+                    new ExcelCellData("SERVICIO", 3), new ExcelCellData("PLAN / PAQUETE", 3), new ExcelCellData("SUBTOTAL", 3),
+                    new ExcelCellData("IVA", 3), new ExcelCellData("TOTAL", 3), new ExcelCellData("ESTADO VENTA", 3),
+                    new ExcelCellData("FORMA DE PAGO", 3), new ExcelCellData("BANCO", 3), new ExcelCellData("CUENTA ORIGEN", 3),
+                    new ExcelCellData("TITULAR", 3), new ExcelCellData("ESTADO SRI", 3), new ExcelCellData("AUTORIZADA", 3)
+                ])
+            };
+
+            foreach (var venta in filteredVentas.OrderBy(v => v.Fecha).ThenBy(v => v.IdReporte))
+            {
+                var factura = facturas.FirstOrDefault(f => f.Notas!.Contains($"BO-{venta.IdReporte}", StringComparison.OrdinalIgnoreCase));
+                rows.Add(new ExcelRowData([
+                    new ExcelCellData(venta.IdReporte.ToString()),
+                    new ExcelCellData(factura?.Numfactura ?? string.Empty),
+                    new ExcelCellData(GetComprobanteRef(venta.Observacion)),
+                    new ExcelCellData(venta.Fecha.ToString("dd/MM/yyyy HH:mm:ss")),
+                    new ExcelCellData(ExtraerNombreClienteReporte(venta.Cliente)),
+                    new ExcelCellData(ExtraerEmailClienteReporte(venta.Cliente)),
+                    new ExcelCellData(venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase) ? "e-Rúbrica" : "e-Fact"),
+                    new ExcelCellData(venta.PlanPaquete ?? string.Empty),
+                    new ExcelCellData(ObtenerSubtotalVenta(venta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 5, ExcelCellType.Number),
+                    new ExcelCellData(ObtenerIvaVenta(venta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 5, ExcelCellType.Number),
+                    new ExcelCellData(ObtenerTotalVenta(venta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 6, ExcelCellType.Number),
+                    new ExcelCellData(venta.Estado ?? string.Empty), new ExcelCellData(venta.FormaPago ?? string.Empty),
+                    new ExcelCellData(ExtraerDatoTransferencia(venta.Observacion, "Banco:")),
+                    new ExcelCellData(ExtraerDatoTransferencia(venta.Observacion, "Cuenta origen:")),
+                    new ExcelCellData(ExtraerDatoTransferencia(venta.Observacion, "Titular:")),
+                    new ExcelCellData(factura?.Estadoenviosri ?? (factura is null ? "SIN FACTURA" : "PENDIENTE")),
+                    new ExcelCellData(factura?.Autorizado == true ? "SI" : "NO")
+                ]));
+            }
+
+            rows.Add(new ExcelRowData([
+                new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
+                new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
+                new ExcelCellData(string.Empty), new ExcelCellData("TOTAL GENERAL", 4),
+                new ExcelCellData(filteredVentas.Sum(ObtenerSubtotalVenta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 6, ExcelCellType.Number),
+                new ExcelCellData(filteredVentas.Sum(ObtenerIvaVenta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 6, ExcelCellType.Number),
+                new ExcelCellData(filteredVentas.Sum(ObtenerTotalVenta).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), 6, ExcelCellType.Number)
+            ]));
+
+            var archivo = ExcelExportService.Create(
+                $"reporte_general_ventas_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+                new ExcelSheetData("VENTAS GENERALES", Array.Empty<string>(), Array.Empty<IReadOnlyList<string>>(), rows,
+                    [12, 22, 22, 21, 30, 32, 18, 28, 14, 14, 14, 16, 22, 24, 22, 22, 18, 12]));
+
+            using var streamRef = new DotNetStreamReference(new MemoryStream(archivo.Content));
+            await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef, archivo.ContentType);
+            feedbackMessage = "Reporte general generado correctamente.";
+            feedbackIsSuccess = true;
+        }
+        catch (Exception ex)
+        {
+            feedbackMessage = $"No se pudo generar el reporte general: {ex.Message}";
+            feedbackIsSuccess = false;
+        }
     }
 
     // Modal Events
@@ -2267,8 +2494,37 @@
                 return obs.Substring(13, endIdx - 13).Trim();
             }
         }
-        return "S/N";
+
+        var comprobanteTransferencia = ExtraerDatoTransferencia(obs, "N. comprobante:", "N comprobante:");
+        return string.IsNullOrWhiteSpace(comprobanteTransferencia) ? "S/N" : comprobanteTransferencia;
     }
+
+    private static string ExtraerDatoTransferencia(string? observacion, params string[] etiquetas)
+    {
+        if (string.IsNullOrWhiteSpace(observacion))
+            return string.Empty;
+
+        foreach (var etiqueta in etiquetas)
+        {
+            var inicioEtiqueta = observacion.IndexOf(etiqueta, StringComparison.OrdinalIgnoreCase);
+            if (inicioEtiqueta < 0)
+                continue;
+
+            var inicio = inicioEtiqueta + etiqueta.Length;
+            var fin = observacion.IndexOf('.', inicio);
+            if (fin < 0)
+                fin = observacion.Length;
+
+            return observacion[inicio..fin].Trim().Trim('.', ';', ':');
+        }
+
+        return string.Empty;
+    }
+
+    private static bool EsTransferenciaAnulada(ReporteVentaBackOffice venta) =>
+        string.Equals(venta.Estado, "anulada", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(venta.FormaPago) &&
+        venta.FormaPago.Contains("transfer", StringComparison.OrdinalIgnoreCase);
 
     private string GetObservacionLimpia(string? obs)
     {
