@@ -24,10 +24,30 @@ public class FacturaListDto
     public string? Tipopago { get; set; }
     public string? EstadoPago { get; set; }
     public string? Cliente { get; set; }
+    public string? Detalle { get; set; }
     public decimal? DescuentoGlobalPct { get; set; }
     public decimal? DescuentoGlobalValor { get; set; }
     public string? IdentificacionCliente { get; set; }
     public bool? Estado { get; set; }
+
+    public string Servicio
+    {
+        get
+        {
+            var descripcion = (Detalle ?? string.Empty).Trim();
+            if (descripcion.Contains("firma", StringComparison.OrdinalIgnoreCase) ||
+                descripcion.Contains("rúbrica", StringComparison.OrdinalIgnoreCase) ||
+                descripcion.Contains("rubrica", StringComparison.OrdinalIgnoreCase))
+                return "Firma electrónica";
+
+            if (descripcion.Contains("e-fact", StringComparison.OrdinalIgnoreCase) ||
+                descripcion.Contains("recarga", StringComparison.OrdinalIgnoreCase) ||
+                descripcion.Contains("document", StringComparison.OrdinalIgnoreCase))
+                return "E-Fact";
+
+            return string.IsNullOrWhiteSpace(descripcion) ? "Sin detalle" : descripcion;
+        }
+    }
     public decimal SaldoPendiente => Math.Max((Total ?? 0m) - TotalAbonado, 0m);
     public bool EstaEnCuentasPorCobrar =>
         SaldoPendiente > 0m &&

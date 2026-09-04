@@ -234,15 +234,19 @@ public sealed class EmisorSistemaService
                  Ice = f.Valorice,
                  Tipopago = f.Tipopago,
                 Estado = f.Estado,
-                Cliente = f.CodclientesNavigation != null
+                 Cliente = f.CodclientesNavigation != null
                     ? (!string.IsNullOrWhiteSpace(f.CodclientesNavigation.Nombrerazonsocial)
                         ? f.CodclientesNavigation.Nombrerazonsocial
                         : ((f.CodclientesNavigation.Nombres ?? "") + " " + (f.CodclientesNavigation.Apellidos ?? "")).Trim())
-                    : null,
-                IdentificacionCliente = f.CodclientesNavigation != null
-                    ? f.CodclientesNavigation.Numeroidentificacion
-                    : null
-            })
+                     : null,
+                 IdentificacionCliente = f.CodclientesNavigation != null
+                     ? f.CodclientesNavigation.Numeroidentificacion
+                     : null,
+                 Detalle = f.Detallefacturas
+                     .OrderBy(d => d.Codlinea)
+                     .Select(d => d.Descripproducto)
+                     .FirstOrDefault()
+             })
             .ToListAsync();
     }
 

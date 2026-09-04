@@ -5,12 +5,14 @@ namespace Simetric.Services;
 
 public interface IFacturasExcelService
 {
-    Task<ReporteArchivoDescargaDto> GenerarAsync(IReadOnlyCollection<FacturaListDto> items);
+    Task<ReporteArchivoDescargaDto> GenerarAsync(
+        IReadOnlyCollection<FacturaListDto> items,
+        IReadOnlyCollection<NotaCreditoListDto>? notasCredito = null);
 }
 
 public sealed class FacturasExcelService : IFacturasExcelService
 {
-    private const int TotalColumnCount = 14;
+    private const int TotalColumnCount = 17;
     private readonly ISimpleExcelExportService _excelExportService;
 
     public FacturasExcelService(ISimpleExcelExportService excelExportService)
@@ -18,7 +20,9 @@ public sealed class FacturasExcelService : IFacturasExcelService
         _excelExportService = excelExportService;
     }
 
-    public Task<ReporteArchivoDescargaDto> GenerarAsync(IReadOnlyCollection<FacturaListDto> items)
+    public Task<ReporteArchivoDescargaDto> GenerarAsync(
+        IReadOnlyCollection<FacturaListDto> items,
+        IReadOnlyCollection<NotaCreditoListDto>? notasCredito = null)
     {
         if (items.Count == 0)
         {
@@ -32,6 +36,9 @@ public sealed class FacturasExcelService : IFacturasExcelService
             new([
                 new ExcelCellData("FECHA", 1),
                 new ExcelCellData("NÚMERO", 1),
+                new ExcelCellData("DOCUMENTO MODIFICADO", 1),
+                new ExcelCellData("SERVICIO", 1),
+                new ExcelCellData("DETALLE", 1),
                 new ExcelCellData("CLIENTE", 1),
                 new ExcelCellData("IDENTIFICACIÓN", 1),
                 new ExcelCellData("ESTADO SRI", 1),
@@ -52,6 +59,9 @@ public sealed class FacturasExcelService : IFacturasExcelService
             rows.Add(new ExcelRowData([
                 new ExcelCellData(item.FechaEmision?.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) ?? string.Empty),
                 new ExcelCellData(item.NumeroCompleto ?? string.Empty),
+                new ExcelCellData(string.Empty),
+                new ExcelCellData(item.Servicio),
+                new ExcelCellData(item.Detalle ?? string.Empty),
                 new ExcelCellData(item.Cliente ?? string.Empty),
                 new ExcelCellData(item.IdentificacionCliente ?? string.Empty),
                 new ExcelCellData((item.Autorizado ?? false) ? "AUTORIZADO" : "PENDIENTE"),
@@ -69,17 +79,58 @@ public sealed class FacturasExcelService : IFacturasExcelService
 
         rows.Add(new ExcelRowData([
             new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
-            new ExcelCellData(string.Empty), new ExcelCellData("TOTAL GENERAL", 4),
+            new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
+            new ExcelCellData(string.Empty), new ExcelCellData("TOTAL FACTURAS", 4),
             Monto(items.Sum(x => x.Subtotal), 6), Monto(items.Sum(x => x.SubtotalIva), 6),
             Monto(items.Sum(x => x.SubtotalCero), 6), Monto(items.Sum(x => x.SubtotalNoObjeto), 6),
             Monto(items.Sum(x => x.SubtotalExento), 6), Monto(items.Sum(x => x.Descuentos), 6),
             Monto(items.Sum(x => x.Iva), 6), Monto(items.Sum(x => x.Ice), 6), Monto(items.Sum(x => x.Total), 6)
         ]));
 
+        var notas = (notasCredito ?? Array.Empty<NotaCreditoListDto>())
+            .Where(x => x.Estado)
+            .OrderBy(x => x.FechaAutorizacion ?? x.FechaDocumentoModificado)
+            .ThenBy(x => x.NumeroCompleto)
+            .ToList();
+
+        if (notas.Count > 0)
+        {
+            rows.Add(new ExcelRowData([
+                new ExcelCellData(string.Empty), new ExcelCellData("NOTAS DE CRÉDITO", 3, ExcelCellType.Text, TotalColumnCount - 1)
+            ]));
+
+            foreach (var nota in notas)
+            {
+                rows.Add(new ExcelRowData([
+                    new ExcelCellData((nota.FechaAutorizacion ?? nota.FechaDocumentoModificado)?.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) ?? string.Empty),
+                    new ExcelCellData(nota.NumeroCompleto),
+                    new ExcelCellData(nota.NumeroDocModificado),
+                    new ExcelCellData("Nota de crédito"),
+                    new ExcelCellData(nota.Motivo),
+                    new ExcelCellData(nota.Cliente),
+                    new ExcelCellData(nota.IdentificacionCliente),
+                    new ExcelCellData("AUTORIZADA"),
+                    Monto(-nota.Subtotal), Monto(0m), Monto(0m), Monto(0m), Monto(0m),
+                    Monto(-nota.Descuentos), Monto(-nota.Iva), Monto(0m), Monto(-nota.Total)
+                ]));
+            }
+
+            rows.Add(new ExcelRowData([
+                new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
+                new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData("TOTAL NETO", 4),
+                new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
+                Monto(items.Sum(x => x.Subtotal) - notas.Sum(x => x.Subtotal), 6),
+                Monto(items.Sum(x => x.SubtotalIva), 6), Monto(items.Sum(x => x.SubtotalCero), 6),
+                Monto(items.Sum(x => x.SubtotalNoObjeto), 6), Monto(items.Sum(x => x.SubtotalExento), 6),
+                Monto(items.Sum(x => x.Descuentos), 6), Monto(items.Sum(x => x.Iva) - notas.Sum(x => x.Iva), 6),
+                Monto(items.Sum(x => x.Ice), 6), Monto(items.Sum(x => x.Total) - notas.Sum(x => x.Total), 6)
+            ]));
+        }
+
         var archivo = _excelExportService.Create(
             $"facturas_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
             new ExcelSheetData("FACTURAS", Array.Empty<string>(), Array.Empty<IReadOnlyList<string>>(), rows,
-                [16, 20, 34, 18, 16, 16, 16, 16, 16, 16, 16, 14, 14, 16]));
+                [16, 20, 24, 22, 38, 34, 18, 16, 16, 16, 16, 16, 16, 14, 14, 16, 16]));
 
         return Task.FromResult(archivo);
     }

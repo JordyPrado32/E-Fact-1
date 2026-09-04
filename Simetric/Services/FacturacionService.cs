@@ -2556,7 +2556,11 @@ IF @resultado < 0
                         : null,
                     IdentificacionCliente = f.CodclientesNavigation != null
                         ? f.CodclientesNavigation.Numeroidentificacion
-                        : null
+                        : null,
+                    Detalle = f.Detallefacturas
+                        .OrderBy(d => d.Codlinea)
+                        .Select(d => d.Descripproducto)
+                        .FirstOrDefault()
                 })
                 .ToListAsync();
         }
@@ -2619,7 +2623,11 @@ IF @resultado < 0
                         : null,
                     IdentificacionCliente = f.CodclientesNavigation != null
                         ? f.CodclientesNavigation.Numeroidentificacion
-                        : null
+                        : null,
+                    Detalle = f.Detallefacturas
+                        .OrderBy(d => d.Codlinea)
+                        .Select(d => d.Descripproducto)
+                        .FirstOrDefault()
                 })
                 .ToListAsync();
         }
@@ -2719,7 +2727,11 @@ IF @resultado < 0
                         : null,
                     IdentificacionCliente = f.CodclientesNavigation != null
                         ? f.CodclientesNavigation.Numeroidentificacion
-                        : null
+                        : null,
+                    Detalle = f.Detallefacturas
+                        .OrderBy(d => d.Codlinea)
+                        .Select(d => d.Descripproducto)
+                        .FirstOrDefault()
                 })
                 .ToListAsync();
         }

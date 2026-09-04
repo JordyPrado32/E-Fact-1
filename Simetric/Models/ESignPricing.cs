@@ -25,6 +25,4 @@ public static class ESignPricing
         _ => 0m
     };
 
-    public static decimal ObtenerIva(string? vigencia) =>
-        decimal.Round(ObtenerPrecioBase(vigencia) * IvaRate, 2, MidpointRounding.AwayFromZero);
 }

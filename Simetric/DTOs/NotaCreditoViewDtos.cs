@@ -15,6 +15,7 @@ public class NotaCreditoListDto
     public string NumeroDocModificado { get; set; } = "";
     public DateTime? FechaDocumentoModificado { get; set; }
     public decimal Subtotal { get; set; }
+    public decimal Descuentos { get; set; }
     public decimal Iva { get; set; }
     public decimal Total { get; set; }
     public string Motivo { get; set; } = "";
