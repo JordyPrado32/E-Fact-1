@@ -13,10 +13,14 @@ public class NotaCreditoListDto
     public string Cliente { get; set; } = "";
     public string IdentificacionCliente { get; set; } = "";
     public string NumeroDocModificado { get; set; } = "";
+    public int? DocumentoModificadoId { get; set; }
     public DateTime? FechaDocumentoModificado { get; set; }
     public decimal Subtotal { get; set; }
+    public decimal SubtotalIva { get; set; }
+    public decimal SubtotalCero { get; set; }
     public decimal Descuentos { get; set; }
     public decimal Iva { get; set; }
+    public decimal Ice { get; set; }
     public decimal Total { get; set; }
     public string Motivo { get; set; } = "";
     public bool Estado { get; set; }

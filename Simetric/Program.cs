@@ -61,6 +61,9 @@ builder.Services.AddScoped<EContaxOrganizacionService>();
 builder.Services.AddScoped<EContaxCatalogService>();
 builder.Services.AddScoped<EDeclaraSharedDataService>();
 builder.Services.AddScoped<ContribuyenteEdeclaraService>();
+builder.Services.AddScoped<ComisionesService>();
+builder.Services.AddScoped<EDeclaraSriCredentialService>();
+builder.Services.AddScoped<EDeclaraComprasService>();
 
 // AUTENTICACION / AUTORIZACION
 builder.Services.AddCascadingAuthenticationState();

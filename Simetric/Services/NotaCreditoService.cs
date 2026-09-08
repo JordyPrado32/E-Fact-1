@@ -1018,6 +1018,7 @@ public class NotaCreditoService
                 IdentificacionCliente = c != null ? (c.Numeroidentificacion ?? "") : "",
                 TipoIdentificacionCliente = ti != null ? (ti.IdeDescripcion ?? "") : "",
                 NumeroDocModificado = nc.NumDocModificado ?? "",
+                DocumentoModificadoId = nc.IdDocModificado,
                 FechaDocumentoModificado = nc.FechaEmiDocModificado,
                 Subtotal = nc.Subtotal ?? 0m,
                 Descuentos = nc.Descuentos ?? 0m,
@@ -1056,6 +1057,7 @@ public class NotaCreditoService
             IdentificacionCliente = x.IdentificacionCliente,
             TipoIdentificacionCliente = x.TipoIdentificacionCliente,
             NumeroDocModificado = x.NumeroDocModificado,
+            DocumentoModificadoId = x.DocumentoModificadoId,
             FechaDocumentoModificado = x.FechaDocumentoModificado,
             Subtotal = x.Subtotal,
             Descuentos = x.Descuentos,
@@ -1075,6 +1077,7 @@ public class NotaCreditoService
                 : ""
         }).ToList();
 
+        await AplicarDesgloseTributarioAsync(db, resultado);
         return resultado;
     }
 
@@ -1111,6 +1114,7 @@ public class NotaCreditoService
                 IdentificacionCliente = c != null ? (c.Numeroidentificacion ?? "") : "",
                 TipoIdentificacionCliente = ti != null ? (ti.IdeDescripcion ?? "") : "",
                 NumeroDocModificado = nc.NumDocModificado ?? "",
+                DocumentoModificadoId = nc.IdDocModificado,
                 FechaDocumentoModificado = nc.FechaEmiDocModificado,
                 Subtotal = nc.Subtotal ?? 0m,
                 Iva = nc.Iva ?? 0m,
@@ -1139,7 +1143,7 @@ public class NotaCreditoService
             })
             .ToListAsync();
 
-        return data.Select(x => new NotaCreditoListDto
+        var resultado = data.Select(x => new NotaCreditoListDto
         {
             Sec = x.Sec,
             NumeroNotaCredito = x.NumeroNotaCredito,
@@ -1148,6 +1152,7 @@ public class NotaCreditoService
             IdentificacionCliente = x.IdentificacionCliente,
             TipoIdentificacionCliente = x.TipoIdentificacionCliente,
             NumeroDocModificado = x.NumeroDocModificado,
+            DocumentoModificadoId = x.DocumentoModificadoId,
             FechaDocumentoModificado = x.FechaDocumentoModificado,
             Subtotal = x.Subtotal,
             Iva = x.Iva,
@@ -1165,6 +1170,51 @@ public class NotaCreditoService
                 ? ConstruirXmlUrl(x.NumeroNotaCredito, x.RucEmisor)
                 : ""
         }).ToList();
+
+        await AplicarDesgloseTributarioAsync(db, resultado);
+        return resultado;
+    }
+
+    private static async Task AplicarDesgloseTributarioAsync(AppDbContext db, List<NotaCreditoListDto> notas)
+    {
+        var notasPorSec = notas.ToDictionary(nota => nota.Sec);
+        if (notasPorSec.Count == 0)
+            return;
+
+        var notasIds = notasPorSec.Keys.ToArray();
+        var desglose = await db.DetallesNotaCredito
+            .AsNoTracking()
+            .Where(detalle => notasIds.Contains(detalle.CodNotaCredito))
+            .GroupBy(detalle => detalle.CodNotaCredito)
+            .Select(grupo => new
+            {
+                Sec = grupo.Key,
+                SubtotalIva = grupo.Sum(detalle => (detalle.Tarifa ?? 0) > 0 || (detalle.ValorIVA ?? 0m) > 0m
+                    ? detalle.ValorTProducto ?? 0m
+                    : 0m),
+                SubtotalCero = grupo.Sum(detalle => (detalle.Tarifa ?? 0) == 0 && (detalle.ValorIVA ?? 0m) == 0m
+                    ? detalle.ValorTProducto ?? 0m
+                    : 0m),
+                Descuentos = grupo.Sum(detalle => detalle.Descuento ?? 0m),
+                Iva = grupo.Sum(detalle => detalle.ValorIVA ?? 0m),
+                Ice = grupo.Sum(detalle => detalle.ValorICE ?? 0m),
+                Irbpnr = grupo.Sum(detalle => detalle.ValorBiIrbpnr ?? 0m)
+            })
+            .ToListAsync();
+
+        foreach (var valores in desglose)
+        {
+            if (!notasPorSec.TryGetValue(valores.Sec, out var nota))
+                continue;
+
+            nota.SubtotalIva = valores.SubtotalIva;
+            nota.SubtotalCero = valores.SubtotalCero;
+            nota.Subtotal = valores.SubtotalIva + valores.SubtotalCero;
+            nota.Descuentos = valores.Descuentos;
+            nota.Iva = valores.Iva;
+            nota.Ice = valores.Ice;
+            nota.Total = nota.Subtotal + nota.Iva + nota.Ice + valores.Irbpnr;
+        }
     }
     public string GenerarClaveAcceso(DateTime fecha, string ruc, string ambiente, string serie, string secuencial, string tipoEmi)
     {

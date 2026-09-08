@@ -1,0 +1,231 @@
+@page "/e-declara/comisiones"
+@page "/e-declara/comisiones/involucrados"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using System.Globalization
+@using System.Text
+@using Simetric.Models.EDeclara
+@using Simetric.Services
+@using Simetric.Services.EDeclara
+@inject AuthenticationStateProvider AuthStateProvider
+@inject AppAccessService AppAccessService
+@inject ComisionesService ComisionesService
+@inject NavigationManager NavManager
+@inject IJSRuntime JS
+
+<PageTitle>Comisiones | E-Declara</PageTitle>
+
+<div class="edeclara-page comisiones-page">
+    <section class="edeclara-hero comisiones-hero">
+        <div><span class="hero-eyebrow">E-Declara · Gestión comercial</span><h2>Comisiones</h2><p>Configura beneficiarios, controla valores generados y registra liquidaciones.</p></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(error)) { <div class="alert alert-danger alert-dismissible" role="alert">@error<button type="button" class="btn-close" aria-label="Cerrar" @onclick="() => error = null"></button></div> }
+    @if (!string.IsNullOrWhiteSpace(exito)) { <div class="alert alert-success alert-dismissible" role="status">@exito<button type="button" class="btn-close" aria-label="Cerrar" @onclick="() => exito = null"></button></div> }
+
+    @if (autorizado && Seccion == "involucrados")
+    {
+        <section class="commission-command-bar" aria-label="Acciones de comisiones">
+            <button type="button" class="commission-command" @onclick="AbrirNuevoInvolucrado"><i class="ri-user-add-line"></i><span><strong>Nuevo involucrado</strong><small>Empleado o externo</small></span></button>
+            <a class="commission-command" href="@EDeclaraRoutes.ComisionesHerramientas"><i class="ri-history-line"></i><span><strong>Historial comisiones</strong><small>Consulta por usuario</small></span></a>
+            <div class="commission-search commission-command-search"><i class="ri-search-line"></i><input value="@filtroInvolucrado" @oninput="FiltrarInvolucrados" placeholder="Buscar por nombre, identificación..." /></div>
+            <button type="button" class="commission-filter-button" @onclick="LimpiarFiltro"><i class="ri-filter-3-line"></i> Filtros</button>
+        </section>
+
+        <section class="commission-metrics four">
+            <article class="metric-registered"><i class="ri-group-line"></i><div><span>Registrados</span><strong>@involucrados.Count</strong><small>Todos los involucrados</small></div></article>
+            <article class="metric-active"><i class="ri-user-follow-line"></i><div><span>Activos</span><strong>@involucrados.Count(x => x.Activo)</strong><small>Disponibles a facturar</small></div></article>
+            <article class="metric-total"><i class="ri-money-dollar-circle-line"></i><div><span>Total en comisiones</span><strong>@Dinero(ResumenInvolucrados.Generadas)</strong><small>Generado por este usuario</small></div></article>
+            <article class="metric-average"><i class="ri-percent-line"></i><div><span>Comisión promedio</span><strong>@PromedioInvolucrados.ToString("0.##")%</strong><small>Solo cálculo porcentual</small></div></article>
+        </section>
+
+        @if (mostrarModalInvolucrado)
+        {
+        <div class="commission-modal-backdrop" @onclick="CerrarModalInvolucrado">
+        <section class="edeclara-panel commission-editor commission-modal" role="dialog" aria-modal="true" aria-label="Formulario de involucrado" @onclick:stopPropagation>
+            <div class="table-card-head">
+                <div><span class="hero-eyebrow">@(nuevo.Id == 0 ? "Nuevo registro" : "Edición")</span><h3 class="panel-title"><i class="ri-user-settings-line"></i>@(nuevo.Id == 0 ? "Agregar involucrado" : $"Editar {nuevo.Nombre}")</h3></div>
+                <button type="button" class="modal-close" aria-label="Cerrar" @onclick="CerrarModalInvolucrado"><i class="ri-close-line"></i></button>
+            </div>
+            <EditForm Model="nuevo" OnValidSubmit="Guardar">
+                <DataAnnotationsValidator /><ValidationSummary class="validation-summary" />
+                <div class="form-grid">
+                    <div class="form-group"><label class="form-label-n">Identificación *</label><InputText class="input-n-premium" maxlength="30" @bind-Value="nuevo.Identificacion" /></div>
+                    <div class="form-group span-2"><label class="form-label-n">Nombres / razón social *</label><InputText class="input-n-premium" maxlength="200" @bind-Value="nuevo.Nombre" /></div>
+                    <div class="form-group"><label class="form-label-n">Tipo</label><InputSelect class="input-n-premium" @bind-Value="nuevo.Tipo">@foreach (var x in Enum.GetValues<TipoInvolucrado>()) { <option value="@x">@Etiqueta(x.ToString())</option> }</InputSelect></div>
+                    <div class="form-group"><label class="form-label-n">Teléfono</label><InputText class="input-n-premium" maxlength="40" @bind-Value="nuevo.Telefono" /></div>
+                    <div class="form-group"><label class="form-label-n">Correo</label><InputText class="input-n-premium" maxlength="150" type="email" @bind-Value="nuevo.Correo" /></div>
+                    <div class="form-group"><label class="form-label-n">Tipo de cálculo</label><InputSelect class="input-n-premium" @bind-Value="nuevo.TipoCalculo" @bind-Value:after="NormalizarTipoCalculo">@foreach (var x in Enum.GetValues<TipoCalculoComision>()) { <option value="@x">@Etiqueta(x.ToString())</option> }</InputSelect></div>
+                    @if (nuevo.TipoCalculo == TipoCalculoComision.Porcentaje) { <div class="form-group"><label class="form-label-n">Porcentaje (%)</label><InputNumber class="input-n-premium" min="0" max="100" step="0.01" @bind-Value="nuevo.PorcentajePredeterminado" /></div> }
+                    else { <div class="form-group"><label class="form-label-n">Valor fijo ($)</label><InputNumber class="input-n-premium" min="0" step="0.01" @bind-Value="nuevo.ValorPredeterminado" /></div> }
+                    <div class="form-group"><label class="form-label-n">Base de cálculo</label><InputSelect class="input-n-premium" @bind-Value="nuevo.BaseCalculo" disabled="@(nuevo.TipoCalculo == TipoCalculoComision.ValorFijo)"><option value="@BaseCalculoComision.Subtotal">Subtotal</option><option value="@BaseCalculoComision.Total">Total</option><option value="@BaseCalculoComision.ValorFijo">Valor fijo</option></InputSelect></div>
+                    <div class="form-group"><label class="form-label-n">Vigente desde</label><InputDate class="input-n-premium" @bind-Value="nuevo.FechaVigencia" /></div>
+                    <div class="form-group span-2"><label class="form-label-n">Datos bancarios</label><InputTextArea class="input-n-premium" rows="2" maxlength="1000" @bind-Value="nuevo.DatosBancarios" /></div>
+                    <div class="form-group span-2"><label class="form-label-n">Observaciones</label><InputTextArea class="input-n-premium" rows="2" maxlength="1000" @bind-Value="nuevo.Observaciones" /></div>
+                </div>
+                <button class="primary-action" type="submit" disabled="@procesando"><i class="@(procesando ? "spinner-border spinner-border-sm" : "ri-save-line")"></i> @(nuevo.Id == 0 ? "Guardar involucrado" : "Guardar cambios")</button>
+            </EditForm>
+        </section>
+        </div>
+        }
+
+        <section class="edeclara-panel">
+            <div class="table-card-head">
+                <div><span class="hero-eyebrow">Listado activo</span><h3 class="panel-title"><i class="ri-team-line"></i>Involucrados registrados</h3></div>
+                <div class="directory-actions"><span class="selection-counter">@InvolucradosFiltrados.Count registro(s)</span><button type="button" class="primary-action" @onclick="AbrirNuevoInvolucrado"><i class="ri-add-line"></i> Nuevo involucrado</button></div>
+            </div>
+            <div class="table-container"><table class="sri-table commission-directory-table"><thead><tr><th>Involucrado</th><th>Identificación</th><th>Tipo</th><th>% Comisión</th><th>Total generado</th><th>Última comisión</th><th>Estado</th><th class="text-end">Acciones</th></tr></thead><tbody>
+                @if (InvolucradosVisibles.Count == 0) { <tr><td colspan="8"><div class="commission-empty"><i class="ri-user-search-line"></i><strong>Sin resultados</strong><span>No hay involucrados que coincidan con la búsqueda.</span></div></td></tr> }
+                @foreach (var x in InvolucradosVisibles)
+                {
+                    <tr><td><strong>@x.Nombre</strong><small>@(x.Correo ?? x.Telefono ?? "Sin datos de contacto")</small></td><td><span class="code-pill">@x.Identificacion</span></td><td>@Etiqueta(x.Tipo.ToString())</td><td><strong>@FormatoCalculo(x)</strong></td><td><strong>@Dinero(x.TotalGenerado)</strong></td><td>@(x.FechaUltimaComision?.ToString("dd/MM/yyyy") ?? "—")<small>@(x.NumeroUltimaFactura ?? "Sin movimientos")</small></td><td><span class="status-pill @(x.Activo ? "active" : "inactive")">@(x.Activo ? "Activo" : "Inactivo")</span></td><td class="actions-cell"><button type="button" class="icon-action edit" title="Editar" @onclick="() => Editar(x)"><i class="ri-edit-line"></i></button><button type="button" class="icon-action @(x.Activo ? "disable" : "enable")" title="@(x.Activo ? "Desactivar" : "Reactivar")" @onclick="() => CambiarEstado(x)"><i class="@(x.Activo ? "ri-user-unfollow-line" : "ri-user-follow-line")"></i></button></td></tr>
+                }
+            </tbody></table></div>
+            @if (TotalPaginas > 1) { <footer class="commission-pager"><span>Mostrando @InicioRegistro-@FinRegistro de @InvolucradosFiltrados.Count registros</span><div><button type="button" disabled="@(paginaActual == 1)" @onclick="PaginaAnterior"><i class="ri-arrow-left-s-line"></i></button>@for (var pagina = 1; pagina <= TotalPaginas; pagina++) { var actual = pagina; <button type="button" class="@(paginaActual == actual ? "active" : null)" @onclick="() => IrAPagina(actual)">@actual</button> }<button type="button" disabled="@(paginaActual == TotalPaginas)" @onclick="PaginaSiguiente"><i class="ri-arrow-right-s-line"></i></button></div></footer> }
+        </section>
+    }
+    else if (autorizado)
+    {
+        <section class="commission-metrics four">
+            <article><span>Generadas</span><strong>@Dinero(Resumen.Generadas)</strong><small>@Resumen.InvolucradosActivos involucrados activos</small></article>
+            <article class="warning"><span>Pendientes</span><strong>@Dinero(Resumen.Pendientes)</strong><small>Por liquidar</small></article>
+            <article class="success"><span>Pagadas</span><strong>@Dinero(Resumen.Pagadas)</strong><small>Liquidaciones registradas</small></article>
+            <article><span>Facturación asociada</span><strong>@Dinero(Resumen.Facturacion)</strong><small>Promedio @Dinero(Resumen.PromedioPorFactura)</small></article>
+        </section>
+
+        <section class="edeclara-panel commission-filters">
+            <div class="table-card-head"><div><span class="hero-eyebrow">Consulta</span><h3 class="panel-title"><i class="ri-filter-3-line"></i>Filtrar movimientos</h3></div><button type="button" class="secondary-action" @onclick="ExportarCsv" disabled="@(movimientos.Count == 0)"><i class="ri-file-excel-2-line"></i> Exportar CSV</button></div>
+            <div class="filter-grid">
+                <div class="form-group"><label class="form-label-n">Desde</label><InputDate class="input-n-premium" @bind-Value="desde" /></div><div class="form-group"><label class="form-label-n">Hasta</label><InputDate class="input-n-premium" @bind-Value="hasta" /></div>
+                <div class="form-group"><label class="form-label-n">Estado</label><InputSelect class="input-n-premium" @bind-Value="estadoFiltro"><option value="">Todos</option>@foreach (var x in Enum.GetValues<ComisionEstado>()) { <option value="@x">@Etiqueta(x.ToString())</option> }</InputSelect></div>
+                <div class="form-group span-2"><label class="form-label-n">Factura, cliente o involucrado</label><InputText class="input-n-premium" @bind-Value="filtroMovimiento" /></div><button type="button" class="primary-action filter-button" @onclick="CargarHerramientas" disabled="@procesando"><i class="ri-search-line"></i> Consultar</button>
+            </div>
+        </section>
+
+        <section class="edeclara-panel">
+            <div class="table-card-head"><div><span class="hero-eyebrow">Liquidación</span><h3 class="panel-title"><i class="ri-exchange-dollar-line"></i>Movimientos</h3></div><span class="selection-counter">@seleccionados.Count seleccionada(s)</span></div>
+            <div class="bulk-toolbar"><button type="button" class="secondary-action" @onclick="MarcarPendientes" disabled="@(procesando || seleccionados.Count == 0)"><i class="ri-timer-line"></i> Marcar pendientes</button><button type="button" class="primary-action" @onclick="MostrarPago" disabled="@(procesando || seleccionados.Count == 0)"><i class="ri-bank-card-line"></i> Registrar pago</button></div>
+            @if (mostrarPago)
+            {
+                <div class="payment-box"><div class="form-group"><label class="form-label-n">Método de pago *</label><InputSelect class="input-n-premium" @bind-Value="metodoPago"><option value="">Selecciona…</option><option>Transferencia</option><option>Efectivo</option><option>Cheque</option><option>Otro</option></InputSelect></div><div class="form-group"><label class="form-label-n">Referencia</label><InputText class="input-n-premium" maxlength="100" @bind-Value="referenciaPago" /></div><button type="button" class="primary-action" @onclick="RegistrarPago" disabled="@procesando"><i class="ri-check-line"></i> Confirmar pago</button><button type="button" class="secondary-action" @onclick="() => mostrarPago = false">Cancelar</button></div>
+            }
+            <div class="table-container"><table class="sri-table movements-table"><thead><tr><th class="check-column"><input type="checkbox" checked="@TodosSeleccionados" @onchange="AlternarSeleccion" aria-label="Seleccionar todos" /></th><th>Fecha</th><th>Factura / cliente</th><th>Involucrado</th><th>Base</th><th>Comisión</th><th>Estado</th><th>Pago</th></tr></thead><tbody>
+                @if (movimientos.Count == 0) { <tr><td colspan="8"><div class="commission-empty"><i class="ri-file-list-3-line"></i><strong>Sin movimientos</strong><span>Ajusta los filtros o genera comisiones desde una factura autorizada.</span></div></td></tr> }
+                @foreach (var x in movimientos)
+                {
+                    <tr class="@(seleccionados.Contains(x.Id) ? "selected" : null)"><td><input type="checkbox" checked="@seleccionados.Contains(x.Id)" @onchange="e => Seleccionar(x.Id, (bool?)e.Value == true)" aria-label="Seleccionar comisión" /></td><td>@x.FechaGeneracion.ToString("dd/MM/yyyy")<small>@x.FechaGeneracion.ToString("HH:mm")</small></td><td><strong>@(x.NumeroFactura ?? "Sin número")</strong><small>@(x.Cliente ?? "Sin cliente")</small></td><td><strong>@x.Involucrado</strong><small>@Etiqueta(x.TipoInvolucrado)</small></td><td>@Dinero(x.ValorFacturado)<small>@Etiqueta(x.BaseUtilizada) · @x.Porcentaje.ToString("0.##")%</small></td><td><strong>@Dinero(x.ComisionGenerada)</strong></td><td><span class="status-pill @EstadoCss(x.Estado)">@Etiqueta(x.Estado.ToString())</span></td><td>@(x.FechaPago?.ToString("dd/MM/yyyy") ?? "—")<small>@(x.MetodoPago ?? "")</small></td></tr>
+                }
+            </tbody></table></div>
+        </section>
+
+        <section class="edeclara-panel commission-reports-panel">
+            <div class="table-card-head"><div><span class="hero-eyebrow">Reportes y cortes</span><h3 class="panel-title"><i class="ri-bar-chart-box-line"></i>Resumen del período filtrado</h3></div><span class="section-chip">@movimientos.Count movimientos</span></div>
+            <div class="report-cards">
+                <article><div class="report-icon purple"><i class="ri-file-list-3-line"></i></div><div><span>Detalle de movimientos</span><strong>@Dinero(movimientos.Sum(x => x.ComisionGenerada))</strong><small>Incluye todos los estados filtrados.</small></div><button type="button" class="secondary-action" @onclick="ExportarCsv" disabled="@(movimientos.Count == 0)">Descargar CSV</button></article>
+                <article><div class="report-icon amber"><i class="ri-time-line"></i></div><div><span>Por pagar</span><strong>@Dinero(movimientos.Where(x => x.Estado == ComisionEstado.Pendiente).Sum(x => x.ComisionGenerada))</strong><small>@movimientos.Count(x => x.Estado == ComisionEstado.Pendiente) comisión(es) pendiente(s).</small></div><button type="button" class="secondary-action" @onclick="VerPendientes">Ver pendientes</button></article>
+                <article><div class="report-icon green"><i class="ri-checkbox-circle-line"></i></div><div><span>Pagado en el período</span><strong>@Dinero(movimientos.Where(x => x.Estado == ComisionEstado.Pagada).Sum(x => x.ComisionGenerada))</strong><small>@movimientos.Count(x => x.Estado == ComisionEstado.Pagada) liquidación(es) registradas.</small></div><button type="button" class="secondary-action" @onclick="VerPagadas">Ver pagadas</button></article>
+            </div>
+        </section>
+
+        <section class="edeclara-panel config-panel">
+            <div><span class="hero-eyebrow">Reglas</span><h3 class="panel-title"><i class="ri-settings-3-line"></i>Configuración</h3></div>
+            <EditForm Model="Configuracion" OnValidSubmit="GuardarConfiguracion"><DataAnnotationsValidator /><ValidationSummary class="validation-summary" /><div class="form-grid"><div class="form-group"><label class="form-label-n">Límite por factura</label><InputNumber class="input-n-premium" min="0" step="0.01" @bind-Value="Configuracion.LimitePorFactura" /></div><div class="form-group"><label class="form-label-n">Regla de redondeo</label><InputSelect class="input-n-premium" @bind-Value="Configuracion.ReglaRedondeo"><option>2 decimales</option><option>Sin decimales</option></InputSelect></div><div class="form-group"><label class="form-label-n">Pasar a pendiente</label><InputSelect class="input-n-premium" @bind-Value="Configuracion.MomentoPendiente"><option>Al autorizar</option><option>Manual</option></InputSelect></div></div><div class="config-checks"><label><InputCheckbox @bind-Value="Configuracion.PermitirModificarPorcentaje" /> Permitir modificar el porcentaje al facturar</label><label><InputCheckbox @bind-Value="Configuracion.RequiereAutorizacionSobreLimite" /> Requerir autorización sobre el límite</label></div><button class="primary-action" type="submit" disabled="@procesando"><i class="ri-save-line"></i> Guardar configuración</button></EditForm>
+        </section>
+
+        <section class="edeclara-panel commission-history-panel">
+            <div class="table-card-head"><div><span class="hero-eyebrow">Trazabilidad</span><h3 class="panel-title"><i class="ri-history-line"></i>Historial de configuraciones</h3></div><span class="section-chip">Últimos @historial.Count cambios</span></div>
+            @if (historial.Count == 0) { <div class="commission-empty compact"><i class="ri-time-line"></i><strong>Sin cambios registrados</strong><span>Las altas y modificaciones de involucrados aparecerán aquí.</span></div> }
+            else { <div class="history-timeline">@foreach (var item in historial) { <article><span class="history-dot"></span><div><strong>@item.Involucrado</strong><p>@item.Motivo</p><small>@item.Fecha.ToString("dd/MM/yyyy HH:mm") · @FormatoHistorial(item)</small></div></article>}</div> }
+        </section>
+    }
+</div>
+
+@code {
+    private static readonly CultureInfo Cultura = CultureInfo.GetCultureInfo("es-EC");
+    private bool procesando, autorizado = true, mostrarPago, mostrarModalInvolucrado;
+    private string? error, exito, filtroInvolucrado, filtroMovimiento, metodoPago, referenciaPago;
+    private const int RegistrosPorPagina = 5;
+    private int empresaId, usuarioId, paginaActual = 1;
+    private DateTime? desde = DateTime.Today.AddMonths(-1), hasta = DateTime.Today;
+    private ComisionEstado? estadoFiltro;
+    private ComisionesResumen Resumen = new();
+    private ComisionesResumen ResumenInvolucrados = new();
+    private ComisionConfiguracion Configuracion = new();
+    private IReadOnlyList<ComisionInvolucrado> involucrados = [];
+    private IReadOnlyList<ComisionMovimiento> movimientos = [];
+    private IReadOnlyList<ComisionHistorial> historial = [];
+    private ComisionInvolucrado nuevo = NuevoInvolucrado();
+    private readonly HashSet<long> seleccionados = [];
+    private string Seccion => NavManager.ToBaseRelativePath(NavManager.Uri).EndsWith("/herramientas", StringComparison.OrdinalIgnoreCase) ? "herramientas" : "involucrados";
+    private List<ComisionInvolucrado> InvolucradosFiltrados => involucrados.Where(x => string.IsNullOrWhiteSpace(filtroInvolucrado) || x.Nombre.Contains(filtroInvolucrado, StringComparison.OrdinalIgnoreCase) || x.Identificacion.Contains(filtroInvolucrado, StringComparison.OrdinalIgnoreCase)).ToList();
+    private List<ComisionInvolucrado> InvolucradosVisibles => InvolucradosFiltrados.Skip((paginaActual - 1) * RegistrosPorPagina).Take(RegistrosPorPagina).ToList();
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(InvolucradosFiltrados.Count / (double)RegistrosPorPagina));
+    private int InicioRegistro => InvolucradosFiltrados.Count == 0 ? 0 : ((paginaActual - 1) * RegistrosPorPagina) + 1;
+    private int FinRegistro => Math.Min(paginaActual * RegistrosPorPagina, InvolucradosFiltrados.Count);
+    private decimal PromedioInvolucrados => involucrados.Where(x => x.Activo && x.TipoCalculo == TipoCalculoComision.Porcentaje).Select(x => x.PorcentajePredeterminado).DefaultIfEmpty().Average();
+    private bool TodosSeleccionados => movimientos.Count > 0 && movimientos.All(x => seleccionados.Contains(x.Id));
+
+    protected override Task OnInitializedAsync()
+    {
+        _ = InicializarAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task InicializarAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        if (!int.TryParse(user.FindFirst("IdUsuario")?.Value, out usuarioId) || usuarioId <= 0) { error = "No se pudo determinar el usuario activo."; autorizado = false; await InvokeAsync(StateHasChanged); return; }
+        empresaId = usuarioId;
+        var access = await AppAccessService.CanAccessAsync(usuarioId, EDeclaraRoutes.ServiceKey, user.FindFirst("IdTipoUsuario")?.Value == AppAccessService.AdminRoleId);
+        autorizado = access.HasAccess && EDeclaraRoutes.IsEDeclaraPath(NavManager, NavManager.Uri);
+        if (!autorizado) { error = "Comisiones solo está disponible dentro de E-Declara."; await InvokeAsync(StateHasChanged); return; }
+        await RecargarAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RecargarAsync() { error = null; try { if (Seccion == "involucrados") { var involucradosTask = ComisionesService.ListarInvolucradosAsync(empresaId); var resumenTask = ComisionesService.ObtenerResumenAsync(empresaId); await Task.WhenAll(involucradosTask, resumenTask); involucrados = await involucradosTask; ResumenInvolucrados = await resumenTask; paginaActual = Math.Min(paginaActual, TotalPaginas); } else await CargarHerramientasCore(); } catch (Exception ex) { error = MensajeError(ex); } }
+    private async Task Guardar() { var esNuevo = nuevo.Id == 0; await Ejecutar(async () => { nuevo.IdEmpresa = empresaId; await ComisionesService.GuardarInvolucradoAsync(nuevo, usuarioId); exito = esNuevo ? "Involucrado creado correctamente." : "Cambios guardados correctamente."; nuevo = NuevoInvolucrado(); mostrarModalInvolucrado = false; await RecargarAsync(); }); }
+    private void AbrirNuevoInvolucrado() { nuevo = NuevoInvolucrado(); error = null; exito = null; mostrarModalInvolucrado = true; }
+    private void Editar(ComisionInvolucrado x) { nuevo = new() { Id=x.Id, IdEmpresa=x.IdEmpresa, IdSucursal=x.IdSucursal, IdEmpleado=x.IdEmpleado, Identificacion=x.Identificacion, Nombre=x.Nombre, Tipo=x.Tipo, Telefono=x.Telefono, Correo=x.Correo, PorcentajePredeterminado=x.PorcentajePredeterminado, ValorPredeterminado=x.ValorPredeterminado, TipoCalculo=x.TipoCalculo, BaseCalculo=x.BaseCalculo, FechaVigencia=x.FechaVigencia, Activo=x.Activo, Observaciones=x.Observaciones, DatosBancarios=x.DatosBancarios }; error=null; exito=null; mostrarModalInvolucrado = true; }
+    private void CerrarModalInvolucrado() { mostrarModalInvolucrado = false; nuevo = NuevoInvolucrado(); }
+    private void NormalizarTipoCalculo() => nuevo.BaseCalculo = nuevo.TipoCalculo == TipoCalculoComision.ValorFijo ? BaseCalculoComision.ValorFijo : BaseCalculoComision.Subtotal;
+    private async Task CambiarEstado(ComisionInvolucrado x) => await Ejecutar(async () => { await ComisionesService.CambiarEstadoInvolucradoAsync(empresaId, x.Id, !x.Activo, usuarioId); await RecargarAsync(); exito = x.Activo ? "Involucrado desactivado." : "Involucrado reactivado."; });
+    private void FiltrarInvolucrados(ChangeEventArgs e) { filtroInvolucrado = e.Value?.ToString(); paginaActual = 1; }
+    private void LimpiarFiltro() { filtroInvolucrado = null; paginaActual = 1; }
+    private void IrAPagina(int pagina) => paginaActual = Math.Clamp(pagina, 1, TotalPaginas);
+    private void PaginaAnterior() => IrAPagina(paginaActual - 1);
+    private void PaginaSiguiente() => IrAPagina(paginaActual + 1);
+    private async Task CargarHerramientas() => await Ejecutar(CargarHerramientasCore, false);
+    private async Task CargarHerramientasCore() { if (desde.HasValue && hasta.HasValue && desde.Value.Date > hasta.Value.Date) throw new ArgumentException("La fecha desde no puede ser posterior a la fecha hasta."); var movimientosTask = ComisionesService.ListarMovimientosAsync(empresaId, estadoFiltro, desde, hasta, filtroMovimiento); var resumenTask = ComisionesService.ObtenerResumenAsync(empresaId, desde, hasta); var configuracionTask = ComisionesService.ObtenerConfiguracionAsync(empresaId); var historialTask = ComisionesService.ListarHistorialAsync(empresaId); await Task.WhenAll(movimientosTask, resumenTask, configuracionTask, historialTask); movimientos = await movimientosTask; Resumen = await resumenTask; Configuracion = await configuracionTask; historial = await historialTask; seleccionados.Clear(); mostrarPago = false; }
+    private void Seleccionar(long id, bool marcado) { if (marcado) seleccionados.Add(id); else seleccionados.Remove(id); }
+    private void AlternarSeleccion(ChangeEventArgs e) { seleccionados.Clear(); if ((bool?)e.Value == true) foreach (var x in movimientos) seleccionados.Add(x.Id); }
+    private async Task MarcarPendientes() => await Ejecutar(async () => { await ComisionesService.MarcarPendientesAsync(empresaId, seleccionados, usuarioId); await CargarHerramientasCore(); exito = "Comisiones marcadas como pendientes."; });
+    private void MostrarPago() { error = null; mostrarPago = true; }
+    private async Task VerPendientes() { estadoFiltro = ComisionEstado.Pendiente; await CargarHerramientas(); }
+    private async Task VerPagadas() { estadoFiltro = ComisionEstado.Pagada; await CargarHerramientas(); }
+    private async Task RegistrarPago() => await Ejecutar(async () => { await ComisionesService.RegistrarPagoAsync(empresaId, seleccionados, metodoPago ?? "", referenciaPago, usuarioId); await CargarHerramientasCore(); metodoPago = referenciaPago = null; exito = "Pago registrado correctamente."; });
+    private async Task GuardarConfiguracion() => await Ejecutar(async () => { Configuracion.IdEmpresa = empresaId; await ComisionesService.GuardarConfiguracionAsync(Configuracion, usuarioId); exito = "Configuración guardada correctamente."; });
+
+    private async Task ExportarCsv()
+    {
+        var csv = new StringBuilder("Fecha;Factura;Cliente;Involucrado;Tipo;Base;Valor facturado;Porcentaje;Comision;Estado;Fecha pago;Metodo;Referencia\r\n");
+        foreach (var x in movimientos) csv.AppendLine(string.Join(';', Csv(x.FechaGeneracion.ToString("yyyy-MM-dd HH:mm")), Csv(x.NumeroFactura), Csv(x.Cliente), Csv(x.Involucrado), Csv(x.TipoInvolucrado), Csv(x.BaseUtilizada), x.ValorFacturado.ToString("0.00", CultureInfo.InvariantCulture), x.Porcentaje.ToString("0.####", CultureInfo.InvariantCulture), x.ComisionGenerada.ToString("0.00", CultureInfo.InvariantCulture), x.Estado, Csv(x.FechaPago?.ToString("yyyy-MM-dd")), Csv(x.MetodoPago), Csv(x.ReferenciaPago)));
+        await using var stream = new MemoryStream(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv.ToString())).ToArray()); using var reference = new DotNetStreamReference(stream); await JS.InvokeVoidAsync("downloadFileFromStream", $"comisiones-{DateTime.Now:yyyyMMdd-HHmm}.csv", reference, "text/csv;charset=utf-8");
+    }
+
+    private async Task Ejecutar(Func<Task> accion, bool mostrarExito = true) { procesando = true; error = null; if (mostrarExito) exito = null; try { await accion(); } catch (Exception ex) { error = MensajeError(ex); } finally { procesando = false; } }
+    private static ComisionInvolucrado NuevoInvolucrado() => new() { FechaVigencia=DateTime.Today, Activo=true, TipoCalculo=TipoCalculoComision.Porcentaje, BaseCalculo=BaseCalculoComision.Subtotal };
+    private static string Dinero(decimal valor) => valor.ToString("C2", Cultura);
+    private static string FormatoCalculo(ComisionInvolucrado x) => x.TipoCalculo == TipoCalculoComision.ValorFijo ? Dinero(x.ValorPredeterminado) : x.PorcentajePredeterminado.ToString("0.##") + "%";
+    private static string FormatoHistorial(ComisionHistorial x) => x.PorcentajeAnterior.HasValue ? x.PorcentajeAnterior.Value.ToString("0.##") + "% → " + x.PorcentajeNuevo.ToString("0.##") + "%" : "Configurado en " + x.PorcentajeNuevo.ToString("0.##") + "%";
+    private static string Etiqueta(string valor) => valor == "ValorFijo" ? "Valor fijo" : valor;
+    private static string EstadoCss(ComisionEstado estado) => estado switch { ComisionEstado.Pagada => "paid", ComisionEstado.Pendiente => "pending", ComisionEstado.Revertida or ComisionEstado.Anulada => "reversed", _ => "generated" };
+    private static string Csv(string? valor)
+    {
+        var comilla = ((char)34).ToString();
+        return comilla + (valor ?? string.Empty).Replace(comilla, comilla + comilla) + comilla;
+    }
+    private static string MensajeError(Exception ex) => ex is Microsoft.Data.SqlClient.SqlException sql && sql.Number == 208 ? "El módulo de comisiones aún no está instalado en la base de datos. Ejecute database/comisiones_edeclara.sql." : ex.Message;
+}

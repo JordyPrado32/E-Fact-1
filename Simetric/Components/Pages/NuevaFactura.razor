@@ -2,6 +2,7 @@
 @page "/demo/facturas/nueva"
 @using Simetric.DTOs
 @using Simetric.Models
+@using Simetric.Models.EDeclara
 @using Simetric.Services
 @using Simetric.Services.EDeclara
 @using Simetric.Components.Shared
@@ -29,6 +30,7 @@
 @inject EmisionControlService EmisionControlService
 @inject NavigationManager NavigationManager
 @inject DemoCatalogService DemoCatalogService
+@inject ComisionesService ComisionesService
 @attribute [AllowAnonymous]
 
 <PageTitle>Nueva Factura | Numerica e-fact</PageTitle>
@@ -461,6 +463,32 @@
                                             </div>
                                         }
                                     </div>
+
+                                    @if (EsContextoEDeclara)
+                                    {
+                                        <div class="n-commission-control">
+                                            <div class="n-commission-head">
+                                                <label class="n-label mb-0"><i class="bi bi-people me-2"></i>Involucrados y comisiones</label>
+                                                <button type="button" class="n-commission-select-all" @onclick="AlternarTodosInvolucrados" disabled="@(!involucradosFactura.Any())">@(TodosInvolucradosSeleccionados ? "Quitar todos" : "Seleccionar todos")</button>
+                                            </div>
+                                            @if (cargandoInvolucradosFactura)
+                                            { <small class="text-muted">Cargando involucrados...</small> }
+                                            else if (!involucradosFactura.Any())
+                                            { <small class="text-muted">No hay involucrados activos configurados.</small> }
+                                            else
+                                            {
+                                                <div class="n-commission-list">
+                                                    @foreach (var involucrado in involucradosFactura)
+                                                    {
+                                                        <label class="n-commission-row">
+                                                            <input type="checkbox" checked="@involucradosSeleccionados.Contains(involucrado.Id)" @onchange="e => CambiarInvolucrado(involucrado.Id, e)" />
+                                                            <span><strong>@involucrado.Nombre</strong><small>@involucrado.Tipo · @involucrado.PorcentajePredeterminado.ToString("0.##")%</small></span>
+                                                        </label>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
                                 </div>
                             </div>
                         </div>
@@ -1903,6 +1931,10 @@
     private string formaPagoSeleccionada = "";
     private bool facturaEsCredito;
     private int currentUserId;
+    private bool EsContextoEDeclara => EDeclaraRoutes.IsEDeclaraPath(NavigationManager, NavigationManager.Uri);
+    private bool cargandoInvolucradosFactura;
+    private List<ComisionInvolucrado> involucradosFactura = new();
+    private HashSet<int> involucradosSeleccionados = new();
     private FacturaSecuenciaPendienteDto? facturaSecuenciaPendiente;
     private bool modoDescuentoGlobal = false;
     private bool sinCaja = false;
@@ -2332,6 +2364,13 @@
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
         currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+        if (EsContextoEDeclara)
+        {
+            cargandoInvolucradosFactura = true;
+            try { involucradosFactura = (await ComisionesService.ListarInvolucradosAsync(currentUserId)).Where(x => x.Activo).ToList(); }
+            catch { involucradosFactura = new(); }
+            finally { cargandoInvolucradosFactura = false; }
+        }
         await CargarEstadoEmisionAsync();
 
         var lookupsTask = Http.GetFromJsonAsync<LookupsResponse>($"api/productos/lookups?userId={currentUserId}");
@@ -5500,6 +5539,21 @@
                 if (string.Equals(m.estado, "AUTORIZADO", StringComparison.OrdinalIgnoreCase))
                 {
                     await FacturacionService.ActualizarAutorizacionFacturaAsync(factura.Codfactura, m.autorizacion, m.fecha, "ok",true);
+                    if (EsContextoEDeclara && involucradosSeleccionados.Count > 0)
+                    {
+                        var comisiones = involucradosFactura.Where(x => involucradosSeleccionados.Contains(x.Id))
+                            .Select(x => new ComisionFacturaDetalle
+                            {
+                                 IdInvolucrado = x.Id,
+                                 Porcentaje = x.TipoCalculo == TipoCalculoComision.Porcentaje ? x.PorcentajePredeterminado : 0m,
+                                 ValorFijo = x.TipoCalculo == TipoCalculoComision.ValorFijo ? x.ValorPredeterminado : 0m,
+                                 Base = x.BaseCalculo,
+                                Motivo = "Comisión definida durante la emisión de la factura"
+                            }).ToList();
+                        await ComisionesService.RegistrarComisionesFacturaAsync(
+                            currentUserId, factura.Codfactura, factura.Subtotal ?? 0m,
+                            factura.Valortotal ?? 0m, comisiones, currentUserId, true);
+                    }
                     var resultadoCorreo = await FacturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, rutaXml, m);
                     await AlertService.CloseAsync();
                     mensajeResultado = resultadoCorreo.Enviado || resultadoCorreo.YaEnviado
@@ -5688,6 +5742,20 @@
     }
 
     private static readonly string[] CodigosFormaPagoVisibles = ["19", "20", "01"];
+
+    private void AlternarTodosInvolucrados()
+    {
+        if (TodosInvolucradosSeleccionados) involucradosSeleccionados.Clear();
+        else involucradosSeleccionados = involucradosFactura.Select(x => x.Id).ToHashSet();
+    }
+
+    private void CambiarInvolucrado(int id, ChangeEventArgs args)
+    {
+        if (args.Value is bool marcado && marcado) involucradosSeleccionados.Add(id);
+        else involucradosSeleccionados.Remove(id);
+    }
+
+    private bool TodosInvolucradosSeleccionados => involucradosFactura.Count > 0 && involucradosFactura.All(x => involucradosSeleccionados.Contains(x.Id));
 
     private string EmisorSeleccionadoResumen =>
         emisores

@@ -153,6 +153,7 @@ public sealed class ReporteComprobantesService
             notaCreditoHeaders.TryGetValue(item.Sec, out var header);
             notaCreditoDetalles.TryGetValue(item.Sec, out var detalle);
             var estaAutorizado = DocumentoAutorizacionHelper.EstaAutorizado(item.Autorizado);
+            var valores = ObtenerValoresNotaCreditoReporte(item, detalle);
 
             return new ReporteComprobanteItemDto
             {
@@ -165,9 +166,9 @@ public sealed class ReporteComprobantesService
                 TerceroIdentificacion = item.IdentificacionCliente,
                 TerceroRol = "Cliente",
                 EstadoDocumento = DocumentoAutorizacionHelper.ObtenerEstadoVisual(item.Autorizado, estaAutorizado),
-                BaseImponible = item.Subtotal,
-                Iva = item.Iva,
-                Total = item.Total,
+                BaseImponible = valores.Subtotal,
+                Iva = valores.Iva,
+                Total = valores.Total,
                 DocumentoRelacionado = item.NumeroDocModificado,
                 ClaveAcceso = item.ClaveAcceso,
                 NumeroAutorizacion = item.NumeroAutorizacion,
@@ -176,8 +177,8 @@ public sealed class ReporteComprobantesService
                 PdfUrl = header?.PdfUrl ?? string.Empty,
                 CodigosRelacionados = detalle?.Codigos ?? new List<string>(),
                 ProductosRelacionados = detalle?.Descripciones ?? new List<string>(),
-                BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(item.Subtotal, item.Iva),
-                BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(item.Subtotal, item.Iva),
+                BaseSinIva = detalle?.BaseSinIva ?? ObtenerBaseSinIvaFallback(valores.Subtotal, valores.Iva),
+                BaseConIva = detalle?.BaseConIva ?? ObtenerBaseConIvaFallback(valores.Subtotal, valores.Iva),
                 TieneProducto = detalle?.TieneProducto == true,
                 TieneServicio = detalle?.TieneServicio == true
             };
@@ -682,6 +683,8 @@ public sealed class ReporteComprobantesService
                 TipoCompravena = p != null ? p.Tipocompravena : null,
                 BaseSinIva = (d.Tarifa ?? 0) == 0 ? d.ValorTProducto ?? 0m : 0m,
                 BaseConIva = (d.Tarifa ?? 0) > 0 || (d.ValorIVA ?? 0m) > 0m ? d.ValorTProducto ?? 0m : 0m,
+                Iva = d.ValorIVA ?? 0m,
+                OtrosImpuestos = (d.ValorICE ?? 0m) + (d.ValorBiIrbpnr ?? 0m),
                 ForzarProducto = true
             })
             .ToListAsync();
@@ -804,6 +807,9 @@ public sealed class ReporteComprobantesService
                         var tipo = (item.TipoCompravena ?? string.Empty).Trim().ToUpperInvariant();
                         lookup.BaseSinIva += item.BaseSinIva;
                         lookup.BaseConIva += item.BaseConIva;
+                        lookup.Iva += item.Iva;
+                        lookup.OtrosImpuestos += item.OtrosImpuestos;
+                        lookup.TieneLineas = true;
 
                         if (tipo == "SERVICIO")
                         {
@@ -834,6 +840,23 @@ public sealed class ReporteComprobantesService
 
     private static decimal ObtenerBaseConIvaFallback(decimal baseImponible, decimal iva)
         => iva > 0m ? baseImponible : 0m;
+
+    private static (decimal Subtotal, decimal Iva, decimal Total) ObtenerValoresNotaCreditoReporte(
+        NotaCreditoListDto notaCredito,
+        ReporteDetalleLookup? detalle)
+    {
+        if (detalle is null || !detalle.TieneLineas)
+            return (notaCredito.Subtotal, notaCredito.Iva, notaCredito.Total);
+
+        var subtotal = Math.Round(detalle.BaseSinIva + detalle.BaseConIva, 2, MidpointRounding.AwayFromZero);
+        var iva = Math.Round(detalle.Iva, 2, MidpointRounding.AwayFromZero);
+        var total = Math.Round(subtotal + iva + detalle.OtrosImpuestos, 2, MidpointRounding.AwayFromZero);
+
+        // Las notas históricas pueden tener encabezados guardados con importes
+        // incompletos. Las líneas son las mismas que se envían al SRI y son la
+        // fuente de verdad para el reporte.
+        return (subtotal, iva, total);
+    }
 
     private static DateTime? ParseFechaAutorizacion(string? valor)
     {
@@ -960,6 +983,8 @@ public sealed class ReporteComprobantesService
         public string? TipoCompravena { get; init; }
         public decimal BaseSinIva { get; init; }
         public decimal BaseConIva { get; init; }
+        public decimal Iva { get; init; }
+        public decimal OtrosImpuestos { get; init; }
         public bool ForzarProducto { get; init; }
     }
 
@@ -969,6 +994,9 @@ public sealed class ReporteComprobantesService
         public List<string> Descripciones { get; set; } = new();
         public decimal BaseSinIva { get; set; }
         public decimal BaseConIva { get; set; }
+        public decimal Iva { get; set; }
+        public decimal OtrosImpuestos { get; set; }
+        public bool TieneLineas { get; set; }
         public bool TieneProducto { get; set; }
         public bool TieneServicio { get; set; }
     }

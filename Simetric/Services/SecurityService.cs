@@ -68,7 +68,9 @@ namespace Simetric.Services
                     DireccionIp = ip,
                     Navegador = ua,
                     Exitoso = exitoso,
-                    DetalleError = string.IsNullOrWhiteSpace(detalle) ? null : detalle
+                    // Los errores del navegador pueden incluir stack traces muy extensos.
+                    // El límite protege el login y evita que falle el registro de auditoría.
+                    DetalleError = string.IsNullOrWhiteSpace(detalle) ? null : detalle[..Math.Min(detalle.Length, 500)]
                 });
 
                 await ctx.SaveChangesAsync();

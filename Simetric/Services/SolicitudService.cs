@@ -792,7 +792,8 @@ namespace Simetric.Services
                 };
             }
 
-            if (solicitud.SolPagoExitoso != true)
+            if (solicitud.SolPagoExitoso != true &&
+                (forzarCreacion || string.IsNullOrWhiteSpace(solicitud.SolUanatacaUuid)))
             {
                 return new BesSolicitudOperacionResultadoDto
                 {
@@ -901,6 +902,62 @@ namespace Simetric.Services
                 resultado.Consulted,
                 resultado.Approved,
                 resultado.SkippedApproved,
+                resultado.NotApproved,
+                resultado.UanatacaErrors);
+
+            return resultado;
+        }
+
+        public async Task<PagoFirmaReconciliationResult> SincronizarTodasLasSolicitudesUanatacaPorUuidAsync(
+            CancellationToken cancellationToken = default)
+        {
+            await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+            var solicitudes = await context.UsuSolicitudFirma
+                .AsNoTracking()
+                .Where(s => s.SolActivo && !string.IsNullOrWhiteSpace(s.SolUanatacaUuid))
+                .OrderBy(s => s.SolId)
+                .Select(s => s.SolId)
+                .ToListAsync(cancellationToken);
+
+            var resultado = new PagoFirmaReconciliationResult();
+            foreach (var solId in solicitudes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                resultado.Consulted++;
+
+                try
+                {
+                    var sincronizacion = await SincronizarSolicitudUanatacaAsync(
+                        solId,
+                        cancellationToken: cancellationToken);
+
+                    if (!sincronizacion.Success)
+                    {
+                        resultado.UanatacaErrors++;
+                    }
+                    else if (string.Equals(sincronizacion.ProviderStatus, "APPROVED", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(sincronizacion.ProviderStatus, "ISSUED", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(sincronizacion.ProviderStatusText, "ISSUED", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(sincronizacion.ProviderStatusText, "CERTIFICATE_ISSUED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        resultado.Approved++;
+                    }
+                    else
+                    {
+                        resultado.NotApproved++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    resultado.UanatacaErrors++;
+                    _logger.LogError(ex, "Error sincronizando por UUID la solicitud Uanataca {SolId}.", solId);
+                }
+            }
+
+            _logger.LogInformation(
+                "Sincronización Uanataca por UUID completada. Consultadas: {Consulted}. Emitidas/aprobadas: {Approved}. En proceso: {NotApproved}. Errores: {Errors}.",
+                resultado.Consulted,
+                resultado.Approved,
                 resultado.NotApproved,
                 resultado.UanatacaErrors);
 
@@ -2365,8 +2422,8 @@ namespace Simetric.Services
                 BirthDate = solicitud.SolFechaNacimiento.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture),
                 Nationality = solicitud.SolNacionalidad,
                 Sex = MapSex(solicitud.SolSexo),
-                PhoneNumber = solicitud.SolTelefono1,
-                PhoneNumber2 = solicitud.SolTelefono2,
+                PhoneNumber = NormalizarTelefonoParaUanataca(solicitud.SolTelefono1) ?? string.Empty,
+                PhoneNumber2 = NormalizarTelefonoParaUanataca(solicitud.SolTelefono2),
                 Email = solicitud.SolCorreo1,
                 Email2 = solicitud.SolCorreo2,
                 Province = solicitud.SolProvincia,
@@ -2407,6 +2464,15 @@ namespace Simetric.Services
             !string.IsNullOrWhiteSpace(local) &&
             !string.IsNullOrWhiteSpace(remoto) &&
             string.Equals(local.Trim(), remoto.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        private static string? NormalizarTelefonoParaUanataca(string? telefono)
+        {
+            if (string.IsNullOrWhiteSpace(telefono))
+                return null;
+
+            var soloDigitos = Regex.Replace(telefono, "[^0-9]", string.Empty);
+            return string.IsNullOrWhiteSpace(soloDigitos) ? null : soloDigitos;
+        }
 
         private static void AplicarDatosSolicitudRemota(
             UsuSolicitudFirma solicitud,

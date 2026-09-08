@@ -1,0 +1,294 @@
+@page "/e-declara/compras"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.Models
+@using Simetric.Models.EDeclara
+@using Simetric.Services
+@using Simetric.Services.EDeclara
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IUsuarioService UsuarioService
+@inject EDeclaraComprasService ComprasService
+@inject EDeclaraSriCredentialService SriCredentialService
+@inject CedulaLookupService CedulaLookupService
+@inject ISimpleExcelExportService ExcelService
+@inject IJSRuntime JS
+
+<PageTitle>Compras | E-Declara</PageTitle>
+
+<div class="ec-shell">
+    <section class="ec-hero">
+        <div>
+            <span class="ec-kicker">Gestión tributaria · E-Declara</span>
+            <h1>Información de compras</h1>
+            <p>Centraliza compras, notas de crédito y documentos recibidos desde el SRI.</p>
+        </div>
+        <span class="ec-hero-badge"><i class="ri-file-chart-line"></i> Declaración de IVA</span>
+    </section>
+
+    @if (cargando)
+    {
+        <section class="ec-state"><span class="spinner-border" role="status"></span><strong>Preparando compras</strong></section>
+    }
+    else if (!string.IsNullOrWhiteSpace(errorInicial))
+    {
+        <section class="ec-alert ec-alert-error"><i class="ri-error-warning-line"></i><span>@errorInicial</span></section>
+    }
+    else
+    {
+        <section class="ec-context-card">
+            <div class="ec-context-copy">
+                <span class="ec-kicker">Contexto de trabajo</span>
+                <strong>Selecciona el período</strong>
+            </div>
+            <label><span>Cuenta E-Declara</span><strong>@perfilNombre</strong><small>@perfilIdentificacion</small></label>
+            <label><span>Año</span>
+                <select value="@anio" @onchange="CambiarAnioAsync">
+                    @for (var value = DateTime.Today.Year; value >= DateTime.Today.Year - 6; value--)
+                    { <option value="@value">@value</option> }
+                </select>
+            </label>
+            <label><span>Período</span>
+                <select value="@periodo" @onchange="CambiarPeriodoAsync">
+                    @for (var value = 1; value <= 12; value++)
+                    { <option value="@value">@NombrePeriodo(value)</option> }
+                    <option value="13">Primer semestre</option>
+                    <option value="14">Segundo semestre</option>
+                </select>
+            </label>
+        </section>
+
+        @if (!claveSriConfigurada)
+        {
+            <section class="ec-alert ec-alert-warning">
+                <i class="ri-lock-2-line"></i>
+                <div><strong>Consulta SRI bloqueada</strong><span>Configura la Clave SRI en tu perfil para descargar compras y notas de crédito.</span></div>
+                <button type="button" @onclick="IrAPerfil">Configurar ahora</button>
+            </section>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(mensaje))
+        {
+            <section class="ec-alert @(mensajeError ? "ec-alert-error" : "ec-alert-success")">
+                <i class="ri-@(mensajeError ? "error-warning" : "checkbox-circle")-line"></i><span>@mensaje</span>
+            </section>
+        }
+
+        <section class="ec-metrics">
+            <article><span>Registros</span><strong>@documentos.Count</strong><small>@NombreTipoDocumentoPlural()</small></article>
+            <article><span>Base imponible</span><strong>@Dinero(documentos.Sum(x => x.BaseImponible))</strong><small>Acumulado del período</small></article>
+            <article><span>IVA</span><strong>@Dinero(documentos.Sum(x => x.Iva))</strong><small>Impuesto registrado</small></article>
+            <article class="@(PendientesClasificacion > 0 ? "is-pending" : "")"><span>Por clasificar</span><strong>@PendientesClasificacion</strong><small>Actividad o casilla pendiente</small></article>
+        </section>
+
+        <section class="ec-workspace">
+            <div class="ec-tabs">
+                <button type="button" class="@(tipoDocumento == 1 ? "is-active" : "")" @onclick="() => CambiarTipoAsync(1)"><i class="ri-shopping-bag-3-line"></i> Compras</button>
+                <button type="button" class="@(tipoDocumento == 3 ? "is-active" : "")" @onclick="() => CambiarTipoAsync(3)"><i class="ri-file-reduce-line"></i> Notas de crédito</button>
+            </div>
+
+            <div class="ec-toolbar">
+                <div class="ec-search"><i class="ri-search-line"></i><input placeholder="Buscar por proveedor, RUC, serie o concepto" value="@filtro" @oninput="Filtrar" /></div>
+                <div class="ec-actions">
+                    <button type="button" class="ec-btn ec-btn-light" disabled="@ocupado" @onclick="ExportarAsync"><i class="ri-file-excel-2-line"></i> Excel</button>
+                    <button type="button" class="ec-btn ec-btn-light" disabled="@ocupado" @onclick="RegistrarFaltantesAsync"><i class="ri-find-replace-line"></i> Verificar faltantes</button>
+                    <label class="ec-btn ec-btn-light @(ocupado ? "is-disabled" : "")"><i class="ri-upload-cloud-2-line"></i> Importar XML<InputFile multiple accept=".xml,text/xml,application/xml" OnChange="ImportarXmlAsync" disabled="@ocupado" /></label>
+                    <button type="button" class="ec-btn ec-btn-sri" disabled="@(ocupado || !claveSriConfigurada || string.IsNullOrWhiteSpace(perfilIdentificacion))" @onclick="ConsultarSriAsync">
+                        @if (sincronizando) { <span class="spinner-border spinner-border-sm"></span> } else { <i class="ri-cloud-line"></i> }
+                        Consultar SRI
+                    </button>
+                    <button type="button" class="ec-btn ec-btn-primary" disabled="@(ocupado || string.IsNullOrWhiteSpace(perfilIdentificacion))" @onclick="Nuevo"><i class="ri-add-line"></i> Registrar @NombreTipoDocumentoSingular().ToLowerInvariant()</button>
+                </div>
+            </div>
+
+            @if (mostrarFormulario)
+            {
+                <section class="ec-editor">
+                    <div class="ec-editor-head">
+                        <div><span class="ec-kicker">@(edicion.Id == 0 ? "Nuevo registro" : "Editando registro")</span><h2>Datos de @NombreTipoDocumentoSingular().ToLowerInvariant()</h2></div>
+                        <button type="button" class="ec-icon-btn" @onclick="CerrarFormulario"><i class="ri-close-line"></i></button>
+                    </div>
+                    <div class="ec-form-grid">
+                        <label><span>Tipo de facturación</span><select @bind="edicion.TipoFacturacion"><option value="">Seleccione actividad</option>@foreach(var x in catalogos.Actividades){<option value="@x.Id">@x.Descripcion</option>}</select></label>
+                        <label><span>Serie *</span><input maxlength="6" placeholder="001001" @bind="edicion.Serie" /></label>
+                        <label><span>Número *</span><input maxlength="9" placeholder="000000001" @bind="edicion.Numero" /></label>
+                        <label><span>Fecha de emisión *</span><input type="date" @bind="edicion.FechaEmision" @bind:format="yyyy-MM-dd" /></label>
+                        <label><span>RUC / identificación *</span><input maxlength="20" @bind="edicion.Ruc" @onblur="BuscarProveedorAsync" /></label>
+                        <label class="span-2"><span>Razón social</span><input maxlength="300" @bind="edicion.RazonSocial" /></label>
+                        <label class="span-2"><span>Concepto</span><input maxlength="500" @bind="edicion.Concepto" /></label>
+                        @if (tipoDocumento == 3)
+                        {
+                            <label><span>Serie factura relacionada *</span><input maxlength="6" placeholder="001001" @bind="edicion.SerieDocumentoModificado" @onblur="BuscarFacturaRelacionadaAsync" /></label>
+                            <label><span>Número factura relacionada *</span><input maxlength="9" placeholder="000000001" @bind="edicion.NumeroDocumentoModificado" @onblur="BuscarFacturaRelacionadaAsync" /></label>
+                        }
+                        <label><span>Casilla</span><select @bind="edicion.Casilla"><option value="">Seleccione casilla</option>@foreach(var x in CasillasActuales){<option value="@x.Id">@x.Id · @x.Descripcion</option>}</select></label>
+                        <label><span>Tarifa (%)</span><select value="@edicion.Tarifa" @onchange="CambiarTarifaEdicion"><option value="0">0%</option>@foreach(var x in catalogos.Tarifas.Where(x => x.Valor != 0)){<option value="@x.Valor.ToString(System.Globalization.CultureInfo.InvariantCulture)">@x.Descripcion</option>}</select></label>
+                        <label><span>Base ($) *</span><input type="number" min="0" step="0.01" value="@edicion.BaseImponible.ToString(System.Globalization.CultureInfo.InvariantCulture)" @onchange="CambiarBaseEdicion" /></label>
+                        <label><span>IVA ($)</span><input type="number" min="0" step="0.01" @bind="edicion.Iva" /></label>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(DescripcionCasillaEdicion)) { <div class="ec-field-help"><i class="ri-information-line"></i> @DescripcionCasillaEdicion</div> }
+                    <div class="ec-editor-actions"><button type="button" class="ec-btn ec-btn-light" @onclick="CerrarFormulario">Cancelar</button><button type="button" class="ec-btn ec-btn-primary" disabled="@guardando" @onclick="GuardarAsync">@if(guardando){<span class="spinner-border spinner-border-sm"></span>}else{<i class="ri-save-3-line"></i>} Guardar</button></div>
+                </section>
+            }
+
+            <div class="ec-table-tools">
+                <label class="ec-check"><input type="checkbox" checked="@TodosSeleccionados" @onchange="SeleccionarTodos" /> Seleccionar página</label>
+                @if (seleccionados.Count > 0) { <button type="button" class="ec-delete-selected" @onclick="EliminarSeleccionadosAsync"><i class="ri-delete-bin-6-line"></i> Eliminar @seleccionados.Count</button> }
+                <label class="ec-check">Ordenar por <select class="ec-grid-select" value="@orden" @onchange="CambiarOrden"><option value="ruc">Proveedor</option><option value="fecha">Fecha</option><option value="documento">Documento</option></select></label>
+                <button type="button" class="ec-icon-btn" title="Cambiar dirección" @onclick="CambiarDireccionOrden"><i class="ri-sort-@(ordenDescendente ? "desc" : "asc")"></i></button>
+                <span>@DocumentosFiltrados.Count registro(s)</span>
+            </div>
+
+            <div class="ec-table-wrap">
+                <table class="ec-table">
+                    <thead><tr><th></th><th>Actividad</th><th>Documento</th><th>Fecha</th><th>Proveedor</th><th>Concepto</th>@if(tipoDocumento==3){<th>Factura relacionada</th>}<th>Casilla</th><th>Tarifa</th><th class="number">Base</th><th class="number">IVA</th><th>Origen</th><th></th></tr></thead>
+                    <tbody>
+                    @if (!DocumentosPagina.Any())
+                    {
+                        <tr><td colspan="@(tipoDocumento == 3 ? 14 : 13)"><div class="ec-empty"><i class="ri-inbox-archive-line"></i><strong>No hay @NombreTipoDocumentoPlural().ToLowerInvariant()</strong><span>Consulta el SRI, importa XML o registra el documento manualmente.</span></div></td></tr>
+                    }
+                    @foreach (var item in DocumentosPagina)
+                    {
+                        <tr class="@(item.EsFaltante ? "is-missing" : item.RequiereClasificacion ? "is-unclassified" : "")">
+                            <td><input type="checkbox" checked="@seleccionados.Contains(item.Id)" @onchange="e => Seleccionar(item.Id, e)" /></td>
+                            <td><select class="ec-grid-select" value="@item.TipoFacturacion" @onchange="e => ActualizarActividadAsync(item,e)"><option value="">—</option>@foreach(var x in catalogos.Actividades){<option value="@x.Id">@x.Descripcion</option>}</select></td>
+                            <td><strong>@item.Serie-@item.Numero</strong><small>@(item.EsFaltante ? "Secuencial faltante" : NombreTipoDocumentoSingular())</small></td>
+                            <td>@item.FechaEmision.ToString("dd/MM/yyyy")</td>
+                            <td><strong>@(string.IsNullOrWhiteSpace(item.RazonSocial) ? "Sin proveedor" : item.RazonSocial)</strong><small>@item.Ruc</small></td>
+                            <td><button type="button" class="ec-concept" @onclick="() => AlternarDetalle(item.Id)">@item.Concepto</button></td>
+                            @if(tipoDocumento==3){<td>@FormatoDocumento(item.SerieDocumentoModificado,item.NumeroDocumentoModificado)</td>}
+                            <td><select class="ec-grid-select compact" value="@item.Casilla" @onchange="e => ActualizarCasillaAsync(item,e)"><option value="">—</option>@foreach(var x in CasillasActuales){<option value="@x.Id">@x.Id</option>}</select></td>
+                            <td>@item.Tarifa.ToString("0.##")%</td><td class="number">@Dinero(item.BaseImponible)</td><td class="number">@Dinero(item.Iva)</td>
+                            <td><span class="ec-origin origin-@item.Origen.ToLowerInvariant()">@item.Origen</span></td>
+                            <td><div class="ec-row-actions"><button title="Editar" @onclick="() => Editar(item)"><i class="ri-pencil-line"></i></button><button title="Eliminar" @onclick="() => EliminarAsync(item)"><i class="ri-delete-bin-line"></i></button></div></td>
+                        </tr>
+                        @if (detalleAbierto == item.Id)
+                        {
+                            <tr class="ec-detail-row"><td colspan="@(tipoDocumento == 3 ? 14 : 13)"><div><strong>Detalle del comprobante</strong>@if(item.Detalles.Count==0){<span>Sin líneas de detalle.</span>}else{<ul>@foreach(var detalle in item.Detalles){<li>@detalle</li>}</ul>}@if(!string.IsNullOrWhiteSpace(item.NumeroAutorizacion)){<small>Autorización: @item.NumeroAutorizacion</small>}</div></td></tr>
+                        }
+                    }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (TotalPaginas > 1)
+            {
+                <div class="ec-pagination"><button disabled="@(pagina==1)" @onclick="() => pagina--"><i class="ri-arrow-left-s-line"></i></button><span>Página @pagina de @TotalPaginas</span><button disabled="@(pagina==TotalPaginas)" @onclick="() => pagina++"><i class="ri-arrow-right-s-line"></i></button></div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<EDeclaraCompraDocumento> documentos = Array.Empty<EDeclaraCompraDocumento>();
+    private EDeclaraComprasCatalogos catalogos = new();
+    private readonly HashSet<long> seleccionados = new();
+    private EDeclaraCompraDocumento edicion = new();
+    private int userId, anio = DateTime.Today.Year, periodo = DateTime.Today.Month, tipoDocumento = 1, pagina = 1;
+    private const int TamanoPagina = 12;
+    private string filtro = string.Empty, mensaje = string.Empty, errorInicial = string.Empty, orden = "ruc", perfilNombre = string.Empty, perfilIdentificacion = string.Empty;
+    private bool cargando = true, ocupado, sincronizando, guardando, mostrarFormulario, mensajeError, claveSriConfigurada, ordenDescendente;
+    private long? detalleAbierto;
+
+    private List<EDeclaraCompraDocumento> DocumentosFiltrados
+    {
+        get
+        {
+            var source = documentos.Where(x => string.IsNullOrWhiteSpace(filtro) ||
+                ($"{x.RazonSocial} {x.Ruc} {x.Serie} {x.Numero} {x.Concepto}").Contains(filtro, StringComparison.OrdinalIgnoreCase));
+            IOrderedEnumerable<EDeclaraCompraDocumento> sorted = orden switch
+            {
+                "fecha" => ordenDescendente ? source.OrderByDescending(x => x.FechaEmision) : source.OrderBy(x => x.FechaEmision),
+                "documento" => ordenDescendente ? source.OrderByDescending(x => x.Serie).ThenByDescending(x => x.Numero) : source.OrderBy(x => x.Serie).ThenBy(x => x.Numero),
+                _ => ordenDescendente ? source.OrderByDescending(x => x.Ruc) : source.OrderBy(x => x.Ruc)
+            };
+            return sorted.ThenBy(x => x.FechaEmision).ThenBy(x => x.Numero).ToList();
+        }
+    }
+    private List<EDeclaraCompraDocumento> DocumentosPagina => DocumentosFiltrados.Skip((pagina-1)*TamanoPagina).Take(TamanoPagina).ToList();
+    private int TotalPaginas => Math.Max(1,(int)Math.Ceiling(DocumentosFiltrados.Count/(double)TamanoPagina));
+    private int PendientesClasificacion => documentos.Count(x => x.RequiereClasificacion);
+    private bool TodosSeleccionados => DocumentosPagina.Count > 0 && DocumentosPagina.All(x => seleccionados.Contains(x.Id));
+    private IReadOnlyList<EDeclaraCasillaCompra> CasillasActuales => tipoDocumento == 3 ? catalogos.CasillasNotasCredito : catalogos.CasillasCompras;
+    private string DescripcionCasillaEdicion => CasillasActuales.FirstOrDefault(x=>x.Id==edicion.Casilla)?.Descripcion ?? string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var state=await AuthStateProvider.GetAuthenticationStateAsync(); var user=state.User;
+            if(user.Identity?.IsAuthenticated!=true || !int.TryParse(user.FindFirst("IdUsuario")?.Value,out userId)){Navigation.NavigateTo("/login",true);return;}
+            var superAdmin=user.FindFirst("IdTipoUsuario")?.Value==AppAccessService.AdminRoleId;
+            var access=await AppAccessService.CanAccessAsync(userId,EDeclaraRoutes.ServiceKey,superAdmin);
+            if(!access.HasAccess){Navigation.NavigateTo($"/suscripciones?servicio={EDeclaraRoutes.ServiceKey}",true);return;}
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
+            claveSriConfigurada=await SriCredentialService.TieneClaveAsync(userId);
+            var cuenta=await UsuarioService.ObtenerUsuarioPorId(userId);
+            perfilNombre=cuenta is null ? string.Empty : (!string.IsNullOrWhiteSpace(cuenta.NombreEmpresa) ? cuenta.NombreEmpresa : cuenta.NombreCompleto);
+            perfilIdentificacion=cuenta?.Identificacion?.Trim()??string.Empty;
+            catalogos=await ComprasService.ObtenerCatalogosAsync();
+            if(!string.IsNullOrWhiteSpace(perfilIdentificacion)) await CargarAsync(); else errorInicial="Configura tu identificación en Mi perfil de E-Declara antes de administrar compras.";
+        }
+        catch(Exception ex){errorInicial=$"No se pudo abrir el módulo de compras: {ex.Message}";}
+        finally{cargando=false;}
+    }
+
+    private async Task CargarAsync(){documentos=await ComprasService.ListarAsync(userId,userId,anio,periodo,tipoDocumento);seleccionados.Clear();pagina=1;detalleAbierto=null;}
+    private async Task CambiarAnioAsync(ChangeEventArgs e){anio=int.Parse(e.Value?.ToString()??DateTime.Today.Year.ToString());await EjecutarCargaAsync();}
+    private async Task CambiarPeriodoAsync(ChangeEventArgs e){periodo=int.Parse(e.Value?.ToString()??DateTime.Today.Month.ToString());await EjecutarCargaAsync();}
+    private async Task CambiarTipoAsync(int value){tipoDocumento=value;CerrarFormulario();await EjecutarCargaAsync();}
+    private async Task EjecutarCargaAsync(){LimpiarMensaje();try{ocupado=true;await CargarAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=false;}}
+    private void Filtrar(ChangeEventArgs e){filtro=e.Value?.ToString()??string.Empty;pagina=1;seleccionados.Clear();}
+    private void Nuevo(){edicion=CrearModeloBase();mostrarFormulario=true;}
+    private void Editar(EDeclaraCompraDocumento item){edicion=Copiar(item);mostrarFormulario=true;}
+    private void CerrarFormulario(){mostrarFormulario=false;edicion=CrearModeloBase();}
+    private EDeclaraCompraDocumento CrearModeloBase()=>new(){IdContribuyente=userId,Anio=anio,Periodo=periodo,TipoDocumento=tipoDocumento,FechaEmision=FechaInicialPeriodo(),Origen="MANUAL"};
+    private DateTime FechaInicialPeriodo()=>anio==DateTime.Today.Year && ((periodo<=12&&periodo==DateTime.Today.Month)||(periodo==13&&DateTime.Today.Month<=6)||(periodo==14&&DateTime.Today.Month>=7))?DateTime.Today:new DateTime(anio,periodo switch{13=>1,14=>7,_=>periodo},1);
+    private static EDeclaraCompraDocumento Copiar(EDeclaraCompraDocumento x)=>new(){Id=x.Id,IdContribuyente=x.IdContribuyente,Anio=x.Anio,Periodo=x.Periodo,TipoDocumento=x.TipoDocumento,TipoFacturacion=x.TipoFacturacion,Serie=x.Serie,Numero=x.Numero,FechaEmision=x.FechaEmision,Ruc=x.Ruc,RazonSocial=x.RazonSocial,IdentificacionComprador=x.IdentificacionComprador,Concepto=x.Concepto,Casilla=x.Casilla,Tarifa=x.Tarifa,BaseImponible=x.BaseImponible,Iva=x.Iva,SerieDocumentoModificado=x.SerieDocumentoModificado,NumeroDocumentoModificado=x.NumeroDocumentoModificado,NumeroAutorizacion=x.NumeroAutorizacion,Origen=x.Origen,EsFaltante=x.EsFaltante,Detalles=x.Detalles};
+
+    private async Task GuardarAsync(){LimpiarMensaje();guardando=true;try{edicion.IdContribuyente=userId;edicion.Anio=anio;edicion.Periodo=periodo;edicion.TipoDocumento=tipoDocumento;await ComprasService.GuardarAsync(userId,edicion);MostrarExito("Documento guardado correctamente.");CerrarFormulario();await CargarAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{guardando=false;}}
+    private void CambiarTarifaEdicion(ChangeEventArgs e){edicion.Tarifa=Decimal(e.Value);edicion.Iva=Math.Round(edicion.BaseImponible*edicion.Tarifa/100m,2);}
+    private void CambiarBaseEdicion(ChangeEventArgs e){edicion.BaseImponible=Decimal(e.Value);edicion.Iva=Math.Round(edicion.BaseImponible*edicion.Tarifa/100m,2);}
+    private static decimal Decimal(object? value)=>decimal.TryParse(value?.ToString(),System.Globalization.NumberStyles.Any,System.Globalization.CultureInfo.InvariantCulture,out var n)?n:0m;
+    private async Task BuscarProveedorAsync(){if(string.IsNullOrWhiteSpace(edicion.Ruc)||!string.IsNullOrWhiteSpace(edicion.RazonSocial))return;try{var local=await ComprasService.BuscarRazonSocialAsync(userId,edicion.Ruc);if(!string.IsNullOrWhiteSpace(local)){edicion.RazonSocial=local;return;}if(!claveSriConfigurada)return;var result=await CedulaLookupService.ConsultarAsync(edicion.Ruc);if(result.Success&&result.Found)edicion.RazonSocial=result.RazonSocial??result.NombreCompleto??string.Empty;}catch{}}
+    private async Task BuscarFacturaRelacionadaAsync()
+    {
+        if (tipoDocumento != 3 || string.IsNullOrWhiteSpace(edicion.Ruc) || string.IsNullOrWhiteSpace(edicion.SerieDocumentoModificado) || string.IsNullOrWhiteSpace(edicion.NumeroDocumentoModificado)) return;
+        var factura = await ComprasService.BuscarFacturaRelacionadaAsync(userId, userId, anio, periodo, edicion.SerieDocumentoModificado, edicion.NumeroDocumentoModificado, edicion.Ruc);
+        if (factura is null) { MostrarError("No se encontró la factura relacionada en las compras del período."); return; }
+        edicion.RazonSocial = factura.RazonSocial;
+        edicion.Concepto = string.IsNullOrWhiteSpace(edicion.Concepto) ? factura.Concepto : edicion.Concepto;
+        edicion.TipoFacturacion = factura.TipoFacturacion;
+        edicion.Casilla = factura.Casilla;
+        LimpiarMensaje();
+    }
+
+    private async Task ImportarXmlAsync(InputFileChangeEventArgs e){LimpiarMensaje();ocupado=true;try{var archivos=new List<(string Nombre,string Xml)>();foreach(var file in e.GetMultipleFiles(100)){if(file.Size>10*1024*1024){MostrarError($"{file.Name} supera 10 MB.");continue;}using var reader=new StreamReader(file.OpenReadStream(10*1024*1024));archivos.Add((file.Name,await reader.ReadToEndAsync()));}var result=await ComprasService.ImportarXmlAsync(userId,userId,anio,periodo,archivos);MostrarResultado(result,"Importación XML");await CargarAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=false;}}
+    private async Task ConsultarSriAsync(){LimpiarMensaje();ocupado=sincronizando=true;try{var result=await ComprasService.ConsultarSriAsync(userId,userId,anio,periodo,tipoDocumento);MostrarResultado(result,"Consulta SRI");await CargarAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=sincronizando=false;}}
+    private void MostrarResultado(EDeclaraImportacionResultado x,string proceso){var detalle=x.Errores.Count>0?$" Errores: {string.Join(" | ",x.Errores.Take(4))}":string.Empty;var texto=$"{proceso}: {x.Importados} registro(s) importado(s) y {x.Omitidos} duplicado(s) omitido(s).{detalle}";if(x.Errores.Count>0&&x.Importados==0)MostrarError(texto);else MostrarExito(texto);}
+    private async Task RegistrarFaltantesAsync(){if(!await JS.InvokeAsync<bool>("confirm","¿Registrar los secuenciales faltantes entre los documentos existentes?"))return;ocupado=true;try{var count=await ComprasService.RegistrarFaltantesAsync(userId,userId,anio,periodo,tipoDocumento);MostrarExito($"Se registraron {count} secuencial(es) faltante(s).");await CargarAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=false;}}
+    private async Task ActualizarActividadAsync(EDeclaraCompraDocumento item,ChangeEventArgs e){item.TipoFacturacion=int.TryParse(e.Value?.ToString(),out var value)?value:null;await ActualizarClasificacionAsync(item);}
+    private async Task ActualizarCasillaAsync(EDeclaraCompraDocumento item,ChangeEventArgs e){item.Casilla=e.Value?.ToString()??string.Empty;await ActualizarClasificacionAsync(item);}
+    private async Task ActualizarClasificacionAsync(EDeclaraCompraDocumento item){try{await ComprasService.ActualizarClasificacionAsync(userId,item.Id,item.TipoFacturacion,item.Casilla);documentos=await ComprasService.ListarAsync(userId,userId,anio,periodo,tipoDocumento);}catch(Exception ex){MostrarError(ex.Message);await CargarAsync();}}
+    private async Task EliminarAsync(EDeclaraCompraDocumento item){if(!await JS.InvokeAsync<bool>("confirm",$"¿Eliminar {item.Serie}-{item.Numero}?"))return;await ComprasService.EliminarAsync(userId,new[]{item.Id});MostrarExito("Registro eliminado.");await CargarAsync();}
+    private async Task EliminarSeleccionadosAsync(){if(!await JS.InvokeAsync<bool>("confirm",$"¿Eliminar {seleccionados.Count} registro(s) seleccionado(s)?"))return;await ComprasService.EliminarAsync(userId,seleccionados);MostrarExito("Registros eliminados.");await CargarAsync();}
+    private void Seleccionar(long id,ChangeEventArgs e){if(e.Value is true)seleccionados.Add(id);else seleccionados.Remove(id);}
+    private void SeleccionarTodos(ChangeEventArgs e){foreach(var x in DocumentosPagina){if(e.Value is true)seleccionados.Add(x.Id);else seleccionados.Remove(x.Id);}}
+    private void AlternarDetalle(long id)=>detalleAbierto=detalleAbierto==id?null:id;
+    private void CambiarOrden(ChangeEventArgs e){orden=e.Value?.ToString()??"ruc";pagina=1;}
+    private void CambiarDireccionOrden(){ordenDescendente=!ordenDescendente;pagina=1;}
+
+    private async Task ExportarAsync(){try{var headers=new[]{"Tipo","Actividad","Serie","Número","Fecha","RUC","Razón social","Concepto","Serie relacionada","Número relacionado","Casilla","Tarifa","Base","IVA","Origen"};var rows=DocumentosFiltrados.Select(x=>(IReadOnlyList<string>)new[]{NombreTipoDocumentoSingular(),catalogos.Actividades.FirstOrDefault(a=>a.Id==x.TipoFacturacion)?.Descripcion??"",x.Serie,x.Numero,x.FechaEmision.ToString("dd/MM/yyyy"),x.Ruc,x.RazonSocial,x.Concepto,x.SerieDocumentoModificado,x.NumeroDocumentoModificado,x.Casilla,x.Tarifa.ToString("0.##"),x.BaseImponible.ToString("0.00"),x.Iva.ToString("0.00"),x.Origen}).ToList();var file=ExcelService.Create($"compras-{anio}-{periodo:00}.xlsx",new ExcelSheetData(NombreTipoDocumentoPlural(),headers,rows));await using var stream=new MemoryStream(file.Content);using var reference=new DotNetStreamReference(stream);await JS.InvokeVoidAsync("downloadFileFromStream",file.FileName,reference,file.ContentType);}catch(Exception ex){MostrarError($"No se pudo exportar: {ex.Message}");}}
+    private void IrAPerfil()=>Navigation.NavigateTo(EDeclaraRoutes.Profile);
+    private void MostrarError(string value){mensaje=value;mensajeError=true;}
+    private void MostrarExito(string value){mensaje=value;mensajeError=false;}
+    private void LimpiarMensaje(){mensaje=string.Empty;mensajeError=false;}
+    private string NombreTipoDocumentoSingular()=>tipoDocumento==3?"Nota de crédito":"Compra";
+    private string NombreTipoDocumentoPlural()=>tipoDocumento==3?"Notas de crédito":"Compras";
+    private static string NombrePeriodo(int value)=>System.Globalization.CultureInfo.GetCultureInfo("es-EC").DateTimeFormat.GetMonthName(value);
+    private static string Dinero(decimal value)=>value.ToString("C2",System.Globalization.CultureInfo.GetCultureInfo("es-EC"));
+    private static string FormatoDocumento(string serie,string numero)=>string.IsNullOrWhiteSpace(serie)&&string.IsNullOrWhiteSpace(numero)?"—":$"{serie}-{numero}";
+}

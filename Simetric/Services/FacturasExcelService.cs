@@ -87,8 +87,11 @@ public sealed class FacturasExcelService : IFacturasExcelService
             Monto(items.Sum(x => x.Iva), 6), Monto(items.Sum(x => x.Ice), 6), Monto(items.Sum(x => x.Total), 6)
         ]));
 
+        var facturasIncluidas = items.Select(x => x.Codfactura).ToHashSet();
         var notas = (notasCredito ?? Array.Empty<NotaCreditoListDto>())
-            .Where(x => x.Estado)
+            .Where(x => DocumentoAutorizacionHelper.EstaAutorizado(x.Autorizado) &&
+                        x.DocumentoModificadoId.HasValue &&
+                        facturasIncluidas.Contains(x.DocumentoModificadoId.Value))
             .OrderBy(x => x.FechaAutorizacion ?? x.FechaDocumentoModificado)
             .ThenBy(x => x.NumeroCompleto)
             .ToList();
@@ -110,8 +113,8 @@ public sealed class FacturasExcelService : IFacturasExcelService
                     new ExcelCellData(nota.Cliente),
                     new ExcelCellData(nota.IdentificacionCliente),
                     new ExcelCellData("AUTORIZADA"),
-                    Monto(-nota.Subtotal), Monto(0m), Monto(0m), Monto(0m), Monto(0m),
-                    Monto(-nota.Descuentos), Monto(-nota.Iva), Monto(0m), Monto(-nota.Total)
+                    Monto(-nota.Subtotal), Monto(-nota.SubtotalIva), Monto(-nota.SubtotalCero), Monto(0m), Monto(0m),
+                    Monto(-nota.Descuentos), Monto(-nota.Iva), Monto(-nota.Ice), Monto(-nota.Total)
                 ]));
             }
 
@@ -120,10 +123,10 @@ public sealed class FacturasExcelService : IFacturasExcelService
                 new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData("TOTAL NETO", 4),
                 new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
                 Monto(items.Sum(x => x.Subtotal) - notas.Sum(x => x.Subtotal), 6),
-                Monto(items.Sum(x => x.SubtotalIva), 6), Monto(items.Sum(x => x.SubtotalCero), 6),
+                Monto(items.Sum(x => x.SubtotalIva) - notas.Sum(x => x.SubtotalIva), 6), Monto(items.Sum(x => x.SubtotalCero) - notas.Sum(x => x.SubtotalCero), 6),
                 Monto(items.Sum(x => x.SubtotalNoObjeto), 6), Monto(items.Sum(x => x.SubtotalExento), 6),
-                Monto(items.Sum(x => x.Descuentos), 6), Monto(items.Sum(x => x.Iva) - notas.Sum(x => x.Iva), 6),
-                Monto(items.Sum(x => x.Ice), 6), Monto(items.Sum(x => x.Total) - notas.Sum(x => x.Total), 6)
+                Monto(items.Sum(x => x.Descuentos) - notas.Sum(x => x.Descuentos), 6), Monto(items.Sum(x => x.Iva) - notas.Sum(x => x.Iva), 6),
+                Monto(items.Sum(x => x.Ice) - notas.Sum(x => x.Ice), 6), Monto(items.Sum(x => x.Total) - notas.Sum(x => x.Total), 6)
             ]));
         }
 

@@ -15,6 +15,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject EDeclaraSriCredentialService SriCredentialService
 
 @{
     var nombreCompleto = GetNombreCompleto();
@@ -189,6 +190,54 @@
                             <ValidationMessage For="@(() => perfil.TipoCliente)" class="profile-field-error pd-field-error" />
                         </div>
                     </div>
+
+                    <section class="profile-security-card pd-security-card sri-key-card" data-tour="perfil.clave-sri">
+                        <div class="profile-security-head">
+                            <div>
+                                <span class="panel-kicker pd-kicker">Integración SRI</span>
+                                <h4 class="sri-key-title">
+                                    Clave SRI
+                                    <span class="sri-info-wrap">
+                                        <button type="button" class="sri-info-button" aria-label="Información sobre la clave SRI">
+                                            <i class="bi bi-info-circle-fill"></i>
+                                        </button>
+                                        <span class="sri-info-bubble" role="tooltip">
+                                            Se utiliza exclusivamente para autenticar las consultas de comprobantes y demás operaciones de E-Declara con el SRI. Se guarda protegida y no se muestra nuevamente.
+                                        </span>
+                                    </span>
+                                </h4>
+                            </div>
+                            <span class="profile-security-badge pd-security-badge @(claveSriConfigurada ? "pd-security-badge-active" : string.Empty)">
+                                @(claveSriConfigurada ? "Configurada" : "Pendiente")
+                            </span>
+                        </div>
+
+                        <div class="sri-key-editor">
+                            <div class="profile-input-shell pd-input-shell">
+                                <span class="profile-input-icon pd-input-icon"><i class="bi bi-key-fill"></i></span>
+                                <input type="@(mostrarClaveSri ? "text" : "password")"
+                                       class="profile-field-input pd-field-input"
+                                       placeholder="@(claveSriConfigurada ? "Escribe una nueva clave para reemplazarla" : "Ingresa tu clave del SRI")"
+                                       autocomplete="new-password"
+                                       maxlength="200"
+                                       @bind="claveSri" />
+                                <button type="button" class="sri-key-eye" @onclick="() => mostrarClaveSri = !mostrarClaveSri" aria-label="Mostrar u ocultar clave SRI">
+                                    <i class="bi @(mostrarClaveSri ? "bi-eye-slash" : "bi-eye")"></i>
+                                </button>
+                            </div>
+                            <button type="button" class="primary-btn pd-save-btn sri-key-save" disabled="@guardandoClaveSri" @onclick="GuardarClaveSriAsync">
+                                @if (guardandoClaveSri)
+                                {
+                                    <span class="spinner-border spinner-border-sm" role="status"></span>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-shield-lock-fill"></i>
+                                }
+                                <span>Guardar clave SRI</span>
+                            </button>
+                        </div>
+                    </section>
 
                     <!-- Seguridad -->
                     <section class="profile-security-card pd-security-card" data-tour="perfil.security">
@@ -536,6 +585,25 @@ select.profile-field-input,
     padding-bottom: 0 !important;
     vertical-align: middle !important;
 }
+
+.sri-key-card { margin-top: 1.25rem; }
+.sri-key-title { display: flex; align-items: center; gap: .45rem; }
+.sri-info-wrap { position: relative; display: inline-flex; }
+.sri-info-button, .sri-key-eye {
+    border: 0; background: transparent; color: var(--pd); padding: .2rem; line-height: 1;
+}
+.sri-info-bubble {
+    position: absolute; z-index: 20; left: 50%; bottom: calc(100% + .65rem); width: min(310px, 75vw);
+    padding: .7rem .8rem; border-radius: 10px; background: #27234f; color: #fff;
+    font-size: .78rem; font-weight: 500; line-height: 1.4; box-shadow: 0 10px 25px rgba(39,35,79,.25);
+    opacity: 0; visibility: hidden; transform: translate(-50%, 5px); transition: .18s ease;
+}
+.sri-info-wrap:hover .sri-info-bubble,
+.sri-info-wrap:focus-within .sri-info-bubble { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.sri-key-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: center; margin-top: 1rem; }
+.sri-key-eye { margin-right: .55rem; }
+.sri-key-save { white-space: nowrap; }
+@@media (max-width: 720px) { .sri-key-editor { grid-template-columns: 1fr; } }
 </style>
 
 @code {
@@ -545,6 +613,10 @@ select.profile-field-input,
     private List<string> listaAvatares = new();
     private List<Tipocliente> tipoClientesList = new();
     private bool cambiarPassword;
+    private string claveSri = string.Empty;
+    private bool claveSriConfigurada;
+    private bool mostrarClaveSri;
+    private bool guardandoClaveSri;
     private int? usuarioIdActual;
     private bool esAdmin;
 
@@ -565,6 +637,15 @@ select.profile-field-input,
 
         usuarioIdActual = idUsuario;
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
+
+        try
+        {
+            claveSriConfigurada = await SriCredentialService.TieneClaveAsync(idUsuario);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al verificar la clave SRI: {ex.Message}");
+        }
 
         try
         {
@@ -818,6 +899,34 @@ select.profile-field-input,
         else
         {
             await JS.InvokeVoidAsync("Swal.fire", "Error", "No se pudo actualizar el perfil.", "error");
+        }
+    }
+
+    private async Task GuardarClaveSriAsync()
+    {
+        if (usuarioIdActual is null || string.IsNullOrWhiteSpace(claveSri))
+        {
+            await JS.InvokeVoidAsync("Swal.fire", "Clave requerida", "Ingresa tu clave SRI para poder guardarla.", "warning");
+            return;
+        }
+
+        guardandoClaveSri = true;
+        try
+        {
+            await SriCredentialService.GuardarClaveAsync(usuarioIdActual.Value, claveSri);
+            claveSri = string.Empty;
+            mostrarClaveSri = false;
+            claveSriConfigurada = true;
+            await JS.InvokeVoidAsync("Swal.fire", "¡Éxito!", "La clave SRI quedó configurada de forma segura.", "success");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al guardar la clave SRI: {ex.Message}");
+            await JS.InvokeVoidAsync("Swal.fire", "Error", "No se pudo guardar la clave SRI.", "error");
+        }
+        finally
+        {
+            guardandoClaveSri = false;
         }
     }
 

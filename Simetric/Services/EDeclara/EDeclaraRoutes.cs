@@ -7,15 +7,19 @@ public static class EDeclaraRoutes
     public const string ServiceKey = "e-declara";
     public const string Root = "/e-declara";
     public const string Dashboard = "/e-declara";
-    public const string Profile = "/e-declara/configuracion/perfil";
+    public const string Profile = "/perfil?contexto=edeclara";
     public const string Contribuyentes = "/e-declara/contribuyentes";
     public const string Declaraciones = "/e-declara/declaraciones";
     public const string GastosIngresos = "/e-declara/gastos-ingresos";
+    public const string Compras = "/e-declara/compras";
     public const string Soporte = "/e-declara/soporte";
     public const string Parametros = "/e-declara/configuracion/parametros";
     public const string Periodos = "/e-declara/configuracion/periodos";
     public const string TiposDeclaracion = "/e-declara/configuracion/tipos-declaracion";
     public const string Roles = "/e-declara/administracion/roles";
+    public const string Comisiones = "/e-declara/comisiones";
+    public const string ComisionesInvolucrados = "/e-declara/comisiones/involucrados";
+    public const string ComisionesHerramientas = "/e-declara/comisiones/herramientas";
 
     public static string PreserveContext(NavigationManager navigationManager, string route)
     {

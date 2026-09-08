@@ -18,6 +18,7 @@
 @inject IHttpClientFactory HttpClientFactory
 @inject IJSRuntime JSRuntime
 @inject Simetric.Services.IReporteComprobantesExcelService ExcelService
+@inject EDeclaraSriCredentialService SriCredentialService
 
 <PageTitle>Gastos / Ingresos | E-Declara</PageTitle>
 
@@ -72,6 +73,18 @@
                 </div>
             }
 
+            @if (!claveSriConfigurada)
+            {
+                <div class="edeclara-state-alert edeclara-state-error mb-3">
+                    <i class="bi bi-shield-lock-fill"></i>
+                    <div>
+                        <strong>Configura tu clave SRI para continuar.</strong>
+                        Las consultas y demás operaciones con el SRI permanecen bloqueadas hasta registrarla en tu perfil de E-Declara.
+                        <button type="button" class="btn btn-link p-0 ms-1 align-baseline" @onclick="IrAConfigurarClaveSri">Configurar ahora</button>
+                    </div>
+                </div>
+            }
+
             <div class="form-grid">
                 
                 <!-- Tipo de Periodo -->
@@ -87,17 +100,6 @@
                 <div class="form-group">
                     <label class="form-label-n">RUC / Usuario SRI *</label>
                     <input type="text" class="input-n-premium" placeholder="1712345678001" @bind="selectedRuc" />
-                </div>
-
-                <!-- Password SRI -->
-                <div class="form-group">
-                    <label class="form-label-n">Contraseña SRI *</label>
-                    <div class="input-wrapper">
-                        <input type="@(showPassword ? "text" : "password")" class="input-n-premium" placeholder="••••••••" @bind="password" />
-                        <button type="button" class="btn-eye-n" @onclick="TogglePasswordVisibility">
-                            <i class="bi @(showPassword ? "bi-eye-slash" : "bi-eye")"></i>
-                        </button>
-                    </div>
                 </div>
 
                 <!-- Anio -->
@@ -161,7 +163,7 @@
             </div>
 
             <div class="actions-row">
-                <button type="button" class="btn-search" disabled="@isSearching" @onclick="ConsultarSriAsync">
+                <button type="button" class="btn-search" disabled="@(isSearching || !claveSriConfigurada)" @onclick="ConsultarSriAsync">
                     @if (isSearching)
                     {
                         <span class="spinner-border spinner-border-sm" role="status"></span>
@@ -375,7 +377,8 @@
     private string? errorInicial;
 
     private string selectedRuc = "";
-    private string password = "";
+    private int currentUserId;
+    private bool claveSriConfigurada;
     private string anio = DateTime.Now.Year.ToString();
     private string tipoPeriodo = "Mensual";
     private int mes = DateTime.Now.Month;
@@ -387,7 +390,6 @@
     private string? errorMessage;
     private string? successMessage;
     private SriResponse? sriResult;
-    private bool showPassword = false;
     private string loadingProgressMessage = "Conectando con el SRI...";
     private string emptyStateMessage = "No se encontraron comprobantes para el periodo y parámetros seleccionados.";
     private int currentPage = 1;
@@ -417,6 +419,8 @@
                 return;
             }
 
+            currentUserId = userId;
+
             var isSuperAdmin = string.Equals(
                 user.FindFirst("IdTipoUsuario")?.Value,
                 AppAccessService.AdminRoleId,
@@ -430,6 +434,7 @@
             }
 
             await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
+            claveSriConfigurada = await SriCredentialService.TieneClaveAsync(userId);
         }
         catch (Exception ex)
         {
@@ -441,10 +446,7 @@
         }
     }
 
-    private void TogglePasswordVisibility()
-    {
-        showPassword = !showPassword;
-    }
+    private void IrAConfigurarClaveSri() => NavManager.NavigateTo(EDeclaraRoutes.Profile);
 
     private async Task<List<SriComprobante>> DescargarMesAsync(string baseUrl, string ruc, string pwd, string year, int month, int compType)
     {
@@ -538,9 +540,11 @@
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(password))
+        var claveSri = await SriCredentialService.ObtenerClaveAsync(currentUserId);
+        if (string.IsNullOrWhiteSpace(claveSri))
         {
-            errorMessage = "La contraseña del SRI es obligatoria.";
+            claveSriConfigurada = false;
+            errorMessage = "Configura una clave SRI válida en tu perfil de E-Declara antes de realizar consultas.";
             return;
         }
 
@@ -574,7 +578,7 @@
                 {
                     try
                     {
-                        var monthList = await DescargarMesAsync(baseUrl, selectedRuc, password, anio, m, comprobante);
+                        var monthList = await DescargarMesAsync(baseUrl, selectedRuc, claveSri, anio, m, comprobante);
                         lock (allComprobantes)
                         {
                             allComprobantes.AddRange(monthList);
@@ -632,7 +636,7 @@
                 loadingProgressMessage = "Descargando comprobantes del mes seleccionado...";
                 StateHasChanged();
 
-                var list = await DescargarMesAsync(baseUrl, selectedRuc, password, anio, mes, comprobante);
+                var list = await DescargarMesAsync(baseUrl, selectedRuc, claveSri, anio, mes, comprobante);
                 
                 sriResult = new SriResponse
                 {
