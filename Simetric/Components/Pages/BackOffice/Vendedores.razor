@@ -257,6 +257,15 @@
         color:#fff;
         transform:translateY(-1px);
     }
+    .vc-copy-btn.danger {
+        background:#fff7f7;
+        color:#991b1b;
+        border:1px solid #f3c8c8;
+    }
+    .vc-copy-btn.danger:hover {
+        background:#fee2e2;
+        transform:translateY(-1px);
+    }
     .vc-admin-body {
         position:relative;
         display:grid;
@@ -718,7 +727,7 @@
                 var absoluteLink = $"{NavManager.BaseUri.TrimEnd('/')}{route}";
                 var isBlocked = vendor.Activo == false;
                 var initials = GetInitials(vendor.Nombre);
-                var showQrPanel = esVendedor || vendor.EsSistema;
+                var showQrPanel = vendor.Activo;
 
                 <article class="vc @(isBlocked ? "blocked" : string.Empty)">
 
@@ -777,6 +786,17 @@
                                         <i class="bi bi-download"></i> Descargar QR
                                     </button>
                                 </div>
+                                @if (!esVendedor && !vendor.EsSistema)
+                                {
+                                    <div class="vc-copy-row">
+                                        <button type="button" class="vc-copy-btn secondary" @onclick="async () => await AbrirEditar(vendor)">
+                                            <i class="bi bi-pencil-square"></i> Editar
+                                        </button>
+                                        <button type="button" class="vc-copy-btn danger" @onclick="() => AbrirBloqueo(vendor)">
+                                            <i class="bi bi-lock-fill"></i> Bloquear
+                                        </button>
+                                    </div>
+                                }
                             </div>
                         </div>
                     }
@@ -1405,11 +1425,22 @@
             if (v != null)
             {
                 v.Activo = !v.Activo;
+                var idUsuarioVendedor = ObtenerIdUsuarioDesdeCodigo(v.CodigoReferencia);
+                if (idUsuarioVendedor.HasValue)
+                {
+                    var usuarioVendedor = await ctx.Usuarios.FindAsync(idUsuarioVendedor.Value);
+                    if (usuarioVendedor != null)
+                    {
+                        usuarioVendedor.Estado = v.Activo;
+                        usuarioVendedor.CuentaBloqueada = !v.Activo;
+                    }
+                }
+
                 await ctx.SaveChangesAsync();
                 success = true;
                 message = v.Activo
                     ? $"\"{v.Nombre}\" fue activado correctamente."
-                    : $"\"{v.Nombre}\" fue bloqueado. Su enlace dejará de funcionar.";
+                    : $"\"{v.Nombre}\" fue dado de baja. Su cuenta y enlace ya no aparecerán en BackOffice.";
             }
             CerrarBloqueo();
             await CargarAsync();
@@ -1452,7 +1483,9 @@
         if (esVendedor)
         {
             var sellerProfile = await VendedorBackOfficeService.ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);
-            vendors = sellerProfile is null ? new List<VendedorBackOffice>() : new List<VendedorBackOffice> { sellerProfile };
+            vendors = sellerProfile is null || !sellerProfile.Activo
+                ? new List<VendedorBackOffice>()
+                : new List<VendedorBackOffice> { sellerProfile };
         }
         else
         {
@@ -1468,15 +1501,25 @@
                 ? new HashSet<int>()
                 : await filterContext.Usuarios
                     .AsNoTracking()
-                    .Where(u => linkedUserIds.Contains(u.IdUsuario) && u.IdTipoUsuario == 7 && (u.TipoCliente == 2 || u.TipoCliente == 3))
+                    .Where(u =>
+                        linkedUserIds.Contains(u.IdUsuario) &&
+                        u.IdTipoUsuario == 7 &&
+                        (u.TipoCliente == 2 || u.TipoCliente == 3) &&
+                        u.Estado == true &&
+                        u.CuentaBloqueada != true &&
+                        !EF.Functions.Like(u.Email, "BAJA-%") &&
+                        !EF.Functions.Like(u.Email, "NULL-%"))
                     .Select(u => u.IdUsuario)
                     .ToHashSetAsync();
 
             vendors = allVendors
                 .Where(v =>
                     v.EsSistema ||
-                    v.CodigoReferencia?.StartsWith("usr_", StringComparison.OrdinalIgnoreCase) != true ||
-                    (int.TryParse(v.CodigoReferencia[4..], out var uid) && sellerUserIds.Contains(uid)))
+                    (v.Activo &&
+                     v.CodigoReferencia?.StartsWith("usr_", StringComparison.OrdinalIgnoreCase) != true) ||
+                    (v.Activo &&
+                     ObtenerIdUsuarioDesdeCodigo(v.CodigoReferencia) is int uid &&
+                     sellerUserIds.Contains(uid)))
                 .ToList();
         }
 
@@ -1597,6 +1640,19 @@
 
         return relativeUrl.StartsWith("images/", StringComparison.OrdinalIgnoreCase)
             ? $"/{relativeUrl}" : value;
+    }
+
+    private static int? ObtenerIdUsuarioDesdeCodigo(string? codigoReferencia)
+    {
+        if (string.IsNullOrWhiteSpace(codigoReferencia) ||
+            !codigoReferencia.StartsWith("usr_", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return int.TryParse(codigoReferencia[4..], out var idUsuario) && idUsuario > 0
+            ? idUsuario
+            : null;
     }
 
     private string GetVendorAvatar(VendedorBackOffice vendor)

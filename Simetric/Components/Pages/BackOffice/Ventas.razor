@@ -268,14 +268,13 @@
                 <div class="chart-card">
                     <div class="chart-title-group">
                         <h3>Estado de ventas</h3>
-                        <p>Ventas pagadas, pendientes y anuladas</p>
+                        <p>Ventas pagadas y pendientes visibles</p>
                     </div>
                     <div class="vs-container">
                         @{
-                            var totalEstados = ventasPagadasCount + countPendientes + countAnuladas;
+                            var totalEstados = ventasPagadasCount + countPendientes;
                             double pctPagadas = totalEstados > 0 ? (double)ventasPagadasCount / totalEstados * 100 : 0;
                             double pctPendientes = totalEstados > 0 ? (double)countPendientes / totalEstados * 100 : 0;
-                            double pctAnuladas = totalEstados > 0 ? (double)countAnuladas / totalEstados * 100 : 0;
                         }
                         <div class="vs-bar-track">
                             <div class="vs-segment paid-bg" style="width: @(pctPagadas.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Pagadas: @(pctPagadas.ToString("F1"))%">
@@ -283,9 +282,6 @@
                             </div>
                             <div class="vs-segment pending-bg" style="width: @(pctPendientes.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Pendientes: @(pctPendientes.ToString("F1"))%">
                                 @if (pctPendientes >= 15) { <span>@(Math.Round(pctPendientes))%</span> }
-                            </div>
-                            <div class="vs-segment void-bg" style="width: @(pctAnuladas.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%" title="Anuladas: @(pctAnuladas.ToString("F1"))%">
-                                @if (pctAnuladas >= 15) { <span>@(Math.Round(pctAnuladas))%</span> }
                             </div>
                         </div>
                         <div class="vs-legend">
@@ -296,10 +292,6 @@
                             <div class="vs-legend-item">
                                 <span class="vs-dot pending-bg"></span>
                                 <span>Pendientes: <strong>@countPendientes</strong></span>
-                            </div>
-                            <div class="vs-legend-item">
-                                <span class="vs-dot void-bg"></span>
-                                <span>Anuladas: <strong>@countAnuladas</strong></span>
                             </div>
                         </div>
                     </div>
@@ -406,7 +398,6 @@
                             <option value="ALL">Todos los Estados</option>
                             <option value="pendiente">Pendiente</option>
                             <option value="pagada">Pagada</option>
-                            <option value="anulada">Anulada</option>
                         </select>
                     </div>
                     <div>
@@ -591,7 +582,7 @@
                                         </td>
                                         <td>
                                             <div class="comprobante-cell">
-                                                <span class="text-muted font-sm">@v.FormaPago</span>
+                                                <span class="payment-method-text">@FormatearFormaPago(v.FormaPago)</span>
                                                 @if (HasComprobanteImage(v))
                                                 {
                                                     <button type="button" class="btn-view-evidence" title="Ver captura de comprobante" @onclick="() => ShowEvidencePreview(v)">
@@ -1097,6 +1088,29 @@
             ? 23m
             : venta.Valor;
 
+    private static string FormatearFormaPago(string? formaPago)
+    {
+        if (string.IsNullOrWhiteSpace(formaPago))
+        {
+            return "-";
+        }
+
+        var value = formaPago.Trim();
+        if (value.Contains("transferencia", StringComparison.OrdinalIgnoreCase) &&
+            value.Contains("bancaria", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Transferencia bancaria";
+        }
+
+        if (value.Contains("tarjeta", StringComparison.OrdinalIgnoreCase) &&
+            value.Contains("credito", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Tarjeta crédito";
+        }
+
+        return value;
+    }
+
     private (string EstadoSolicitud, string EstadoSolicitudClase, string EstadoSolicitudIcono, string EstadoPago, string EstadoPagoClase, string EstadoPagoIcono, string EstadoUanataca, string EstadoUanatacaClase, string EstadoUanatacaIcono) ObtenerEstadosFirma(ReporteVentaBackOffice venta)
     {
         var email = ExtraerEmailClienteReporte(venta.Cliente);
@@ -1218,7 +1232,6 @@
     private decimal ventasWeb;
     private int countPendientes;
     private int ventasPagadasCount;
-    private int countAnuladas;
     private int clientesConCompraCount;
     private int clientesEFactCount;
     private int clientesESignCount;
@@ -1450,7 +1463,9 @@
 
                 await Task.WhenAll(ventasTask, vendedoresTask);
 
-                ventasList = ventasTask.Result;
+                ventasList = ventasTask.Result
+                    .Where(v => !EsVentaAnulada(v))
+                    .ToList();
                 vendedoresList = vendedoresTask.Result;
                 if (ventasList.Any(v => v.Producto == "e-sign"))
                 {
@@ -1489,7 +1504,6 @@
             totalRecaudado = paidSalesOfClients.Sum(ObtenerTotalVenta);
             ventasPagadasCount = paidSalesOfClients.Count;
             countPendientes = activeSalesOfClients.Count(EsVentaPendiente);
-            countAnuladas = clientesAfiliadosList.SelectMany(c => c.Transacciones).Count(EsVentaAnulada);
             clientesConCompraCount = clientesAfiliadosList.Count(c => c.Transacciones.Any(EsVentaPagada));
             clientesEFactCount = clientesAfiliadosList.Count(c => c.Transacciones.Any(v => EsVentaPagada(v) && EsProducto(v, "e-fact")));
             clientesESignCount = clientesAfiliadosList.Count(c => c.Transacciones.Any(v => EsVentaPagada(v) && EsProducto(v, "e-sign")));
@@ -1505,7 +1519,6 @@
         ventasAsesores = paidSales.Where(v => EsCanal(v, "Números Asesores")).Sum(ObtenerTotalVenta);
         ventasWeb = paidSales.Where(v => EsCanal(v, "Web")).Sum(ObtenerTotalVenta);
         countPendientes = activeSales.Count(EsVentaPendiente);
-        countAnuladas = ventasList.Count(EsVentaAnulada);
         clientesConCompraCount = ContarClientesUnicos(paidSales);
         clientesEFactCount = ContarClientesUnicos(paidSales.Where(v => EsProducto(v, "e-fact")));
         clientesESignCount = ContarClientesUnicos(paidSales.Where(v => EsProducto(v, "e-sign")));
@@ -1604,12 +1617,18 @@
         return ventas
             .GroupBy(v => v.IdReporte)
             .Select(g => g.First())
+            .Where(v => !EsVentaAnulada(v))
             .OrderByDescending(v => v.Fecha)
             .ToList();
     }
 
     private void ApplyFilters()
     {
+        if (filterEstado == "anulada")
+        {
+            filterEstado = "ALL";
+        }
+
         if (esVendedor)
         {
             if (!string.IsNullOrWhiteSpace(searchString))
@@ -1644,9 +1663,8 @@
             return;
         }
 
-        // Las transferencias anuladas no forman parte del listado ni de los reportes.
         var query = ventasList
-            .Where(v => !EsTransferenciaAnulada(v))
+            .Where(v => !EsVentaAnulada(v))
             .AsQueryable();
 
         // Product filter
@@ -2509,11 +2527,6 @@
 
         return string.Empty;
     }
-
-    private static bool EsTransferenciaAnulada(ReporteVentaBackOffice venta) =>
-        string.Equals(venta.Estado, "anulada", StringComparison.OrdinalIgnoreCase) &&
-        !string.IsNullOrWhiteSpace(venta.FormaPago) &&
-        venta.FormaPago.Contains("transfer", StringComparison.OrdinalIgnoreCase);
 
     private string GetObservacionLimpia(string? obs)
     {
