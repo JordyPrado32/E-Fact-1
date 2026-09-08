@@ -327,7 +327,7 @@
 
     <section class="registered-users-toolbar">
         <input class="registered-users-search"
-               placeholder="Buscar por nombre, correo o identificación..."
+               placeholder="Buscar por nombre o correo..."
                @bind="searchText"
                @bind:event="oninput" />
         <div class="registered-users-toolbar-actions">
@@ -370,7 +370,6 @@
                     <thead>
                         <tr>
                             <th>Usuario</th>
-                            <th>Identificación</th>
                             <th>Celular</th>
                             <th>Fecha registro</th>
                             <th>Vendedor</th>
@@ -389,13 +388,12 @@
                                         <span>@usuario.Email</span>
                                     </div>
                                 </td>
-                                <td>@DisplayOrDash(usuario.Identificacion)</td>
                                 <td>@DisplayOrDash(usuario.Celular)</td>
                                 <td>@(usuario.FechaRegistro?.ToString("dd/MM/yyyy") ?? "-")</td>
                                 <td>@DisplayOrDash(usuario.Vendedor)</td>
                                 <td>
                                     <span class="registered-users-pill @(usuario.Compras > 0 ? "registered-users-pill-success" : "registered-users-pill-neutral")">
-                                        @(usuario.Compras > 0 ? usuario.Compras.ToString() : "Sin compras")
+                                        @usuario.TipoCompra
                                     </span>
                                 </td>
                                 <td>$ @usuario.TotalComprado.ToString("N2")</td>
@@ -438,8 +436,7 @@
                 var term = searchText.Trim();
                 query = query.Where(u =>
                     u.Nombre.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                    u.Email.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                    (u.Identificacion ?? string.Empty).Contains(term, StringComparison.OrdinalIgnoreCase));
+                    u.Email.Contains(term, StringComparison.OrdinalIgnoreCase));
             }
 
             query = purchaseFilter switch
@@ -471,7 +468,7 @@
                 .ToListAsync();
 
             usuariosDb = usuariosDb
-                .Where(u => !BackOfficeReportDataFilter.IsTestData(u))
+                .Where(u => !BackOfficeReportDataFilter.IsTestData(u) && !EsUsuarioDadoDeBaja(u))
                 .ToList();
 
             var ventas = await context.ReporteVentasBackOffice
@@ -491,6 +488,9 @@
             usuarios.AddRange(usuariosDb.Select(usuario =>
             {
                 var ventasUsuario = ventas.Where(venta => CoincideVenta(usuario, venta.Cliente)).ToList();
+                var comproDocumentos = ventasUsuario.Any(v => NormalizarProducto(v.Producto) == "documentos");
+                var comproFirma = ventasUsuario.Any(v => NormalizarProducto(v.Producto) == "firma");
+
                 return new UsuarioRegistradoRow
                 {
                     IdUsuario = usuario.IdUsuario,
@@ -503,6 +503,7 @@
                         ? vendedor
                         : null,
                     Compras = ventasUsuario.Count,
+                    TipoCompra = ObtenerTipoCompra(comproDocumentos, comproFirma),
                     TotalComprado = ventasUsuario.Sum(v => v.Valor),
                     Activo = usuario.Estado == true && usuario.CuentaBloqueada != true
                 };
@@ -553,14 +554,44 @@
         return (!string.IsNullOrWhiteSpace(usuario.Email) &&
                 (string.Equals(usuario.Email.Trim(), emailPart, StringComparison.OrdinalIgnoreCase) ||
                  cliente.Contains(usuario.Email.Trim(), StringComparison.OrdinalIgnoreCase))) ||
-               (!string.IsNullOrWhiteSpace(usuario.Identificacion) &&
-                cliente.Contains(usuario.Identificacion.Trim(), StringComparison.OrdinalIgnoreCase)) ||
                (!string.IsNullOrWhiteSpace(nombrePart) &&
                 string.Equals(nombrePart, ObtenerNombreUsuario(usuario), StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool EsUsuarioDadoDeBaja(Usuario usuario)
+    {
+        if (usuario.Estado == false)
+        {
+            return true;
+        }
+
+        var email = usuario.Email ?? string.Empty;
+        return email.StartsWith("BAJA-", StringComparison.OrdinalIgnoreCase) ||
+               email.StartsWith("NULL-", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string DisplayOrDash(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
+
+    private static string NormalizarProducto(string? producto)
+    {
+        var value = producto ?? string.Empty;
+        return value.Contains("sign", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("firma", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("rubrica", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("rúbrica", StringComparison.OrdinalIgnoreCase)
+            ? "firma"
+            : "documentos";
+    }
+
+    private static string ObtenerTipoCompra(bool documentos, bool firma) =>
+        (documentos, firma) switch
+        {
+            (true, true) => "Documentos y firma",
+            (true, false) => "Documentos",
+            (false, true) => "Firma",
+            _ => "Sin compras"
+        };
 
     private enum PurchaseFilter
     {
@@ -579,6 +610,7 @@
         public DateTime? FechaRegistro { get; set; }
         public string? Vendedor { get; set; }
         public int Compras { get; set; }
+        public string TipoCompra { get; set; } = "Sin compras";
         public decimal TotalComprado { get; set; }
         public bool Activo { get; set; }
     }

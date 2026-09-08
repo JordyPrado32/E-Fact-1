@@ -8,9 +8,11 @@
 @using System.Security.Claims
 @using System.Text.Json
 @using Microsoft.Data.SqlClient
+@using Simetric.Services
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager NavManager
 @inject AuthenticationStateProvider AuthStateProvider
+@inject FirmaRenovacionService FirmaRenovacionService
 
 <PageTitle>Dashboard BackOffice | Numerica</PageTitle>
 
@@ -35,6 +37,15 @@
     }
     else
     {
+        <section class="dashboard-hero dashboard-hero-visual">
+            <div class="dashboard-hero-copy">
+                <span class="dashboard-eyebrow">Resumen operativo</span>
+                <h2>¡Hola, @userDisplayName!</h2>
+                <p>Aquí tienes un resumen actualizado de la actividad de tu sistema.</p>
+            </div>
+            <img src="/images/backoffice-dashboard-header.png" alt="Numerica BackOffice" class="dashboard-hero-image" />
+        </section>
+
         <section class="kpi-grid">
             @foreach (var kpi in BuildKpis())
             {
@@ -51,7 +62,14 @@
                             }
                         </span>
                         <strong class="kpi-value @(kpi.Value.Contains('\n') ? "multiline" : string.Empty)">@kpi.Value</strong>
+                        <small class="kpi-trend-note">
+                            <i class="ri-arrow-up-line"></i>
+                            @kpi.Note
+                        </small>
                     </div>
+                    <svg class="kpi-sparkline" viewBox="0 0 92 42" aria-hidden="true">
+                        <polyline points="@kpi.Sparkline" />
+                    </svg>
                 </article>
             }
         </section>
@@ -102,47 +120,31 @@
                 </div>
             </article>
 
-            <article class="dashboard-panel mrr-panel">
+            <article class="dashboard-panel platform-panel">
                 <div class="panel-header">
                     <div>
-                        <h3>Ingresos recurrentes (MRR)</h3>
-                        <span>Evolución comercial mensual</span>
+                        <h3>Clientes activos por plataforma</h3>
+                        <span>E-FACT, E-RÚBRICA y cuentas con servicios activos</span>
                     </div>
-                    <span class="mrr-badge">Este año</span>
+                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver clientes</button>
                 </div>
-                <div class="mrr-chart-body">
-                    <svg viewBox="0 0 300 150" class="mrr-svg-chart">
-                        <defs>
-                            <linearGradient id="chart-grad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stop-color="#2563eb" stop-opacity="0.25" />
-                                <stop offset="100%" stop-color="#2563eb" stop-opacity="0.0" />
-                            </linearGradient>
-                        </defs>
-                        
-                        <!-- Grid Lines -->
-                        <line x1="30" y1="40" x2="280" y2="40" stroke="#f1f5f9" stroke-dasharray="4" />
-                        <line x1="30" y1="70" x2="280" y2="70" stroke="#f1f5f9" stroke-dasharray="4" />
-                        <line x1="30" y1="100" x2="280" y2="100" stroke="#f1f5f9" stroke-dasharray="4" />
-                        <line x1="30" y1="130" x2="280" y2="130" stroke="#cbd5e1" />
-                        
-                        <!-- Closed Area under Line -->
-                        <polygon fill="url(#chart-grad)" points="@fillPoints" />
-                        
-                        <!-- Line -->
-                        <polyline fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" points="@pointsString" />
-                        
-                        <!-- Dots -->
-                        @foreach (var dot in graphDots)
-                        {
-                            <circle cx="@dot.X.ToString("F1", CultureInfo.InvariantCulture)" cy="@dot.Y.ToString("F1", CultureInfo.InvariantCulture)" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2.5" class="chart-dot" />
-                        }
-                    </svg>
-                    <div class="chart-labels">
-                        @foreach (var dot in graphDots)
-                        {
-                            <span>@dot.Month</span>
-                        }
-                    </div>
+                <div class="platform-body">
+                    @foreach (var platform in plataformaStats)
+                    {
+                        <div class="platform-row">
+                            <span class="platform-icon @platform.Css">
+                                <i class="@(platform.Css == "green" ? "ri-shield-keyhole-line" : "ri-file-list-3-line")"></i>
+                            </span>
+                            <div class="platform-meta">
+                                <strong>@platform.Nombre</strong>
+                                <small>@platform.Cantidad clientes</small>
+                                <div class="progress-track">
+                                    <div class="progress-fill @platform.Css" style="width: @(platform.Porcentaje.ToString("F1", CultureInfo.InvariantCulture))%"></div>
+                                </div>
+                            </div>
+                            <span class="platform-percent">@platform.Porcentaje.ToString("F1", CultureInfo.InvariantCulture)%</span>
+                        </div>
+                    }
                 </div>
             </article>
 
@@ -150,14 +152,23 @@
                 <div class="panel-header">
                     <div>
                         <h3>Productos vendidos</h3>
-                        <span>e-fact / eRúbrica</span>
+                        <span>Ventas por periodo</span>
                     </div>
-                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/ventas")'>Ver ventas</button>
+                    <select class="panel-select" @bind="productPeriod">
+                        <option value="hoy">Hoy</option>
+                        <option value="mes">Este mes</option>
+                        <option value="trimestre">Trimestre</option>
+                        <option value="anio">Este año</option>
+                    </select>
                 </div>
                 <div class="product-stack">
-                    @foreach (var producto in productosMes)
+                    @{
+                        var productosPeriodo = BuildProductos(FiltrarVentasPorPeriodo(ventasDashboardValidas, productPeriod));
+                        var totalProductosPeriodo = productosPeriodo.Sum(p => p.Total);
+                    }
+                    @foreach (var producto in productosPeriodo)
                     {
-                        var pct = totalProductos > 0 ? Math.Round((double)(producto.Total / totalProductos) * 100.0, 1) : 0;
+                        var pct = totalProductosPeriodo > 0 ? Math.Round((double)(producto.Total / totalProductosPeriodo) * 100.0, 1) : 0;
                         <div class="product-row">
                             <div class="product-top">
                                 <div class="product-name">
@@ -206,8 +217,8 @@
                                         <td>@venta.Fecha.ToString("dd/MM/yyyy HH:mm")</td>
                                         <td class="client-cell">@(venta.Cliente.Contains("|") ? venta.Cliente.Split('|')[0].Trim() : venta.Cliente)</td>
                                         <td>
-                                            <span class="prod-badge @venta.Producto.ToLower()">
-                                                @(NormalizarProducto(venta.Producto) == "e-sign" ? "eRúbrica" : venta.Producto)
+                                            <span class="prod-badge @NormalizarProducto(venta.Producto)">
+                                                @ProductoDisplay(venta.Producto)
                                             </span>
                                         </td>
                                         <td>@venta.Canal</td>
@@ -235,7 +246,7 @@
                 <div class="panel-header">
                     <div>
                         <h3>Novedades importantes de clientes</h3>
-                        <span>Solicitudes pagadas por gestionar y usuarios con bajo saldo</span>
+                        <span>Solicitudes, bajo saldo y firmas caducadas</span>
                     </div>
                     <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/solicitudes-firmas")'>Ver solicitudes</button>
                 </div>
@@ -252,62 +263,6 @@
                             <span class="feed-time">@act.TimeLabel</span>
                         </div>
                     }
-                </div>
-            </article>
-
-            <!-- Row 3: Provinces & System Health -->
-            <article class="dashboard-panel provinces-panel panel-span-2">
-                <div class="panel-header">
-                    <div>
-                        <h3>Clientes activos por plataforma</h3>
-                        <span>e-fact, eRúbrica y cuentas con ambos servicios</span>
-                    </div>
-                    <button type="button" class="panel-link" @onclick='() => NavigateTo("/backoffice/clientes")'>Ver Clientes</button>
-                </div>
-                <div class="provinces-body">
-                    @foreach (var prov in plataformaStats)
-                    {
-                        <div class="province-row">
-                            <div class="province-meta">
-                                <span class="prov-name">@prov.Nombre</span>
-                                <span class="prov-value">@prov.Cantidad clientes (@prov.Porcentaje%)</span>
-                            </div>
-                            <div class="progress-track">
-                                <div class="progress-fill @prov.Css" style="width: @(prov.Porcentaje)%"></div>
-                            </div>
-                        </div>
-                    }
-                </div>
-            </article>
-
-            <article class="dashboard-panel system-panel">
-                <div class="panel-header">
-                    <div>
-                        <h3>Estado del sistema</h3>
-                        <span>Disponibilidad de componentes clave</span>
-                    </div>
-                </div>
-                <div class="system-status-list">
-                    <div class="status-row">
-                        <span><i class="ri-settings-5-line"></i> API SRI</span>
-                        <span class="status-indicator operative"><i class="ri-checkbox-circle-fill"></i> Operativo</span>
-                    </div>
-                    <div class="status-row">
-                        <span><i class="ri-key-2-line"></i> eRúbrica</span>
-                        <span class="status-indicator operative"><i class="ri-checkbox-circle-fill"></i> Operativo</span>
-                    </div>
-                    <div class="status-row">
-                        <span><i class="ri-mail-line"></i> Correo de salida</span>
-                        <span class="status-indicator operative"><i class="ri-checkbox-circle-fill"></i> Operativo</span>
-                    </div>
-                    <div class="status-row">
-                        <span><i class="ri-bank-card-line"></i> Pasarela de pagos</span>
-                        <span class="status-indicator operative"><i class="ri-checkbox-circle-fill"></i> Operativo</span>
-                    </div>
-                    <div class="status-row">
-                        <span><i class="ri-server-line"></i> Servidor de BD</span>
-                        <span class="status-indicator operative"><i class="ri-checkbox-circle-fill"></i> Operativo</span>
-                    </div>
                 </div>
             </article>
         </section>
@@ -333,6 +288,9 @@
     private List<ProductoDashboardDto> productosMes = new();
     private List<ReporteVentaBackOffice> ultimasVentas = new();
     private List<RenovacionDashboardDto> renovacionesProximas = new();
+    private List<ReporteVentaBackOffice> ventasDashboardValidas = new();
+    private List<RenovacionDashboardDto> firmasCaducadas = new();
+    private string productPeriod = "mes";
 
     private decimal mrrVal;
     private int clientesActivosVal;
@@ -414,6 +372,7 @@
             var ventasValidas = ventas
                 .Where(v => !string.Equals(v.Estado, "anulada", StringComparison.OrdinalIgnoreCase))
                 .ToList();
+            ventasDashboardValidas = ventasValidas;
             var ventasMesList = ventasValidas
                 .Where(v => v.Fecha >= inicioMes && v.Fecha < finMes)
                 .ToList();
@@ -538,6 +497,17 @@
                     "e-fact",
                     s.PlanActual ?? "Plan general",
                     s.FechaFin!.Value))
+                .OrderBy(r => r.FechaVence)
+                .Take(6)
+                .ToList();
+
+            firmasCaducadas = (await FirmaRenovacionService.ObtenerFirmasPorRenovarAsync())
+                .Where(f => f.DiasRestantes < 0 && f.FechaExpiracion.HasValue)
+                .Select(f => new RenovacionDashboardDto(
+                    f.Cliente,
+                    "E-RÚBRICA",
+                    string.IsNullOrWhiteSpace(f.Ruc) ? "Firma caducada" : $"RUC {f.Ruc}",
+                    f.FechaExpiracion!.Value))
                 .OrderBy(r => r.FechaVence)
                 .Take(6)
                 .ToList();
@@ -900,12 +870,22 @@
                     solicitudFirma.SolFechaPago ?? solicitudFirma.SolFechaSolicitud));
             }
 
+            foreach (var firma in firmasCaducadas)
+            {
+                alertasImportantes.Add(new ActivityDto(
+                    "ri-error-warning-line",
+                    "red",
+                    $"{firma.Cliente} tiene E-RÚBRICA caducada.",
+                    $"Venció {firma.FechaVence:dd/MM/yyyy}",
+                    firma.FechaVence));
+            }
+
             if (!alertasImportantes.Any())
             {
                 alertasImportantes.Add(new ActivityDto(
                     "ri-checkbox-circle-line",
                     "green",
-                    "No hay solicitudes pagadas pendientes ni usuarios con bajo saldo.",
+                    "No hay solicitudes pendientes, usuarios con bajo saldo ni firmas caducadas.",
                     "Actualizado hoy",
                     DateTime.Now));
             }
@@ -949,12 +929,12 @@
             plataformaStats =
             [
                 new PlatformStatsDto(
-                    "Clientes e-fact",
+                    "Clientes E-FACT",
                     clientesEFact,
                     Math.Round((double)clientesEFact / totalClientesPlataforma * 100d, 1),
                     "blue"),
                 new PlatformStatsDto(
-                    "Clientes e-sign",
+                    "Clientes E-RÚBRICA",
                     clientesESign,
                     Math.Round((double)clientesESign / totalClientesPlataforma * 100d, 1),
                     "green")
@@ -1096,8 +1076,27 @@
         return new List<ProductoDashboardDto>
         {
             new("e-fact", "EF", efact.Sum(v => v.Valor), efact.Count, "efact"),
-            new("eRúbrica", "ER", esign.Sum(v => v.Valor), esign.Count, "esign")
+            new("E-RÚBRICA", "ER", esign.Sum(v => v.Valor), esign.Count, "esign")
         };
+    }
+
+    private static List<ReporteVentaBackOffice> FiltrarVentasPorPeriodo(
+        IEnumerable<ReporteVentaBackOffice> ventas,
+        string periodo)
+    {
+        var hoy = DateTime.Today;
+        var inicio = periodo switch
+        {
+            "hoy" => hoy,
+            "trimestre" => hoy.AddMonths(-3),
+            "anio" => new DateTime(hoy.Year, 1, 1),
+            _ => new DateTime(hoy.Year, hoy.Month, 1)
+        };
+
+        return ventas
+            .Where(v => string.Equals(v.Estado, "pagada", StringComparison.OrdinalIgnoreCase))
+            .Where(v => v.Fecha >= inicio && v.Fecha < hoy.AddDays(1))
+            .ToList();
     }
 
     private static List<DonutSegmentDto> BuildDonutSegments(List<CanalDashboardDto> canales)
@@ -1191,6 +1190,9 @@
         return "e-fact";
     }
 
+    private static string ProductoDisplay(string? producto) =>
+        NormalizarProducto(producto) == "e-sign" ? "E-RÚBRICA" : "E-FACT";
+
     private static string NombreFirma(UsuSolicitudFirma sol)
     {
         return $"{sol.SolNombres} {sol.SolPrimerApellido} {sol.SolSegundoApellido}".Trim();
@@ -1209,12 +1211,11 @@
 
     private List<KpiDashboardDto> BuildKpis() =>
     [
-        new KpiDashboardDto("ri-team-line", "blue", "MRR (Ingresos recurrentes)", "eRúbrica $0.00\neDeclara $0.00\nePeople $0.00\neContax $0.00", false, "", false, "", ""),
-        new KpiDashboardDto("ri-group-line", "green", "Clientes activos", $"e-fact {clientesActivosVal.ToString("N0", CultureInfo.InvariantCulture)}\neRúbrica 0 clientes", false, "", false, "", ""),
-        new KpiDashboardDto("ri-file-list-3-line", "purple", "Documentos emitidos hoy", documentosHoyVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", ""),
-        new KpiDashboardDto("ri-money-dollar-circle-line", "orange", "Ingresos del mes", Money(ingresosMesVal), false, "", false, "", ""),
-        new KpiDashboardDto("ri-send-plane-line", "blue", "Solicitudes por gestionar", solicitudesFirmaPendientes.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", "", "Pagadas · Uanataca"),
-        new KpiDashboardDto("ri-alert-line", "red", "Suscripciones vencidas", suscripcionesVencidasVal.ToString("N0", CultureInfo.InvariantCulture), false, "", false, "", "")
+        new KpiDashboardDto("ri-file-list-3-line", "blue", "Documentos emitidos hoy", documentosHoyVal.ToString("N0", CultureInfo.InvariantCulture), "vs. ayer", "5,36 19,36 32,22 45,28 58,12 72,24 86,15"),
+        new KpiDashboardDto("ri-group-line", "green", "Clientes activos", clientesActivosVal.ToString("N0", CultureInfo.InvariantCulture), "este mes", "5,34 18,20 30,26 44,17 58,9 71,25 87,16"),
+        new KpiDashboardDto("ri-money-dollar-circle-line", "orange", "Ingresos del mes", Money(ingresosMesVal), "vs. mes anterior", "5,37 18,31 28,36 40,18 53,25 66,11 86,18"),
+        new KpiDashboardDto("ri-box-3-line", "purple", "Productos vendidos", ventasMesCount.ToString("N0", CultureInfo.InvariantCulture), "por periodo", "5,35 18,34 30,21 44,27 57,8 69,31 85,20"),
+        new KpiDashboardDto("ri-send-plane-fill", "rose", "Solicitudes por gestionar", solicitudesFirmaPendientes.ToString("N0", CultureInfo.InvariantCulture), "Servicio E-RÚBRICA", "5,34 18,27 31,13 44,27 56,15 70,23 87,12", "Uanataca")
     ];
 
     private sealed record KpiDashboardDto(
@@ -1222,11 +1223,8 @@
         string Tone, 
         string Label, 
         string Value, 
-        bool IsTrend, 
-        string TrendText, 
-        bool IsTrendPositive, 
-        string LinkText, 
-        string LinkUrl,
+        string Note,
+        string Sparkline,
         string SubLabel = ""
     );
     private sealed record CanalDashboardDto(string Nombre, decimal Total, int Transacciones, string Color);

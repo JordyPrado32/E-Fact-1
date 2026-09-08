@@ -74,11 +74,6 @@
                 <small>Perfiles con acceso habilitado.</small>
             </article>
 
-            <article class="summary-card">
-                <span class="summary-label">Cuentas bloqueadas</span>
-                <strong>@UsuariosBloqueados</strong>
-                <small>Cuentas bloqueadas o inactivas.</small>
-            </article>
         </div>
     </section>
 
@@ -92,7 +87,22 @@
 
         <div class="filter-group">
             <button type="button" class="filter-chip @(activeFilter == "Todos" ? "filter-chip-active" : "")" @onclick='() => SetActiveFilter("Todos")'>Todos</button>
-            <button type="button" class="filter-chip @(activeFilter == "Bloqueados" ? "filter-chip-active" : "")" @onclick='() => SetActiveFilter("Bloqueados")'>Bloqueados</button>
+            @if (isInternal)
+            {
+                <button type="button" class="filter-chip @(activeFilter == "Bloqueados" ? "filter-chip-active" : "")" @onclick='() => SetActiveFilter("Bloqueados")'>Bloqueados</button>
+            }
+            else
+            {
+                <button type="button" class="filter-chip @(activeFilter == "Documentos" ? "filter-chip-active" : "")" @onclick='() => SetActiveFilter("Documentos")'>Con documentos</button>
+                <button type="button" class="filter-chip @(activeFilter == "Firma" ? "filter-chip-active" : "")" @onclick='() => SetActiveFilter("Firma")'>Con firma</button>
+                <select class="filter-select" @bind="serviceFilter" @bind:after="ResetPage">
+                    <option value="Todos">Todos los servicios</option>
+                    <option value="Documentos">E-FACT</option>
+                    <option value="Firma">E-RÚBRICA</option>
+                    <option value="Ambos">Ambos</option>
+                    <option value="SinServicios">Sin servicios</option>
+                </select>
+            }
         </div>
 
         <div class="search-box">
@@ -1215,15 +1225,16 @@
             }
         }
     }
-    private string activeFilter = "Todos"; // "Todos", "Bloqueados"
+    private string activeFilter = "Todos"; // "Todos", "Bloqueados", "Documentos", "Firma"
+    private string serviceFilter = "Todos";
 
     private int currentPage = 1;
-    private int pageSize = 5;
+    private int pageSize = 10;
     private Dictionary<int, List<UsuarioServicioSuscripcion>> suscripcionesClientePorUsuario = new();
+    private Dictionary<int, List<UsuSolicitudFirma>> solicitudesFirmaClientePorUsuario = new();
     private Dictionary<int, AppServicio> serviciosCatalogo = new();
 
     private int UsuariosActivos => usuariosList.Count(u => u.Estado == true && u.CuentaBloqueada != true);
-    private int UsuariosBloqueados => usuariosList.Count(u => u.CuentaBloqueada == true || u.Estado == false);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -1258,6 +1269,10 @@
                 .OrderByDescending(u => u.FechaCreacion)
                 .ToListAsync();
 
+            usuariosList = usuariosList
+                .Where(u => !EsUsuarioDadoDeBaja(u))
+                .ToList();
+
             if (!isInternal && usuariosList.Count > 0)
             {
                 var usuarioIds = usuariosList.Select(u => u.IdUsuario).ToList();
@@ -1270,6 +1285,16 @@
                     .GroupBy(s => s.IdUsuario)
                     .ToDictionary(g => g.Key, g => g.OrderBy(s => s.FechaFin ?? DateTime.MaxValue).ToList());
 
+                var solicitudesFirma = await context.UsuSolicitudFirma
+                    .AsNoTracking()
+                    .Include(s => s.EstadoNumerica)
+                    .Where(s => s.SolActivo && usuarioIds.Contains(s.SolIdUsuarioCliente))
+                    .ToListAsync();
+
+                solicitudesFirmaClientePorUsuario = solicitudesFirma
+                    .GroupBy(s => s.SolIdUsuarioCliente)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(s => s.SolFechaSolicitud).ToList());
+
                 serviciosCatalogo = await context.AppServicios
                     .AsNoTracking()
                     .ToDictionaryAsync(s => s.ServicioId);
@@ -1277,6 +1302,7 @@
             else
             {
                 suscripcionesClientePorUsuario.Clear();
+                solicitudesFirmaClientePorUsuario.Clear();
                 serviciosCatalogo.Clear();
             }
 
@@ -1308,14 +1334,31 @@
             );
         }
 
+        query = query.Where(u => u.Estado == true);
+
         if (activeFilter == "Bloqueados")
         {
-            query = query.Where(u => u.CuentaBloqueada == true || u.Estado == false);
+            query = query.Where(u => u.CuentaBloqueada == true);
         }
-        else
+        else if (!EsVistaUsuariosInternos() && activeFilter == "Documentos")
         {
-            // "Todos" muestra los activos o con bloqueo temporal, omitiendo los dados de baja total
-            query = query.Where(u => u.Estado == true || u.CuentaBloqueada == true);
+            query = query.Where(TieneDocumentosDisponibles);
+        }
+        else if (!EsVistaUsuariosInternos() && activeFilter == "Firma")
+        {
+            query = query.Where(TieneFirmaActiva);
+        }
+
+        if (!EsVistaUsuariosInternos())
+        {
+            query = serviceFilter switch
+            {
+                "Documentos" => query.Where(TieneDocumentosDisponibles),
+                "Firma" => query.Where(TieneFirmaActiva),
+                "Ambos" => query.Where(u => TieneDocumentosDisponibles(u) && TieneFirmaActiva(u)),
+                "SinServicios" => query.Where(EsCuentaClienteInactiva),
+                _ => query
+            };
         }
 
         return query.ToList();
@@ -1333,6 +1376,18 @@
             return "Sin correo disponible";
         }
         return email;
+    }
+
+    private static bool EsUsuarioDadoDeBaja(Usuario usuario)
+    {
+        if (usuario.Estado == false)
+        {
+            return true;
+        }
+
+        var email = usuario.Email ?? string.Empty;
+        return email.StartsWith("BAJA-", StringComparison.OrdinalIgnoreCase) ||
+               email.StartsWith("NULL-", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record ClienteNovedad(string Texto, string Clase);
@@ -1403,28 +1458,75 @@
 
         var hoy = DateTime.Today;
         var firmaActiva = suscripciones
-            .Where(s => string.Equals(s.Estado, "ACTIVO", StringComparison.OrdinalIgnoreCase) && EsSuscripcionFirma(s))
+            .Where(s => EsEstadoSuscripcionActiva(s.Estado) && EsSuscripcionFirma(s))
             .OrderBy(s => s.FechaFin ?? DateTime.MaxValue)
             .FirstOrDefault();
 
-        if (firmaActiva?.FechaFin is null)
+        if (firmaActiva is not null)
         {
-            return null;
+            var plan = string.IsNullOrWhiteSpace(firmaActiva.PlanActual) ? "E-RÚBRICA adquirida" : $"E-RÚBRICA: {firmaActiva.PlanActual}";
+
+            if (firmaActiva.FechaFin is null)
+            {
+                return new ClienteNovedad(plan, "novedad-pill-ok");
+            }
+
+            var dias = (firmaActiva.FechaFin.Value.Date - hoy).Days;
+            if (dias < 0)
+            {
+                return new ClienteNovedad($"{plan} vencida", "novedad-pill-danger");
+            }
+
+            if (dias <= 30)
+            {
+                return new ClienteNovedad($"{plan} caduca en {dias} días", dias <= 7 ? "novedad-pill-danger" : "novedad-pill-warning");
+            }
+
+            return new ClienteNovedad(plan, "novedad-pill-ok");
         }
 
-        var dias = (firmaActiva.FechaFin.Value.Date - hoy).Days;
-        if (dias < 0)
+        if (solicitudesFirmaClientePorUsuario.TryGetValue(idUsuario, out var solicitudes))
         {
-            return new ClienteNovedad("Firma vencida", "novedad-pill-danger");
-        }
-
-        if (dias <= 30)
-        {
-            return new ClienteNovedad($"Firma caduca en {dias} días", dias <= 7 ? "novedad-pill-danger" : "novedad-pill-warning");
+            var solicitud = solicitudes.FirstOrDefault();
+            if (solicitud is not null)
+            {
+                var detalle = ObtenerDetalleSolicitudFirma(solicitud);
+                var estado = solicitud.EstadoNumerica?.EstNombre;
+                var textoEstado = string.IsNullOrWhiteSpace(estado) ? "solicitada" : estado.Trim().ToLowerInvariant();
+                var clase = solicitud.SolPagoExitoso == true ? "novedad-pill-ok" : "novedad-pill-warning";
+                return new ClienteNovedad($"E-RÚBRICA {textoEstado}: {detalle}", clase);
+            }
         }
 
         return null;
     }
+
+    private static string ObtenerDetalleSolicitudFirma(UsuSolicitudFirma solicitud)
+    {
+        var partes = new[]
+        {
+            string.IsNullOrWhiteSpace(solicitud.SolFormatoFirma) ? null : solicitud.SolFormatoFirma.Trim(),
+            string.IsNullOrWhiteSpace(solicitud.SolVigencia) ? null : solicitud.SolVigencia.Trim()
+        }.Where(p => !string.IsNullOrWhiteSpace(p));
+
+        var detalle = string.Join(" - ", partes);
+        return string.IsNullOrWhiteSpace(detalle) ? "firma solicitada" : detalle;
+    }
+
+    private bool EsCuentaClienteInactiva(Usuario usuario) =>
+        !TieneDocumentosDisponibles(usuario) && !TieneFirmaActiva(usuario);
+
+    private bool TieneDocumentosDisponibles(Usuario usuario) =>
+        usuario.SaldoDocumentos > 0 || TienePlanIlimitado(usuario);
+
+    private bool TieneFirmaActiva(Usuario usuario) =>
+        suscripcionesClientePorUsuario.TryGetValue(usuario.IdUsuario, out var suscripciones) &&
+        suscripciones.Any(s => EsEstadoSuscripcionActiva(s.Estado) && EsSuscripcionFirma(s));
+
+    private static bool EsEstadoSuscripcionActiva(string? estado) =>
+        string.Equals(estado, "ACTIVO", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(estado, "ACTIVA", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(estado, "VIGENTE", StringComparison.OrdinalIgnoreCase);
 
     private bool EsSuscripcionFirma(UsuarioServicioSuscripcion suscripcion)
     {
@@ -1664,6 +1766,11 @@
     {
         activeFilter = filter;
         currentPage = 1; // Reset to page 1 on filter change
+    }
+
+    private void ResetPage()
+    {
+        currentPage = 1;
     }
 
     private void SetPage(int page)
