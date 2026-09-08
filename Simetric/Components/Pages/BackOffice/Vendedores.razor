@@ -688,7 +688,7 @@
         <div class="vp-hero-copy">
             <span class="vp-hero-kicker">BackOffice · Comercial</span>
             <h2>@(esVendedor ? "Mi QR y Enlace" : "Vendedores y Links de Venta")</h2>
-            <p class="vp-hero-note">@(esVendedor ? "Comparte tu enlace o QR para registrar clientes asociados a tu perfil." : "Cada vendedor tiene un enlace y QR únicos que se resuelven en backend sin exponer su nombre en la URL.")</p>
+            <p class="vp-hero-note">Comparte tu enlace o QR para registrar clientes asociados a tu perfil. @if (vendedoresConQrActivos > 0) { <span>Hay @vendedoresConQrActivos vendedor(es) con QR activo.</span> }</p>
         </div>
         @if (!esVendedor)
         {
@@ -1177,7 +1177,9 @@
     private bool success;
     private string? message;
     private bool esVendedor;
+    private bool esAdministradorBackOffice;
     private bool tienePerfilVendedor;
+    private int vendedoresConQrActivos;
     private bool isLoading = true;
     private readonly Dictionary<string, string> qrCache = new(StringComparer.Ordinal);
 
@@ -1474,18 +1476,24 @@
         }
 
         esVendedor = string.Equals(role, "7", StringComparison.OrdinalIgnoreCase) &&
-                     (string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase) ||
+                     (string.Equals(tipoCliente, "1", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase) ||
                       string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase));
+        esAdministradorBackOffice = esVendedor && string.Equals(tipoCliente, "1", StringComparison.OrdinalIgnoreCase);
         tienePerfilVendedor = idUsuario > 0 && await VendedorBackOfficeService.TienePerfilUsuarioAsync(idUsuario);
 
         var allVendors = await VendedorBackOfficeService.ListarAsync();
+        vendedoresConQrActivos = allVendors.Count(v => !v.EsSistema && v.Activo);
 
         if (esVendedor)
         {
             var sellerProfile = await VendedorBackOfficeService.ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);
-            vendors = sellerProfile is null || !sellerProfile.Activo
-                ? new List<VendedorBackOffice>()
-                : new List<VendedorBackOffice> { sellerProfile };
+            var sistema = allVendors.FirstOrDefault(v => v.EsSistema);
+            vendors = new[] { sellerProfile, esAdministradorBackOffice ? sistema : null }
+                .Where(v => v is not null && v.Activo)
+                .Cast<VendedorBackOffice>()
+                .DistinctBy(v => v.IdVendedor)
+                .ToList();
         }
         else
         {
