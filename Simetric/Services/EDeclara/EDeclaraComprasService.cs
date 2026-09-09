@@ -258,8 +258,12 @@ public sealed class EDeclaraComprasService
         contribuyenteId = userId;
         if (string.IsNullOrWhiteSpace(ruc)) throw new InvalidOperationException("La cuenta no tiene identificación configurada en Mi perfil.");
         var meses = periodo switch { 13 => Enumerable.Range(1, 6), 14 => Enumerable.Range(7, 6), >= 1 and <= 12 => new[] { periodo }, _ => throw new InvalidOperationException("Período inválido.") };
-        var archivos = await DescargarXmlSriAsync(ruc, clave, anio, meses, tipoDocumento);
-        var resultado = await ImportarXmlAsync(userId, contribuyenteId, anio, periodo, archivos, "SRI");
+        var descarga = await DescargarXmlSriAsync(ruc, clave, anio, meses, tipoDocumento);
+        var resultado = await ImportarXmlAsync(userId, contribuyenteId, anio, periodo, descarga.Archivos, "SRI");
+        if (descarga.Encontrados == 0)
+            return resultado with { Errores = ["La API no devolvió comprobantes para el período seleccionado."] };
+        if (descarga.NoLeidos > 0)
+            return resultado with { Errores = resultado.Errores.Append($"La API encontró {descarga.Encontrados} comprobante(s), pero no se pudieron leer {descarga.NoLeidos} archivo(s) XML.").ToList() };
         return resultado;
     }
 
@@ -301,7 +305,7 @@ public sealed class EDeclaraComprasService
         });
     }
 
-    private async Task<List<(string Nombre, string Xml)>> DescargarXmlSriAsync(
+    private async Task<(List<(string Nombre, string Xml)> Archivos, int Encontrados, int NoLeidos)> DescargarXmlSriAsync(
         string ruc, string clave, int anio, IEnumerable<int> meses, int tipoDocumento)
     {
         var endpoint = (_configuration["ApiDescargaComprobantes:BaseUrl"]
@@ -329,28 +333,55 @@ public sealed class EDeclaraComprasService
             throw new InvalidOperationException($"El servicio SRI respondió HTTP {(int)response.StatusCode}.");
 
         var responseText = await response.Content.ReadAsStringAsync();
-        if (string.IsNullOrWhiteSpace(responseText)) return documentos;
+        if (string.IsNullOrWhiteSpace(responseText)) return (documentos, 0, 0);
         using var json = JsonDocument.Parse(responseText);
         if (!TryGetProperty(json.RootElement, "listaComprobantes", out var lista) || lista.ValueKind != JsonValueKind.Array)
-            return documentos;
+            return (documentos, 0, 0);
 
+        var encontrados = lista.GetArrayLength();
+        var noLeidos = 0;
         foreach (var item in lista.EnumerateArray())
         {
             var link = GetJsonString(item, "xmlLink");
             var xmlDirecto = GetJsonString(item, "xml");
-            var xml = !string.IsNullOrWhiteSpace(xmlDirecto) ? xmlDirecto : await LeerXmlDesdeReferenciaAsync(client, endpoint, link);
+            var xml = !string.IsNullOrWhiteSpace(xmlDirecto) ? xmlDirecto : await LeerXmlDesdeReferenciaAsync(client, endpoint, link, ruc);
             if (!string.IsNullOrWhiteSpace(xml)) documentos.Add(($"SRI-{anio}-{documentos.Count + 1}.xml", xml));
+            else noLeidos++;
         }
-        return documentos;
+        return (documentos, encontrados, noLeidos);
     }
 
-    private static async Task<string?> LeerXmlDesdeReferenciaAsync(HttpClient client, string endpoint, string? referencia)
+    private async Task<string?> LeerXmlDesdeReferenciaAsync(HttpClient client, string endpoint, string? referencia, string ruc)
     {
         if (string.IsNullOrWhiteSpace(referencia)) return null;
         if (referencia.TrimStart().StartsWith('<')) return referencia;
-        if (Uri.TryCreate(referencia, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https") return await client.GetStringAsync(uri);
         if (Path.GetExtension(referencia).Equals(".xml", StringComparison.OrdinalIgnoreCase) && File.Exists(referencia)) return await File.ReadAllTextAsync(referencia);
-        if (Uri.TryCreate(new Uri(endpoint), referencia, out var relativa)) return await client.GetStringAsync(relativa);
+        if (Uri.TryCreate(referencia, UriKind.Absolute, out var uri))
+        {
+            if (uri.IsFile && File.Exists(uri.LocalPath)) return await File.ReadAllTextAsync(uri.LocalPath);
+        }
+
+        var nombreArchivo = Path.GetFileName(uri?.LocalPath ?? referencia);
+        var rutaFisica = _configuration["ApiDescargaComprobantes:PhysicalRecibidosPath"];
+        if (!string.IsNullOrWhiteSpace(rutaFisica) && !string.IsNullOrWhiteSpace(nombreArchivo))
+        {
+            var rutaPorRuc = Path.Combine(rutaFisica, SoloDigitos(ruc), nombreArchivo);
+            if (File.Exists(rutaPorRuc)) return await File.ReadAllTextAsync(rutaPorRuc);
+            var rutaDirecta = Path.Combine(rutaFisica, nombreArchivo);
+            if (File.Exists(rutaDirecta)) return await File.ReadAllTextAsync(rutaDirecta);
+        }
+
+        if (uri?.Scheme is "http" or "https")
+        {
+            using var response = await client.GetAsync(uri);
+            if (response.IsSuccessStatusCode) return await response.Content.ReadAsStringAsync();
+        }
+
+        if (Uri.TryCreate(new Uri(endpoint), referencia, out var relativa) && relativa.Scheme is "http" or "https")
+        {
+            using var response = await client.GetAsync(relativa);
+            if (response.IsSuccessStatusCode) return await response.Content.ReadAsStringAsync();
+        }
         return null;
     }
 

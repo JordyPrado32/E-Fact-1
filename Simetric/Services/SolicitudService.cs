@@ -2369,11 +2369,12 @@ namespace Simetric.Services
 
             if (remote is null)
             {
-                _logger.LogWarning("Uanataca no devolvió estado remoto. SolId: {SolId}. UUID: {Uuid}", solicitud.SolId, solicitud.SolUanatacaUuid ?? "(sin UUID)");
+                _logger.LogDebug("Uanataca aun no devuelve estado remoto. SolId: {SolId}. UUID: {Uuid}", solicitud.SolId, solicitud.SolUanatacaUuid ?? "(sin UUID)");
                 return new BesSolicitudOperacionResultadoDto
                 {
-                    Success = false,
-                    Message = "La solicitud ya fue enviada a Uanataca, pero no se pudo recuperar su estado remoto.",
+                    Success = true,
+                    StatusCode = 404,
+                    Message = "La solicitud sigue pendiente de aparecer en Uanataca; se consultará nuevamente.",
                     Uuid = solicitud.SolUanatacaUuid
                 };
             }

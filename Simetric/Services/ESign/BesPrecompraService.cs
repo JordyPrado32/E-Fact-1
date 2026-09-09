@@ -104,7 +104,8 @@ public sealed class UanatacaApiService
             GetPath("CertificateRequestsPath", "/certificateRequests"),
             token,
             query,
-            cancellationToken);
+            cancellationToken,
+            notFoundAsEmpty: true);
 
         return DeserializarSolicitudes(raw);
     }
@@ -283,12 +284,19 @@ public sealed class UanatacaApiService
         string path,
         string bearerToken,
         IReadOnlyDictionary<string, string?>? query,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool notFoundAsEmpty = false)
     {
         using var request = BuildRequest(method, path, bearerToken, query);
         using var requestTimeout = CrearRequestTimeout(cancellationToken);
         using var response = await _httpClient.SendAsync(request, requestTimeout.Token);
         var body = await response.Content.ReadAsStringAsync(requestTimeout.Token);
+
+        if (notFoundAsEmpty && response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            _logger.LogDebug("Uanataca no encontro resultados. Method: {Method}. Path: {Path}", method, path);
+            return null;
+        }
 
         if (!response.IsSuccessStatusCode)
         {
