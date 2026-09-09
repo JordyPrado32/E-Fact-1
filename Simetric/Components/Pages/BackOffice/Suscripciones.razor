@@ -160,6 +160,7 @@
                     </div>
                     <div class="donut-legend">
                         <div class="legend-item"><span class="dot dot-vigente"></span> <span class="legend-name">Vigentes</span> <span class="legend-value">@esignVigentesCount (@(totalESignSuscripciones > 0 ? Math.Round((double)esignVigentesCount / totalESignSuscripciones * 100) : 0)%)</span></div>
+                        <div class="legend-item"><span class="dot dot-poremitir"></span> <span class="legend-name">Por emitir</span> <span class="legend-value">@esignPorEmitirCount (@(totalESignSuscripciones > 0 ? Math.Round((double)esignPorEmitirCount / totalESignSuscripciones * 100) : 0)%)</span></div>
                         <div class="legend-item"><span class="dot dot-porvencer"></span> <span class="legend-name">Por Vencer</span> <span class="legend-value">@esignPorVencerCount (@(totalESignSuscripciones > 0 ? Math.Round((double)esignPorVencerCount / totalESignSuscripciones * 100) : 0)%)</span></div>
                         <div class="legend-item"><span class="dot dot-vencida"></span> <span class="legend-name">Vencidas</span> <span class="legend-value">@esignVencidasCount (@(totalESignSuscripciones > 0 ? Math.Round((double)esignVencidasCount / totalESignSuscripciones * 100) : 0)%)</span></div>
                     </div>
@@ -364,6 +365,7 @@
                                 <select class="filter-select" @bind="filterESignEstado" @bind:after="OnFilterESignChanged">
                                     <option value="ALL">Todos los estados</option>
                                     <option value="vigente">Vigente</option>
+                                    <option value="por emitir">Por emitir</option>
                                     <option value="por vencer">Por Vencer</option>
                                     <option value="vencida">Vencida</option>
                                 </select>
@@ -430,7 +432,7 @@
                                             </td>
                                             <td>
                                                 <span class="status-badge @row.Estado.Replace(" ", "")">
-                                                    <i class="bi @(row.Estado == "vigente" ? "bi-check-circle-fill" : row.Estado == "por vencer" ? "bi-exclamation-triangle-fill" : "bi-x-circle-fill")"></i>
+                                                    <i class="bi @(row.Estado == "vigente" ? "bi-check-circle-fill" : row.Estado == "por emitir" || row.Estado == "por vencer" ? "bi-exclamation-triangle-fill" : "bi-x-circle-fill")"></i>
                                                     @row.Estado
                                                 </span>
                                             </td>
@@ -497,9 +499,10 @@
     private int totalEFactSuscripciones => efactActivosCount + efactSinSaldoCount;
 
     private int esignVigentesCount;
+    private int esignPorEmitirCount;
     private int esignPorVencerCount;
     private int esignVencidasCount;
-    private int totalESignSuscripciones => esignVigentesCount + esignPorVencerCount + esignVencidasCount;
+    private int totalESignSuscripciones => esignVigentesCount + esignPorEmitirCount + esignPorVencerCount + esignVencidasCount;
 
     // UI Panel Toggles
     private bool showEFactDetails = false;
@@ -675,11 +678,13 @@
                 var signatures = await context.Set<UsuSolicitudFirma>()
                     .AsNoTracking()
                     .Include(s => s.EstadoNumerica)
-                    .Where(s => (s.SolIdEstadoNumerica == 3 || s.SolActivo) && userIds.Contains(s.SolIdUsuarioCliente))
+                    .Where(s => userIds.Contains(s.SolIdUsuarioCliente)
+                        && (s.SolPagoExitoso == true || s.SolIdEstadoNumerica == 3 || s.SolActivo))
                     .ToListAsync();
 
                 esignAllRows.Clear();
                 esignVigentesCount = 0;
+                esignPorEmitirCount = 0;
                 esignPorVencerCount = 0;
                 esignVencidasCount = 0;
 
@@ -688,8 +693,13 @@
                     var issueDate = s.SolFechaAprobacion ?? s.SolFechaSolicitud;
                     var expirationDate = CalcularExpiracion(s);
 
-                    string status = "vigente";
-                    if (expirationDate < DateTime.Today)
+                    string status;
+                    if (s.SolPagoExitoso == true && s.SolIdEstadoNumerica != 3)
+                    {
+                        status = "por emitir";
+                        esignPorEmitirCount++;
+                    }
+                    else if (expirationDate < DateTime.Today)
                     {
                         status = "vencida";
                         esignVencidasCount++;
@@ -701,6 +711,7 @@
                     }
                     else
                     {
+                        status = "vigente";
                         esignVigentesCount++;
                     }
 
@@ -748,8 +759,8 @@
 
             var esignPayload = new
             {
-                labels = new[] { "Vigentes", "Por Vencer", "Vencidas" },
-                values = new[] { esignVigentesCount, esignPorVencerCount, esignVencidasCount }
+                labels = new[] { "Vigentes", "Por emitir", "Por Vencer", "Vencidas" },
+                values = new[] { esignVigentesCount, esignPorEmitirCount, esignPorVencerCount, esignVencidasCount }
             };
 
             await JS.InvokeVoidAsync("numericaDashboardCharts.renderSubscriptions", efactPayload, esignPayload);

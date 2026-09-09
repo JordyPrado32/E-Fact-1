@@ -536,7 +536,7 @@ window.numericaDashboardCharts = (function () {
             "esign",
             "esignDoughnutChart",
             esignPayload,
-            ["#10b981", "#f59e0b", "#ef4444"],
+            ["#10b981", "#2563eb", "#f59e0b", "#ef4444"],
             value => `${value} firma(s)`);
     }
 
