@@ -4177,22 +4177,40 @@ IF @resultado < 0
                 .Select(f => f.Codfactura)
                 .ToList();
         }
-        public async Task<bool> AnularFacturaDirectoAsync(int codfactura)
+        public async Task<bool> AnularFacturaDirectoAsync(int codfactura, bool notificarCobranzasBackOffice = false)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
             try
             {
-                // Como estás dentro del servicio, aquí SÍ tienes acceso a tu DbContext, 
-                // a tu repositorio o a tu conexión de Dapper/SQL.
-
-                // EJEMPLO SI USAS ENTORNO CON REPOSITORIO O CONTEXTO INTERNO:
-                // Supongamos que tu contexto interno en el servicio se llama _context o _db:
-                var factura = await context.Facturas.FirstOrDefaultAsync(f => f.Codfactura == codfactura);
+                var factura = await context.Facturas
+                    .Include(f => f.CodclientesNavigation)
+                    .FirstOrDefaultAsync(f => f.Codfactura == codfactura);
 
                 if (factura != null)
                 {
-                    factura.Estado = false; // Cambiamos el campo a false
-                    await context.SaveChangesAsync(); // Guardamos en la base de datos
+                    factura.Estado = false;
+                    await context.SaveChangesAsync();
+
+                    if (notificarCobranzasBackOffice)
+                    {
+                        try
+                        {
+                            await _emailService.EnviarAvisoFacturaAnuladaBackOfficeAsync(
+                                ObtenerNumeroFacturaDocumento(factura),
+                                new[] { "lguairacaja@numerosasesores.com", "mpincay@numerosasesores.com" },
+                                ObtenerNombreClienteFactura(factura),
+                                factura.CodclientesNavigation?.Numeroidentificacion,
+                                factura.Valortotal,
+                                factura.Fechaentrega,
+                                factura.Estadoenviosri,
+                                factura.Numautorizacion);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "No se pudo notificar a Cobranzas la anulacion de la factura {FacturaId}.", codfactura);
+                        }
+                    }
+
                     return true;
                 }
 

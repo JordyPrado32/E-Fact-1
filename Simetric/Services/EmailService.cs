@@ -30,6 +30,15 @@ public interface IEmailService
         string rutaXmlAdjunto,
         string? rutaPdfAdjunto,
         IEnumerable<string>? copiasOcultas = null);
+    Task EnviarAvisoFacturaAnuladaBackOfficeAsync(
+        string numeroFactura,
+        IEnumerable<string> destinatarios,
+        string? nombreCliente,
+        string? identificacionCliente,
+        decimal? totalFactura,
+        DateTime? fechaEmision,
+        string? estadoSri,
+        string? numeroAutorizacion);
     Task EnviarNotaCreditoAsync(
         string numeroNotaCredito,
         string numeroDocumentoModificado,
@@ -38,6 +47,16 @@ public interface IEmailService
         decimal? totalNotaCredito,
         string rutaXmlAdjunto,
         string? rutaPdfAdjunto);
+    Task EnviarAvisoNotaCreditoAnuladaBackOfficeAsync(
+        string numeroNotaCredito,
+        string? numeroDocumentoModificado,
+        IEnumerable<string> destinatarios,
+        string? nombreCliente,
+        string? identificacionCliente,
+        decimal? totalNotaCredito,
+        DateTime? fechaDocumentoModificado,
+        string? estadoSri,
+        string? numeroAutorizacion);
     Task EnviarNotaDebitoAsync(
         string numeroNotaDebito,
         string numeroDocumentoModificado,
@@ -769,6 +788,68 @@ public class EmailService : IEmailService
         await SendMessageAsync(mensaje);
     }
 
+    public async Task EnviarAvisoFacturaAnuladaBackOfficeAsync(
+        string numeroFactura,
+        IEnumerable<string> destinatarios,
+        string? nombreCliente,
+        string? identificacionCliente,
+        decimal? totalFactura,
+        DateTime? fechaEmision,
+        string? estadoSri,
+        string? numeroAutorizacion)
+    {
+        var destinatariosNormalizados = destinatarios
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!destinatariosNormalizados.Any())
+            throw new InvalidOperationException("No hay destinatarios configurados para notificar la anulación.");
+
+        var numeroSeguro = WebUtility.HtmlEncode(numeroFactura);
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Consumidor final" : nombreCliente.Trim());
+        var identificacionSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(identificacionCliente) ? "Sin identificación" : identificacionCliente.Trim());
+        var estadoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(estadoSri) ? "Sin estado SRI registrado" : estadoSri.Trim());
+        var autorizacionSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(numeroAutorizacion) ? "Sin autorización registrada" : numeroAutorizacion.Trim());
+        var fechaTexto = fechaEmision?.ToString("dd/MM/yyyy", new CultureInfo("es-EC")) ?? "Sin fecha registrada";
+        var totalTexto = (totalFactura ?? 0m).ToString("N2", new CultureInfo("es-EC"));
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+
+        foreach (var correo in destinatariosNormalizados)
+            mensaje.To.Add(MailboxAddress.Parse(correo));
+
+        mensaje.Subject = $"BackOffice: factura anulada pendiente de gestión SRI {numeroFactura}";
+
+        var bodyBuilder = new BodyBuilder
+        {
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Factura anulada en BackOffice: {numeroFactura}. Requiere gestión en SRI.",
+                eyebrow: "BackOffice",
+                title: $"Factura anulada {numeroSeguro}",
+                subtitle: "Notificación interna para Cobranzas.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimadas,")}
+{BuildBodyParagraph($"Se anuló la factura <strong>{numeroSeguro}</strong> dentro de BackOffice. Por favor revisar y gestionar la anulación correspondiente en el portal del <strong>SRI</strong>, cuando aplique.")}
+{BuildInfoTable(
+    ("Factura", numeroSeguro),
+    ("Cliente", clienteSeguro),
+    ("Identificación", identificacionSeguro),
+    ("Fecha de emisión", WebUtility.HtmlEncode(fechaTexto)),
+    ("Total", $"${totalTexto}"),
+    ("Estado SRI", estadoSeguro),
+    ("Autorización", autorizacionSeguro))}
+{BuildNoticeBox("<strong>Acción requerida:</strong> validar la anulación tributaria en el SRI y dar seguimiento desde Cobranzas. Este aviso fue generado automáticamente al anular la factura en BackOffice.")}",
+                footerText: "Notificación interna BackOffice")
+        };
+
+        mensaje.Body = bodyBuilder.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
     public async Task EnviarNotaCreditoAsync(
         string numeroNotaCredito,
         string numeroDocumentoModificado,
@@ -835,6 +916,71 @@ public class EmailService : IEmailService
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
         if (!string.IsNullOrWhiteSpace(rutaPdfAdjunto))
             bodyBuilder.Attachments.Add(rutaPdfAdjunto);
+
+        mensaje.Body = bodyBuilder.ToMessageBody();
+
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoNotaCreditoAnuladaBackOfficeAsync(
+        string numeroNotaCredito,
+        string? numeroDocumentoModificado,
+        IEnumerable<string> destinatarios,
+        string? nombreCliente,
+        string? identificacionCliente,
+        decimal? totalNotaCredito,
+        DateTime? fechaDocumentoModificado,
+        string? estadoSri,
+        string? numeroAutorizacion)
+    {
+        var destinatariosNormalizados = destinatarios
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!destinatariosNormalizados.Any())
+            throw new InvalidOperationException("No hay destinatarios configurados para notificar la anulación.");
+
+        var numeroSeguro = WebUtility.HtmlEncode(numeroNotaCredito);
+        var documentoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(numeroDocumentoModificado) ? "Sin documento relacionado" : numeroDocumentoModificado.Trim());
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Consumidor final" : nombreCliente.Trim());
+        var identificacionSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(identificacionCliente) ? "Sin identificación" : identificacionCliente.Trim());
+        var estadoSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(estadoSri) ? "Sin estado SRI registrado" : estadoSri.Trim());
+        var autorizacionSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(numeroAutorizacion) ? "Sin autorización registrada" : numeroAutorizacion.Trim());
+        var fechaTexto = fechaDocumentoModificado?.ToString("dd/MM/yyyy", new CultureInfo("es-EC")) ?? "Sin fecha registrada";
+        var totalTexto = (totalNotaCredito ?? 0m).ToString("N2", new CultureInfo("es-EC"));
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+
+        foreach (var correo in destinatariosNormalizados)
+            mensaje.To.Add(MailboxAddress.Parse(correo));
+
+        mensaje.Subject = $"BackOffice: nota de crédito anulada pendiente de gestión SRI {numeroNotaCredito}";
+
+        var bodyBuilder = new BodyBuilder
+        {
+            HtmlBody = BuildTransactionalEmailLayout(
+                previewText: $"Nota de crédito anulada en BackOffice: {numeroNotaCredito}. Requiere gestión en SRI.",
+                eyebrow: "BackOffice",
+                title: $"Nota de crédito anulada {numeroSeguro}",
+                subtitle: "Notificación interna para Cobranzas.",
+                bodyHtml: $@"
+{BuildBodyParagraph("Estimadas,")}
+{BuildBodyParagraph($"Se anuló la nota de crédito <strong>{numeroSeguro}</strong> dentro de BackOffice. Por favor revisar y gestionar la anulación correspondiente en el portal del <strong>SRI</strong>, cuando aplique.")}
+{BuildInfoTable(
+    ("Nota de crédito", numeroSeguro),
+    ("Documento relacionado", documentoSeguro),
+    ("Cliente", clienteSeguro),
+    ("Identificación", identificacionSeguro),
+    ("Fecha sustento", WebUtility.HtmlEncode(fechaTexto)),
+    ("Total", $"${totalTexto}"),
+    ("Estado SRI", estadoSeguro),
+    ("Autorización", autorizacionSeguro))}
+{BuildNoticeBox("<strong>Acción requerida:</strong> validar la anulación tributaria en el SRI y dar seguimiento desde Cobranzas. Este aviso fue generado automáticamente al anular la nota de crédito en BackOffice.")}",
+                footerText: "Notificación interna BackOffice")
+        };
 
         mensaje.Body = bodyBuilder.ToMessageBody();
 

@@ -727,7 +727,9 @@
                 var absoluteLink = $"{NavManager.BaseUri.TrimEnd('/')}{route}";
                 var isBlocked = vendor.Activo == false;
                 var initials = GetInitials(vendor.Nombre);
-                var showQrPanel = vendor.Activo;
+                var showQrPanel = vendor.Activo &&
+                                  (vendor.EsSistema || vendor.IdVendedor == idVendedorPropio);
+                var qrLabel = vendor.EsSistema ? "QR del sistema" : "Mi QR";
 
                 <article class="vc @(isBlocked ? "blocked" : string.Empty)">
 
@@ -771,7 +773,7 @@
                     {
                         <div class="vc-body">
                             <div class="vc-qr">
-                                <span class="vc-qr-badge"><i class="bi bi-qr-code-scan"></i> QR</span>
+                                <span class="vc-qr-badge"><i class="bi bi-qr-code-scan"></i> @qrLabel</span>
                                 <button type="button" class="vc-qr-frame" @onclick="() => AbrirQrModal(vendor.Nombre, absoluteLink)" title="Ver QR grande">
                                     <img src="@ObtenerQrVendedor(absoluteLink)" alt="QR @vendor.Nombre" class="vc-qr-img" />
                                 </button>
@@ -786,7 +788,7 @@
                                         <i class="bi bi-download"></i> Descargar QR
                                     </button>
                                 </div>
-                                @if (!esVendedor && !vendor.EsSistema)
+                                @if (!esVendedor && !vendor.EsSistema && vendor.IdVendedor != idVendedorPropio)
                                 {
                                     <div class="vc-copy-row">
                                         <button type="button" class="vc-copy-btn secondary" @onclick="async () => await AbrirEditar(vendor)">
@@ -1180,6 +1182,7 @@
     private bool esAdministradorBackOffice;
     private bool tienePerfilVendedor;
     private int vendedoresConQrActivos;
+    private int? idVendedorPropio;
     private bool isLoading = true;
     private readonly Dictionary<string, string> qrCache = new(StringComparer.Ordinal);
 
@@ -1479,20 +1482,36 @@
                      (string.Equals(tipoCliente, "1", StringComparison.OrdinalIgnoreCase) ||
                       string.Equals(tipoCliente, "2", StringComparison.OrdinalIgnoreCase) ||
                       string.Equals(tipoCliente, "3", StringComparison.OrdinalIgnoreCase));
-        esAdministradorBackOffice = esVendedor && string.Equals(tipoCliente, "1", StringComparison.OrdinalIgnoreCase);
+        esAdministradorBackOffice = string.Equals(role, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase) ||
+                                  (esVendedor && string.Equals(tipoCliente, "1", StringComparison.OrdinalIgnoreCase));
         tienePerfilVendedor = idUsuario > 0 && await VendedorBackOfficeService.TienePerfilUsuarioAsync(idUsuario);
 
         var allVendors = await VendedorBackOfficeService.ListarAsync();
+        if (esAdministradorBackOffice && idUsuario > 0)
+        {
+            var perfilPropio = await VendedorBackOfficeService.ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);
+            idVendedorPropio = perfilPropio?.IdVendedor;
+            allVendors = await VendedorBackOfficeService.ListarAsync();
+        }
         vendedoresConQrActivos = allVendors.Count(v => !v.EsSistema && v.Activo);
 
-        if (esVendedor)
+        if (esVendedor && !esAdministradorBackOffice)
         {
             var sellerProfile = await VendedorBackOfficeService.ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);
+            idVendedorPropio = sellerProfile?.IdVendedor;
             var sistema = allVendors.FirstOrDefault(v => v.EsSistema);
             vendors = new[] { sellerProfile, esAdministradorBackOffice ? sistema : null }
                 .Where(v => v is not null && v.Activo)
                 .Cast<VendedorBackOffice>()
                 .DistinctBy(v => v.IdVendedor)
+                .ToList();
+        }
+        else if (esAdministradorBackOffice)
+        {
+            vendors = allVendors
+                .Where(v => v.Activo)
+                .OrderBy(v => v.EsSistema ? 0 : v.IdVendedor == idVendedorPropio ? 1 : 2)
+                .ThenBy(v => v.Nombre)
                 .ToList();
         }
         else
