@@ -5,6 +5,7 @@
 @using Microsoft.AspNetCore.Components.Forms
 @using Simetric.DTOs
 @using Simetric.Services
+@using System.Globalization
 @using System.Text
 @using Simetric.Models.Glogales
 @attribute [AllowAnonymous]
@@ -27,6 +28,10 @@
     var notasAutorizadas = notasFiltradas.Count(x => EstaAutorizada(x));
     var notasNoAutorizadas = notasFiltradas.Count(x => ObtenerEstadoNotaTexto(x) == DocumentoAutorizacionHelper.EstadoNoAutorizado);
     var notasPendientes = notasFiltradas.Count - notasAutorizadas - notasNoAutorizadas;
+    var notasAnuladas = notasFiltradas.Count(x => x.Estado == false);
+    var porcentajeNotasAutorizadas = notasFiltradas.Count == 0 ? 0 : (int)Math.Round((notasAutorizadas * 100m) / notasFiltradas.Count);
+    var notasHoy = notasFiltradas.Count(x => x.FechaDocumentoModificado?.Date == DateTime.Today);
+    var tendenciaNotas = ConstruirTendenciaNotas(notasFiltradas);
 }
 
 <div class="facturas-shell @(esVistaBackOfficeNotas ? "backoffice-notas-shell" : string.Empty)" data-tour="ncgen.page">
@@ -51,36 +56,115 @@
         </div>
     }
 
-    <section class="facturas-hero" data-tour="ncgen.hero">
-        <div class="hero-copy">
-            <span class="hero-eyebrow">@(esVistaBackOfficeNotas ? "Backoffice" : "Ajustes emitidos")</span>
-            <h2>Mis notas de crédito con filtros, reporte y acciones unificadas</h2>
-            <p>
-                Busca por cliente, documento modificado o motivo, exporta el resultado visible y abre el
-                XML o PDF desde la misma vista.
-            </p>
-        </div>
+    @if (esVistaBackOfficeNotas)
+    {
+        <section class="bo-dashboard-overview" data-tour="ncgen.hero">
+            <div class="bo-invoices-title">
+                <h2>Mis notas de crédito backoffice</h2>
+                <p>Revisa de forma rápida cómo van tus notas de crédito y ajustes del período.</p>
+            </div>
 
-        <div class="hero-summary">
-            <article class="summary-card summary-card-primary">
-                <span class="summary-label">Notas filtradas</span>
-                <strong>@notasFiltradas.Count</strong>
-                <small>@ResumenRangoFechas</small>
-            </article>
+            <div class="bo-period-chip">
+                <i class="bi bi-calendar3"></i>
+                <span>@ResumenRangoFechas</span>
+            </div>
 
-            <article class="summary-card">
-                <span class="summary-label">Total filtrado</span>
-                <strong>$ @totalFiltrado.ToString("N2")</strong>
-                <small>Importe acumulado de las notas visibles en la consulta.</small>
-            </article>
+            <div class="bo-dashboard-grid">
+                <article class="bo-chart-card">
+                    <div class="bo-chart-head">
+                        <div>
+                            <span>Resumen del período</span>
+                            <strong>$ @totalFiltrado.ToString("N2")</strong>
+                        </div>
+                        <small>@notasFiltradas.Count notas filtradas</small>
+                    </div>
 
-            <article class="summary-card">
-                <span class="summary-label">Autorizadas</span>
-                <strong>@notasAutorizadas</strong>
-                <small>Pendientes: @notasPendientes | No autorizadas: @notasNoAutorizadas</small>
-            </article>
-        </div>
-    </section>
+                    <div class="bo-chart-canvas-wrap">
+                        <canvas id="@notasChartId" aria-label="Resumen del período de notas de crédito" role="img"></canvas>
+                    </div>
+
+                    <div class="bo-chart-labels">
+                        <span>@tendenciaNotas.StartLabel</span>
+                        <span>@tendenciaNotas.MiddleLabel</span>
+                        <span>@tendenciaNotas.EndLabel</span>
+                    </div>
+                </article>
+
+                <div class="bo-kpi-grid">
+                    <article class="bo-kpi-card">
+                        <i class="bi bi-file-earmark-text"></i>
+                        <div>
+                            <span>Notas de hoy</span>
+                            <strong>@notasHoy</strong>
+                            <small>Emitidas hoy</small>
+                        </div>
+                    </article>
+
+                    <article class="bo-kpi-card bo-kpi-status">
+                        <div class="bo-status-donut" style="--bo-progress:@porcentajeNotasAutorizadas">
+                            <strong>@porcentajeNotasAutorizadas%</strong>
+                        </div>
+                        <div>
+                            <span>Estado general</span>
+                            <small><b>@notasAutorizadas</b> autorizadas</small>
+                            <small><b>@notasPendientes</b> por revisar</small>
+                        </div>
+                    </article>
+
+                    <article class="bo-kpi-card bo-kpi-review">
+                        <i class="bi bi-file-earmark-x"></i>
+                        <div>
+                            <span>Anuladas</span>
+                            <strong>@notasAnuladas</strong>
+                            <small>Requieren seguimiento SRI</small>
+                        </div>
+                    </article>
+
+                    <article class="bo-kpi-card bo-kpi-value">
+                        <i class="bi bi-cash-coin"></i>
+                        <div>
+                            <span>Valor promedio</span>
+                            <strong>$ @(notasFiltradas.Count == 0 ? "0,00" : (totalFiltrado / notasFiltradas.Count).ToString("N2"))</strong>
+                            <small>Promedio filtrado</small>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </section>
+    }
+    else
+    {
+        <section class="facturas-hero" data-tour="ncgen.hero">
+            <div class="hero-copy">
+                <span class="hero-eyebrow">Ajustes emitidos</span>
+                <h2>Mis notas de crédito con filtros, reporte y acciones unificadas</h2>
+                <p>
+                    Busca por cliente, documento modificado o motivo, exporta el resultado visible y abre el
+                    XML o PDF desde la misma vista.
+                </p>
+            </div>
+
+            <div class="hero-summary">
+                <article class="summary-card summary-card-primary">
+                    <span class="summary-label">Notas filtradas</span>
+                    <strong>@notasFiltradas.Count</strong>
+                    <small>@ResumenRangoFechas</small>
+                </article>
+
+                <article class="summary-card">
+                    <span class="summary-label">Total filtrado</span>
+                    <strong>$ @totalFiltrado.ToString("N2")</strong>
+                    <small>Importe acumulado de las notas visibles en la consulta.</small>
+                </article>
+
+                <article class="summary-card">
+                    <span class="summary-label">Autorizadas</span>
+                    <strong>@notasAutorizadas</strong>
+                    <small>Pendientes: @notasPendientes | No autorizadas: @notasNoAutorizadas</small>
+                </article>
+            </div>
+        </section>
+    }
 
     <section class="toolbar-card" data-tour="ncgen.toolbar">
         <div class="toolbar-copy">
@@ -283,9 +367,6 @@
                                                     Vencido
                                                 </span>
                                             }
-                                            <span class="authorization-number" title="@ObtenerNumeroAutorizacionTexto(item)">
-                                                Autorizacion: @ObtenerNumeroAutorizacionTexto(item)
-                                            </span>
                                         }
                                         else if (EsNoAutorizada(item))
                                         {
@@ -450,26 +531,61 @@
 
             </div>
 
-            <div class="table-footer">
-                <div class="footer-metrics">
-                    <div class="footer-metric">
-                        <span class="footer-label">Resultados visibles</span>
-                        <strong>@notasPaginaActual.Count</strong>
-                    </div>
-
-                    <div class="footer-metric">
-                        <span class="footer-label">Resultados filtrados</span>
-                        <strong>@notasFiltradas.Count</strong>
-                    </div>
-
-                    <div class="footer-metric footer-metric-highlight">
-                        <span class="footer-label">Total visible</span>
-                        <strong>$ @totalVisible.ToString("N2")</strong>
-                    </div>
-                </div>
-
+            @if (esVistaBackOfficeNotas)
+            {
                 @if (TotalPaginas > 1)
                 {
+                    <div class="table-footer table-footer-pagination-only">
+                        <nav class="pagination-nav" aria-label="Paginacion de notas de credito">
+                            <button class="pagination-btn pagination-btn-direction"
+                                    @onclick="PaginaAnterior"
+                                    disabled="@(PaginaActualSegura == 1)">
+                                <i class="bi bi-chevron-left"></i>
+                                <span>Anterior</span>
+                            </button>
+
+                            @foreach (var pagina in PaginasVisibles)
+                            {
+                                var paginaLocal = pagina;
+
+                                <button class="pagination-btn @(paginaLocal == PaginaActualSegura ? "is-active" : null)"
+                                        @onclick="() => IrAPagina(paginaLocal)">
+                                    @paginaLocal
+                                </button>
+                            }
+
+                            <button class="pagination-btn pagination-btn-direction"
+                                    @onclick="PaginaSiguiente"
+                                    disabled="@(PaginaActualSegura == TotalPaginas)">
+                                <span>Siguiente</span>
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </nav>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="table-footer">
+                    <div class="footer-metrics">
+                        <div class="footer-metric">
+                            <span class="footer-label">Resultados visibles</span>
+                            <strong>@notasPaginaActual.Count</strong>
+                        </div>
+
+                        <div class="footer-metric">
+                            <span class="footer-label">Resultados filtrados</span>
+                            <strong>@notasFiltradas.Count</strong>
+                        </div>
+
+                        <div class="footer-metric footer-metric-highlight">
+                            <span class="footer-label">Total visible</span>
+                            <strong>$ @totalVisible.ToString("N2")</strong>
+                        </div>
+                    </div>
+
+                    @if (TotalPaginas > 1)
+                    {
                     <nav class="pagination-nav" aria-label="Paginacion de notas de credito">
                         <button class="pagination-btn pagination-btn-direction"
                                 @onclick="PaginaAnterior"
@@ -495,8 +611,9 @@
                             <i class="bi bi-chevron-right"></i>
                         </button>
                     </nav>
+                    }
+                </div>
                 }
-            </div>
 
         </section>
     }
@@ -594,9 +711,9 @@
     private bool isDemoMode;
     private bool esVistaBackOfficeNotas;
     private List<NotaCreditoListDto> notas = new();
-    private readonly int[] pageSizeOptions = { 5, 10, 20, 50 };
+    private readonly int[] pageSizeOptions = { 15, 30, 50 };
     private int paginaActual = 1;
-    private int registrosPorPagina = 10;
+    private int registrosPorPagina = 15;
     private bool mostrarModal;
     private NotaCreditoDetalleViewDto? notaSeleccionada;
     private string filtro = string.Empty;
@@ -608,6 +725,17 @@
     private string tituloResultadoOverlay = string.Empty;
     private string detalleResultadoOverlay = string.Empty;
     private List<Simetric.Models.Emisor> emisores = new();
+    private readonly string notasChartId = $"bo-notas-chart-{Guid.NewGuid():N}";
+    private string? ultimaFirmaChartNotas;
+
+    private sealed class TendenciaDashboard
+    {
+        public List<string> Labels { get; set; } = new();
+        public List<decimal> Values { get; set; } = new();
+        public string StartLabel { get; set; } = "";
+        public string MiddleLabel { get; set; } = "";
+        public string EndLabel { get; set; } = "";
+    }
     private int RegistrosPorPagina
     {
         get => registrosPorPagina;
@@ -695,6 +823,38 @@
             .Take(registrosPorPagina)
             .ToList();
 
+    private static TendenciaDashboard ConstruirTendenciaNotas(List<NotaCreditoListDto> notasFiltradas)
+    {
+        var datos = notasFiltradas
+            .Where(x => x.FechaDocumentoModificado.HasValue)
+            .GroupBy(x => x.FechaDocumentoModificado!.Value.Date)
+            .OrderBy(x => x.Key)
+            .Select(x => new { Fecha = x.Key, Total = x.Sum(n => n.Total) })
+            .ToList();
+
+        return ConstruirTendenciaDashboard(datos.Select(x => (x.Fecha, x.Total)).ToList());
+    }
+
+    private static TendenciaDashboard ConstruirTendenciaDashboard(List<(DateTime Fecha, decimal Total)> datos)
+    {
+        if (datos.Count == 0)
+            return new TendenciaDashboard { StartLabel = "Sin datos", MiddleLabel = "", EndLabel = "" };
+
+        if (datos.Count == 1)
+            datos = new List<(DateTime Fecha, decimal Total)> { (datos[0].Fecha.AddDays(-1), 0m), datos[0] };
+
+        var culture = new CultureInfo("es-EC");
+
+        return new TendenciaDashboard
+        {
+            Labels = datos.Select(x => x.Fecha.ToString("d MMM", culture)).ToList(),
+            Values = datos.Select(x => x.Total).ToList(),
+            StartLabel = datos.First().Fecha.ToString("d MMM", culture),
+            MiddleLabel = datos[datos.Count / 2].Fecha.ToString("d MMM", culture),
+            EndLabel = datos.Last().Fecha.ToString("d MMM", culture)
+        };
+    }
+
     private int TotalPaginas =>
         NotasFiltradas.Count == 0
             ? 0
@@ -737,6 +897,35 @@
         isDemoMode = EsRutaDemoNotasCredito();
         esVistaBackOfficeNotas = EsRutaBackOfficeNotasCredito();
         await Recargar();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await RenderizarGraficoNotasAsync();
+    }
+
+    private async Task RenderizarGraficoNotasAsync()
+    {
+        if (cargando || !esVistaBackOfficeNotas)
+            return;
+
+        var tendencia = ConstruirTendenciaNotas(NotasFiltradas);
+        var firma = string.Join("|", tendencia.Labels.Zip(tendencia.Values, (label, value) => $"{label}:{value.ToString(CultureInfo.InvariantCulture)}"));
+
+        if (firma == ultimaFirmaChartNotas)
+            return;
+
+        ultimaFirmaChartNotas = firma;
+
+        await JS.InvokeVoidAsync(
+            "numericaDashboardCharts.renderBackOfficeLineChart",
+            notasChartId,
+            new
+            {
+                labels = tendencia.Labels,
+                values = tendencia.Values,
+                label = "Notas de crédito"
+            });
     }
 
     private async Task Recargar()
@@ -1276,7 +1465,9 @@
                 procesandoAnulacion = true;
 
                 // Consumimos el método directo de tu servicio
-                var exito = await NotaCreditoService.AnularNotaCreditoDirectoAsync(item.Sec);
+                var exito = await NotaCreditoService.AnularNotaCreditoDirectoAsync(
+                    item.Sec,
+                    notificarCobranzasBackOffice: esVistaBackOfficeNotas);
 
                 if (exito)
                 {

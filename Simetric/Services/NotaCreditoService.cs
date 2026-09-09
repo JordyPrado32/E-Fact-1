@@ -2157,17 +2157,43 @@ public class NotaCreditoService
         return valor.Length <= 20 ? valor : valor[..20];
     }
 
-    public async Task<bool> AnularNotaCreditoDirectoAsync(int sec)
+    public async Task<bool> AnularNotaCreditoDirectoAsync(int sec, bool notificarCobranzasBackOffice = false)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();
         try
         {
-            // Buscamos el registro en la tabla de notas de crédito utilizando el campo 'Sec'
             var nota = await context.NotaCreditos.FirstOrDefaultAsync(n => n.Sec == sec);
             if (nota != null)
             {
-                nota.Estado = false; // Seteamos a false
+                nota.Estado = false;
                 await context.SaveChangesAsync();
+
+                if (notificarCobranzasBackOffice)
+                {
+                    try
+                    {
+                        var cliente = nota.CodClientes.HasValue
+                            ? await context.Clientes
+                                .AsNoTracking()
+                                .FirstOrDefaultAsync(c => c.Codcliente == nota.CodClientes.Value)
+                            : null;
+
+                        await _emailService.EnviarAvisoNotaCreditoAnuladaBackOfficeAsync(
+                            FormatearNumeroCompleto(nota.Serie, nota.NumNotaCredito),
+                            nota.NumDocModificado,
+                            new[] { "lguairacaja@numerosasesores.com", "mpincay@numerosasesores.com" },
+                            ObtenerNombreCliente(cliente),
+                            cliente?.Numeroidentificacion,
+                            nota.ValorTotal,
+                            nota.FechaEmiDocModificado,
+                            nota.Autorizado,
+                            nota.NumAutorizacion);
+                    }
+                    catch
+                    {
+                    }
+                }
+
                 return true;
             }
             return false;

@@ -274,6 +274,77 @@ window.numericaDashboardCharts = (function () {
         });
     }
 
+    function renderBackOfficeLineChart(canvasId, payload) {
+        if (!window.Chart || !canvasId) {
+            return;
+        }
+
+        const canvas = getCanvas(canvasId);
+        const key = `backOffice:${canvasId}`;
+        destroyChart(key);
+
+        if (!canvas || !payload) {
+            return;
+        }
+
+        const labels = Array.isArray(payload.labels) ? payload.labels : [];
+        const values = toNumbers(payload.values);
+
+        const ctx = canvas.getContext("2d");
+        const gradient = ctx.createLinearGradient(0, 0, 0, 180);
+        gradient.addColorStop(0, "rgba(20, 120, 242, 0.24)");
+        gradient.addColorStop(0.6, "rgba(20, 120, 242, 0.10)");
+        gradient.addColorStop(1, "rgba(20, 120, 242, 0)");
+
+        charts[key] = new Chart(canvas, {
+            type: "line",
+            data: {
+                labels,
+                datasets: [{
+                    label: payload.label || "Total",
+                    data: values,
+                    borderColor: "#1478f2",
+                    backgroundColor: gradient,
+                    pointBackgroundColor: "#ffffff",
+                    pointBorderColor: "#1478f2",
+                    pointBorderWidth: 3,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    tension: 0.38,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: "index" },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: context => currencyFormatter.format(context.parsed.y || 0)
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: "#5c78a1", font: { size: 11, weight: "700" } }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        border: { display: false },
+                        grid: { color: "#dbeafe" },
+                        ticks: {
+                            color: "#5c78a1",
+                            callback: value => currencyFormatter.format(Number(value || 0)).replace(",00", "")
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     function renderDoughnutChart(key, canvasId, payload, colors, tooltipFormatter) {
         const canvas = getCanvas(canvasId);
         destroyChart(key);
@@ -502,5 +573,5 @@ window.numericaDashboardCharts = (function () {
         }
     }
 
-    return { render, destroy, renderReportDocuments, destroyReportDocuments, renderSubscriptions, renderESign, scrollToDetails };
+    return { render, destroy, renderReportDocuments, destroyReportDocuments, renderSubscriptions, renderESign, renderBackOfficeLineChart, scrollToDetails };
 })();
