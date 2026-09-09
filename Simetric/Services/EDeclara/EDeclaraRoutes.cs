@@ -10,7 +10,6 @@ public static class EDeclaraRoutes
     public const string Profile = "/perfil?contexto=edeclara";
     public const string Contribuyentes = "/e-declara/contribuyentes";
     public const string Declaraciones = "/e-declara/declaraciones";
-    public const string GastosIngresos = "/e-declara/gastos-ingresos";
     public const string Compras = "/e-declara/compras";
     public const string Soporte = "/e-declara/soporte";
     public const string Parametros = "/e-declara/configuracion/parametros";

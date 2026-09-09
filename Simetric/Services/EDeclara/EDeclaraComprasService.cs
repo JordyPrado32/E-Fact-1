@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 using Dapper;
@@ -308,38 +309,42 @@ public sealed class EDeclaraComprasService
     private async Task<(List<(string Nombre, string Xml)> Archivos, int Encontrados, int NoLeidos)> DescargarXmlSriAsync(
         string ruc, string clave, int anio, IEnumerable<int> meses, int tipoDocumento)
     {
-        var endpoint = (_configuration["ApiDescargaComprobantes:BaseUrl"]
-            ?? "http://68.178.204.190:8081/api/consultacomprobantes2/consultar").Trim();
         var periodos = meses.Distinct().OrderBy(x => x).ToList();
-        var payload = new
+        var documentos = new List<(string Nombre, string Xml)>();
+        var noLeidos = 0;
+        var endpoint = (_configuration["ApiDescargaComprobantes:BaseUrl"]
+            ?? "http://68.178.204.190:8081/api/consultacomprobantes2/consultar").TrimEnd('/');
+        using var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(60);
+
+        var anioTexto = anio.ToString(CultureInfo.InvariantCulture);
+        var solicitud = new
         {
             Usuario = ruc,
             UsuarioAdicional = string.Empty,
             Password = clave,
             Dia = 0,
-            Anio = anio.ToString(CultureInfo.InvariantCulture),
+            Anio = anioTexto,
             Mes = periodos.First(),
             Comprobante = tipoDocumento,
             XMLpdf = true,
-            Periodos = periodos.Select(mes => new { Anio = anio.ToString(CultureInfo.InvariantCulture), Mes = mes }).ToList()
+            Periodos = periodos.Select(mes => new { Anio = anioTexto, Mes = mes }).ToList()
         };
 
-        var documentos = new List<(string Nombre, string Xml)>();
-        using var client = _httpClientFactory.CreateClient();
-        client.Timeout = TimeSpan.FromHours(1);
-        using var content = System.Net.Http.Json.JsonContent.Create(payload);
-        using var response = await client.PostAsync(endpoint, content);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"El servicio SRI respondió HTTP {(int)response.StatusCode}.");
-
+        using var contenido = new StringContent(JsonSerializer.Serialize(solicitud), Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync(endpoint, contenido);
         var responseText = await response.Content.ReadAsStringAsync();
-        if (string.IsNullOrWhiteSpace(responseText)) return (documentos, 0, 0);
+        if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+            throw new InvalidOperationException("El SRI está presentando inconvenientes, por favor vuelva a intentar más tarde.");
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"El servicio SRI respondió HTTP {(int)response.StatusCode}: {responseText}");
+        if (string.IsNullOrWhiteSpace(responseText))
+            return (documentos, 0, noLeidos);
+
         using var json = JsonDocument.Parse(responseText);
         if (!TryGetProperty(json.RootElement, "listaComprobantes", out var lista) || lista.ValueKind != JsonValueKind.Array)
-            return (documentos, 0, 0);
+            return (documentos, 0, noLeidos);
 
-        var encontrados = lista.GetArrayLength();
-        var noLeidos = 0;
         foreach (var item in lista.EnumerateArray())
         {
             var link = GetJsonString(item, "xmlLink");
@@ -348,7 +353,8 @@ public sealed class EDeclaraComprasService
             if (!string.IsNullOrWhiteSpace(xml)) documentos.Add(($"SRI-{anio}-{documentos.Count + 1}.xml", xml));
             else noLeidos++;
         }
-        return (documentos, encontrados, noLeidos);
+
+        return (documentos, lista.GetArrayLength(), noLeidos);
     }
 
     private async Task<string?> LeerXmlDesdeReferenciaAsync(HttpClient client, string endpoint, string? referencia, string ruc)
@@ -392,28 +398,40 @@ public sealed class EDeclaraComprasService
         var envoltura = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
         var comprobanteTexto = envoltura.Descendants().FirstOrDefault(x => x.Name.LocalName == "comprobante")?.Value;
         var documento = !string.IsNullOrWhiteSpace(comprobanteTexto) ? XDocument.Parse(comprobanteTexto) : envoltura;
-        var raiz = documento.Root?.DescendantsAndSelf().FirstOrDefault(x => x.Name.LocalName is "factura" or "notaCredito")
-            ?? throw new InvalidOperationException("El XML no corresponde a una factura ni a una nota de crédito.");
-        var tipo = raiz.Name.LocalName == "notaCredito" ? 3 : 1;
+        var raiz = documento.Root?.DescendantsAndSelf().FirstOrDefault(x => x.Name.LocalName is "factura" or "notaCredito" or "comprobanteRetencion")
+            ?? throw new InvalidOperationException("El XML no corresponde a una factura, nota de crédito ni comprobante de retención.");
+        var esRetencion = raiz.Name.LocalName == "comprobanteRetencion";
+        var tipo = esRetencion ? 6 : raiz.Name.LocalName == "notaCredito" ? 3 : 1;
         string Valor(string nombre) => raiz.Descendants().FirstOrDefault(x => x.Name.LocalName == nombre)?.Value.Trim() ?? string.Empty;
-        var fecha = ParseFecha(Valor("fechaEmision")) ?? throw new InvalidOperationException("El XML no contiene una fecha de emisión válida.");
+        var infoTributaria = raiz.Elements().FirstOrDefault(x => x.Name.LocalName == "infoTributaria");
+        var infoRetencion = raiz.Elements().FirstOrDefault(x => x.Name.LocalName == "infoCompRetencion");
+        string ValorEn(XElement? elemento, string nombre) => elemento?.Elements().FirstOrDefault(x => x.Name.LocalName == nombre)?.Value.Trim() ?? string.Empty;
+        var fechaTexto = esRetencion ? ValorEn(infoRetencion, "fechaEmision") : Valor("fechaEmision");
+        var fecha = ParseFecha(fechaTexto) ?? throw new InvalidOperationException("El XML no contiene una fecha de emisión válida.");
         ValidarPeriodo(fecha, anio, periodo);
-        var comprador = Valor("identificacionComprador");
+        var comprador = esRetencion ? ValorEn(infoRetencion, "identificacionSujetoRetenido") : Valor("identificacionComprador");
         if (!CoincideIdentificacion(comprador, identificacionEsperada))
             throw new InvalidOperationException("El comprobante no pertenece a la identificación configurada en Mi perfil.");
-        var serie = Valor("estab") + Valor("ptoEmi");
-        var numero = Valor("secuencial");
-        var ruc = Valor("ruc");
-        var razon = Valor("razonSocial");
+        var serie = ValorEn(infoTributaria, "estab") + ValorEn(infoTributaria, "ptoEmi");
+        var numero = ValorEn(infoTributaria, "secuencial");
+        var ruc = ValorEn(infoTributaria, "ruc");
+        var razon = ValorEn(infoTributaria, "razonSocial");
         var autorizacion = envoltura.Descendants().FirstOrDefault(x => x.Name.LocalName == "numeroAutorizacion")?.Value.Trim() ?? Valor("claveAcceso");
         var detalleNodos = raiz.Descendants().Where(x => x.Name.LocalName == "detalle").ToList();
         var detalles = detalleNodos.Select(x => x.Elements().FirstOrDefault(e => e.Name.LocalName == "descripcion")?.Value.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToList();
-        var concepto = detalles.FirstOrDefault() ?? (tipo == 1 ? "Compra importada" : "Nota de crédito importada");
+        if (esRetencion)
+            detalles = raiz.Descendants().Where(x => x.Name.LocalName == "impuesto").Select(x =>
+                $"Código {Child(x, "codigoRetencion")}: base {Child(x, "baseImponible")}, retenido {Child(x, "valorRetenido")}").ToList();
+        var concepto = detalles.FirstOrDefault() ?? (tipo == 1 ? "Compra importada" : tipo == 3 ? "Nota de crédito importada" : "Retención importada");
         var modificado = Valor("numDocModificado").Replace("-", string.Empty, StringComparison.Ordinal);
-        var impuestos = raiz.Descendants().Where(x => x.Name.LocalName == "totalImpuesto")
-            .Where(x => Child(x, "codigo") is "" or "2")
-            .Select(x => new { Tarifa = ObtenerTarifa(x), Base = ParseDecimal(Child(x, "baseImponible")), Iva = ParseDecimal(Child(x, "valor")) })
-            .Where(x => x.Base != 0 || x.Iva != 0 || x.Tarifa == 0).ToList();
+        var impuestos = esRetencion
+            ? raiz.Descendants().Where(x => x.Name.LocalName == "impuesto")
+                .Select(x => new { Tarifa = ParseDecimal(Child(x, "porcentajeRetener")), Base = ParseDecimal(Child(x, "baseImponible")), Iva = ParseDecimal(Child(x, "valorRetenido")) })
+                .Where(x => x.Base != 0 || x.Iva != 0).ToList()
+            : raiz.Descendants().Where(x => x.Name.LocalName == "totalImpuesto")
+                .Where(x => Child(x, "codigo") is "" or "2")
+                .Select(x => new { Tarifa = ObtenerTarifa(x), Base = ParseDecimal(Child(x, "baseImponible")), Iva = ParseDecimal(Child(x, "valor")) })
+                .Where(x => x.Base != 0 || x.Iva != 0 || x.Tarifa == 0).ToList();
         if (impuestos.Count == 0) impuestos.Add(new { Tarifa = 0m, Base = ParseDecimal(Valor("totalSinImpuestos")), Iva = 0m });
         return impuestos.Select(i => new EDeclaraCompraDocumento
         {
@@ -439,7 +457,7 @@ public sealed class EDeclaraComprasService
 
     private static void ValidarDocumento(EDeclaraCompraDocumento d, string identificacionPerfil)
     {
-        if (d.TipoDocumento is not (1 or 3)) throw new InvalidOperationException("Tipo de documento inválido.");
+        if (d.TipoDocumento is not (1 or 3 or 6)) throw new InvalidOperationException("Tipo de documento inválido.");
         if (string.IsNullOrWhiteSpace(d.Serie)) throw new InvalidOperationException("Ingresa la serie.");
         if (string.IsNullOrWhiteSpace(d.Numero)) throw new InvalidOperationException("Ingresa el número del documento.");
         if (d.FechaEmision == default) throw new InvalidOperationException("Ingresa la fecha de emisión.");

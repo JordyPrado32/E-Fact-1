@@ -2222,7 +2222,9 @@ namespace Simetric.Services
                 {
                     Success = false,
                     StatusCode = createResult.StatusCode,
-                    Message = createResult.ErrorMessage ?? "Uanataca rechazó la creación de la solicitud.",
+                    Message = ConstruirMensajeErrorUanataca(
+                        createResult.ErrorMessage ?? "Uanataca rechazó la creación de la solicitud.",
+                        createResult.ResponseBody),
                     ErrorBody = createResult.ResponseBody
                 };
             }
@@ -2617,6 +2619,14 @@ namespace Simetric.Services
             }
 
             return value.Length <= maxLength ? value : value[..maxLength];
+        }
+
+        private static string ConstruirMensajeErrorUanataca(string mensaje, string? respuesta)
+        {
+            if (string.IsNullOrWhiteSpace(respuesta))
+                return mensaje;
+
+            return $"{mensaje} | Detalle devuelto por Uanataca: {respuesta}";
         }
 
         private static string? FirstNonEmpty(params string?[] values) =>

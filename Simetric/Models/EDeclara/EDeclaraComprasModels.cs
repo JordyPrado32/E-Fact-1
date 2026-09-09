@@ -25,7 +25,7 @@ public sealed class EDeclaraCompraDocumento
     public string Origen { get; set; } = "MANUAL";
     public bool EsFaltante { get; set; }
     public IReadOnlyList<string> Detalles { get; set; } = Array.Empty<string>();
-    public bool RequiereClasificacion => !EsFaltante && (TipoFacturacion is null or <= 0 || string.IsNullOrWhiteSpace(Casilla));
+    public bool RequiereClasificacion => TipoDocumento is (1 or 3) && !EsFaltante && (TipoFacturacion is null or <= 0 || string.IsNullOrWhiteSpace(Casilla));
     public decimal Total => BaseImponible + Iva;
 }
 
