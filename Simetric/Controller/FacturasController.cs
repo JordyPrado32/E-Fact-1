@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using System.Linq;
+using Microsoft.Extensions.Logging;
 
 namespace Simetric.Controllers
 {
@@ -17,10 +18,12 @@ namespace Simetric.Controllers
     public class FacturasController : ControllerBase
     {
         private readonly FacturacionService _service;
+        private readonly ILogger<FacturasController> _logger;
 
-        public FacturasController(FacturacionService service)
+        public FacturasController(FacturacionService service, ILogger<FacturasController> logger)
         {
             _service = service;
+            _logger = logger;
         }
 
         /// <summary>
@@ -116,14 +119,25 @@ namespace Simetric.Controllers
                     });
                 }
 
-                // 4. Respuesta exitosa
-                // La respuesta del guardado incluye el resultado real del envío
-                // firmado al SRI; la app no debe asumir que guardar = autorizar.
-                var respuestaSri = await _service.ReintentarEnvioSriFacturaAsync(dto.Factura.Codfactura);
+                // 4. Intentar autorizar inmediatamente, sin revertir el guardado si SRI falla.
+                object? respuestaSri;
+                try
+                {
+                    respuestaSri = await _service.ReintentarEnvioSriFacturaAsync(dto.Factura.Codfactura);
+                }
+                catch (Exception exSri)
+                {
+                    _logger.LogWarning(exSri, "La factura {FacturaId} fue guardada, pero el intento inmediato de autorización SRI falló.", dto.Factura.Codfactura);
+                    respuestaSri = new
+                    {
+                        estado = DocumentoAutorizacionHelper.EstadoPendiente,
+                        mensaje = "Factura guardada. La autorización SRI quedó pendiente de reintento."
+                    };
+                }
 
                 return Ok(new
                 {
-                    mensaje = "Factura procesada y guardada correctamente.",
+                    mensaje = "Factura guardada correctamente.",
                     codfactura = dto.Factura.Codfactura,
                     numeroComprobante = dto.Factura.Numfactura,
                     clienteId = dto.Cliente.Codcliente,

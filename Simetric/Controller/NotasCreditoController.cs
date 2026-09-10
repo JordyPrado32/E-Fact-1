@@ -39,6 +39,15 @@ public class NotasCreditoController : UsuarioApiControllerBase
         return Ok(new { sec });
     }
 
+    [HttpPost("automatica/{codFactura:int}")]
+    public async Task<IActionResult> CrearAutomatica(int codFactura, [FromQuery] int idUsuario)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+
+        return Ok(await _service.EmitirNotaCreditoAutomaticaDesdeFacturaAsync(idUsuario, codFactura));
+    }
+
     [HttpGet]
     public async Task<IActionResult> Listar([FromQuery] int idUsuario)
     {

@@ -8,10 +8,17 @@ namespace Simetric.Controllers;
 public class CuentasCobrarController : UsuarioApiControllerBase
 {
     private readonly AbonoService _abonoService;
+    private readonly IEstadoCuentaPdfService _estadoCuentaPdfService;
+    private readonly IEstadoCuentaExcelService _estadoCuentaExcelService;
 
-    public CuentasCobrarController(AbonoService abonoService)
+    public CuentasCobrarController(
+        AbonoService abonoService,
+        IEstadoCuentaPdfService estadoCuentaPdfService,
+        IEstadoCuentaExcelService estadoCuentaExcelService)
     {
         _abonoService = abonoService;
+        _estadoCuentaPdfService = estadoCuentaPdfService;
+        _estadoCuentaExcelService = estadoCuentaExcelService;
     }
 
     [HttpGet]
@@ -44,6 +51,32 @@ public class CuentasCobrarController : UsuarioApiControllerBase
 
         var detalle = await _abonoService.GetEstadoCuentaDetalleAsync(idUsuario, idCliente);
         return detalle is null ? NotFound() : Ok(detalle);
+    }
+
+    [HttpGet("estado-cuenta/{idCliente:int}/pdf")]
+    public async Task<IActionResult> GetEstadoCuentaPdf(int idCliente, [FromQuery] int idUsuario)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+
+        var detalle = await _abonoService.GetEstadoCuentaDetalleAsync(idUsuario, idCliente);
+        if (detalle is null) return NotFound();
+
+        var archivo = await _estadoCuentaPdfService.GenerarDetalleAsync(detalle);
+        return File(archivo.Content, archivo.ContentType, archivo.FileName);
+    }
+
+    [HttpGet("estado-cuenta/{idCliente:int}/excel")]
+    public async Task<IActionResult> GetEstadoCuentaExcel(int idCliente, [FromQuery] int idUsuario)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+
+        var detalle = await _abonoService.GetEstadoCuentaDetalleAsync(idUsuario, idCliente);
+        if (detalle is null) return NotFound();
+
+        var archivo = await _estadoCuentaExcelService.GenerarDetalleAsync(detalle);
+        return File(archivo.Content, archivo.ContentType, archivo.FileName);
     }
 
     [HttpGet("abonos")]

@@ -221,7 +221,8 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
     {
         var normalized = NormalizarMensaje(mensaje);
 
-        if (ContainsAny(normalized, "cancela", "cancelar", "me equivoque", "no"))
+        if (ContainsAny(normalized, "cancela", "cancelar", "me equivoque") ||
+            Regex.IsMatch(normalized, @"(?:^|\s)no(?:\s+(?:quiero|deseo|seguir|continuar|hacerlo))?\s*$", RegexOptions.IgnoreCase))
         {
             state.Estado = FacturaConversationStates.Cancelado;
             state.RequiereConfirmacion = false;

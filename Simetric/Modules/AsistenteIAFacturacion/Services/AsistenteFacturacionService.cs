@@ -236,6 +236,12 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 Step("buscar", "Buscando comprobantes", "Consultando facturas reales de tu cuenta.", "completed"),
                 Step("resumir", "Preparando resumen", "Ordenando resultados y estados.", "completed")
             },
+            "emitir_nota_credito" => new List<BotProgressStepDto>
+            {
+                Step("factura_origen", "Buscando factura de origen", "Localizando la factura autorizada indicada.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("validar_nota", "Validando nota de crédito", "Comprobando que el documento pueda generar la nota.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá la nota de crédito sin tu autorización explícita.", state.OperacionPendiente is not null ? "pending" : "completed")
+            },
             _ => new List<BotProgressStepDto>
             {
                 Step("interpretar", "Entendiendo tu solicitud", "Identificando la acción que necesitas.", "completed"),
