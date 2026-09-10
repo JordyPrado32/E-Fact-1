@@ -15,6 +15,9 @@ public sealed class FacturaConversationState
     public FacturaDraftDto Draft { get; set; } = new();
     public List<FacturaConversationMessage> Historial { get; set; } = new();
     public PendingSelectionState? SeleccionPendiente { get; set; }
+    public PendingOperationState? OperacionPendiente { get; set; }
+    public long EstadoVersion { get; set; }
+    public Dictionary<string, ChatFacturaResponse> RespuestasIdempotentes { get; set; } = new();
 }
 
 public sealed class FacturaConversationMessage
@@ -46,4 +49,13 @@ public sealed class PendingSelectionState
     public string? Observacion { get; set; }
     public decimal? DescuentoPorcentaje { get; set; }
     public decimal? DescuentoValor { get; set; }
+}
+
+public sealed class PendingOperationState
+{
+    public string Tipo { get; set; } = string.Empty;
+    public string ToolName { get; set; } = string.Empty;
+    public string ArgumentsJson { get; set; } = "{}";
+    public string Resumen { get; set; } = string.Empty;
+    public DateTimeOffset ExpiraEn { get; set; }
 }

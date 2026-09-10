@@ -6,6 +6,15 @@ namespace Simetric.Modules.AsistenteIAFacturacion.Tools;
 
 public sealed class ToolDispatcher
 {
+    private static readonly HashSet<string> ProtectedTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ToolDefinitions.CrearCliente,
+        ToolDefinitions.CrearProducto,
+        ToolDefinitions.RegistrarAbonoGeneral,
+        ToolDefinitions.EmitirFactura,
+        ToolDefinitions.EmitirNotaCreditoDesdeFactura
+    };
+
     private readonly FacturacionTools _tools;
 
     public ToolDispatcher(FacturacionTools tools)
@@ -13,15 +22,34 @@ public sealed class ToolDispatcher
         _tools = tools;
     }
 
-    public async Task<ToolResultDto> DispatchAsync(string toolName, string? argumentsJson, FacturaConversationState state, CancellationToken cancellationToken = default)
+    public async Task<ToolResultDto> DispatchAsync(string toolName, string? argumentsJson, FacturaConversationState state, CancellationToken cancellationToken = default, bool allowSideEffects = false)
     {
-        using var document = string.IsNullOrWhiteSpace(argumentsJson)
-            ? JsonDocument.Parse("{}")
-            : JsonDocument.Parse(argumentsJson);
-
-        var root = document.RootElement;
-        return toolName switch
+        JsonDocument document;
+        try
         {
+            document = string.IsNullOrWhiteSpace(argumentsJson)
+                ? JsonDocument.Parse("{}")
+                : JsonDocument.Parse(argumentsJson);
+        }
+        catch (JsonException)
+        {
+            return new ToolResultDto
+            {
+                ToolName = toolName,
+                Success = false,
+                CodigoError = "invalid_arguments",
+                Message = "La herramienta recibió parámetros inválidos."
+            };
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (!allowSideEffects && RequiresConfirmation(toolName, state))
+                return RequestConfirmation(toolName, argumentsJson, state);
+
+            return toolName switch
+            {
             ToolDefinitions.BuscarCliente => await _tools.BuscarClienteAsync(state, GetString(root, "query") ?? string.Empty, cancellationToken),
             ToolDefinitions.BuscarProducto => await _tools.BuscarProductoAsync(state, GetString(root, "query") ?? string.Empty, cancellationToken),
             ToolDefinitions.CrearCliente => await _tools.CrearClienteAsync(state, new ClienteCreateRequestDto
@@ -71,13 +99,68 @@ public sealed class ToolDispatcher
             ToolDefinitions.EmitirFactura => await _tools.EmitirFacturaAsync(state, cancellationToken),
             ToolDefinitions.EmitirNotaCreditoDesdeFactura => await _tools.EmitirNotaCreditoDesdeFacturaAsync(state, GetString(root, "referenciaFactura") ?? string.Empty, GetString(root, "motivo"), cancellationToken),
             ToolDefinitions.ConsultarFacturas => await _tools.ConsultarFacturasAsync(state, GetString(root, "filtro"), GetString(root, "periodo"), GetInt(root, "limite"), cancellationToken),
-            _ => new ToolResultDto
+                _ => new ToolResultDto
+                {
+                    ToolName = toolName,
+                    Success = false,
+                    CodigoError = "tool_not_implemented",
+                    Message = $"La herramienta '{toolName}' no está implementada."
+                }
+            };
+        }
+    }
+
+    private static bool RequiresConfirmation(string toolName, FacturaConversationState state)
+        => ProtectedTools.Contains(toolName)
+            && (toolName != ToolDefinitions.EmitirFactura || state.Estado == FacturaConversationStates.EsperandoConfirmacion);
+
+    private static ToolResultDto RequestConfirmation(string toolName, string? argumentsJson, FacturaConversationState state)
+    {
+        var summary = BuildOperationSummary(toolName, argumentsJson);
+        var current = state.OperacionPendiente;
+        if (current is null || !string.Equals(current.ToolName, toolName, StringComparison.OrdinalIgnoreCase) || !string.Equals(current.ArgumentsJson, argumentsJson ?? "{}", StringComparison.Ordinal))
+        {
+            state.OperacionPendiente = new PendingOperationState
             {
+                Tipo = toolName,
                 ToolName = toolName,
-                Success = false,
-                Message = $"La herramienta '{toolName}' no está implementada."
-            }
+                ArgumentsJson = string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson,
+                Resumen = summary,
+                ExpiraEn = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+        }
+
+        var operation = state.OperacionPendiente!;
+        return new ToolResultDto
+        {
+            ToolName = toolName,
+            Success = false,
+            RequiereConfirmacion = true,
+            CodigoError = "confirmation_required",
+            Message = $"Se requiere confirmación explícita para {operation.Resumen}. Responde 'confirmar' o 'cancelar'."
         };
+    }
+
+    private static string BuildOperationSummary(string toolName, string? argumentsJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            var root = document.RootElement;
+            return toolName switch
+            {
+                ToolDefinitions.CrearCliente => $"crear el cliente '{GetString(root, "razonSocial") ?? GetString(root, "nombreCompleto") ?? GetString(root, "nombres") ?? "nuevo"}'",
+                ToolDefinitions.CrearProducto => $"crear el producto '{GetString(root, "nombre") ?? "nuevo"}'",
+                ToolDefinitions.RegistrarAbonoGeneral => $"registrar un abono de ${GetDecimal(root, "monto")?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) ?? "0.00"}",
+                ToolDefinitions.EmitirFactura => "emitir la factura del borrador actual",
+                ToolDefinitions.EmitirNotaCreditoDesdeFactura => $"emitir una nota de crédito para la factura '{GetString(root, "referenciaFactura") ?? "indicada"}'",
+                _ => "ejecutar esta operación"
+            };
+        }
+        catch (JsonException)
+        {
+            return "ejecutar esta operación";
+        }
     }
 
     private static string? GetString(JsonElement element, string propertyName)

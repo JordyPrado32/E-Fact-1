@@ -4,6 +4,9 @@ namespace Simetric.Modules.AsistenteIAFacturacion.DTOs;
 
 public sealed class ChatFacturaResponse
 {
+    [JsonPropertyName("requestId")]
+    public string? RequestId { get; set; }
+
     [JsonPropertyName("sessionId")]
     public string SessionId { get; set; } = string.Empty;
 
@@ -12,6 +15,9 @@ public sealed class ChatFacturaResponse
 
     [JsonPropertyName("estado")]
     public string Estado { get; set; } = "SinFactura";
+
+    [JsonPropertyName("estadoVersion")]
+    public long EstadoVersion { get; set; }
 
     [JsonPropertyName("facturaDraft")]
     public FacturaDraftDto FacturaDraft { get; set; } = new();
@@ -42,4 +48,19 @@ public sealed class ChatFacturaResponse
 
     [JsonPropertyName("datosFaltantes")]
     public List<string> DatosFaltantes { get; set; } = new();
+
+    [JsonPropertyName("operacionPendiente")]
+    public PendingOperationDto? OperacionPendiente { get; set; }
+}
+
+public sealed class PendingOperationDto
+{
+    [JsonPropertyName("tipo")]
+    public string Tipo { get; set; } = string.Empty;
+
+    [JsonPropertyName("resumen")]
+    public string Resumen { get; set; } = string.Empty;
+
+    [JsonPropertyName("expiraEn")]
+    public DateTimeOffset ExpiraEn { get; set; }
 }

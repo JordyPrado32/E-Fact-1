@@ -60,6 +60,10 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         {
             return await ProcesarConOpenAIAsync(state, mensaje, apiKey, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (HttpRequestException ex)
         {
             _logger.LogError(
@@ -71,7 +75,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
             return new OpenAIAsistenteResult
             {
-                Respuesta = $"No pude comunicarme correctamente con OpenAI. {ex.Message}",
+                Respuesta = "No pude comunicarme correctamente con el servicio de IA. Intenta nuevamente en unos segundos.",
                 AccionDetectada = "error_openai"
             };
         }
@@ -114,7 +118,11 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             }
         };
 
-        foreach (var historyItem in state.Historial.TakeLast(10))
+        var history = state.Historial.TakeLast(10).ToList();
+        if (history.LastOrDefault() is { Role: "user" } lastMessage && string.Equals(lastMessage.Content, mensaje, StringComparison.Ordinal))
+            history.RemoveAt(history.Count - 1);
+
+        foreach (var historyItem in history)
         {
             messages.Add(new Dictionary<string, object?>
             {
@@ -140,7 +148,8 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                     messages,
                     tools = ToolDefinitions.BuildTools(),
                     tool_choice = "auto",
-                    temperature = 0.05
+                    temperature = 0.05,
+                    max_tokens = 800
                 }),
                 Encoding.UTF8,
                 "application/json");

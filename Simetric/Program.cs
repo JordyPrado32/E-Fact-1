@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Localization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Infrastructure;
 using Simetric.Auth;
@@ -17,6 +18,7 @@ using Simetric.Services.EContax;
 using Simetric.Services.EDeclara;
 using Simetric.Services.ESign;
 using System.Globalization;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 QuestPDF.Settings.License = LicenseType.Community;
@@ -48,6 +50,22 @@ builder.Services.AddControllers()
 
 builder.Services.Configure<OpenAISettings>(builder.Configuration.GetSection("OpenAI"));
 builder.Services.Configure<WhatsAppCloudApiOptions>(builder.Configuration.GetSection("WhatsAppCloudApi"));
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("asistente-facturacion", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirst("IdUsuario")?.Value
+                ?? context.Connection.RemoteIpAddress?.ToString()
+                ?? "anonimo",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+});
 
 builder.Services.AddSingleton<SqlAuditService>();
 builder.Services.AddSingleton<AuditService>();
@@ -284,7 +302,10 @@ builder.Services.AddScoped<IProductoService, SystemProductoServiceAdapter>();
 builder.Services.AddScoped<IFacturacionService, SystemFacturacionServiceAdapter>();
 builder.Services.AddScoped<FacturacionTools>();
 builder.Services.AddScoped<ToolDispatcher>();
-builder.Services.AddHttpClient<IOpenAIAsistenteService, OpenAIAsistenteService>();
+builder.Services.AddHttpClient<IOpenAIAsistenteService, OpenAIAsistenteService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(45);
+});
 builder.Services.AddScoped<IAsistenteFacturacionService, AsistenteFacturacionService>();
 
 builder.Services.AddHostedService<ComprobanteCorreoDispatcherService>();
@@ -378,6 +399,7 @@ app.UseRequestLocalization();
 app.UseSession();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.UseAntiforgery();
 

@@ -269,7 +269,7 @@ public sealed class CompraDocumentosFacturacionService
             Idusuario = idUsuario,
             Idvendedor = idVendedor,
             Estado = true,
-            Tipopago = "19",
+            Tipopago = "20",
             Notas = string.IsNullOrWhiteSpace(referenciaPago)
                 ? $"{descripcion} {marker}"
                 : $"{descripcion}. Pago Pagomedios Ref/Auth: {referenciaPago}. {marker}"

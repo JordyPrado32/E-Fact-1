@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -9,26 +10,51 @@ namespace Simetric.Modules.AsistenteIAFacturacion.Services;
 
 public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
 {
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> ConversationLocks = new();
     private readonly IFacturaConversationStore _conversationStore;
     private readonly IOpenAIAsistenteService _openAIAsistenteService;
+    private readonly ToolDispatcher _toolDispatcher;
 
     public AsistenteFacturacionService(
         IFacturaConversationStore conversationStore,
-        IOpenAIAsistenteService openAIAsistenteService)
+        IOpenAIAsistenteService openAIAsistenteService,
+        ToolDispatcher toolDispatcher)
     {
         _conversationStore = conversationStore;
         _openAIAsistenteService = openAIAsistenteService;
+        _toolDispatcher = toolDispatcher;
     }
 
     public async Task<ChatFacturaResponse> ProcesarAsync(int userId, ChatFacturaRequest request, CancellationToken cancellationToken = default)
+    {
+        var sessionId = string.IsNullOrWhiteSpace(request.SessionId) ? Guid.NewGuid().ToString("N") : request.SessionId.Trim();
+        var gate = ConversationLocks.GetOrAdd($"{userId}:{sessionId}", _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            request.SessionId = sessionId;
+            return await ProcesarExclusivoAsync(userId, request, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<ChatFacturaResponse> ProcesarExclusivoAsync(int userId, ChatFacturaRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.SessionId))
             request.SessionId = Guid.NewGuid().ToString("N");
 
         var state = await _conversationStore.GetOrCreateAsync(userId, request.SessionId, cancellationToken);
+        var requestId = request.RequestId?.Trim();
+        if (!string.IsNullOrWhiteSpace(requestId) && state.RespuestasIdempotentes.TryGetValue(requestId, out var previousResponse))
+            return previousResponse;
+
         state.UserId = userId;
         state.SessionId = request.SessionId;
         state.ActualizadoEn = DateTimeOffset.UtcNow;
+        state.EstadoVersion++;
         var mensaje = request.Mensaje.Trim();
 
         state.Historial.Add(new FacturaConversationMessage
@@ -37,6 +63,13 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             Content = mensaje
         });
         TrimHistorial(state);
+
+        var pendingOperationResponse = await TryResolvePendingOperationAsync(state, mensaje, cancellationToken);
+        if (pendingOperationResponse is not null)
+        {
+            state.Historial.Add(new FacturaConversationMessage { Role = "assistant", Content = pendingOperationResponse.Respuesta });
+            return await CompleteAsync(state, requestId, pendingOperationResponse, cancellationToken);
+        }
 
         var pendingSelectionResponse = await TryResolvePendingSelectionWithContinuationAsync(state, mensaje, cancellationToken);
         if (pendingSelectionResponse is not null)
@@ -48,8 +81,15 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 Content = pendingSelectionResponse.Respuesta
             });
 
-            await _conversationStore.SaveAsync(state, cancellationToken);
-            return pendingSelectionResponse;
+            return await CompleteAsync(state, requestId, pendingSelectionResponse, cancellationToken);
+        }
+
+        if (state.Estado == FacturaConversationStates.EsperandoConfirmacion && IsExplicitConfirmation(mensaje))
+        {
+            var emission = await _toolDispatcher.DispatchAsync(ToolDefinitions.EmitirFactura, "{}", state, cancellationToken, allowSideEffects: true);
+            var emissionResponse = BuildToolResponse(state, emission, "confirmar_emision");
+            state.Historial.Add(new FacturaConversationMessage { Role = "assistant", Content = emissionResponse.Respuesta });
+            return await CompleteAsync(state, requestId, emissionResponse, cancellationToken);
         }
 
         var fastPathResult = await _openAIAsistenteService.TryProcesarRapidoAsync(state, mensaje, cancellationToken);
@@ -62,15 +102,12 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         });
         TrimHistorial(state);
 
-        await _conversationStore.SaveAsync(state, cancellationToken);
-
-        return new ChatFacturaResponse
+        return await CompleteAsync(state, requestId, new ChatFacturaResponse
         {
-            SessionId = state.SessionId,
             Respuesta = result.Respuesta,
             Estado = state.Estado,
             FacturaDraft = state.Draft,
-            RequiereConfirmacion = state.RequiereConfirmacion,
+            RequiereConfirmacion = state.RequiereConfirmacion || state.OperacionPendiente is not null,
             Emitida = state.Emitida,
             AccionDetectada = result.AccionDetectada ?? state.UltimaIntencion,
             RutaSugerida = result.RutaSugerida,
@@ -79,8 +116,88 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             OpcionesSeleccion = state.SeleccionPendiente?.Opciones ?? new List<SelectionOptionDto>(),
             Progreso = BuildProgress(state, result.AccionDetectada, result.Respuesta),
             DatosFaltantes = BuildMissingData(state, result.Respuesta)
-        };
+        }, cancellationToken);
     }
+
+    private async Task<ChatFacturaResponse?> TryResolvePendingOperationAsync(FacturaConversationState state, string mensaje, CancellationToken cancellationToken)
+    {
+        var pending = state.OperacionPendiente;
+        if (pending is null)
+            return null;
+
+        if (pending.ExpiraEn <= DateTimeOffset.UtcNow)
+        {
+            state.OperacionPendiente = null;
+            state.RequiereConfirmacion = false;
+            return BuildStateResponse(state, "La confirmación expiró. Repite la operación para generar una nueva confirmación.", "confirmacion_expirada");
+        }
+
+        var normalized = NormalizeConfirmationText(mensaje);
+        if (normalized == "cancelar" || normalized == "cancela" || normalized == "no")
+        {
+            state.OperacionPendiente = null;
+            state.RequiereConfirmacion = false;
+            return BuildStateResponse(state, "Cancelé la operación pendiente.", "cancelar");
+        }
+
+        if (!IsExplicitConfirmation(mensaje))
+            return BuildStateResponse(state, $"La operación está pendiente: {pending.Resumen}. Responde 'confirmar' o 'cancelar'.", "confirmacion_pendiente");
+
+        state.OperacionPendiente = null;
+        var result = await _toolDispatcher.DispatchAsync(pending.ToolName, pending.ArgumentsJson, state, cancellationToken, allowSideEffects: true);
+        return BuildToolResponse(state, result, pending.ToolName);
+    }
+
+    private async Task<ChatFacturaResponse> CompleteAsync(FacturaConversationState state, string? requestId, ChatFacturaResponse response, CancellationToken cancellationToken)
+    {
+        response.RequestId = requestId;
+        response.SessionId = state.SessionId;
+        response.Estado = state.Estado;
+        response.EstadoVersion = state.EstadoVersion;
+        response.OperacionPendiente = state.OperacionPendiente is null
+            ? null
+            : new PendingOperationDto
+            {
+                Tipo = state.OperacionPendiente.Tipo,
+                Resumen = state.OperacionPendiente.Resumen,
+                ExpiraEn = state.OperacionPendiente.ExpiraEn
+            };
+
+        if (!string.IsNullOrWhiteSpace(requestId))
+        {
+            if (state.RespuestasIdempotentes.Count >= 50)
+                state.RespuestasIdempotentes.Remove(state.RespuestasIdempotentes.Keys.First());
+            state.RespuestasIdempotentes[requestId] = JsonSerializer.Deserialize<ChatFacturaResponse>(JsonSerializer.Serialize(response)) ?? response;
+        }
+
+        await _conversationStore.SaveAsync(state, cancellationToken);
+        return response;
+    }
+
+    private static ChatFacturaResponse BuildToolResponse(FacturaConversationState state, ToolResultDto result, string action)
+        => BuildStateResponse(state, result.Message, action, result.RequiereConfirmacion);
+
+    private static ChatFacturaResponse BuildStateResponse(FacturaConversationState state, string message, string action, bool requiresConfirmation = false)
+        => new()
+        {
+            Respuesta = message,
+            Estado = state.Estado,
+            FacturaDraft = state.Draft,
+            RequiereConfirmacion = requiresConfirmation || state.RequiereConfirmacion,
+            Emitida = state.Emitida,
+            AccionDetectada = action,
+            SeleccionPendienteTipo = state.SeleccionPendiente?.Tipo,
+            SeleccionPendienteMensaje = state.SeleccionPendiente?.Mensaje,
+            OpcionesSeleccion = state.SeleccionPendiente?.Opciones ?? new List<SelectionOptionDto>(),
+            DatosFaltantes = BuildMissingData(state, message)
+        };
+
+    private static bool IsExplicitConfirmation(string mensaje)
+        => new[] { "si", "sí", "confirmar", "confirmo", "acepto", "dale", "correcto", "emitir", "emite" }
+            .Contains(NormalizeConfirmationText(mensaje), StringComparer.OrdinalIgnoreCase);
+
+    private static string NormalizeConfirmationText(string value)
+        => value.Trim().Trim('.', '!', '?', ',').ToLowerInvariant();
 
     private static List<BotProgressStepDto> BuildProgress(FacturaConversationState state, string? action, string response)
     {

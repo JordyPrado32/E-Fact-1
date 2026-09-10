@@ -15,4 +15,10 @@ public sealed class ToolResultDto
 
     [JsonPropertyName("data")]
     public object? Data { get; set; }
+
+    [JsonPropertyName("requiereConfirmacion")]
+    public bool RequiereConfirmacion { get; set; }
+
+    [JsonPropertyName("codigoError")]
+    public string? CodigoError { get; set; }
 }

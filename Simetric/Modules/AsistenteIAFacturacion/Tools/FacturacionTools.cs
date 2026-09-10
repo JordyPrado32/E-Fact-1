@@ -566,6 +566,7 @@ public sealed class FacturacionTools
 
     public Task<ToolResultDto> ValidarFacturaAsync(FacturaConversationState state)
     {
+        Recalculate(state.Draft);
         var errores = ValidateDraft(state.Draft);
         if (errores.Count > 0)
         {
@@ -587,6 +588,7 @@ public sealed class FacturacionTools
 
     public async Task<ToolResultDto> EmitirFacturaAsync(FacturaConversationState state, CancellationToken cancellationToken)
     {
+        Recalculate(state.Draft);
         var errores = ValidateDraft(state.Draft);
         if (errores.Count > 0)
             return Fail(ToolDefinitions.EmitirFactura, string.Join(" ", errores), errores);
@@ -718,7 +720,7 @@ public sealed class FacturacionTools
     {
         var errors = new List<string>();
 
-        if (draft.Cliente?.Id <= 0)
+        if (draft.Cliente is null || draft.Cliente.Id <= 0)
             errors.Add("Falta seleccionar un cliente válido.");
 
         if (draft.Items.Count == 0)
@@ -734,9 +736,24 @@ public sealed class FacturacionTools
 
             if (item.DescuentoAplicado < 0)
                 errors.Add($"El descuento de '{item.Descripcion}' no puede ser negativo.");
+
+            if (item.TarifaPorcentaje < 0m || item.TarifaPorcentaje > 100m)
+                errors.Add($"La tarifa de IVA de '{item.Descripcion}' no es válida.");
+
+            if (item.DescuentoPorcentaje is < 0m or > 100m || item.DescuentoValor < 0m)
+                errors.Add($"El descuento de '{item.Descripcion}' no es válido.");
         }
 
-        if (draft.Descuento > draft.Subtotal + draft.Descuento)
+        if (draft.DescuentoGlobalPorcentaje is < 0m or > 100m || draft.DescuentoGlobalValor < 0m)
+            errors.Add("El descuento global no es válido.");
+
+        if (string.IsNullOrWhiteSpace(draft.FormaPago))
+            errors.Add("Falta seleccionar la forma de pago.");
+
+        if (IsCreditPayment(draft.FormaPago) && (draft.DiasCredito is null or <= 0 || draft.FechaVencimiento is null))
+            errors.Add("Falta indicar un plazo y fecha de vencimiento válidos para el crédito.");
+
+        if (draft.Descuento > draft.Subtotal)
             errors.Add("El descuento total no puede superar el valor de la factura.");
 
         return errors;
