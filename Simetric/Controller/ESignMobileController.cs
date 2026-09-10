@@ -61,14 +61,15 @@ public sealed class ESignMobileController : ControllerBase
     public async Task<IActionResult> Dashboard([FromQuery] int take = 8, CancellationToken cancellationToken = default)
     {
         var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (userId <= 0 || accountId is null) return Unauthorized();
 
         take = Math.Clamp(take, 1, 50);
-        var solicitudes = await _solicitudService.ObtenerSolicitudesClienteAsync(userId);
-        var firmas = await _solicitudService.ObtenerFirmasClienteAsync(userId);
-        var notificaciones = await _solicitudService.ObtenerNotificacionesPendientesClienteAsync(userId, take);
-        var entregasFirma = await _solicitudService.ObtenerEntregasFirmaPendientesClienteAsync(userId, take);
-        var renovacion = await _firmaRenovacionService.ObtenerPorUsuarioAsync(userId, cancellationToken: cancellationToken);
+        var solicitudes = await _solicitudService.ObtenerSolicitudesClienteAsync(accountId.Value);
+        var firmas = await _solicitudService.ObtenerFirmasClienteAsync(accountId.Value);
+        var notificaciones = await _solicitudService.ObtenerNotificacionesPendientesClienteAsync(accountId.Value, take);
+        var entregasFirma = await _solicitudService.ObtenerEntregasFirmaPendientesClienteAsync(accountId.Value, take);
+        var renovacion = await _firmaRenovacionService.ObtenerPorUsuarioAsync(accountId.Value, cancellationToken: cancellationToken);
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var idTipoUsuario = await db.Usuarios.AsNoTracking()
             .Where(user => user.IdUsuario == userId)
@@ -170,59 +171,59 @@ public sealed class ESignMobileController : ControllerBase
     [HttpGet("solicitudes")]
     public async Task<IActionResult> ObtenerSolicitudes(CancellationToken cancellationToken)
     {
-        var userId = GetUserId();
-        return userId <= 0 ? Unauthorized() : Ok(await _solicitudService.ObtenerSolicitudesClienteAsync(userId));
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        return accountId is null ? Unauthorized() : Ok(await _solicitudService.ObtenerSolicitudesClienteAsync(accountId.Value));
     }
 
     [HttpGet("firmas")]
     public async Task<IActionResult> ObtenerFirmas(CancellationToken cancellationToken)
     {
-        var userId = GetUserId();
-        return userId <= 0 ? Unauthorized() : Ok(await _solicitudService.ObtenerFirmasClienteAsync(userId));
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        return accountId is null ? Unauthorized() : Ok(await _solicitudService.ObtenerFirmasClienteAsync(accountId.Value));
     }
 
     [HttpGet("renovacion")]
     public async Task<IActionResult> ObtenerRenovacion(CancellationToken cancellationToken)
     {
-        var userId = GetUserId();
-        return userId <= 0
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        return accountId is null
             ? Unauthorized()
-            : Ok(await _firmaRenovacionService.ObtenerPorUsuarioAsync(userId, cancellationToken: cancellationToken));
+            : Ok(await _firmaRenovacionService.ObtenerPorUsuarioAsync(accountId.Value, cancellationToken: cancellationToken));
     }
 
     [HttpGet("notificaciones")]
-    public async Task<IActionResult> ObtenerNotificaciones([FromQuery] int take = 8)
+    public async Task<IActionResult> ObtenerNotificaciones([FromQuery] int take = 8, CancellationToken cancellationToken = default)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
-        return Ok(await _solicitudService.ObtenerNotificacionesPendientesClienteAsync(userId, Math.Clamp(take, 1, 50)));
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (accountId is null) return Unauthorized();
+        return Ok(await _solicitudService.ObtenerNotificacionesPendientesClienteAsync(accountId.Value, Math.Clamp(take, 1, 50)));
     }
 
     [HttpGet("entregas-firma")]
-    public async Task<IActionResult> ObtenerEntregasFirma([FromQuery] int take = 8)
+    public async Task<IActionResult> ObtenerEntregasFirma([FromQuery] int take = 8, CancellationToken cancellationToken = default)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
-        return Ok(await _solicitudService.ObtenerEntregasFirmaPendientesClienteAsync(userId, Math.Clamp(take, 1, 50)));
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (accountId is null) return Unauthorized();
+        return Ok(await _solicitudService.ObtenerEntregasFirmaPendientesClienteAsync(accountId.Value, Math.Clamp(take, 1, 50)));
     }
 
     [HttpPost("notificaciones/entregas/{observacionId:int}/vista")]
     public async Task<IActionResult> MarcarEntregaVista(int observacionId)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
+        var accountId = await GetAccountIdAsync(HttpContext.RequestAborted);
+        if (accountId is null) return Unauthorized();
         if (observacionId <= 0) return BadRequest(new { mensaje = "La observación no es válida." });
 
-        var actualizado = await _solicitudService.MarcarEntregaFirmaVistaAsync(observacionId, userId);
+        var actualizado = await _solicitudService.MarcarEntregaFirmaVistaAsync(observacionId, accountId.Value);
         return actualizado ? Ok(new { actualizado = true }) : NotFound(new { mensaje = "Entrega no encontrada." });
     }
 
     [HttpGet("solicitudes/{solId:int}/firma-p12")]
     public async Task<IActionResult> DescargarFirmaP12(int solId)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
-        var archivo = await _solicitudService.ObtenerArchivoFirmaP12ClienteAsync(solId, userId);
+        var accountId = await GetAccountIdAsync(HttpContext.RequestAborted);
+        if (accountId is null) return Unauthorized();
+        var archivo = await _solicitudService.ObtenerArchivoFirmaP12ClienteAsync(solId, accountId.Value);
         return archivo is null
             ? NotFound(new { mensaje = "No existe una firma disponible para la solicitud." })
             : File(archivo.Contenido, "application/x-pkcs12", archivo.NombreArchivo);
@@ -231,17 +232,18 @@ public sealed class ESignMobileController : ControllerBase
     [HttpPost("solicitudes/{solId:int}/sincronizar")]
     public async Task<IActionResult> SincronizarSolicitud(int solId, CancellationToken cancellationToken)
     {
-        if (GetUserId() <= 0) return Unauthorized();
-        var resultado = await _solicitudService.SincronizarSolicitudClienteUanatacaAsync(solId, GetUserId(), cancellationToken);
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (accountId is null) return Unauthorized();
+        var resultado = await _solicitudService.SincronizarSolicitudClienteUanatacaAsync(solId, accountId.Value, cancellationToken);
         return resultado.Success ? Ok(resultado) : BadRequest(resultado);
     }
 
     [HttpPost("solicitudes/sincronizar-pendientes")]
     public async Task<IActionResult> SincronizarPendientes(CancellationToken cancellationToken)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
-        var resultado = await _solicitudService.SincronizarSolicitudesUanatacaPendientesAsync(userId, cancellationToken);
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (accountId is null) return Unauthorized();
+        var resultado = await _solicitudService.SincronizarSolicitudesUanatacaPendientesAsync(accountId.Value, cancellationToken);
         return Ok(resultado);
     }
 
@@ -249,8 +251,8 @@ public sealed class ESignMobileController : ControllerBase
     [RequestSizeLimit(70 * 1024 * 1024)]
     public async Task<IActionResult> CrearSolicitud([FromForm] MobileSolicitudFirmaRequest request, CancellationToken cancellationToken)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (accountId is null) return Unauthorized();
 
         var vigencia = NormalizarVigencia(request.Vigencia);
         var subtotal = ESignPricing.ObtenerSubtotal(vigencia);
@@ -263,7 +265,7 @@ public sealed class ESignMobileController : ControllerBase
         var tieneRuc = tipoPersona == "JURIDICA" || !string.IsNullOrWhiteSpace(request.Ruc);
         var solicitud = new UsuSolicitudFirma
         {
-            SolIdUsuarioCliente = userId,
+            SolIdUsuarioCliente = accountId.Value,
             SolTipoPersona = tipoPersona,
             SolTipoIdentificacion = NormalizarTipoIdentificacion(request.TipoDocumento),
             SolIdentificacion = SoloDigitosOTexto(request.Identificacion),
@@ -327,13 +329,13 @@ public sealed class ESignMobileController : ControllerBase
     [HttpPost("solicitudes/pago")]
     public async Task<IActionResult> CrearPagoSolicitud([FromBody] MobileSolicitudPagoRequest request)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
+        var accountId = await GetAccountIdAsync(HttpContext.RequestAborted);
+        if (accountId is null) return Unauthorized();
         if (request.SolicitudId <= 0) return BadRequest(new { mensaje = "La solicitud no es válida." });
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         var solicitud = await db.UsuSolicitudFirma
-            .FirstOrDefaultAsync(item => item.SolId == request.SolicitudId && item.SolIdUsuarioCliente == userId && item.SolActivo);
+            .FirstOrDefaultAsync(item => item.SolId == request.SolicitudId && item.SolIdUsuarioCliente == accountId.Value && item.SolActivo);
         if (solicitud is null) return NotFound(new { mensaje = "Solicitud no encontrada." });
         if (solicitud.SolPagoExitoso == true) return BadRequest(new { mensaje = "La solicitud ya tiene un pago aprobado." });
 
@@ -348,8 +350,8 @@ public sealed class ESignMobileController : ControllerBase
     [RequestSizeLimit(8 * 1024 * 1024)]
     public async Task<IActionResult> RegistrarTransferenciaSolicitud([FromForm] MobileSolicitudTransferenciaRequest request, CancellationToken cancellationToken)
     {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (accountId is null) return Unauthorized();
         if (request.SolicitudId <= 0) return BadRequest(new { mensaje = "La solicitud no es válida." });
         if (string.IsNullOrWhiteSpace(request.Banco) || string.IsNullOrWhiteSpace(request.TitularCuenta) ||
             string.IsNullOrWhiteSpace(request.CuentaOrigen) || string.IsNullOrWhiteSpace(request.NumeroComprobante))
@@ -359,7 +361,7 @@ public sealed class ESignMobileController : ControllerBase
 
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var solicitud = await db.UsuSolicitudFirma
-            .FirstOrDefaultAsync(item => item.SolId == request.SolicitudId && item.SolIdUsuarioCliente == userId && item.SolActivo, cancellationToken);
+            .FirstOrDefaultAsync(item => item.SolId == request.SolicitudId && item.SolIdUsuarioCliente == accountId.Value && item.SolActivo, cancellationToken);
         if (solicitud is null) return NotFound(new { mensaje = "Solicitud no encontrada." });
         if (solicitud.SolPagoExitoso == true) return BadRequest(new { mensaje = "La solicitud ya tiene un pago aprobado." });
 
