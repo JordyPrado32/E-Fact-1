@@ -138,7 +138,12 @@ namespace Simetric.Services
                     ValorFacturado = f.Valortotal ?? 0m,
                     TotalAbonos = context.Abonos
                         .Where(a => a.codFactura == f.Codfactura && a.estado == true)
-                        .Sum(a => (decimal?)a.abono) ?? 0m
+                        .Sum(a => (decimal?)a.abono) ?? 0m,
+                    TotalNotasCredito = context.NotaCreditos
+                        .Where(nc => nc.IdDocModificado == f.Codfactura &&
+                                     nc.Estado == true &&
+                                     nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado)
+                        .Sum(nc => (decimal?)nc.ValorTotal) ?? 0m
                 })
                 .ToListAsync();
 
@@ -163,10 +168,10 @@ namespace Simetric.Services
                     g => g.Key,
                     g => new
                     {
-                        FacturasPendientes = g.Count(x => x.ValorFacturado - x.TotalAbonos > 0),
-                        SaldoTotal = g.Sum(x => Math.Max(x.ValorFacturado - x.TotalAbonos, 0m)),
+                        FacturasPendientes = g.Count(x => x.ValorFacturado - x.TotalAbonos - x.TotalNotasCredito > 0),
+                        SaldoTotal = g.Sum(x => Math.Max(x.ValorFacturado - x.TotalAbonos - x.TotalNotasCredito, 0m)),
                         DiasVencidosMaximos = g
-                            .Where(x => x.FechaVencimiento.HasValue && x.ValorFacturado - x.TotalAbonos > 0)
+                            .Where(x => x.FechaVencimiento.HasValue && x.ValorFacturado - x.TotalAbonos - x.TotalNotasCredito > 0)
                             .Select(x => Math.Max((DateTime.Today - x.FechaVencimiento!.Value.Date).Days, 0))
                             .DefaultIfEmpty(0)
                             .Max()
@@ -177,7 +182,7 @@ namespace Simetric.Services
                 {
                     var resumen = resumenCliente.GetValueOrDefault(f.IdCliente);
                     var pago = pagosCliente.GetValueOrDefault(f.IdCliente);
-                    var saldoActual = Math.Max(f.ValorFacturado - f.TotalAbonos, 0m);
+                    var saldoActual = Math.Max(f.ValorFacturado - f.TotalAbonos - f.TotalNotasCredito, 0m);
 
                     return new EstadoCuentaClienteResumenVM
                     {
@@ -229,13 +234,18 @@ namespace Simetric.Services
                     ValorFacturado = f.Valortotal ?? 0m,
                     TotalAbonos = context.Abonos
                         .Where(a => a.codFactura == f.Codfactura && a.estado == true)
-                        .Sum(a => (decimal?)a.abono) ?? 0m
+                        .Sum(a => (decimal?)a.abono) ?? 0m,
+                    TotalNotasCredito = context.NotaCreditos
+                        .Where(nc => nc.IdDocModificado == f.Codfactura &&
+                                     nc.Estado == true &&
+                                     nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado)
+                        .Sum(nc => (decimal?)nc.ValorTotal) ?? 0m
                 })
                 .ToListAsync();
 
             foreach (var factura in facturas)
             {
-                factura.SaldoActual = Math.Max(factura.ValorFacturado - factura.TotalAbonos, 0m);
+                factura.SaldoActual = Math.Max(factura.ValorFacturado - factura.TotalAbonos - factura.TotalNotasCredito, 0m);
                 factura.DiasVencidos = factura.SaldoActual <= 0 || !factura.FechaVencimiento.HasValue
                     ? 0
                     : Math.Max((DateTime.Today - factura.FechaVencimiento.Value.Date).Days, 0);
@@ -531,7 +541,12 @@ namespace Simetric.Services
                 TotalFactura = f.Valortotal ?? 0,
                 TotalAbonado = context.Abonos
                     .Where(a => a.codFactura == f.Codfactura && a.estado == true)
-                    .Sum(a => (decimal?)a.abono) ?? 0
+                    .Sum(a => (decimal?)a.abono) ?? 0,
+                TotalNotasCredito = context.NotaCreditos
+                    .Where(nc => nc.IdDocModificado == f.Codfactura &&
+                                 nc.Estado == true &&
+                                 nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado)
+                    .Sum(nc => (decimal?)nc.ValorTotal) ?? 0
             }).ToListAsync();
 
             return facturas
@@ -569,7 +584,12 @@ namespace Simetric.Services
                 TotalFactura = f.Valortotal ?? 0,
                 TotalAbonado = context.Abonos
                     .Where(a => a.codFactura == f.Codfactura && a.estado == true)
-                    .Sum(a => (decimal?)a.abono) ?? 0
+                    .Sum(a => (decimal?)a.abono) ?? 0,
+                TotalNotasCredito = context.NotaCreditos
+                    .Where(nc => nc.IdDocModificado == f.Codfactura &&
+                                 nc.Estado == true &&
+                                 nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado)
+                    .Sum(nc => (decimal?)nc.ValorTotal) ?? 0
             }).ToListAsync();
 
             return facturas
@@ -629,7 +649,13 @@ namespace Simetric.Services
                 .Where(f =>
                     f.Idusuario == idUsuario &&
                     (f.Tipopago == "19" || f.Estadopago == "PENDIENTE") &&
-                    (f.Estado == true || f.Estado == null));
+                    (f.Estado == true || f.Estado == null) &&
+                    (f.Valortotal ?? 0m) > 0m &&
+                    (context.NotaCreditos
+                        .Where(nc => nc.IdDocModificado == f.Codfactura &&
+                                     nc.Estado == true &&
+                                     nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado)
+                        .Sum(nc => (decimal?)nc.ValorTotal) ?? 0m) < (f.Valortotal ?? 0m));
 
         private static async Task<bool> ClientePerteneceUsuarioAsync(AppDbContext context, int idUsuario, int idCliente)
         {

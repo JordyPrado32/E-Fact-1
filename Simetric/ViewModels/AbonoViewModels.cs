@@ -73,6 +73,7 @@ namespace Simetric.ViewModels
         public DateTime? FechaVencimiento { get; set; }
         public decimal ValorFacturado { get; set; }
         public decimal TotalAbonos { get; set; }
+        public decimal TotalNotasCredito { get; set; }
         public decimal SaldoActual { get; set; }
         public string Estado { get; set; } = string.Empty;
         public int DiasVencidos { get; set; }

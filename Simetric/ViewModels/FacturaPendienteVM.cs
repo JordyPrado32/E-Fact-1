@@ -9,9 +9,10 @@
         public string NumeroIdentificacion { get; set; } = string.Empty;
         public decimal TotalFactura { get; set; }
         public decimal TotalAbonado { get; set; }
+        public decimal TotalNotasCredito { get; set; }
         public DateTime? FechaEmision { get; set; }
         public DateTime? FechaVencimiento { get; set; }
-        public decimal SaldoPendiente => TotalFactura - TotalAbonado;
+        public decimal SaldoPendiente => Math.Max(TotalFactura - TotalAbonado - TotalNotasCredito, 0m);
 
         // Propiedad para capturar cuánto se va a pagar en la vista
         public decimal MontoAPagar { get; set; }

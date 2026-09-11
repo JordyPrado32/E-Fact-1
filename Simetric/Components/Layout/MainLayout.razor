@@ -9,7 +9,7 @@
 @using Simetric.Services.EDeclara
 @using Simetric.Services.ESign
 @using Microsoft.EntityFrameworkCore
-@implements IDisposable
+@implements IAsyncDisposable
 @inject NavigationManager NavManager
 @inject IJSRuntime JS
 @inject DashboardService DashboardService
@@ -235,19 +235,21 @@ else
                             </a>
                         }
 
-                        <div class="session-profile-menu">
-                            <button type="button"
-                                    class="session-profile-trigger"
-                                    aria-haspopup="menu"
-                                    aria-expanded="@_mostrarMenuSesion"
-                                    aria-label="Abrir opciones de sesión"
-                                @onclick="ToggleSessionMenu">
+                        <div class="session-profile-menu" @ref="_sessionMenuRoot">
+                            <div class="session-profile-content">
                                 <div class="session-meta">
                                     <span class="session-label">Sesion activa</span>
                                     <span class="user-name">@GetDisplayName(context.User)</span>
                                 </div>
-                                <img src="@GetUserAvatar(context.User, _avatarUrlActual)" class="user-avatar" alt="Avatar del usuario" />
-                            </button>
+                                <button type="button"
+                                        class="session-avatar-trigger"
+                                        aria-haspopup="menu"
+                                        aria-expanded="@_mostrarMenuSesion"
+                                        aria-label="Abrir opciones de sesión"
+                                        @onclick="ToggleSessionMenu">
+                                    <img src="@GetUserAvatar(context.User, _avatarUrlActual)" class="user-avatar" alt="Avatar del usuario" />
+                                </button>
+                            </div>
 
                             @if (_mostrarMenuSesion)
                             {
@@ -276,14 +278,6 @@ else
                             }
                         </div>
                         </div>
-                        <button type="button"
-                                class="session-profile-settings session-settings-trigger"
-                                aria-haspopup="menu"
-                                aria-expanded="@_mostrarMenuSesion"
-                                aria-label="Abrir opciones de sesión"
-                                @onclick="ToggleSessionMenu">
-                            <i class="ri-settings-3-line" aria-hidden="true"></i>
-                        </button>
                     </div>
                 </Authorized>
                 <NotAuthorized>
@@ -934,6 +928,7 @@ else
     private const string ReadyConfirmationStoragePrefix = "numerica:ready-confirmation-dismissed:";
     private const string OnboardingBotSessionStoragePrefix = "numerica:onboarding-bot-dismissed:";
     private const string DefaultAvatarUrl = "/images/Avatars/Avatar-Boy.jpg";
+    private const string SessionMenuOutsideClickKey = "main-layout-session-menu";
 
     private bool _cerrandoSesion;
     private bool _mostrarBienvenida;
@@ -945,6 +940,9 @@ else
     private bool _resaltarSaldoDocumentos;
     private int _saldoHighlightVersion;
     private bool _mostrarMenuSesion;
+    private ElementReference _sessionMenuRoot;
+    private DotNetObjectReference<MainLayout>? _sessionMenuReference;
+    private bool _sessionMenuOutsideClickRegistered;
     private bool _mostrarMenuServicios;
     private bool _cargandoServiciosHeader;
     private bool _puedeCambiarServicioHeader;
@@ -1104,37 +1102,51 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender) return;
-
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
-
-        if (user.Identity?.IsAuthenticated != true) return;
-
-        await CargarServiciosHeaderAsync(user);
-        await RecordarModuloActualAsync(user, NavManager.Uri);
-
-        if (IsESignContext)
+        if (firstRender)
         {
-            await ActualizarEstadoFirmaAsync(user);
-            await InvokeAsync(StateHasChanged);
-        }
-        else if (!IsEContaxContext && !IsEDeclaraContext)
-        {
-            await ActualizarEstadoEmisionAsync(user);
-            await EvaluarConfirmacionCuentaListaAsync(user);
-            await EvaluarEstadoBotOnboardingAsync(user);
-            await InvokeAsync(StateHasChanged);
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated == true)
+            {
+                await CargarServiciosHeaderAsync(user);
+                await RecordarModuloActualAsync(user, NavManager.Uri);
+
+                if (IsESignContext)
+                {
+                    await ActualizarEstadoFirmaAsync(user);
+                    await InvokeAsync(StateHasChanged);
+                }
+                else if (!IsEContaxContext && !IsEDeclaraContext)
+                {
+                    await ActualizarEstadoEmisionAsync(user);
+                    await EvaluarConfirmacionCuentaListaAsync(user);
+                    await EvaluarEstadoBotOnboardingAsync(user);
+                    await InvokeAsync(StateHasChanged);
+                }
+
+                await EvaluarBienvenidaAsync(user, IsEContaxContext, IsEDeclaraContext, IsESignContext);
+            }
         }
 
-        await EvaluarBienvenidaAsync(user, IsEContaxContext, IsEDeclaraContext, IsESignContext);
+        await SyncSessionMenuOutsideClickAsync();
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         EmisorOnboardingService.Changed -= OnOnboardingChanged;
         EmisionControlService.Changed -= OnEmisionChanged;
         NavManager.LocationChanged -= OnLocationChanged;
+
+        try
+        {
+            await JS.InvokeVoidAsync("numericaUi.unregisterOutsideClick", SessionMenuOutsideClickKey);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _sessionMenuReference?.Dispose();
     }
 
     private async Task CerrarBienvenida()
@@ -1441,6 +1453,47 @@ else
     }
 
     private void ToggleSessionMenu() => _mostrarMenuSesion = !_mostrarMenuSesion;
+
+    private async Task SyncSessionMenuOutsideClickAsync()
+    {
+        try
+        {
+            if (_mostrarMenuSesion && !_sessionMenuOutsideClickRegistered)
+            {
+                _sessionMenuReference ??= DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync(
+                    "numericaUi.registerOutsideClick",
+                    SessionMenuOutsideClickKey,
+                    _sessionMenuRoot,
+                    _sessionMenuReference,
+                    nameof(CloseSessionMenuFromOutsideAsync));
+                _sessionMenuOutsideClickRegistered = true;
+            }
+            else if (!_mostrarMenuSesion && _sessionMenuOutsideClickRegistered)
+            {
+                await JS.InvokeVoidAsync("numericaUi.unregisterOutsideClick", SessionMenuOutsideClickKey);
+                _sessionMenuOutsideClickRegistered = false;
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    [JSInvokable]
+    public Task CloseSessionMenuFromOutsideAsync()
+    {
+        return InvokeAsync(() =>
+        {
+            if (!_mostrarMenuSesion)
+            {
+                return;
+            }
+
+            _mostrarMenuSesion = false;
+            StateHasChanged();
+        });
+    }
 
     private void ToggleServicesMenu()
     {

@@ -2670,7 +2670,12 @@ IF @resultado < 0
             var totalAbonado = await context.Abonos
                 .Where(a => a.codFactura == codFactura && a.estado == true)
                 .SumAsync(a => (decimal?)a.abono, cancellationToken) ?? 0m;
-            var saldoPendiente = Math.Max(totalFactura - totalAbonado, 0m);
+            var totalNotasCredito = await context.NotaCreditos
+                .Where(nc => nc.IdDocModificado == codFactura &&
+                             nc.Estado == true &&
+                             nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado)
+                .SumAsync(nc => (decimal?)nc.ValorTotal, cancellationToken) ?? 0m;
+            var saldoPendiente = Math.Max(totalFactura - totalAbonado - totalNotasCredito, 0m);
 
             if (saldoPendiente <= 0m)
                 return (false, "La factura ya está completamente cobrada. Revisa primero sus abonos registrados.");
