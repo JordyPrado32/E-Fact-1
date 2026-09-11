@@ -2,7 +2,7 @@ namespace Simetric.Services;
 
 public static class BackOfficePermissionHelper
 {
-    private const string UsuarioERubricaEmail = "servicealcliente@numerosasesores.com";
+    private const string UsuarioERubricaEmail = "servicioalcliente@numerosasesores.com";
 
     public const int SuperAdministradorRoleId = 2;
     public const int BackOfficeRoleId = 7;
