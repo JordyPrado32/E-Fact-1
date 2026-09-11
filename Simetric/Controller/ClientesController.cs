@@ -1288,15 +1288,24 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
     private async Task SincronizarProveedorDesdeClienteAsync(ClienteUpsertDto dto, string? codigoTipoIdentificacion)
     {
-        if (!dto.EsProveedor)
-            return;
-
         var identificacion = dto.Numeroidentificacion?.Trim();
         if (string.IsNullOrWhiteSpace(identificacion))
             return;
 
         var proveedor = await _context.Proveedores
             .FirstOrDefaultAsync(x => x.ruc == identificacion);
+
+        if (!dto.EsProveedor)
+        {
+            if (proveedor is not null && proveedor.estado != false)
+            {
+                proveedor.estado = false;
+                proveedor.fechaActualizacion = DateTime.Now;
+                await _context.SaveChangesAsync();
+            }
+
+            return;
+        }
 
         if (proveedor is null)
         {
@@ -1307,6 +1316,8 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
             };
             _context.Proveedores.Add(proveedor);
         }
+
+        proveedor.estado = true;
 
         var nombres = SepararPartes(dto.Nombres);
         var apellidos = SepararPartes(dto.Apellidos);
