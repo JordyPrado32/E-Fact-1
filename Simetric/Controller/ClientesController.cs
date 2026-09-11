@@ -61,6 +61,15 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         public int? Tipoidentificacion { get; set; }
         public List<string> CorreosAdicionales { get; set; } = new();
         public string? Oblgconta { get; set; }
+        public bool EsProveedor { get; set; }
+        public string? CuentaContableProveedor { get; set; }
+        public string? CreditoTributarioProveedor { get; set; }
+        public string? CodigoProveedor { get; set; }
+        public bool EsSujetoRetencionProveedor { get; set; }
+        public bool RegistraInformacionBancariaProveedor { get; set; }
+        public string? BancoProveedor { get; set; }
+        public string? TipoCuentaProveedor { get; set; }
+        public string? NumeroCuentaProveedor { get; set; }
     }
 
     public class BulkImportResultDto
@@ -122,6 +131,39 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
                 c.Pais,
                 c.Provincia,
                 c.Ciudad,
+                EsProveedor = _context.Proveedores
+                    .Any(p => p.ruc == c.Numeroidentificacion && p.estado != false),
+                CuentaContableProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.cuentaContable)
+                    .FirstOrDefault(),
+                CreditoTributarioProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.retIva1)
+                    .FirstOrDefault(),
+                CodigoProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.detalle)
+                    .FirstOrDefault(),
+                EsSujetoRetencionProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.llevaRetencion)
+                    .FirstOrDefault() == true,
+                RegistraInformacionBancariaProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false)
+                    .Any(p => p.tipoCuenta != null || p.numeroCuenta != null || p.institucionFin != null),
+                BancoProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false && p.institucionFin != null)
+                    .Select(p => p.institucionFin!.Value.ToString())
+                    .FirstOrDefault(),
+                TipoCuentaProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.tipoCuenta)
+                    .FirstOrDefault(),
+                NumeroCuentaProveedor = _context.Proveedores
+                    .Where(p => p.ruc == c.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.numeroCuenta)
+                    .FirstOrDefault(),
                 Tipoidentificacion = _context.Identificacion
                     .Where(i => i.IdeCodigo == c.Tipoidentificacion)
                     .Select(i => i.IdeSec)
@@ -176,6 +218,39 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
                 x.Pais,
                 x.Provincia,
                 x.Ciudad,
+                EsProveedor = _context.Proveedores
+                    .Any(p => p.ruc == x.Numeroidentificacion && p.estado != false),
+                CuentaContableProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.cuentaContable)
+                    .FirstOrDefault(),
+                CreditoTributarioProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.retIva1)
+                    .FirstOrDefault(),
+                CodigoProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.detalle)
+                    .FirstOrDefault(),
+                EsSujetoRetencionProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.llevaRetencion)
+                    .FirstOrDefault() == true,
+                RegistraInformacionBancariaProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false)
+                    .Any(p => p.tipoCuenta != null || p.numeroCuenta != null || p.institucionFin != null),
+                BancoProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false && p.institucionFin != null)
+                    .Select(p => p.institucionFin!.Value.ToString())
+                    .FirstOrDefault(),
+                TipoCuentaProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.tipoCuenta)
+                    .FirstOrDefault(),
+                NumeroCuentaProveedor = _context.Proveedores
+                    .Where(p => p.ruc == x.Numeroidentificacion && p.estado != false)
+                    .Select(p => p.numeroCuenta)
+                    .FirstOrDefault(),
                 Tipoidentificacion = _context.Identificacion
                     .Where(i => i.IdeCodigo == x.Tipoidentificacion)
                     .Select(i => i.IdeSec)
@@ -277,6 +352,8 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         }
 
         await _context.SaveChangesAsync();
+
+        await SincronizarProveedorDesdeClienteAsync(dto, codigoReal);
 
         return Ok(new { entity.Codcliente });
     }
@@ -575,6 +652,8 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         }
 
         await _context.SaveChangesAsync();
+
+        await SincronizarProveedorDesdeClienteAsync(dto, codigoReal);
         return Ok();
     }
 
@@ -1206,6 +1285,72 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
 
     private static string NormalizarCorreo(string? valor) =>
         (valor ?? string.Empty).Trim().ToLowerInvariant();
+
+    private async Task SincronizarProveedorDesdeClienteAsync(ClienteUpsertDto dto, string? codigoTipoIdentificacion)
+    {
+        if (!dto.EsProveedor)
+            return;
+
+        var identificacion = dto.Numeroidentificacion?.Trim();
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return;
+
+        var proveedor = await _context.Proveedores
+            .FirstOrDefaultAsync(x => x.ruc == identificacion);
+
+        if (proveedor is null)
+        {
+            proveedor = new Proveedor
+            {
+                ruc = identificacion,
+                estado = true
+            };
+            _context.Proveedores.Add(proveedor);
+        }
+
+        var nombres = SepararPartes(dto.Nombres);
+        var apellidos = SepararPartes(dto.Apellidos);
+        var esJuridica = await EsTipoJuridico(dto.TipoCliente);
+
+        proveedor.tipoIdentificacion = codigoTipoIdentificacion;
+        proveedor.personaNatural = esJuridica ? 'N' : 'S';
+        proveedor.primerNombre = esJuridica ? null : nombres.ElementAtOrDefault(0);
+        proveedor.segundoNombre = esJuridica ? null : nombres.ElementAtOrDefault(1);
+        proveedor.primerApellido = esJuridica ? null : apellidos.ElementAtOrDefault(0);
+        proveedor.segundoApellido = esJuridica ? null : apellidos.ElementAtOrDefault(1);
+        proveedor.nombreComercial = dto.Nombrecomercial;
+        proveedor.nombre = esJuridica
+            ? (dto.Nombrerazonsocial ?? dto.Nombrecomercial ?? identificacion).Trim()
+            : string.Join(" ", new[] { dto.Nombres, dto.Apellidos }
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!.Trim()));
+        proveedor.direccion = dto.Direccion;
+        proveedor.telefono = dto.Telefonoconvencional;
+        proveedor.telefonoMovil = dto.Celular;
+        proveedor.email = dto.Correo;
+        proveedor.obligado = string.Equals(dto.Oblgconta, "SI", StringComparison.OrdinalIgnoreCase) ? 'S' : 'N';
+        proveedor.cuentaContable = string.IsNullOrWhiteSpace(dto.CuentaContableProveedor)
+            ? "21311 - Proveedores"
+            : dto.CuentaContableProveedor.Trim();
+        proveedor.retIva1 = string.IsNullOrWhiteSpace(dto.CreditoTributarioProveedor)
+            ? "01"
+            : dto.CreditoTributarioProveedor.Trim();
+        proveedor.llevaRetencion = dto.EsSujetoRetencionProveedor;
+        proveedor.detalle = dto.CodigoProveedor?.Trim();
+        proveedor.tipoCuenta = dto.RegistraInformacionBancariaProveedor ? dto.TipoCuentaProveedor?.Trim() : null;
+        proveedor.numeroCuenta = dto.RegistraInformacionBancariaProveedor ? dto.NumeroCuentaProveedor?.Trim() : null;
+        proveedor.institucionFin = dto.RegistraInformacionBancariaProveedor && int.TryParse(dto.BancoProveedor?.Trim(), out var bancoCodigo)
+            ? bancoCodigo
+            : null;
+        proveedor.fechaActualizacion = DateTime.Now;
+
+        await _context.SaveChangesAsync();
+    }
+
+    private static List<string> SepararPartes(string? texto) =>
+        (texto ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
 
     private string? ValidarClienteOptimizado(ClienteUpsertDto dto, List<Identificacion> identificaciones, List<Tipocliente> tiposCliente)
     {
