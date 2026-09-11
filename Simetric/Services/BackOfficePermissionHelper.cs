@@ -2,6 +2,8 @@ namespace Simetric.Services;
 
 public static class BackOfficePermissionHelper
 {
+    private const string UsuarioERubricaEmail = "servicealcliente@numerosasesores.com";
+
     public const int SuperAdministradorRoleId = 2;
     public const int BackOfficeRoleId = 7;
     public const int AdministradorBackOfficeTipoCliente = 1;
@@ -12,4 +14,7 @@ public static class BackOfficePermissionHelper
         (idTipoUsuario == BackOfficeRoleId &&
             (tipoCliente == AdministradorBackOfficeTipoCliente ||
              tipoCliente == CobranzasBackOfficeTipoCliente));
+
+    public static bool PuedeVerERubrica(string? email) =>
+        string.Equals(email?.Trim(), UsuarioERubricaEmail, StringComparison.OrdinalIgnoreCase);
 }
