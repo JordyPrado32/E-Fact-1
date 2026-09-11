@@ -114,15 +114,20 @@ public class ProductosController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<ProductoDto>>> GetAll([FromQuery] int userId)
+    public async Task<ActionResult<List<ProductoDto>>> GetAll([FromQuery] int userId, [FromQuery] bool incluirInactivos = false)
     {
         if (!IsValidUser(userId)) return Unauthorized("Sesión no válida.");
 
         int? ownerId = await GetOwnerIdAsync(userId);
         if (ownerId == null) return NotFound("Usuario no encontrado.");
-        var data = await _db.Productos
+        var query = _db.Productos
             .AsNoTracking()
-            .Where(p => p.Idusuario == ownerId) // ✅ Filtro por grupo
+            .Where(p => p.Idusuario == ownerId); // ✅ Filtro por grupo
+
+        if (!incluirInactivos)
+            query = query.Where(p => p.Estado == true);
+
+        var data = await query
             .OrderByDescending(p => p.Codigo)
             .Select(p => new ProductoDto
             {
