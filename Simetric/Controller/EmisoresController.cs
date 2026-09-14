@@ -12,15 +12,18 @@ namespace Simetric.Controllers
     public class EmisoresController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly CedulaLookupService _cedulaLookupService;
         private readonly EmisorCertificadoValidator _emisorCertificadoValidator;
         private readonly IWebHostEnvironment _hostEnvironment;
 
         public EmisoresController(
             AppDbContext context,
+            CedulaLookupService cedulaLookupService,
             EmisorCertificadoValidator emisorCertificadoValidator,
             IWebHostEnvironment hostEnvironment)
         {
             _context = context;
+            _cedulaLookupService = cedulaLookupService;
             _emisorCertificadoValidator = emisorCertificadoValidator;
             _hostEnvironment = hostEnvironment;
         }
@@ -122,6 +125,45 @@ namespace Simetric.Controllers
                 numeroSerie = resultado.NumeroSerie,
                 huellaDigital = resultado.HuellaDigital,
                 logGuardado
+            });
+        }
+
+        [HttpGet("consulta-ruc")]
+        public async Task<IActionResult> ConsultarRuc([FromQuery] string? ruc)
+        {
+            var rucNormalizado = new string((ruc ?? string.Empty).Where(char.IsDigit).ToArray());
+            if (rucNormalizado.Length != 13)
+                return BadRequest("El RUC debe tener exactamente 13 dígitos.");
+
+            var resultado = await _cedulaLookupService.ConsultarAsync(
+                rucNormalizado,
+                HttpContext.RequestAborted);
+
+            if (!resultado.Success || !resultado.Found)
+            {
+                return Ok(new
+                {
+                    found = false,
+                    mensaje = string.IsNullOrWhiteSpace(resultado.Mensaje)
+                        ? "El SRI no devolvió información para este RUC."
+                        : resultado.Mensaje
+                });
+            }
+
+            return Ok(new
+            {
+                found = true,
+                mensaje = resultado.Mensaje ?? "Datos del SRI cargados correctamente.",
+                ruc = rucNormalizado,
+                razonSocial = resultado.RazonSocial,
+                nomComercial = resultado.NombreComercial ?? resultado.RazonSocial,
+                dirEstablecimiento = resultado.DireccionEstablecimiento,
+                direccionMatriz = resultado.DireccionMatriz,
+                codEstablecimiento = ObtenerEstablecimientoDesdeRuc(rucNormalizado)
+                    ?? NormalizarSerie(resultado.NumeroEstablecimiento, "001"),
+                // La pantalla web de Emisor conserva ambos valores en NO al precargar desde el SRI.
+                llevaContabilidad = "NO",
+                retenciones = "NO"
             });
         }
 
