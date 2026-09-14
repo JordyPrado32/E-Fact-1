@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -36,6 +37,7 @@ public sealed class ESignMobileController : ControllerBase
     private readonly PagoService _pagoService;
     private readonly IWebHostEnvironment _hostEnvironment;
     private readonly IEmailService _emailService;
+    private readonly EmisionControlService _emisionControlService;
 
     public ESignMobileController(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -49,7 +51,8 @@ public sealed class ESignMobileController : ControllerBase
         IESignMenuService eSignMenuService,
         PagoService pagoService,
         IWebHostEnvironment hostEnvironment,
-        IEmailService emailService)
+        IEmailService emailService,
+        EmisionControlService emisionControlService)
     {
         _dbFactory = dbFactory;
         _solicitudService = solicitudService;
@@ -63,6 +66,7 @@ public sealed class ESignMobileController : ControllerBase
         _pagoService = pagoService;
         _hostEnvironment = hostEnvironment;
         _emailService = emailService;
+        _emisionControlService = emisionControlService;
     }
 
     [HttpGet("dashboard")]
@@ -471,6 +475,8 @@ public sealed class ESignMobileController : ControllerBase
     {
         var userId = GetUserId();
         if (userId <= 0) return Unauthorized();
+        if (!await TieneAccesoFirmaDocumentosAsync(userId, cancellationToken))
+            return BadRequest(new { mensaje = "Para firmar documentos necesitas un plan de documentos activo o una solicitud de firma electrónica pagada y vigente." });
         if (pdf is null || !EsArchivo(pdf, ".pdf", 15 * 1024 * 1024))
             return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 15 MB." });
         if (pagina <= 0 || xMm < 0 || yMm < 0 || anchoMm <= 0)
@@ -563,6 +569,43 @@ public sealed class ESignMobileController : ControllerBase
             return null;
 
         return new FirmaConfigurada(contenido, Path.GetFileName(ruta), clave);
+    }
+
+    private async Task<bool> TieneAccesoFirmaDocumentosAsync(int userId, CancellationToken cancellationToken)
+    {
+        if (await _emisionControlService.TienePlanDocumentosActivoAsync(userId))
+            return true;
+
+        await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        var usuario = await db.Usuarios.AsNoTracking()
+            .Where(item => item.IdUsuario == userId)
+            .Select(item => new { item.estadoAsociado, item.idJefe })
+            .FirstOrDefaultAsync(cancellationToken);
+        var idsCuenta = new[]
+        {
+            userId,
+            usuario?.estadoAsociado == true && usuario.idJefe is > 0 ? usuario.idJefe.Value : userId
+        }.Distinct().ToArray();
+        var solicitudes = await db.UsuSolicitudFirma.AsNoTracking()
+            .Where(item => idsCuenta.Contains(item.SolIdUsuarioCliente) && item.SolActivo && item.SolPagoExitoso == true)
+            .Select(item => new { item.SolFechaSolicitud, item.SolFechaPago, item.SolFechaAprobacion, item.SolVigencia })
+            .ToListAsync(cancellationToken);
+
+        return solicitudes.Any(item => CalcularFechaFinFirma(
+            item.SolFechaAprobacion ?? item.SolFechaPago ?? item.SolFechaSolicitud,
+            item.SolVigencia) >= DateTime.Today);
+    }
+
+    private static DateTime CalcularFechaFinFirma(DateTime fechaInicio, string? vigencia)
+    {
+        var match = Regex.Match(vigencia ?? string.Empty, @"\d+");
+        if (!match.Success || !int.TryParse(match.Value, out var cantidad))
+            return fechaInicio;
+
+        var texto = vigencia ?? string.Empty;
+        return texto.Contains("AÑO", StringComparison.OrdinalIgnoreCase) || texto.Contains("ANO", StringComparison.OrdinalIgnoreCase)
+            ? fechaInicio.AddYears(cantidad)
+            : fechaInicio.AddDays(cantidad);
     }
 
     private sealed record FirmaConfigurada(byte[] Contenido, string NombreArchivo, string Clave);
