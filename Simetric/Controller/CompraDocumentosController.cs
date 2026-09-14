@@ -14,18 +14,26 @@ namespace Simetric.Controllers;
 public class CompraDocumentosController : UsuarioApiControllerBase
 {
     private static readonly JsonSerializerOptions HistorialJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly HashSet<string> BancosTransferencia = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Banco Pichincha", "Banco Guayaquil", "Banco Internacional", "Banco Pacifico",
+        "Banco Produbanco", "Banco Bolivariano", "Cooperativa JEP", "Otra institucion"
+    };
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly PagoService _pagoService;
     private readonly IConfiguration _configuration;
+    private readonly IEmailService _emailService;
 
     public CompraDocumentosController(
         IDbContextFactory<AppDbContext> dbFactory,
         PagoService pagoService,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IEmailService emailService)
     {
         _dbFactory = dbFactory;
         _pagoService = pagoService;
         _configuration = configuration;
+        _emailService = emailService;
     }
 
     [HttpGet("compra")]
@@ -190,6 +198,99 @@ public class CompraDocumentosController : UsuarioApiControllerBase
         return Ok(LeerHistorial(historialJson));
     }
 
+    [HttpPost("compra/transferencia")]
+    public async Task<IActionResult> RegistrarTransferenciaCompra([FromQuery] int idUsuario, [FromBody] CompraDocumentosTransferenciaDto model)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+        if (!model.EsIlimitado && model.Documentos < EFactDocumentPricing.DocumentosMinimosPersonalizados)
+            return BadRequest($"La recarga personalizada requiere al menos {EFactDocumentPricing.DocumentosMinimosPersonalizados} documentos.");
+        if (model.MontoTotal < EFactDocumentPricing.MontoMinimoPersonalizado || model.MontoTotal > EFactDocumentPricing.MontoMaximoPersonalizado)
+            return BadRequest("El monto de la recarga no es valido.");
+        if (string.IsNullOrWhiteSpace(model.Banco) || string.IsNullOrWhiteSpace(model.Titular) || string.IsNullOrWhiteSpace(model.CuentaOrigen) || string.IsNullOrWhiteSpace(model.NumeroComprobante))
+            return BadRequest("Completa los datos de la transferencia.");
+        if (!BancosTransferencia.Contains(model.Banco.Trim())) return BadRequest("Selecciona un banco valido.");
+        if (!model.CuentaOrigen.All(char.IsDigit)) return BadRequest("El numero de cuenta origen solo debe contener numeros.");
+        if (model.NumeroComprobante.Length > 50 || !model.NumeroComprobante.All(char.IsLetterOrDigit))
+            return BadRequest("El numero de comprobante debe tener maximo 50 caracteres alfanumericos.");
+
+        var partesTitular = model.Titular.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (partesTitular.Length < 2 || partesTitular.Count(parte => parte.Length >= 3 && parte.All(char.IsLetter)) < 2)
+            return BadRequest("El titular de la cuenta debe incluir al menos un nombre y un apellido.");
+
+        byte[] comprobante;
+        try
+        {
+            var base64 = (model.ComprobanteBase64 ?? string.Empty).Trim();
+            var separator = base64.IndexOf(',');
+            if (separator >= 0) base64 = base64[(separator + 1)..];
+            comprobante = Convert.FromBase64String(base64);
+        }
+        catch (FormatException)
+        {
+            return BadRequest("El comprobante debe ser una imagen JPG o PNG valida.");
+        }
+
+        if (comprobante.Length == 0 || comprobante.Length > 5 * 1024 * 1024 || !EsImagenComprobante(comprobante))
+            return BadRequest("El comprobante debe ser una imagen de maximo 5MB.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios.FirstOrDefaultAsync(x => x.IdUsuario == idUsuario);
+        if (usuario is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(usuario.Email)) return BadRequest("Tu perfil no tiene correo configurado.");
+
+        var total = decimal.Round(model.MontoTotal, 2, MidpointRounding.AwayFromZero);
+        var compraId = Guid.NewGuid().ToString("N");
+        var compra = new CompraDocumentosHistorialItem
+        {
+            Id = compraId,
+            Fecha = DateTime.Now,
+            Documentos = model.EsIlimitado ? 0 : model.Documentos,
+            MontoTotal = total,
+            Estado = "Pendiente",
+            Descripcion = model.EsIlimitado ? "Plan de documentos ilimitados por 1 año" : $"Recarga de {model.Documentos} documentos E-FACT",
+            CustomValue = $"recarga-documentos|purchase:{compraId}|user:{idUsuario}|docs:{(model.EsIlimitado ? 0 : model.Documentos)}|total:{total.ToString("0.00", CultureInfo.InvariantCulture)}",
+            FormaPago = "Transferencia",
+            EmailDestino = usuario.Email.Trim().ToLowerInvariant(),
+            EsIlimitado = model.EsIlimitado,
+            EsPermanente = model.EsPermanente
+        };
+        var historial = LeerHistorial(usuario.HistorialComprasDocumentosJson);
+        historial.Insert(0, compra);
+        usuario.HistorialComprasDocumentosJson = JsonSerializer.Serialize(historial, HistorialJsonOptions);
+
+        var nombre = string.IsNullOrWhiteSpace(usuario.NombreEmpresa)
+            ? $"{usuario.Nombres} {usuario.Apellidos}".Trim()
+            : usuario.NombreEmpresa.Trim();
+        var solicitud = new ReporteVentaBackOffice
+        {
+            Cliente = Truncar($"{nombre} | {usuario.Email}", 150),
+            Producto = "e-fact",
+            PlanPaquete = Truncar(compra.Descripcion, 100),
+            Valor = total,
+            Fecha = DateTime.Now,
+            Canal = "Transferencia Movil",
+            Vendedor = "Solicitud movil",
+            Estado = "pendiente",
+            FormaPago = "Transferencia Bancaria",
+            Observacion = Truncar($"[CompraDocs:{compraId}] Banco: {model.Banco.Trim()}. Cuenta origen: {model.CuentaOrigen.Trim()}. N. comprobante: {model.NumeroComprobante.Trim().ToUpperInvariant()}. Titular: {model.Titular.Trim()}. Solicitud pendiente de aprobacion por compra de documentos.", 500),
+            ComprobanteArchivo = comprobante
+        };
+        context.ReporteVentasBackOffice.Add(solicitud);
+        await context.SaveChangesAsync();
+
+        try
+        {
+            await _emailService.EnviarAvisoCobroPendienteAsync(usuario.Email.Trim(), nombre, solicitud.Producto, solicitud.PlanPaquete, solicitud.Valor, solicitud.FormaPago, model.NumeroComprobante.Trim().ToUpperInvariant());
+        }
+        catch
+        {
+            // La solicitud ya fue registrada y el BackOffice puede validarla aunque falle el aviso.
+        }
+
+        return Ok(new { purchaseId = compraId, status = "Pendiente", message = "Tu transferencia fue registrada. Sera validada en un plazo maximo de 24 horas." });
+    }
+
     [HttpGet("paquetes")]
     public IActionResult GetPaquetes() => Ok(new[]
     {
@@ -227,9 +328,16 @@ public class CompraDocumentosController : UsuarioApiControllerBase
         (item.Estado ?? string.Empty).Contains("aprob", StringComparison.OrdinalIgnoreCase) ||
         (item.Estado ?? string.Empty).Contains("autoriz", StringComparison.OrdinalIgnoreCase) ||
         (item.Estado ?? string.Empty).Contains("pag", StringComparison.OrdinalIgnoreCase);
+
+    private static string Truncar(string value, int maximo) => value.Length <= maximo ? value : value[..maximo];
+
+    private static bool EsImagenComprobante(byte[] bytes) =>
+        bytes.Length >= 8 &&
+        ((bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) ||
+         (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 && bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A));
 }
 
-public sealed class CompraDocumentosMobileDto
+public class CompraDocumentosMobileDto
 {
     public int Documentos { get; set; }
     public decimal MontoTotal { get; set; }
@@ -237,4 +345,13 @@ public sealed class CompraDocumentosMobileDto
     public string? EmailDestino { get; set; }
     public bool EsIlimitado { get; set; }
     public bool EsPermanente { get; set; }
+}
+
+public sealed class CompraDocumentosTransferenciaDto : CompraDocumentosMobileDto
+{
+    public string Banco { get; set; } = string.Empty;
+    public string Titular { get; set; } = string.Empty;
+    public string CuentaOrigen { get; set; } = string.Empty;
+    public string NumeroComprobante { get; set; } = string.Empty;
+    public string? ComprobanteBase64 { get; set; }
 }

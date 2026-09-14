@@ -19,6 +19,11 @@ namespace Simetric.Controllers;
 [Route("api/mobile/e-rubrica")]
 public sealed class ESignMobileController : ControllerBase
 {
+    private static readonly HashSet<string> BancosTransferencia = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Banco Pichincha", "Banco Guayaquil", "Banco Internacional", "Banco Pacifico",
+        "Banco Produbanco", "Banco Bolivariano", "Cooperativa JEP", "Otra institucion"
+    };
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly SolicitudService _solicitudService;
     private readonly FirmaRenovacionService _firmaRenovacionService;
@@ -30,6 +35,7 @@ public sealed class ESignMobileController : ControllerBase
     private readonly IESignMenuService _eSignMenuService;
     private readonly PagoService _pagoService;
     private readonly IWebHostEnvironment _hostEnvironment;
+    private readonly IEmailService _emailService;
 
     public ESignMobileController(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -42,7 +48,8 @@ public sealed class ESignMobileController : ControllerBase
         FirmaStampApiService firmaStampApiService,
         IESignMenuService eSignMenuService,
         PagoService pagoService,
-        IWebHostEnvironment hostEnvironment)
+        IWebHostEnvironment hostEnvironment,
+        IEmailService emailService)
     {
         _dbFactory = dbFactory;
         _solicitudService = solicitudService;
@@ -55,6 +62,7 @@ public sealed class ESignMobileController : ControllerBase
         _eSignMenuService = eSignMenuService;
         _pagoService = pagoService;
         _hostEnvironment = hostEnvironment;
+        _emailService = emailService;
     }
 
     [HttpGet("dashboard")]
@@ -356,6 +364,13 @@ public sealed class ESignMobileController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Banco) || string.IsNullOrWhiteSpace(request.TitularCuenta) ||
             string.IsNullOrWhiteSpace(request.CuentaOrigen) || string.IsNullOrWhiteSpace(request.NumeroComprobante))
             return BadRequest(new { mensaje = "Completa los datos de la transferencia." });
+        if (!BancosTransferencia.Contains(request.Banco.Trim())) return BadRequest(new { mensaje = "Selecciona un banco valido." });
+        if (!request.CuentaOrigen.All(char.IsDigit)) return BadRequest(new { mensaje = "La cuenta de origen solo debe contener numeros." });
+        if (request.NumeroComprobante.Length > 50 || !request.NumeroComprobante.All(char.IsLetterOrDigit))
+            return BadRequest(new { mensaje = "El numero de comprobante debe tener maximo 50 caracteres alfanumericos." });
+        var partesTitular = NormalizarTexto(request.TitularCuenta).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (partesTitular.Length < 2 || partesTitular.Count(parte => parte.Length >= 3 && parte.All(char.IsLetter)) < 2)
+            return BadRequest(new { mensaje = "El titular debe incluir al menos un nombre y un apellido." });
         if (request.Comprobante is null || !EsArchivoImagen(request.Comprobante, 5 * 1024 * 1024))
             return BadRequest(new { mensaje = "Adjunta un comprobante JPG o PNG de hasta 5 MB." });
 
@@ -377,6 +392,7 @@ public sealed class ESignMobileController : ControllerBase
             await stream.CopyToAsync(memory, cancellationToken);
             comprobanteBytes = memory.ToArray();
         }
+        if (!EsImagenComprobante(comprobanteBytes)) return BadRequest(new { mensaje = "El comprobante debe ser una imagen JPG o PNG valida." });
 
         var venta = new ReporteVentaBackOffice
         {
@@ -398,6 +414,22 @@ public sealed class ESignMobileController : ControllerBase
         solicitud.SolIdTransaccionPago = Truncar($"TRANSFERENCIA-PENDIENTE-MOVIL-{venta.IdReporte}", 100);
         solicitud.SolFechaActualizacion = DateTime.Now;
         await db.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _emailService.EnviarAvisoCobroPendienteAsync(
+                solicitud.SolCorreo1,
+                $"{solicitud.SolNombres} {solicitud.SolPrimerApellido}".Trim(),
+                venta.Producto,
+                venta.PlanPaquete,
+                venta.Valor,
+                venta.FormaPago,
+                request.NumeroComprobante.Trim().ToUpperInvariant());
+        }
+        catch
+        {
+            // La solicitud permanece disponible para Cobros aunque falle el aviso.
+        }
 
         return Ok(new { solicitudId = solicitud.SolId, status = "TRANSFERENCIA_REGISTRADA" });
     }
@@ -673,6 +705,11 @@ public sealed class ESignMobileController : ControllerBase
     private static bool EsArchivoImagen(IFormFile archivo, long maxBytes) =>
         archivo.Length > 0 && archivo.Length <= maxBytes &&
         ImagenExtensiones.Contains(Path.GetExtension(archivo.FileName), StringComparer.OrdinalIgnoreCase);
+
+    private static bool EsImagenComprobante(byte[] bytes) =>
+        bytes.Length >= 8 &&
+        ((bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) ||
+         (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 && bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A));
 
     private static string Truncar(string? value, int maxLength)
     {
