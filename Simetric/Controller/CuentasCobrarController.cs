@@ -10,15 +10,18 @@ public class CuentasCobrarController : UsuarioApiControllerBase
     private readonly AbonoService _abonoService;
     private readonly IEstadoCuentaPdfService _estadoCuentaPdfService;
     private readonly IEstadoCuentaExcelService _estadoCuentaExcelService;
+    private readonly IEmailService _emailService;
 
     public CuentasCobrarController(
         AbonoService abonoService,
         IEstadoCuentaPdfService estadoCuentaPdfService,
-        IEstadoCuentaExcelService estadoCuentaExcelService)
+        IEstadoCuentaExcelService estadoCuentaExcelService,
+        IEmailService emailService)
     {
         _abonoService = abonoService;
         _estadoCuentaPdfService = estadoCuentaPdfService;
         _estadoCuentaExcelService = estadoCuentaExcelService;
+        _emailService = emailService;
     }
 
     [HttpGet]
@@ -53,6 +56,17 @@ public class CuentasCobrarController : UsuarioApiControllerBase
         return detalle is null ? NotFound() : Ok(detalle);
     }
 
+    [HttpGet("estado-cuenta/excel")]
+    public async Task<IActionResult> GetEstadoCuentaListadoExcel([FromQuery] int idUsuario)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+
+        var items = await _abonoService.GetEstadoCuentaClientesAsync(idUsuario);
+        var archivo = await _estadoCuentaExcelService.GenerarListadoAsync(items);
+        return File(archivo.Content, archivo.ContentType, archivo.FileName);
+    }
+
     [HttpGet("estado-cuenta/{idCliente:int}/pdf")]
     public async Task<IActionResult> GetEstadoCuentaPdf(int idCliente, [FromQuery] int idUsuario)
     {
@@ -77,6 +91,27 @@ public class CuentasCobrarController : UsuarioApiControllerBase
 
         var archivo = await _estadoCuentaExcelService.GenerarDetalleAsync(detalle);
         return File(archivo.Content, archivo.ContentType, archivo.FileName);
+    }
+
+    [HttpPost("estado-cuenta/{idCliente:int}/enviar")]
+    public async Task<IActionResult> EnviarEstadoCuenta(int idCliente, [FromQuery] int idUsuario)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+
+        var detalle = await _abonoService.GetEstadoCuentaDetalleAsync(idUsuario, idCliente);
+        if (detalle is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(detalle.Correo))
+            return BadRequest("El cliente no tiene un correo registrado para enviar el estado de cuenta.");
+
+        var archivo = await _estadoCuentaPdfService.GenerarDetalleAsync(detalle);
+        await _emailService.EnviarEstadoCuentaAsync(
+            new[] { detalle.Correo },
+            detalle,
+            archivo.Content,
+            archivo.FileName);
+
+        return Ok(new { message = "Estado de cuenta enviado correctamente.", correo = detalle.Correo });
     }
 
     [HttpGet("abonos")]
