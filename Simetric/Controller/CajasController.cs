@@ -267,7 +267,9 @@ public class CajasController : ControllerBase
         var secNotaCredito = notaCredito.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "nota-credito", ToSerieRaw(serieNotasCred), codEmisor, notaCredito) : string.Empty;
         var secNotaDebito = notaDebito.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "nota-debito", ToSerieRaw(serieNotasDeb), codEmisor, notaDebito) : string.Empty;
         var secLiquidacion = liquidacion.Initialized ? await ResolveNextDocumentSequenceAsync(idUsuario, "liquidacion-compra", ToSerieRaw(serieLiquidacion), codEmisor, liquidacion) : string.Empty;
-        var secRetencion = _initialSequencePromptService.ResolveNextSequence(null, retencion) ?? string.Empty;
+        var secRetencion = retencion.Initialized
+            ? await ResolveNextDocumentSequenceAsync(idUsuario, "retencion", ToSerieRaw(serieLiquidacion), codEmisor, retencion)
+            : string.Empty;
 
         return new
         {
@@ -321,12 +323,12 @@ public class CajasController : ControllerBase
         int? codEmisor,
         InitialSequencePromptState state)
     {
-        var automatico = await GetNextExistingDocumentSequenceAsync(idUsuario, documentKey, serieRaw, codEmisor);
-        var siguiente = _initialSequencePromptService.ResolveNextSequence(automatico, state);
+        var existentes = await GetExistingDocumentSequencesAsync(idUsuario, documentKey, serieRaw, codEmisor);
+        var siguiente = _initialSequencePromptService.ResolveFirstAvailableSequence(existentes, state);
         return string.IsNullOrWhiteSpace(siguiente) ? string.Empty : siguiente;
     }
 
-    private async Task<string?> GetNextExistingDocumentSequenceAsync(int idUsuario, string documentKey, string serieRaw, int? codEmisor)
+    private async Task<List<string?>> GetExistingDocumentSequencesAsync(int idUsuario, string documentKey, string serieRaw, int? codEmisor)
     {
         var usuariosCuenta = await GetUsuariosCuentaIdsAsync(idUsuario);
         var serieVisual = FormatearSerie(serieRaw);
@@ -397,21 +399,23 @@ public class CajasController : ControllerBase
                     .ToListAsync();
                 break;
 
+            case "retencion":
+                secuenciales = await _context.RetencionInfo
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.Usuario.HasValue &&
+                        usuariosCuenta.Contains(x.Usuario.Value) &&
+                        x.Serie != null &&
+                        x.Serie.Replace("-", "") == serieRaw)
+                    .Select(x => x.NumRetencion)
+                    .ToListAsync();
+                break;
+
             default:
-                return null;
+                return [];
         }
 
-        var maximo = 0;
-        foreach (var valor in secuenciales)
-        {
-            var digitos = LimpiarDigitos(valor);
-            if (int.TryParse(digitos, out var numero) && numero > maximo)
-                maximo = numero;
-        }
-
-        return maximo > 0
-            ? (maximo + 1).ToString("D9", CultureInfo.InvariantCulture)
-            : null;
+        return secuenciales;
     }
 
     private async Task<List<int>> GetUsuariosCuentaIdsAsync(int idUsuario)

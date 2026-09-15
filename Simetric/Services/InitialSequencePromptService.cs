@@ -142,16 +142,24 @@ public sealed class InitialSequencePromptService
                         normalizedDocumentKey,
                         currentSeries);
 
-                    if (sequenceState is not null)
-                        return sequenceState;
-
                     var legacyState = await TryReadLegacyStateAsync(
                         connection,
                         currentCajaSec,
                         normalizedDocumentKey,
                         currentSeries,
-                        columns
-                        );
+                        columns);
+
+                    if (legacyState?.Initialized == true &&
+                        (sequenceState is null ||
+                         (!string.IsNullOrWhiteSpace(legacyState.PreviousSequence) &&
+                          (string.IsNullOrWhiteSpace(sequenceState.PreviousSequence) ||
+                           string.CompareOrdinal(legacyState.PreviousSequence, sequenceState.PreviousSequence) < 0))))
+                    {
+                        return legacyState;
+                    }
+
+                    if (sequenceState is not null)
+                        return sequenceState;
 
                     if (legacyState is not null)
                         return legacyState;
@@ -446,11 +454,12 @@ WHERE [titularUserId] = @titularUserId
             nextNumber = automaticNumber;
         }
 
-        if (state.Initialized &&
+        if (nextNumber <= 0 &&
+            state.Initialized &&
             state.HadPreviousDocuments &&
             TryGetSequenceNumber(state.PreviousSequence, out var previousNumber))
         {
-            nextNumber = Math.Max(nextNumber, previousNumber + 1);
+            nextNumber = previousNumber + 1;
         }
 
         if (nextNumber <= 0 && state.Initialized && state.HadPreviousDocuments == false)
@@ -460,6 +469,36 @@ WHERE [titularUserId] = @titularUserId
             return string.Empty;
 
         return nextNumber.ToString("D9", CultureInfo.InvariantCulture);
+    }
+
+    public string ResolveFirstAvailableSequence(IEnumerable<string?> issuedSequences, InitialSequencePromptState state)
+    {
+        var issued = new HashSet<long>();
+        foreach (var sequence in issuedSequences)
+        {
+            var digits = new string((sequence ?? string.Empty).Where(char.IsDigit).ToArray());
+            if (digits.Length > 9)
+                digits = digits[^9..];
+
+            if (TryGetSequenceNumber(digits, out var number))
+                issued.Add(number);
+        }
+
+        var next = 1L;
+        if (state.Initialized && state.HadPreviousDocuments &&
+            TryGetSequenceNumber(state.PreviousSequence, out var previous))
+        {
+            next = previous + 1;
+        }
+
+        var firstIssued = issued.Count > 0 ? issued.Min() : 0;
+        if (firstIssued > 0 && firstIssued < next)
+            next = firstIssued + 1;
+
+        while (issued.Contains(next) && next <= 999999999)
+            next++;
+
+        return next <= 999999999 ? next.ToString("D9", CultureInfo.InvariantCulture) : string.Empty;
     }
 
     private async Task<List<int>> GetCajaSecsAsync(AppDbContext context, int userId, string documentKey, string? seriesKey = null, int? emisorId = null, List<int>? usuariosSincronizados = null)
@@ -797,19 +836,6 @@ WHERE [sec] = @sec";
         string seriesKey,
         DocumentSequenceColumns columns)
     {
-        await using var countCommand = connection.CreateCommand();
-        countCommand.CommandText = @"
-SELECT COUNT(1)
-FROM [dbo].[CAJA_SECUENCIA]
-WHERE [cajaSec] = @sec
-  AND [documentKey] = @documentKey";
-        AddParameter(countCommand, "@sec", cajaSec);
-        AddParameter(countCommand, "@documentKey", documentKey);
-
-        var existingCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync());
-        if (existingCount > 0)
-            return null;
-
         await using var legacyCommand = connection.CreateCommand();
         legacyCommand.CommandText = $@"
 SELECT [{columns.InitializedColumn}], [{columns.LastSequenceColumn}]

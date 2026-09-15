@@ -6,6 +6,7 @@ public sealed class FacturaConversationState
 {
     public string SessionId { get; set; } = string.Empty;
     public int UserId { get; set; }
+    public string FacturaDraftId { get; set; } = Guid.NewGuid().ToString("N");
     public string Estado { get; set; } = FacturaConversationStates.SinFactura;
     public string? UltimaIntencion { get; set; }
     public string? UltimaAccionEstructurada { get; set; }

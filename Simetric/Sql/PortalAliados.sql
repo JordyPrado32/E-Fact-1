@@ -1,0 +1,83 @@
+/* Portal de Aliados Numerica - despliegue idempotente */
+
+IF OBJECT_ID(N'dbo.VENDEDOR_BACKOFFICE', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.VENDEDOR_BACKOFFICE
+    (
+        idVendedor INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        nombre NVARCHAR(120) NOT NULL,
+        codigoReferencia NVARCHAR(60) NOT NULL,
+        activo BIT NOT NULL CONSTRAINT DF_VENDEDOR_BACKOFFICE_activo DEFAULT(1),
+        esSistema BIT NOT NULL CONSTRAINT DF_VENDEDOR_BACKOFFICE_esSistema DEFAULT(0),
+        idUsuarioCreacion INT NULL,
+        fechaCreacion DATETIME NOT NULL CONSTRAINT DF_VENDEDOR_BACKOFFICE_fechaCreacion DEFAULT(GETDATE()),
+        porcentajeBase DECIMAL(9,4) NOT NULL CONSTRAINT DF_VENDEDOR_BACKOFFICE_porcentajeBase DEFAULT(30)
+    );
+END
+
+IF COL_LENGTH('dbo.VENDEDOR_BACKOFFICE', 'porcentajeBase') IS NULL
+    ALTER TABLE dbo.VENDEDOR_BACKOFFICE ADD porcentajeBase DECIMAL(9,4) NOT NULL CONSTRAINT DF_VENDEDOR_BACKOFFICE_porcentajeBase DEFAULT(30);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_VENDEDOR_BACKOFFICE_codigoReferencia' AND object_id = OBJECT_ID(N'dbo.VENDEDOR_BACKOFFICE'))
+    CREATE UNIQUE INDEX UX_VENDEDOR_BACKOFFICE_codigoReferencia ON dbo.VENDEDOR_BACKOFFICE(codigoReferencia);
+
+IF COL_LENGTH('dbo.Usuarios', 'idVendedor') IS NULL
+    ALTER TABLE dbo.Usuarios ADD idVendedor INT NULL;
+
+IF NOT EXISTS (SELECT 1 FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'Aliado Comercial')
+    INSERT INTO dbo.TIPOUSUARIO (NOMBRETIPO, DESCRIPCION, ESTADO)
+    VALUES (N'Aliado Comercial', N'Acceso externo al Portal de Aliados Numerica.', 1);
+
+DECLARE @idTipo INT = (SELECT TOP 1 IdTipoUsuario FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'Aliado Comercial' AND ESTADO = 1 ORDER BY IdTipoUsuario);
+
+IF NOT EXISTS (SELECT 1 FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipo AND ESTADOROL = 1)
+    INSERT INTO dbo.ROLES (DESCRIPCIONROL, IDTIPOUSUARIO, ESTADOROL) VALUES (N'Aliado Comercial', @idTipo, 1);
+
+DECLARE @idRol INT = (SELECT TOP 1 IDROL FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipo AND ESTADOROL = 1 ORDER BY IDROL);
+DECLARE @padre INT = (SELECT TOP 1 IDMENU FROM dbo.MENUS WHERE RUTAMENU = N'/aliados' AND ESTADOMENU = 1);
+
+IF @padre IS NULL
+BEGIN
+    INSERT INTO dbo.MENUS (NOMBREMENU, RUTAMENU, ICONOMENU, IDMENUPADRE, ESTADOMENU, MOSTRAR_EFACT, MOSTRAR_EDECLARA, orden_menu)
+    VALUES (N'Portal de Aliados', N'/aliados', N'ri-team-line', 0, 1, 1, 0, 90);
+    SET @padre = CONVERT(INT, SCOPE_IDENTITY());
+END
+
+INSERT INTO dbo.MENUS (NOMBREMENU, RUTAMENU, ICONOMENU, IDMENUPADRE, ESTADOMENU, MOSTRAR_EFACT, MOSTRAR_EDECLARA, orden_menu)
+SELECT v.Nombre, v.Ruta, v.Icono, CASE WHEN v.Ruta = N'/aliados' THEN 0 ELSE @padre END, 1, 1, 0, v.Orden
+FROM (VALUES
+    (N'Inicio', N'/aliados', N'ri-dashboard-3-line', 1),
+    (N'Mis clientes', N'/aliados/clientes', N'ri-user-3-line', 2),
+    (N'Renovaciones', N'/aliados/renovaciones', N'ri-refresh-line', 3),
+    (N'Comisiones', N'/aliados/comisiones', N'ri-hand-coin-line', 4),
+    (N'Mi perfil', N'/aliados/perfil', N'ri-user-settings-line', 5)
+) v(Nombre, Ruta, Icono, Orden)
+WHERE NOT EXISTS (SELECT 1 FROM dbo.MENUS m WHERE m.RUTAMENU = v.Ruta);
+
+UPDATE dbo.MENUS
+SET ESTADOMENU = 1, MOSTRAR_EFACT = 1, MOSTRAR_EDECLARA = 0
+WHERE RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/perfil');
+
+INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
+SELECT @idRol, m.IDMENU
+FROM dbo.MENUS m
+WHERE m.RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/perfil')
+  AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRol AND rm.IDMENU = m.IDMENU);
+
+IF OBJECT_ID(N'dbo.ALIADO_RENOVACION_GESTION', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ALIADO_RENOVACION_GESTION
+    (
+        IdGestion INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        IdVendedor INT NOT NULL,
+        IdFactura INT NOT NULL,
+        FechaGestion DATETIME2 NOT NULL CONSTRAINT DF_ALIADO_GESTION_FECHA DEFAULT(SYSUTCDATETIME()),
+        Resultado NVARCHAR(50) NOT NULL,
+        Observacion NVARCHAR(500) NULL,
+        ProximoSeguimiento DATE NULL,
+        IdUsuario INT NOT NULL
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ALIADO_GESTION_CANAL_FACTURA' AND object_id = OBJECT_ID(N'dbo.ALIADO_RENOVACION_GESTION'))
+    CREATE INDEX IX_ALIADO_GESTION_CANAL_FACTURA ON dbo.ALIADO_RENOVACION_GESTION (IdVendedor, IdFactura, FechaGestion DESC);

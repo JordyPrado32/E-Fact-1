@@ -837,6 +837,17 @@ public class LiquidacionCompraService
             .Distinct()
             .ToListAsync();
         var comprasConRetencionSet = comprasConRetencionDetalle.ToHashSet();
+        var retencionesCabecera = await context.RetencionInfo
+            .AsNoTracking()
+            .Where(x => x.IcCompra.HasValue && codigosCompra.Contains(x.IcCompra.Value))
+            .Select(x => new { IdCompra = x.IcCompra!.Value, x.NumRetencion })
+            .ToListAsync();
+        var retencionesCabeceraSet = retencionesCabecera
+            .Select(x => x.IdCompra)
+            .ToHashSet();
+        var numerosRetencion = retencionesCabecera
+            .GroupBy(x => x.IdCompra)
+            .ToDictionary(x => x.Key, x => x.Select(item => item.NumRetencion).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "");
 
         return data.Select(x => new LiquidacionCompraListDto
         {
@@ -858,8 +869,11 @@ public class LiquidacionCompraService
             PdfUrl = ConstruirLiquidacionPdfUrl(x.Compra.CodClave),
             TieneRetencion = x.Compra.TieneRetencion == true ||
                 !string.IsNullOrWhiteSpace(x.Compra.NumRetencion) ||
-                comprasConRetencionSet.Contains(x.Compra.CodFactura),
-            NumeroRetencion = x.Compra.NumRetencion ?? ""
+                comprasConRetencionSet.Contains(x.Compra.CodFactura) ||
+                retencionesCabeceraSet.Contains(x.Compra.CodFactura),
+            NumeroRetencion = string.IsNullOrWhiteSpace(x.Compra.NumRetencion)
+                ? numerosRetencion.GetValueOrDefault(x.Compra.CodFactura, "")
+                : x.Compra.NumRetencion
         }).ToList();
     }
 
@@ -1753,15 +1767,17 @@ public class LiquidacionCompraService
             .Select(x => x.NumFactura)
             .ToListAsync();
 
-        var maximo = 0;
-        foreach (var valor in posibles)
-        {
-            var soloNumero = new string((valor ?? "").Where(char.IsDigit).ToArray());
-            if (int.TryParse(soloNumero, out var numero) && numero > maximo)
-                maximo = numero;
-        }
+        var usuarioSecuencia = codEmisor is > 0
+            ? await context.Emisores.AsNoTracking()
+                .Where(x => x.Codigo == codEmisor.Value)
+                .Select(x => x.IdUsuario)
+                .FirstOrDefaultAsync()
+            : 0;
+        var estado = usuarioSecuencia > 0
+            ? await _initialSequencePromptService.GetStateAsync(usuarioSecuencia.Value, "liquidacion-compra", serieNormalizada.Replace("-", string.Empty), codEmisor)
+            : new InitialSequencePromptState();
 
-        return (maximo + 1).ToString("D9", CultureInfo.InvariantCulture);
+        return _initialSequencePromptService.ResolveFirstAvailableSequence(posibles, estado);
     }
 
     private void ValidarLiquidacion(LiquidacionCompraPreviewDto preview)

@@ -22,6 +22,7 @@ public class NotasCreditoController : UsuarioApiControllerBase
     {
         public int? IdUsuario { get; set; }
         public NotaCredito NotaCredito { get; set; } = null!;
+        public Cliente? Cliente { get; set; }
         public List<NotaCreditoService.DetalleNcDto> Detalles { get; set; } = new();
         public List<FacturaCorreoDestinoDto> Correos { get; set; } = new();
     }
@@ -31,12 +32,29 @@ public class NotasCreditoController : UsuarioApiControllerBase
     {
         var idUsuario = ResolverIdUsuario(dto.IdUsuario);
         if (idUsuario <= 0) return Unauthorized();
-        if (dto.NotaCredito is null || dto.Detalles.Count == 0)
+        if (dto.NotaCredito is null || dto.Detalles is null || dto.Detalles.Count == 0)
             return BadRequest(new { mensaje = "La nota de crédito debe contener cabecera y detalles." });
 
+        if (dto.NotaCredito.IdDocModificado is not > 0)
+            return BadRequest(new { mensaje = "La nota de crédito debe referenciar una factura válida." });
+
+        if (await _facturacionService.GetFacturaCompletaUsuarioAsync(dto.NotaCredito.IdDocModificado.Value, idUsuario) is null)
+            return NotFound(new { mensaje = "La factura modificada no existe o no pertenece a la cuenta." });
+
+        var validacion = await _service.ValidarProductosDisponiblesAsync(dto.NotaCredito.IdDocModificado.Value, dto.Detalles);
+        if (!validacion.Success)
+            return BadRequest(new { mensaje = validacion.Message });
+
         dto.NotaCredito.Usuario = idUsuario;
-        var sec = await _service.CrearAsync(dto.NotaCredito, dto.Detalles, dto.Correos);
-        return Ok(new { sec });
+        try
+        {
+            var sec = await _service.CrearAsync(dto.NotaCredito, dto.Detalles, dto.Correos, dto.Cliente);
+            return Ok(new { sec });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { mensaje = ex.Message });
+        }
     }
 
     [HttpPost("automatica/{codFactura:int}")]

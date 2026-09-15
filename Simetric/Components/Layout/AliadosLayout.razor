@@ -1,0 +1,134 @@
+@inherits LayoutComponentBase
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using System.Security.Claims
+@using Simetric.Models
+@using Simetric.Services
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@inject IMenuService MenuService
+@inject AliadoPortalService AliadoService
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (cargando)
+{
+    <div class="ally-loading"><span class="spinner-border text-primary"></span><span>Validando acceso...</span></div>
+}
+else if (contexto is not null)
+{
+    <div class="ally-shell">
+        <aside class="ally-sidebar">
+            <div class="ally-brand">
+                <span class="ally-brand-mark">N</span>
+                <div><strong>Numérica</strong><small>Portal de Aliados</small></div>
+            </div>
+            <AliadosNavMenu Menus="menus" Contexto="contexto" OnLogout="CerrarSesion" />
+        </aside>
+        <main class="ally-main">
+            <header class="ally-topbar">
+                <div>
+                    <span class="ally-eyebrow">PORTAL DE ALIADOS</span>
+                    <h1>@ObtenerTitulo()</h1>
+                </div>
+                <div class="ally-user">
+                    <span class="ally-avatar">@ObtenerIniciales(contexto.Nombre)</span>
+                    <span><strong>@contexto.Nombre</strong><small>@contexto.NombreAliado</small></span>
+                </div>
+            </header>
+            <section class="ally-content">@Body</section>
+        </main>
+    </div>
+}
+
+@code {
+    private AliadoPortalContext? contexto;
+    private List<Menu> menus = new();
+    private bool cargando = true;
+    private bool redireccionando;
+
+    protected override async Task OnInitializedAsync()
+    {
+        NavManager.LocationChanged += OnLocationChanged;
+        await ValidarAccesoAsync();
+    }
+
+    private async Task ValidarAccesoAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (auth.User.Identity?.IsAuthenticated != true ||
+            !int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var userId))
+        {
+            NavManager.NavigateTo("/login");
+            return;
+        }
+
+        contexto = await AliadoService.ObtenerContextoAsync(userId);
+        if (contexto is null)
+        {
+            NavManager.NavigateTo("/dashboard");
+            return;
+        }
+
+        menus = await MenuService.GetMenusByRol(contexto.IdTipoUsuario);
+        cargando = false;
+        await ValidarRutaAsync();
+    }
+
+    private async Task ValidarRutaAsync()
+    {
+        if (contexto is null || redireccionando)
+            return;
+
+        var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].TrimEnd('/');
+        if (ruta.Equals("aliados", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var rutaPermitida = menus.Any(x => !string.IsNullOrWhiteSpace(x.RutaMenu) &&
+            (ruta.Equals(x.RutaMenu.Trim('/'), StringComparison.OrdinalIgnoreCase) ||
+             ruta.StartsWith($"{x.RutaMenu.Trim('/')}/", StringComparison.OrdinalIgnoreCase)));
+        if (!rutaPermitida)
+        {
+            redireccionando = true;
+            NavManager.NavigateTo(AliadoPortalService.RootRoute);
+        }
+        await Task.CompletedTask;
+    }
+
+    private string ObtenerTitulo()
+    {
+        var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].Trim('/');
+        return ruta.ToLowerInvariant() switch
+        {
+            "aliados/clientes" => "Mis clientes",
+            "aliados/renovaciones" => "Renovaciones",
+            "aliados/comisiones" => "Comisiones",
+            "aliados/perfil" => "Mi perfil",
+            _ => "Inicio"
+        };
+    }
+
+    private static string ObtenerIniciales(string nombre)
+    {
+        var partes = nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return partes.Length > 1
+            ? $"{partes[0][0]}{partes[^1][0]}".ToUpperInvariant()
+            : (partes.FirstOrDefault()?.FirstOrDefault().ToString() ?? "A").ToUpperInvariant();
+    }
+
+    private async Task CerrarSesion()
+    {
+        await JS.InvokeVoidAsync("numericaLogoutAndRedirect", "/login");
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await ValidarRutaAsync();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose() => NavManager.LocationChanged -= OnLocationChanged;
+}

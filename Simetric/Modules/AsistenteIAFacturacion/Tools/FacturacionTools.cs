@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Simetric.DTOs;
 using Simetric.Modules.AsistenteIAFacturacion.DTOs;
 using Simetric.Modules.AsistenteIAFacturacion.Services;
@@ -145,6 +148,7 @@ public sealed class FacturacionTools
 
     public async Task<ToolResultDto> CrearBorradorFacturaAsync(FacturaConversationState state, int? clienteId, string? clienteNombre, CancellationToken cancellationToken)
     {
+        state.FacturaDraftId = Guid.NewGuid().ToString("N");
         state.Draft = new FacturaDraftDto();
         state.Emitida = false;
         state.RequiereConfirmacion = false;
@@ -596,7 +600,7 @@ public sealed class FacturacionTools
         if (state.Estado != FacturaConversationStates.EsperandoConfirmacion)
             return Fail(ToolDefinitions.EmitirFactura, "La factura aún no está en estado de confirmación final.");
 
-        var result = await _facturacionService.EmitirAsync(state.UserId, state.Draft, cancellationToken);
+        var result = await _facturacionService.EmitirAsync(state.UserId, state.Draft, BuildEmissionRequestId(state), cancellationToken);
         if (!result.Success)
             return Fail(ToolDefinitions.EmitirFactura, result.Message);
 
@@ -605,6 +609,14 @@ public sealed class FacturacionTools
         state.RequiereConfirmacion = false;
 
         return Ok(ToolDefinitions.EmitirFactura, result.Message, new { state.Draft, result.NumeroFactura });
+    }
+
+    private static string BuildEmissionRequestId(FacturaConversationState state)
+    {
+        var draftJson = JsonSerializer.Serialize(state.Draft);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(draftJson)))[..24];
+        var requestId = $"numi-{state.UserId}-{state.FacturaDraftId}-{hash}";
+        return requestId[..Math.Min(120, requestId.Length)];
     }
 
     public async Task<ToolResultDto> EmitirNotaCreditoDesdeFacturaAsync(FacturaConversationState state, string referenciaFactura, string? motivo, CancellationToken cancellationToken)

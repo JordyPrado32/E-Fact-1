@@ -129,6 +129,45 @@ namespace Simetric.Services
                 .ToListAsync();
         }
 
+        public async Task<List<FacturaBusquedaDto>> BuscarFacturasDisponiblesAsync(int idUsuario, string filtro)
+        {
+            filtro = (filtro ?? string.Empty).Trim();
+            if (idUsuario <= 0 || string.IsNullOrWhiteSpace(filtro)) return new List<FacturaBusquedaDto>();
+
+            await using var context = await _dbFactory.CreateDbContextAsync();
+            var usuariosCuenta = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
+            var filtroNumerico = new string(filtro.Where(char.IsDigit).ToArray());
+            return await (
+                from f in context.Facturas.AsNoTracking()
+                join c in context.Clientes.AsNoTracking() on f.Codclientes equals c.Codcliente into cliJoin
+                from c in cliJoin.DefaultIfEmpty()
+                where f.Idusuario.HasValue && usuariosCuenta.Contains(f.Idusuario.Value) &&
+                      f.Estado == true &&
+                      f.Numfactura != null &&
+                      (f.Numfactura.Contains(filtro) ||
+                       (!string.IsNullOrWhiteSpace(filtroNumerico) &&
+                        ((f.Serie ?? string.Empty).Replace("-", string.Empty) + f.Numfactura).Contains(filtroNumerico))) &&
+                      string.IsNullOrWhiteSpace(f.Guiaremision) &&
+                      !context.GuiasRemision.Any(g =>
+                          g.Codfactura == f.Codfactura &&
+                          g.IdUsuario.HasValue &&
+                          usuariosCuenta.Contains(g.IdUsuario.Value))
+                orderby f.Codfactura descending
+                select new FacturaBusquedaDto
+                {
+                    Codfactura = f.Codfactura,
+                    Numfactura = f.Numfactura ?? string.Empty,
+                    Serie = f.Serie ?? string.Empty,
+                    ClienteNombre = c != null
+                        ? (!string.IsNullOrWhiteSpace(c.Nombrerazonsocial)
+                            ? c.Nombrerazonsocial
+                            : ((c.Nombres ?? string.Empty) + " " + (c.Apellidos ?? string.Empty)).Trim())
+                        : string.Empty
+                })
+                .Take(40)
+                .ToListAsync();
+        }
+
         public async Task<Transportista> GuardarTransportistaAsync(Transportista transportistaData)
         {
             if (transportistaData == null) throw new Exception("Debes ingresar la informacion del transportista.");
@@ -219,6 +258,22 @@ namespace Simetric.Services
                         await context.GuiasRemision.AsNoTracking().AnyAsync(g => g.Codfactura == facturaDb.Codfactura && g.IdUsuario == idUsuario))
                         throw new Exception("La factura seleccionada ya tiene una guia de remision registrada.");
 
+                    if (facturaDb != null)
+                    {
+                        var facturaDetalles = await context.Detallefacturas.AsNoTracking()
+                            .Where(d => d.Codfactura == facturaDb.Codfactura)
+                            .ToListAsync();
+                        foreach (var grupo in detallesData.GroupBy(d => $"{Limpiar(d.CodInterno)?.ToUpperInvariant()}|{Limpiar(d.CodAdicional)?.ToUpperInvariant()}"))
+                        {
+                            var detalleSolicitado = grupo.First();
+                            var detallesCoincidentes = facturaDetalles.Where(d => CoincideDetalleFactura(detalleSolicitado, d)).ToList();
+                            if (detallesCoincidentes.Count == 0)
+                                throw new Exception("Todos los detalles de una guia vinculada deben pertenecer a la factura seleccionada.");
+                            if (grupo.Sum(d => d.Cantidad ?? 0) > detallesCoincidentes.Sum(d => d.Cantproducto))
+                                throw new Exception("La cantidad trasladada no puede superar la cantidad de la factura seleccionada.");
+                        }
+                    }
+
                     var resolucion = await ResolverSerieGuiaAsync(idUsuario, guiaData.Serie);
                     var caja = await context.Caja.FirstOrDefaultAsync(c =>
                         c.Estado == true &&
@@ -283,7 +338,7 @@ namespace Simetric.Services
                     if (string.IsNullOrWhiteSpace(emisorDb.Ruc)) throw new Exception("El emisor asociado no tiene RUC configurado.");
                     ValidarEmisorSri(emisorDb);
                     const int ambiente = 2;
-                    var fechaEmision = DateTime.Today;
+                    var fechaEmision = (guiaData.Fecha ?? DateTime.Today).Date;
                     var tipoEmision = string.IsNullOrWhiteSpace(emisorDb.TipoEmision) ? "1" : emisorDb.TipoEmision.Trim();
                     var claveAcceso = GenerarClaveAcceso(
                         fechaEmision,
@@ -635,7 +690,11 @@ namespace Simetric.Services
             foreach (var item in existentes)
             {
                 if (NormalizarSerie(item.Serie) != serieNorm) continue;
-                if (long.TryParse(SoloDigitos(item.NumGuiaRemision), out var num) && num > maximo) maximo = num;
+                var secuencial = SoloDigitos(item.NumGuiaRemision);
+                if (secuencial.Length > 9)
+                    secuencial = secuencial[^9..];
+
+                if (long.TryParse(secuencial, out var num) && num > maximo) maximo = num;
             }
 
             var reservas = await context.Facturas.AsNoTracking().Where(f => f.Idusuario == idUsuario && f.Guiaremision != null)
@@ -1162,6 +1221,18 @@ namespace Simetric.Services
             if (manual.Length > 9 || !long.TryParse(manual, out var secuencial) || secuencial <= 0 || secuencial > 999999999)
                 throw new Exception("El secuencial de la guia no es valido.");
             return secuencial.ToString().PadLeft(9, '0');
+        }
+
+        private static bool CoincideDetalleFactura(DetalleGuiaRemision detalle, Detallefactura facturaDetalle)
+        {
+            var codigoInterno = Limpiar(detalle.CodInterno);
+            var codigoAdicional = Limpiar(detalle.CodAdicional);
+            var internoCoincide = !string.IsNullOrWhiteSpace(codigoInterno) &&
+                (string.Equals(codigoInterno, Limpiar(facturaDetalle.Codprincipal), StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(codigoInterno, facturaDetalle.Codproducto.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase));
+            var adicionalCoincide = string.IsNullOrWhiteSpace(codigoAdicional) ||
+                string.Equals(codigoAdicional, Limpiar(facturaDetalle.Codauxiliar), StringComparison.OrdinalIgnoreCase);
+            return internoCoincide && adicionalCoincide;
         }
 
         private static void ValidarDatosSri(

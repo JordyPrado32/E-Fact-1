@@ -1280,6 +1280,8 @@ public class NotaDebitoService
             var codigoPorcentaje = NormalizarCodigoPorcentajeSri(detalle);
             if (codigoPorcentaje is not ("0" or "2" or "3" or "4" or "5" or "6" or "7" or "8" or "10"))
                 throw new InvalidOperationException($"La tarifa de IVA del motivo '{detalle.Descripcion}' no es valida para el SRI.");
+            if (detalle.Iva is not (0 or 5 or 8 or 12 or 13 or 14 or 15))
+                throw new InvalidOperationException($"La tarifa de IVA del motivo '{detalle.Descripcion}' no es compatible con el SRI.");
         }
     }
 

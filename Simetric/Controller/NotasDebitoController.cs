@@ -22,6 +22,7 @@ public class NotasDebitoController : UsuarioApiControllerBase
     {
         public int? IdUsuario { get; set; }
         public NotaDebito NotaDebito { get; set; } = null!;
+        public Cliente? Cliente { get; set; }
         public List<NotaDebitoService.DetalleNdDto> Detalles { get; set; } = new();
         public List<FacturaCorreoDestinoDto> Correos { get; set; } = new();
     }
@@ -42,8 +43,18 @@ public class NotasDebitoController : UsuarioApiControllerBase
             return BadRequest(new { mensaje = "La nota de débito debe contener cabecera y detalles." });
 
         dto.NotaDebito.Usuario = idUsuario;
-        var sec = await _service.CrearAsync(dto.NotaDebito, dto.Detalles, dto.Correos);
-        return Ok(new { sec });
+        try
+        {
+            if (dto.Cliente is not null)
+                dto.NotaDebito.CodClientes = await _service.ResolverClienteParaNotaDebitoAsync(idUsuario, dto.Cliente);
+
+            var sec = await _service.CrearAsync(dto.NotaDebito, dto.Detalles, dto.Correos);
+            return Ok(new { sec });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { mensaje = ex.Message });
+        }
     }
 
     [HttpGet]

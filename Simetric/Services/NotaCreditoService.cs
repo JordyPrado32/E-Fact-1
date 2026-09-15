@@ -428,13 +428,41 @@ public class NotaCreditoService
     public async Task<int> CrearAsync(
      NotaCredito nc,
      List<DetalleNcDto> detalles,
-     List<FacturaCorreoDestinoDto>? correosNota = null)
+     List<FacturaCorreoDestinoDto>? correosNota = null,
+     Cliente? clienteData = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         // 1. Pre-transaction validation and setup
         if (nc.Usuario is not > 0)
             throw new Exception("No se pudo identificar el usuario para asignar la serie de la nota de crédito.");
+
+        if (nc.IdDocModificado is not > 0)
+            throw new InvalidOperationException("La nota de crédito debe referenciar una factura válida.");
+
+        var validacion = await ValidarProductosDisponiblesAsync(nc.IdDocModificado.Value, detalles);
+        if (!validacion.Success)
+            throw new InvalidOperationException(validacion.Message);
+
+        foreach (var detalle in detalles)
+        {
+            detalle.Descuento = Math.Round(Math.Max(detalle.Descuento, 0m), 2, MidpointRounding.AwayFromZero);
+            detalle.Preciounitario = Math.Round(detalle.Preciounitario, 2, MidpointRounding.AwayFromZero);
+            detalle.Iva = Math.Clamp(detalle.Iva, 0, 100);
+            detalle.Subtotal = Math.Round(
+                Math.Max(0m, detalle.Cantidad * detalle.Preciounitario - detalle.Descuento),
+                2,
+                MidpointRounding.AwayFromZero);
+            detalle.Total = Math.Round(
+                detalle.Subtotal + detalle.Subtotal * detalle.Iva / 100m,
+                2,
+                MidpointRounding.AwayFromZero);
+        }
+
+        nc.Subtotal = Math.Round(detalles.Sum(d => d.Subtotal), 2, MidpointRounding.AwayFromZero);
+        nc.Descuentos = Math.Round(detalles.Sum(d => d.Descuento), 2, MidpointRounding.AwayFromZero);
+        nc.Iva = Math.Round(detalles.Sum(d => d.Subtotal * d.Iva / 100m), 2, MidpointRounding.AwayFromZero);
+        nc.ValorTotal = Math.Round(nc.Subtotal.Value + nc.Iva.Value, 2, MidpointRounding.AwayFromZero);
 
         await _emisionControlService.AsegurarPuedeEmitirAsync(nc.Usuario.Value);
 
@@ -444,6 +472,24 @@ public class NotaCreditoService
         var cliente = nc.CodClientes.HasValue
             ? await db.Clientes.FirstOrDefaultAsync(c => c.Codcliente == nc.CodClientes.Value)
             : null;
+
+        if (cliente is not null && clienteData is not null)
+        {
+            cliente.Numeroidentificacion = clienteData.Numeroidentificacion?.Trim();
+            cliente.Nombres = clienteData.Nombres;
+            cliente.Apellidos = clienteData.Apellidos;
+            cliente.Nombrerazonsocial = clienteData.Nombrerazonsocial;
+            cliente.Nombrecomercial = clienteData.Nombrecomercial;
+            cliente.Correo = clienteData.Correo?.Trim();
+            cliente.Celular = clienteData.Celular;
+            cliente.Telefonoconvencional = clienteData.Telefonoconvencional;
+            cliente.Direccion = clienteData.Direccion;
+            cliente.Referencia = clienteData.Referencia;
+            cliente.Observaciones = clienteData.Observaciones;
+            cliente.TipoCliente = clienteData.TipoCliente;
+            cliente.Tipoidentificacion = clienteData.Tipoidentificacion;
+            cliente.Oblgconta = clienteData.Oblgconta;
+        }
 
         var correosNotaNormalizados = NormalizarCorreos(correosNota?.Select(x => x.Correo));
         var correosGuardarEnCliente = NormalizarCorreos(
@@ -491,7 +537,9 @@ public class NotaCreditoService
                         CodPrincipal = string.IsNullOrWhiteSpace(d.Codprincipal) ? d.Codproducto.ToString(CultureInfo.InvariantCulture) : d.Codprincipal.Trim(),
                         CodAuxiliar = string.IsNullOrWhiteSpace(d.Codauxiliar) ? d.Codprincipal : d.Codauxiliar.Trim(),
                         CantProducto = d.Cantidad,
-                        DescripProducto = d.Descripcion,
+                        DescripProducto = string.IsNullOrWhiteSpace(d.Detalle)
+                            ? d.Descripcion
+                            : $"{d.Descripcion.Trim()} - {d.Detalle.Trim()}",
                         PrecioProducto = d.Preciounitario,
                         Descuento = d.Descuento,
                         ValorTProducto = d.Subtotal,
@@ -575,6 +623,9 @@ public class NotaCreditoService
 
     public async Task<(bool Success, string Message)> ValidarProductosDisponiblesAsync(int codFactura, List<DetalleNcDto> detallesSolicitados)
     {
+        if (codFactura <= 0)
+            return (false, "La factura modificada no es válida.");
+
         using var db = await _dbFactory.CreateDbContextAsync();
 
         var detallesFactura = await db.Detallefacturas
@@ -590,15 +641,31 @@ public class NotaCreditoService
 
         foreach (var detalle in detallesSolicitados)
         {
+            if (detalle.Codproducto <= 0)
+                return (false, "Todos los detalles deben corresponder a productos de la factura original.");
+
             if (detalle.Cantidad <= 0m)
                 return (false, $"La cantidad del producto '{detalle.Descripcion}' debe ser mayor a cero.");
 
             if (detalle.Cantidad != decimal.Truncate(detalle.Cantidad))
                 return (false, $"La cantidad del producto '{detalle.Descripcion}' debe ser un número entero.");
 
-            var original = detallesFactura.FirstOrDefault(x => x.Codproducto == detalle.Codproducto);
+            if (detalle.Preciounitario <= 0m)
+                return (false, $"El precio del producto '{detalle.Descripcion}' debe ser mayor a cero.");
+
+            if (detalle.Descuento < 0m || detalle.Descuento > detalle.Cantidad * detalle.Preciounitario)
+                return (false, $"El descuento del producto '{detalle.Descripcion}' no es válido.");
+
+            if (detalle.Iva < 0 || detalle.Iva > 100)
+                return (false, $"La tarifa de IVA del producto '{detalle.Descripcion}' no es válida.");
+        }
+
+        foreach (var grupo in detallesSolicitados.GroupBy(x => x.Codproducto))
+        {
+            var detalle = grupo.First();
+            var original = detallesFactura.FirstOrDefault(x => x.Codproducto == grupo.Key);
             if (original == null)
-                return (false, $"El producto con código {detalle.Codproducto} ya no existe en la factura original.");
+                return (false, $"El producto con código {grupo.Key} ya no existe en la factura original.");
 
             var cantidadOriginal = original.Cantproducto;
             var cantidadYaAnulada = yaAnulados
@@ -612,7 +679,8 @@ public class NotaCreditoService
                 return (false, $"El producto '{original.Descripproducto}' ya fue anulado anteriormente y no puede generar otra nota de crédito.");
             }
 
-            if (detalle.Cantidad > cantidadDisponible)
+            var cantidadSolicitada = grupo.Sum(x => x.Cantidad);
+            if (cantidadSolicitada > cantidadDisponible)
             {
                 return (false, $"La cantidad solicitada para '{original.Descripproducto}' excede la disponible. Disponible: {cantidadDisponible:0.##}.");
             }
@@ -2326,7 +2394,11 @@ public class NotaCreditoService
             if (string.IsNullOrWhiteSpace(secuencial))
                 continue;
 
-            if (int.TryParse(secuencial.Trim(), out var numero) && numero > maximo)
+            var digitos = new string(secuencial.Where(char.IsDigit).ToArray());
+            if (digitos.Length > 9)
+                digitos = digitos[^9..];
+
+            if (int.TryParse(digitos, out var numero) && numero > maximo)
                 maximo = numero;
         }
 

@@ -9,8 +9,13 @@ namespace Simetric.Controllers;
 public class GuiasRemisionController : UsuarioApiControllerBase
 {
     private readonly GuiaRemisionService _service;
+    private readonly FacturacionService _facturacionService;
 
-    public GuiasRemisionController(GuiaRemisionService service) => _service = service;
+    public GuiasRemisionController(GuiaRemisionService service, FacturacionService facturacionService)
+    {
+        _service = service;
+        _facturacionService = facturacionService;
+    }
 
     public sealed class CrearGuiaRemisionDto
     {
@@ -63,7 +68,13 @@ public class GuiasRemisionController : UsuarioApiControllerBase
 
         var serieVisual = await _service.GetSerieGuiaVisualAsync(idUsuario);
         var siguiente = await _service.GetNextGuiaRemisionNumeroAsync(idUsuario, serie);
-        return Ok(new { serie = serieVisual, proximo = siguiente });
+        var emisor = (await _facturacionService.GetEmisoresActivosAsync(idUsuario)).FirstOrDefault();
+        return Ok(new
+        {
+            serie = serieVisual,
+            proximo = siguiente,
+            direccionOrigen = emisor?.DirEstablecimiento ?? emisor?.DireccionMatriz
+        });
     }
 
     [HttpGet("transportistas")]
@@ -73,6 +84,15 @@ public class GuiasRemisionController : UsuarioApiControllerBase
         return idUsuario <= 0
             ? Unauthorized()
             : Ok(await _service.BuscarTransportistasAsync(idUsuario, filtro ?? string.Empty));
+    }
+
+    [HttpGet("facturas/buscar")]
+    public async Task<IActionResult> BuscarFacturasDisponibles([FromQuery] int idUsuario, [FromQuery] string? filtro = null)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        return idUsuario <= 0
+            ? Unauthorized()
+            : Ok(await _service.BuscarFacturasDisponiblesAsync(idUsuario, filtro ?? string.Empty));
     }
 
     [HttpGet("transportistas/por-identificacion")]

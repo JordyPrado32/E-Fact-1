@@ -45,6 +45,7 @@ namespace Simetric.Services
         private readonly ILogger<FacturacionService> _logger;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly FacturaStoredProcedureBootstrapService _facturaStoredProcedureBootstrapService;
+        private readonly FacturaPersistenceSchemaService _facturaPersistenceSchemaService;
         private readonly EmisorCertificadoProtector _certificadoProtector;
         private readonly FirmaPathResolver _firmaPathResolver;
         public string? UltimoErrorGuardarFactura { get; private set; }
@@ -63,6 +64,7 @@ namespace Simetric.Services
             ILogger<FacturacionService> logger,
             IHttpContextAccessor httpContextAccessor,
             FacturaStoredProcedureBootstrapService facturaStoredProcedureBootstrapService,
+            FacturaPersistenceSchemaService facturaPersistenceSchemaService,
             EmisorCertificadoProtector certificadoProtector,
             FirmaPathResolver firmaPathResolver)
         {
@@ -79,6 +81,7 @@ namespace Simetric.Services
             _logger = logger;
             _httpContextAccessor = httpContextAccessor;
             _facturaStoredProcedureBootstrapService = facturaStoredProcedureBootstrapService;
+            _facturaPersistenceSchemaService = facturaPersistenceSchemaService;
             _certificadoProtector = certificadoProtector;
             _firmaPathResolver = firmaPathResolver;
         }
@@ -767,7 +770,7 @@ namespace Simetric.Services
 
             if (!string.IsNullOrWhiteSpace(ultimoNumero))
             {
-                var secuencial = new string(ultimoNumero.Where(char.IsDigit).ToArray());
+                var secuencial = ExtraerSecuencial(ultimoNumero);
                 if (long.TryParse(secuencial, out var actual))
                     return actual;
             }
@@ -791,7 +794,7 @@ namespace Simetric.Services
             long max = 0;
             foreach (var numero in numeros)
             {
-                var limpia = new string((numero ?? string.Empty).Where(char.IsDigit).ToArray());
+                var limpia = ExtraerSecuencial(numero);
                 if (long.TryParse(limpia, out var actual) && actual > max)
                 {
                     max = actual;
@@ -799,6 +802,12 @@ namespace Simetric.Services
             }
 
             return max;
+        }
+
+        private static string ExtraerSecuencial(string? numero)
+        {
+            var digitos = new string((numero ?? string.Empty).Where(char.IsDigit).ToArray());
+            return digitos.Length > 9 ? digitos[^9..] : digitos;
         }
 
         #endregion
@@ -1015,9 +1024,11 @@ namespace Simetric.Services
             Factura factura,
             Cliente clienteData,
             List<Detallefactura> detalles,
-            List<FacturaCorreoDestinoDto>? correosFactura = null)
+            List<FacturaCorreoDestinoDto>? correosFactura = null,
+            string? requestId = null)
         {
             UltimoErrorGuardarFactura = null;
+            var normalizedRequestId = string.IsNullOrWhiteSpace(requestId) ? null : requestId.Trim();
             object? prevCliente = null;
             object? newCliente = null;
             var correosFacturaNormalizados = NormalizarCorreos(correosFactura?.Select(x => x.Correo));
@@ -1031,6 +1042,7 @@ namespace Simetric.Services
 
             try
             {
+                await _facturaPersistenceSchemaService.EnsureSchemaAsync();
                 return await strategy.ExecuteAsync(async () =>
                 {
                     await using var context = await _dbFactory.CreateDbContextAsync();
@@ -1048,6 +1060,36 @@ namespace Simetric.Services
                             usuarioContexto = await GetFacturaUsuarioContextoAsync(context, idUsuario);
                         }
                         var idUsuarioEmisor = usuarioContexto.IdUsuarioTitularCuenta;
+                        FacturaRequestIdempotency? requestIdempotency = null;
+
+                        if (normalizedRequestId is not null)
+                        {
+                            requestIdempotency = await context.FacturaRequestIdempotencies
+                                .SingleOrDefaultAsync(x => x.IdUsuario == idUsuario && x.RequestId == normalizedRequestId);
+
+                            if (requestIdempotency is not null)
+                            {
+                                var facturaExistente = await context.Facturas
+                                    .AsNoTracking()
+                                    .FirstOrDefaultAsync(x => x.Codfactura == requestIdempotency.Codfactura && x.Idusuario == idUsuario);
+
+                                if (facturaExistente is null)
+                                    throw new InvalidOperationException("La solicitud de emisión anterior está incompleta. Intenta nuevamente con una nueva solicitud.");
+
+                                CopiarDatosFactura(factura, facturaExistente);
+                                await transaction.CommitAsync();
+                                return true;
+                            }
+
+                            requestIdempotency = new FacturaRequestIdempotency
+                            {
+                                IdUsuario = idUsuario,
+                                RequestId = normalizedRequestId,
+                                CreadoEn = DateTimeOffset.UtcNow
+                            };
+                            context.FacturaRequestIdempotencies.Add(requestIdempotency);
+                            await context.SaveChangesAsync();
+                        }
 
                         if (detalles == null || !detalles.Any())
                             throw new Exception("La factura debe contener al menos un ítem.");
@@ -1311,6 +1353,12 @@ namespace Simetric.Services
 
                         factura.Detallefacturas = detalles;
 
+                        if (requestIdempotency is not null)
+                        {
+                            requestIdempotency.Codfactura = factura.Codfactura;
+                            await context.SaveChangesAsync();
+                        }
+
                         var facturaNuevoSnapshot = SnapshotFactura(factura);
 
                         _logger.LogInformation(
@@ -1325,7 +1373,7 @@ namespace Simetric.Services
                             factura.Codfactura,
                             stopwatch.ElapsedMilliseconds);
 
-                        if (long.TryParse(new string((factura.Numfactura ?? string.Empty).Where(char.IsDigit).ToArray()), out var secActual))
+                        if (long.TryParse(ExtraerSecuencial(factura.Numfactura), out var secActual))
                         {
                             await _initialSequencePromptService.UpdateLastSequenceAsync(
                                 idUsuario,
@@ -1371,6 +1419,17 @@ namespace Simetric.Services
             }
             catch (Exception ex)
             {
+                if (normalizedRequestId is not null && EsViolacionUnicidad(ex))
+                {
+                    var facturaIdempotente = await BuscarFacturaPorRequestIdAsync(idUsuario, normalizedRequestId);
+                    if (facturaIdempotente is not null)
+                    {
+                        CopiarDatosFactura(factura, facturaIdempotente);
+                        UltimoErrorGuardarFactura = null;
+                        return true;
+                    }
+                }
+
                 UltimoErrorGuardarFactura = ObtenerMensajeErrorGuardarFactura(ex);
 
                 try
@@ -1408,6 +1467,40 @@ namespace Simetric.Services
                     clienteData?.Numeroidentificacion);
                 return false;
             }
+        }
+
+        private async Task<Factura?> BuscarFacturaPorRequestIdAsync(int idUsuario, string requestId)
+        {
+            await using var context = await _dbFactory.CreateDbContextAsync();
+            var request = await context.FacturaRequestIdempotencies
+                .AsNoTracking()
+                .SingleOrDefaultAsync(x => x.IdUsuario == idUsuario && x.RequestId == requestId);
+            if (request is null)
+                return null;
+
+            return await context.Facturas
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Codfactura == request.Codfactura && x.Idusuario == idUsuario);
+        }
+
+        private static void CopiarDatosFactura(Factura destino, Factura origen)
+        {
+            destino.Codfactura = origen.Codfactura;
+            destino.Numfactura = origen.Numfactura;
+            destino.Serie = origen.Serie;
+            destino.Codemisor = origen.Codemisor;
+            destino.Codclientes = origen.Codclientes;
+            destino.Valortotal = origen.Valortotal;
+            destino.Estadoenviosri = origen.Estadoenviosri;
+            destino.Autorizado = origen.Autorizado;
+            destino.Numautorizacion = origen.Numautorizacion;
+            destino.Mensaje = origen.Mensaje;
+        }
+
+        private static bool EsViolacionUnicidad(Exception ex)
+        {
+            var sqlException = ObtenerSqlException(ex);
+            return sqlException?.Number is 2601 or 2627;
         }
         public async Task ActualizarAutorizacionFacturaAsync(int codFactura, string numeroAutorizacion, string fechaAutorizacion, string mensaje, Boolean autorizado)
         {
@@ -1909,7 +2002,7 @@ namespace Simetric.Services
                             codFactura);
                     }
 
-                    if (long.TryParse(new string((numFactura ?? string.Empty).Where(char.IsDigit).ToArray()), out var secActual))
+                    if (long.TryParse(ExtraerSecuencial(numFactura), out var secActual))
                     {
                         await initialSequencePromptService.UpdateLastSequenceAsync(
                             idUsuario,
@@ -2585,11 +2678,12 @@ IF @resultado < 0
         public async Task<List<FacturaListDto>> ListarFacturasUsuarioAsync(int idUsuario, int top = 200)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
+            var usuariosCuentaIds = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
 
             IQueryable<Factura> query = context.Facturas
                 .AsNoTracking()
                 .Where(f =>
-                    f.Idusuario == idUsuario &&
+                    f.Idusuario.HasValue && usuariosCuentaIds.Contains(f.Idusuario.Value) &&
                     (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true) &&
                     (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)))
                 .OrderByDescending(f => f.Codfactura);
@@ -2641,12 +2735,13 @@ IF @resultado < 0
                 return (false, "No se pudo identificar la factura.");
 
             await using var context = await _dbFactory.CreateDbContextAsync(cancellationToken);
+            var usuariosCuentaIds = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
             var factura = await context.Facturas
                 .Include(f => f.CodclientesNavigation)
                 .FirstOrDefaultAsync(
                     f =>
                         f.Codfactura == codFactura &&
-                        f.Idusuario == idUsuario &&
+                        f.Idusuario.HasValue && usuariosCuentaIds.Contains(f.Idusuario.Value) &&
                         (f.CodemisorNavigation == null || !f.CodemisorNavigation.EsEmisorSistema) &&
                         (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)),
                     cancellationToken);
@@ -2695,13 +2790,14 @@ IF @resultado < 0
                 return new List<FacturaListDto>();
 
             await using var context = await _dbFactory.CreateDbContextAsync();
+            var usuariosCuentaIds = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
 
             var identificacionNormalizada = identificacionCliente.Trim();
 
             IQueryable<Factura> query = context.Facturas
                 .AsNoTracking()
                 .Where(f =>
-                    f.Idusuario == idUsuario &&
+                    f.Idusuario.HasValue && usuariosCuentaIds.Contains(f.Idusuario.Value) &&
                     (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true) &&
                     (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)) &&
                     f.CodclientesNavigation != null &&
@@ -2747,12 +2843,13 @@ IF @resultado < 0
             bool incluirFacturasEmisorSistema = false)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
+            var usuariosCuentaIds = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
 
             return await context.Facturas
                 .AsNoTracking()
                 .Where(f =>
                     f.Codfactura == codfactura &&
-                    f.Idusuario == idUsuario &&
+                    f.Idusuario.HasValue && usuariosCuentaIds.Contains(f.Idusuario.Value) &&
                     (incluirFacturasEmisorSistema ||
                         ((f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true) &&
                          (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)))))
@@ -2794,9 +2891,11 @@ IF @resultado < 0
                         Apellidos = f.CodclientesNavigation.Apellidos,
                         Nombrerazonsocial = f.CodclientesNavigation.Nombrerazonsocial,
                         Nombrecomercial = f.CodclientesNavigation.Nombrecomercial,
-                        Numeroidentificacion = f.CodclientesNavigation.Numeroidentificacion,
-                        Tipoidentificacion = f.CodclientesNavigation.Tipoidentificacion,
-                        Direccion = f.CodclientesNavigation.Direccion,
+                         Numeroidentificacion = f.CodclientesNavigation.Numeroidentificacion,
+                         Tipoidentificacion = f.CodclientesNavigation.Tipoidentificacion,
+                         TipoCliente = f.CodclientesNavigation.TipoCliente,
+                         Oblgconta = f.CodclientesNavigation.Oblgconta,
+                         Direccion = f.CodclientesNavigation.Direccion,
                         Correo = f.CodclientesNavigation.Correo,
                         Telefonoconvencional = f.CodclientesNavigation.Telefonoconvencional,
                         Celular = f.CodclientesNavigation.Celular,
@@ -3189,17 +3288,8 @@ IF @resultado < 0
                 .Select(n => n.NumNotaCredito)
                 .ToListAsync();
 
-            int max = 0;
-            foreach (var s in list)
-            {
-                if (string.IsNullOrWhiteSpace(s)) continue;
-                if (int.TryParse(s.Trim(), out var n) && n > max)
-                    max = n;
-            }
-
             var estadoSecuencia = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-credito", serieNc);
-            var automatico = max > 0 ? (max + 1).ToString("000000000") : string.Empty;
-            var siguiente = _initialSequencePromptService.ResolveNextSequence(automatico, estadoSecuencia);
+            var siguiente = _initialSequencePromptService.ResolveFirstAvailableSequence(list, estadoSecuencia);
             return string.IsNullOrWhiteSpace(siguiente) ? "000000001" : siguiente;
         }
 
@@ -3222,19 +3312,8 @@ IF @resultado < 0
                 .Select(n => n.NumNotaDebito)
                 .ToListAsync();
 
-            var max = 0;
-            foreach (var s in list)
-            {
-                if (string.IsNullOrWhiteSpace(s))
-                    continue;
-
-                if (int.TryParse(s.Trim(), out var n) && n > max)
-                    max = n;
-            }
-
             var estadoSecuencia = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-debito", serieNd);
-            var automatico = max > 0 ? (max + 1).ToString("000000000") : string.Empty;
-            var siguiente = _initialSequencePromptService.ResolveNextSequence(automatico, estadoSecuencia);
+            var siguiente = _initialSequencePromptService.ResolveFirstAvailableSequence(list, estadoSecuencia);
             return string.IsNullOrWhiteSpace(siguiente) ? "000000001" : siguiente;
         }
 
@@ -3283,9 +3362,11 @@ IF @resultado < 0
                         Apellidos = f.CodclientesNavigation.Apellidos,
                         Nombrerazonsocial = f.CodclientesNavigation.Nombrerazonsocial,
                         Nombrecomercial = f.CodclientesNavigation.Nombrecomercial,
-                        Numeroidentificacion = f.CodclientesNavigation.Numeroidentificacion,
-                        Tipoidentificacion = f.CodclientesNavigation.Tipoidentificacion,
-                        Direccion = f.CodclientesNavigation.Direccion,
+                         Numeroidentificacion = f.CodclientesNavigation.Numeroidentificacion,
+                         Tipoidentificacion = f.CodclientesNavigation.Tipoidentificacion,
+                         TipoCliente = f.CodclientesNavigation.TipoCliente,
+                         Oblgconta = f.CodclientesNavigation.Oblgconta,
+                         Direccion = f.CodclientesNavigation.Direccion,
                         Correo = f.CodclientesNavigation.Correo,
                         Telefonoconvencional = f.CodclientesNavigation.Telefonoconvencional,
                         Celular = f.CodclientesNavigation.Celular,

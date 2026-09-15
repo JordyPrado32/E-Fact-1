@@ -109,7 +109,7 @@ public class RetencionGeneradaService
                 Clave = x.Clave ?? "",
                 NumeroAutorizacion = x.NumAutorizacion ?? "",
                 Autorizado = x.Autorizado ?? "",
-                Estado = x.Estado ?? "",
+                Estado = ResolverEstadoVisualRetencion(x.Autorizado, x.Estado),
                 Mensaje = x.Mensaje ?? "",
                 BaseTotal = total?.BaseTotal ?? 0m,
                 TotalRetenido = total?.TotalRetenido ?? 0m,
@@ -120,6 +120,18 @@ public class RetencionGeneradaService
         }).ToList();
 
         return resultado;
+    }
+
+    private static string ResolverEstadoVisualRetencion(string? autorizado, string? estado)
+    {
+        if (DocumentoAutorizacionHelper.EstaAutorizado(autorizado, estado))
+            return "AUTORIZADO";
+
+        var valor = (estado ?? string.Empty).Trim().ToUpperInvariant();
+        if (valor.Contains("ERROR") || valor.Contains("FALL") || valor.Contains("EXCEPTION"))
+            return "ERROR";
+
+        return DocumentoAutorizacionHelper.EsNoAutorizado(valor) ? "RECHAZADO" : "PENDIENTE";
     }
 
     public Task<RetencionGeneradaDetalleViewDto?> GetRetencionDetalleAsync(int sec)

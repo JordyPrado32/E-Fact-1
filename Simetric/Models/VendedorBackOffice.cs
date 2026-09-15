@@ -23,6 +23,9 @@ public class VendedorBackOffice
     [Column("activo")]
     public bool Activo { get; set; } = true;
 
+    [Column("porcentajeBase")]
+    public decimal PorcentajeBase { get; set; } = 30m;
+
     [Column("esSistema")]
     public bool EsSistema { get; set; }
 

@@ -81,7 +81,7 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<FacturaEmissionResult> EmitirAsync(int userId, FacturaDraftDto draft, CancellationToken cancellationToken = default)
+    public async Task<FacturaEmissionResult> EmitirAsync(int userId, FacturaDraftDto draft, string? requestId = null, CancellationToken cancellationToken = default)
     {
         await using var context = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var ownerId = await ResolveOwnerIdAsync(context, userId, cancellationToken);
@@ -202,7 +202,7 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
             Subtotal12 = decimal.Round(draft.Items.Where(x => x.TarifaPorcentaje > 0).Sum(x => x.Subtotal), 2)
         };
 
-        var ok = await _facturacionService.GuardarFacturaCompletaAsync(userId, factura, cliente, detalles);
+        var ok = await _facturacionService.GuardarFacturaCompletaAsync(userId, factura, cliente, detalles, requestId: requestId);
         if (!ok)
             return Fail(_facturacionService.UltimoErrorGuardarFactura ?? "No se pudo emitir la factura con el servicio actual.");
 

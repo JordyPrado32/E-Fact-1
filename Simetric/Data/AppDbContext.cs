@@ -20,6 +20,8 @@ namespace Simetric.Data
         public DbSet<Detallefactura> Detallefacturas { get; set; }
         public DbSet<Emisor> Emisores { get; set; }
         public DbSet<Factura> Facturas { get; set; }
+        public DbSet<FacturaConversationSnapshot> FacturaConversationSnapshots { get; set; }
+        public DbSet<FacturaRequestIdempotency> FacturaRequestIdempotencies { get; set; }
         public DbSet<FormasPago> FormasPago { get; set; }
         public DbSet<AbonoMultiple> AbonoMultiples { get; set; }
         public DbSet<Abonos> Abonos { get; set; }
@@ -72,6 +74,7 @@ namespace Simetric.Data
         public DbSet<UsuarioServicioSuscripcion> UsuarioServicioSuscripciones { get; set; }
         public DbSet<ReporteVentaBackOffice> ReporteVentasBackOffice { get; set; }
         public DbSet<VendedorBackOffice> VendedoresBackOffice { get; set; }
+        public DbSet<AliadoRenovacionGestion> AliadoRenovacionGestiones { get; set; }
         public DbSet<ContribuyenteEdeclare> ContribuyentesEdeclare { get; set; }
         public DbSet<EContaxRol> EContaxRoles { get; set; }
         public DbSet<EContaxMenu> EContaxMenus { get; set; }
@@ -146,6 +149,21 @@ namespace Simetric.Data
                 entity.HasKey(e => e.Id);
                 entity.HasIndex(e => new { e.TipoDocumento, e.DocumentoId })
                     .IsUnique();
+            });
+
+            modelBuilder.Entity<FacturaConversationSnapshot>(entity =>
+            {
+                entity.ToTable("FACTURA_CONVERSACION_IA", "dbo");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.EstadoVersion).IsConcurrencyToken();
+                entity.HasIndex(e => new { e.IdUsuario, e.SessionId }).IsUnique();
+            });
+
+            modelBuilder.Entity<FacturaRequestIdempotency>(entity =>
+            {
+                entity.ToTable("FACTURA_IDEMPOTENCIA", "dbo");
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.IdUsuario, e.RequestId }).IsUnique();
             });
 
             modelBuilder.Entity<EsignFirmaValidacionApiLog>(entity =>

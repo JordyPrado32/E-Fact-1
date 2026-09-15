@@ -382,5 +382,13 @@ BEGIN
     ALTER TABLE [dbo].[Usuarios] ADD [idVendedor] INT NULL;
 END
 """;
+
+        yield return """
+IF COL_LENGTH('dbo.VENDEDOR_BACKOFFICE', 'porcentajeBase') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[VENDEDOR_BACKOFFICE]
+        ADD [porcentajeBase] DECIMAL(9,4) NOT NULL CONSTRAINT [DF_VENDEDOR_BACKOFFICE_porcentajeBase] DEFAULT(30);
+END
+""";
     }
 }

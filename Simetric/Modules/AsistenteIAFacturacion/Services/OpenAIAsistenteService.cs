@@ -326,7 +326,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
             var clientMatch = Regex.Match(
                 mensaje,
-                @"(?:a|para)\s+(?<cliente>[\p{L}0-9][\p{L}0-9\s\.\-']+?)(?=\s+de\s+|\s+con\s+|\s+a\s+cr[eé]dito|\s+al?\s+contado|$)",
+                @"(?:a|al|para)\s+(?:(?:el|la)\s+)?(?:cliente\s+)?(?<cliente>[\p{L}0-9][\p{L}0-9\s\.\-']+?)(?=\s+de\s+|\s+con\s+|\s+a\s+cr[eé]dito|\s+al?\s+contado|$)",
                 RegexOptions.IgnoreCase);
             if (clientMatch.Success)
             {
@@ -382,11 +382,15 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
             foreach (Match itemMatch in Regex.Matches(
                 mensaje,
-                @"(?<cantidad>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?<producto>[\p{L}][\p{L}0-9\s\.\-]+?)(?=,| y | con | a\s+cr[eé]dito| al?\s+contado|$)",
+                @"(?:(?<cantidad>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?!(?:factura|cliente|producto)\b)(?<producto>[\p{L}][\p{L}0-9\s\.\-]+?)(?=,| y | con | a\s+cr[eé]dito| al?\s+contado|$))|(?:\b(?:con|incluye)\s+)(?:(?:el|la)\s+)?(?:(?<cantidadSinCantidad>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+)?(?<productoSinCantidad>[\p{L}][\p{L}0-9\s\.\-]+?)(?=,| y | a\s+cr[eé]dito| al?\s+contado|$)",
                 RegexOptions.IgnoreCase))
             {
-                var productoQuery = itemMatch.Groups["producto"].Value.Trim();
-                var cantidad = ParseAmountToken(itemMatch.Groups["cantidad"].Value) ?? 0m;
+                var productoQuery = (itemMatch.Groups["producto"].Success
+                    ? itemMatch.Groups["producto"].Value
+                    : itemMatch.Groups["productoSinCantidad"].Value).Trim();
+                var cantidad = ParseAmountToken(itemMatch.Groups["cantidad"].Success
+                    ? itemMatch.Groups["cantidad"].Value
+                    : itemMatch.Groups["cantidadSinCantidad"].Value) ?? 1m;
                 var productSearch = await _toolDispatcher.DispatchAsync(
                     ToolDefinitions.BuscarProducto,
                     JsonSerializer.Serialize(new { query = productoQuery }),
@@ -581,7 +585,19 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             return true;
 
         if (state.Draft.Items.Count == 0)
-            return false;
+        {
+            return ContainsAny(
+                normalized,
+                "crear factura",
+                "crear una factura",
+                "crea factura",
+                "crea una factura",
+                "haz una factura",
+                "genera una factura",
+                "factura para",
+                "factura a",
+                "facturar a");
+        }
 
         return ContainsAny(
             normalized,

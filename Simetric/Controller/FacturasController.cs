@@ -14,6 +14,7 @@ namespace Simetric.Controllers
 
     [ApiController]
     [Route("api/[controller]")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
 
     public class FacturasController : ControllerBase
     {
@@ -33,6 +34,7 @@ namespace Simetric.Controllers
         public class FacturaCreateDto
         {
             public int? IdUsuario { get; set; }
+            public string? RequestId { get; set; }
             public Factura Factura { get; set; } = null!;
             public Cliente Cliente { get; set; } = null!;
             public List<Detallefactura> Detalles { get; set; } = new();
@@ -74,6 +76,9 @@ namespace Simetric.Controllers
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
+            if (!string.IsNullOrWhiteSpace(dto.RequestId) && dto.RequestId.Trim().Length > 120)
+                return BadRequest(new { mensaje = "El identificador de solicitud no es válido." });
+
             if (dto.Factura == null || dto.Cliente == null)
                 return BadRequest(new { mensaje = "Datos de factura o cliente incompletos." });
 
@@ -108,7 +113,8 @@ namespace Simetric.Controllers
                     dto.Factura,
                     dto.Cliente,
                     dto.Detalles,
-                    dto.CorreosFactura);
+                    dto.CorreosFactura,
+                    dto.RequestId);
 
 
                 if (!ok)

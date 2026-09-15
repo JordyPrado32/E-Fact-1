@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Localization;
@@ -72,6 +73,9 @@ builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<CurrentUserContext>();
 builder.Services.AddSingleton<AuditActorResolver>();
 builder.Services.AddSingleton<SqlAuditSaveChangesInterceptor>();
+builder.Services.AddSingleton<ConnectedUsersService>();
+builder.Services.AddScoped<ConnectedUserCircuitHandler>();
+builder.Services.AddScoped<CircuitHandler>(sp => sp.GetRequiredService<ConnectedUserCircuitHandler>());
 builder.Services.AddScoped<EfactSharedDataService>();
 builder.Services.AddScoped<EContaxSharedDataService>();
 builder.Services.AddScoped<EContaxTenantService>();
@@ -219,7 +223,8 @@ builder.Services.AddScoped<TipoClienteService>();
 builder.Services.AddScoped<IdentificacionService>();
 builder.Services.AddScoped<ConfiguracionService>();
 builder.Services.AddScoped<ClienteService>();
-builder.Services.AddScoped<VendedorBackOfficeService>();
+    builder.Services.AddScoped<VendedorBackOfficeService>();
+    builder.Services.AddScoped<AliadoPortalService>();
 builder.Services.AddScoped<PagoService>();
 builder.Services.AddScoped<IUsuarioService, UsuarioService>();
 builder.Services.AddScoped<RetencionesService>();
@@ -296,7 +301,8 @@ builder.Services.AddHttpClient<WhatsAppSupportService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
 });
-builder.Services.AddSingleton<IFacturaConversationStore, InMemoryFacturaConversationStore>();
+builder.Services.AddSingleton<FacturaPersistenceSchemaService>();
+builder.Services.AddSingleton<IFacturaConversationStore, SqlFacturaConversationStore>();
 builder.Services.AddScoped<Simetric.Modules.AsistenteIAFacturacion.Services.IClienteService, SystemClienteServiceAdapter>();
 builder.Services.AddScoped<IProductoService, SystemProductoServiceAdapter>();
 builder.Services.AddScoped<IFacturacionService, SystemFacturacionServiceAdapter>();
@@ -349,6 +355,9 @@ try
 
     var facturaStoredProcedureBootstrapService = scope.ServiceProvider.GetRequiredService<FacturaStoredProcedureBootstrapService>();
     await facturaStoredProcedureBootstrapService.EnsureSchemaAsync();
+
+    var facturaPersistenceSchemaService = scope.ServiceProvider.GetRequiredService<FacturaPersistenceSchemaService>();
+    await facturaPersistenceSchemaService.EnsureSchemaAsync();
 
     var edeclaraMenuService = scope.ServiceProvider.GetRequiredService<IEDeclaraMenuService>();
     await edeclaraMenuService.EnsureSchemaAsync();

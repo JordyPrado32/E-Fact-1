@@ -1,0 +1,93 @@
+using Microsoft.EntityFrameworkCore;
+using Simetric.Data;
+
+namespace Simetric.Services;
+
+public sealed class FacturaPersistenceSchemaService
+{
+    private static readonly SemaphoreSlim SchemaLock = new(1, 1);
+    private static bool _schemaEnsured;
+
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
+
+    public FacturaPersistenceSchemaService(IDbContextFactory<AppDbContext> dbFactory)
+    {
+        _dbFactory = dbFactory;
+    }
+
+    public async Task EnsureSchemaAsync()
+    {
+        if (_schemaEnsured)
+            return;
+
+        await SchemaLock.WaitAsync();
+        try
+        {
+            if (_schemaEnsured)
+                return;
+
+            await using var context = await _dbFactory.CreateDbContextAsync();
+            await context.Database.ExecuteSqlRawAsync(BuildConversationTableSql());
+            await context.Database.ExecuteSqlRawAsync(BuildIdempotencyTableSql());
+            _schemaEnsured = true;
+        }
+        finally
+        {
+            SchemaLock.Release();
+        }
+    }
+
+    private static string BuildConversationTableSql() =>
+        """
+        IF OBJECT_ID(N'[dbo].[FACTURA_CONVERSACION_IA]', N'U') IS NULL
+        BEGIN
+            CREATE TABLE [dbo].[FACTURA_CONVERSACION_IA]
+            (
+                [ID] BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT [PK_FACTURA_CONVERSACION_IA] PRIMARY KEY,
+                [ID_USUARIO] INT NOT NULL,
+                [SESSION_ID] NVARCHAR(120) NOT NULL,
+                [ESTADO_JSON] NVARCHAR(MAX) NOT NULL,
+                [ESTADO_VERSION] BIGINT NOT NULL,
+                [ACTUALIZADO_EN] DATETIMEOFFSET(7) NOT NULL,
+                [EXPIRA_EN] DATETIMEOFFSET(7) NOT NULL
+            );
+        END;
+
+        IF NOT EXISTS
+        (
+            SELECT 1 FROM sys.indexes
+            WHERE name = N'UX_FACTURA_CONVERSACION_IA_USUARIO_SESSION'
+              AND object_id = OBJECT_ID(N'[dbo].[FACTURA_CONVERSACION_IA]')
+        )
+        BEGIN
+            CREATE UNIQUE INDEX [UX_FACTURA_CONVERSACION_IA_USUARIO_SESSION]
+                ON [dbo].[FACTURA_CONVERSACION_IA] ([ID_USUARIO], [SESSION_ID]);
+        END;
+        """;
+
+    private static string BuildIdempotencyTableSql() =>
+        """
+        IF OBJECT_ID(N'[dbo].[FACTURA_IDEMPOTENCIA]', N'U') IS NULL
+        BEGIN
+            CREATE TABLE [dbo].[FACTURA_IDEMPOTENCIA]
+            (
+                [ID] BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT [PK_FACTURA_IDEMPOTENCIA] PRIMARY KEY,
+                [ID_USUARIO] INT NOT NULL,
+                [REQUEST_ID] NVARCHAR(120) NOT NULL,
+                [CODFACTURA] INT NOT NULL,
+                [CREADO_EN] DATETIMEOFFSET(7) NOT NULL
+            );
+        END;
+
+        IF NOT EXISTS
+        (
+            SELECT 1 FROM sys.indexes
+            WHERE name = N'UX_FACTURA_IDEMPOTENCIA_USUARIO_REQUEST'
+              AND object_id = OBJECT_ID(N'[dbo].[FACTURA_IDEMPOTENCIA]')
+        )
+        BEGIN
+            CREATE UNIQUE INDEX [UX_FACTURA_IDEMPOTENCIA_USUARIO_REQUEST]
+                ON [dbo].[FACTURA_IDEMPOTENCIA] ([ID_USUARIO], [REQUEST_ID]);
+        END;
+        """;
+}
