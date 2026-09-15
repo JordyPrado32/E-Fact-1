@@ -47,7 +47,8 @@ public sealed class ESignMobileValidationController : ControllerBase
 
     private int GetUserId()
     {
-        var value = User.FindFirstValue(ClaimTypes.NameIdentifier)
+        var value = User.FindFirstValue("IdUsuario")
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? User.FindFirstValue("idUsuario")
             ?? User.FindFirstValue("sub");
         return int.TryParse(value, out var userId) ? userId : 0;

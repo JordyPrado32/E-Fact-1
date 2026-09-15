@@ -35,7 +35,8 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .Select(file => new
             {
-                nombreDocumento = file.Name,
+                nombreDocumento = CrearNombreVisible(file.Name),
+                nombreArchivo = file.Name,
                 fechaFirma = file.LastWriteTimeUtc,
                 estado = "Válido",
                 tamano = $"{Math.Max(1, Math.Ceiling(file.Length / 1024d))} KB",
@@ -48,9 +49,28 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
 
     private int GetUserId()
     {
-        var value = User.FindFirstValue(ClaimTypes.NameIdentifier)
+        var value = User.FindFirstValue("IdUsuario")
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? User.FindFirstValue("idUsuario")
             ?? User.FindFirstValue("sub");
         return int.TryParse(value, out var userId) ? userId : 0;
+    }
+
+    private static string CrearNombreVisible(string fileName)
+    {
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length >= 3 && partes[0].Length == 14 && partes[1].Length == 32)
+        {
+            nombre = string.Join("_", partes.Skip(2));
+        }
+
+        nombre = nombre
+            .Replace("-firmado", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("_firmado", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace('_', ' ')
+            .Trim();
+
+        return string.IsNullOrWhiteSpace(nombre) ? "Documento firmado.pdf" : $"{nombre}.pdf";
     }
 }
