@@ -530,9 +530,17 @@ public sealed class ESignMobileController : ControllerBase
             anchoMm,
             cancellationToken);
 
-        return resultado.Success && resultado.Pdf is not null
-            ? File(resultado.Pdf, resultado.ContentType ?? "application/pdf", $"{Path.GetFileNameWithoutExtension(pdf.FileName)}-firmado.pdf")
-            : BadRequest(new { mensaje = resultado.Message, estado = resultado.HttpStatusCode });
+        if (!resultado.Success || resultado.Pdf is null)
+            return BadRequest(new { mensaje = resultado.Message, estado = resultado.HttpStatusCode });
+
+        var downloadFileName = $"{Path.GetFileNameWithoutExtension(pdf.FileName)}-firmado.pdf";
+        var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{downloadFileName}";
+        var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", userId.ToString());
+        var physicalDirectory = Path.Combine(_hostEnvironment.WebRootPath, relativeDirectory);
+        Directory.CreateDirectory(physicalDirectory);
+        await System.IO.File.WriteAllBytesAsync(Path.Combine(physicalDirectory, storedFileName), resultado.Pdf, cancellationToken);
+
+        return File(resultado.Pdf, resultado.ContentType ?? "application/pdf", downloadFileName);
     }
 
     private async Task<FirmaConfigurada?> CargarFirmaConfiguradaAsync(
