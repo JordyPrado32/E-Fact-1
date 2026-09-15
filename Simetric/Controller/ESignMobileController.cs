@@ -618,29 +618,6 @@ public sealed class ESignMobileController : ControllerBase
 
     private sealed record FirmaConfigurada(byte[] Contenido, string NombreArchivo, string Clave);
 
-    [HttpPost("documentos/validar-firma")]
-    [RequestSizeLimit(10 * 1024 * 1024)]
-    public async Task<IActionResult> ValidarFirmaPdf([FromForm] IFormFile? pdf, CancellationToken cancellationToken = default)
-    {
-        if (GetUserId() <= 0) return Unauthorized();
-        if (pdf is null || !EsArchivo(pdf, ".pdf", 10 * 1024 * 1024))
-            return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 10 MB." });
-
-        await using var stream = pdf.OpenReadStream();
-        var resultado = await _firmaStampApiService.ValidarFirmaPdfAsync(
-            stream, Path.GetFileName(pdf.FileName), pdf.ContentType, cancellationToken);
-        return resultado.Success ? Ok(resultado) : BadRequest(resultado);
-    }
-
-    [HttpGet("documentos/validar-qr")]
-    public async Task<IActionResult> ValidarQr([FromQuery] string entrada, CancellationToken cancellationToken)
-    {
-        if (GetUserId() <= 0) return Unauthorized();
-        if (string.IsNullOrWhiteSpace(entrada)) return BadRequest(new { mensaje = "La entrada QR es obligatoria." });
-        var resultado = await _firmaStampApiService.ValidarQrAsync(entrada, cancellationToken);
-        return resultado.Success ? Ok(resultado) : BadRequest(resultado);
-    }
-
     private const long MaxDocumentoBytes = 10 * 1024 * 1024;
     private const long MaxVideoBytes = 50 * 1024 * 1024;
     private static readonly string[] DocumentoExtensiones = [".jpg", ".jpeg", ".png", ".pdf"];
