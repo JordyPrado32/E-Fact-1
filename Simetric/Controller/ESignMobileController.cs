@@ -31,7 +31,6 @@ public sealed class ESignMobileController : ControllerBase
     private readonly EmisorCertificadoValidator _certificadoValidator;
     private readonly EmisorCertificadoProtector _certificadoProtector;
     private readonly FirmaPathResolver _firmaPathResolver;
-    private readonly UanatacaApiService _uanatacaApiService;
     private readonly FirmaStampApiService _firmaStampApiService;
     private readonly IESignMenuService _eSignMenuService;
     private readonly PagoService _pagoService;
@@ -46,7 +45,6 @@ public sealed class ESignMobileController : ControllerBase
         EmisorCertificadoValidator certificadoValidator,
         EmisorCertificadoProtector certificadoProtector,
         FirmaPathResolver firmaPathResolver,
-        UanatacaApiService uanatacaApiService,
         FirmaStampApiService firmaStampApiService,
         IESignMenuService eSignMenuService,
         PagoService pagoService,
@@ -60,7 +58,6 @@ public sealed class ESignMobileController : ControllerBase
         _certificadoValidator = certificadoValidator;
         _certificadoProtector = certificadoProtector;
         _firmaPathResolver = firmaPathResolver;
-        _uanatacaApiService = uanatacaApiService;
         _firmaStampApiService = firmaStampApiService;
         _eSignMenuService = eSignMenuService;
         _pagoService = pagoService;
@@ -437,26 +434,6 @@ public sealed class ESignMobileController : ControllerBase
 
         return Ok(new { solicitudId = solicitud.SolId, status = "TRANSFERENCIA_REGISTRADA" });
     }
-
-    [HttpGet("catalogos/productos")]
-    public async Task<IActionResult> ObtenerProductos(CancellationToken cancellationToken) =>
-        Ok(await _uanatacaApiService.ObtenerProductosAsync(cancellationToken));
-
-    [HttpGet("catalogos/stakeholder-productos")]
-    public async Task<IActionResult> ObtenerProductosStakeholder([FromQuery] string? stakeholderUuid, CancellationToken cancellationToken) =>
-        Ok(await _uanatacaApiService.ObtenerProductosStakeholderAsync(stakeholderUuid, cancellationToken));
-
-    [HttpGet("catalogos/saldo")]
-    public async Task<IActionResult> ObtenerSaldo(CancellationToken cancellationToken) =>
-        Ok(new { balance = await _uanatacaApiService.ObtenerSaldoAsync(cancellationToken) });
-
-    [HttpGet("proveedor/solicitudes")]
-    public async Task<IActionResult> BuscarSolicitudesProveedor(
-        [FromQuery] string? q,
-        [FromQuery] string? status,
-        [FromQuery] string? uuid,
-        CancellationToken cancellationToken) =>
-        Ok(await _uanatacaApiService.BuscarSolicitudesAsync(q, status, uuid, cancellationToken));
 
     [HttpPost("documentos/firmar")]
     [RequestSizeLimit(20 * 1024 * 1024)]
