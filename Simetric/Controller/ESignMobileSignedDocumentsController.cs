@@ -32,12 +32,12 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
 
         var documentos = Directory.EnumerateFiles(physicalDirectory, "*.pdf", SearchOption.TopDirectoryOnly)
             .Select(path => new FileInfo(path))
-            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .OrderByDescending(file => file.CreationTime)
             .Select(file => new
             {
-                nombreDocumento = CrearNombreVisible(file.Name),
+                nombreDocumento = CrearNombreVisible(file),
                 nombreArchivo = file.Name,
-                fechaFirma = file.LastWriteTimeUtc,
+                fechaFirma = file.CreationTime,
                 estado = "Válido",
                 tamano = $"{Math.Max(1, Math.Ceiling(file.Length / 1024d))} KB",
                 downloadUrl = "/" + Path.Combine(relativeDirectory, file.Name).Replace('\\', '/'),
@@ -56,21 +56,44 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
         return int.TryParse(value, out var userId) ? userId : 0;
     }
 
-    private static string CrearNombreVisible(string fileName)
+    private static string CrearNombreVisible(FileInfo file)
     {
-        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        if (TryGetNombreDocumentoOriginal(file.Name, out var nombreOriginal))
+            return $"{nombreOriginal}_firmado.pdf";
+
+        var nombre = Path.GetFileNameWithoutExtension(file.Name);
         var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
-        if (partes.Length >= 3 && partes[0].Length == 14 && partes[1].Length == 32)
+        if (partes.Length >= 3 &&
+            partes[0].Length == 14 &&
+            partes[^1].Equals("estampado", StringComparison.OrdinalIgnoreCase) &&
+            partes[1].Length >= 16)
         {
-            nombre = string.Join("_", partes.Skip(2));
+            return $"Documento estampado - {file.CreationTime:dd/MM/yyyy HH:mm}";
         }
 
-        nombre = nombre
-            .Replace("-firmado", string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Replace("_firmado", string.Empty, StringComparison.OrdinalIgnoreCase)
+        var index = nombre.IndexOf("_estampado", StringComparison.OrdinalIgnoreCase);
+        if (index > 0)
+            nombre = nombre[..index];
+
+        return string.IsNullOrWhiteSpace(nombre) ? "Documento firmado.pdf" : $"{nombre.Replace('_', ' ').Trim()}.pdf";
+    }
+
+    private static bool TryGetNombreDocumentoOriginal(string fileName, out string nombreOriginal)
+    {
+        nombreOriginal = string.Empty;
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length < 4 ||
+            partes[0].Length != 14 ||
+            partes[1].Length != 32 ||
+            !partes[^1].Equals("firmado", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        nombreOriginal = string.Join("_", partes.Skip(2).Take(partes.Length - 3))
             .Replace('_', ' ')
             .Trim();
-
-        return string.IsNullOrWhiteSpace(nombre) ? "Documento firmado.pdf" : $"{nombre}.pdf";
+        return !string.IsNullOrWhiteSpace(nombreOriginal);
     }
 }

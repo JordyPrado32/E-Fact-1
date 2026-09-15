@@ -19,14 +19,14 @@ public sealed class ESignMobileValidationController : ControllerBase
     }
 
     [HttpPost("validar-firma")]
-    [RequestSizeLimit(10 * 1024 * 1024)]
+    [RequestSizeLimit(15 * 1024 * 1024)]
     public async Task<IActionResult> ValidarFirmaPdf([FromForm] IFormFile? pdf, CancellationToken cancellationToken = default)
     {
         if (GetUserId() <= 0) return Unauthorized();
-        if (pdf is null || pdf.Length <= 0 || pdf.Length > 10 * 1024 * 1024 ||
+        if (pdf is null || pdf.Length <= 0 || pdf.Length > 15 * 1024 * 1024 ||
             !string.Equals(Path.GetExtension(pdf.FileName), ".pdf", StringComparison.OrdinalIgnoreCase))
         {
-            return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 10 MB." });
+            return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 15 MB." });
         }
 
         await using var stream = pdf.OpenReadStream();
