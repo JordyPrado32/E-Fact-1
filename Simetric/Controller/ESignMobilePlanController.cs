@@ -34,7 +34,13 @@ public sealed class ESignMobilePlanController : ControllerBase
             .OrderByDescending(item => item.SolFechaPago ?? item.SolFechaSolicitud)
             .FirstOrDefault();
         if (firma is null)
-            return Ok(new { estadoAcceso = "Compra una firma", tieneFirmaPagada = false, diasRestantes = 0, fechaVencimiento = (DateTime?)null });
+            return Ok(new
+            {
+                tieneFirmaPagada = false,
+                diasRestantes = 0,
+                estado = "Compra una firma",
+                fechaVencimiento = (DateTime?)null
+            });
 
         var fechaInicio = firma.SolFechaAprobacion ?? firma.SolFechaPago ?? firma.SolFechaSolicitud;
         var match = Regex.Match(firma.SolVigencia ?? string.Empty, @"\d+");
@@ -43,7 +49,16 @@ public sealed class ESignMobilePlanController : ControllerBase
             ? fechaInicio.AddDays(Math.Max(cantidad, 1))
             : fechaInicio.AddYears(Math.Clamp(cantidad, 1, 5));
         var diasRestantes = Math.Max(0, (fechaVencimiento.Date - DateTime.Today).Days);
-        return Ok(new { estadoAcceso = diasRestantes > 0 ? "Activo" : "Vencido", tieneFirmaPagada = true, diasRestantes, fechaVencimiento, vigencia = firma.SolVigencia });
+        return Ok(new
+        {
+            tieneFirmaPagada = true,
+            solicitudId = firma.SolId,
+            vigencia = firma.SolVigencia,
+            fechaInicio,
+            fechaVencimiento,
+            diasRestantes,
+            estado = diasRestantes > 0 ? "Activo" : "Vencido"
+        });
     }
 
     private async Task<int?> GetAccountIdAsync(CancellationToken cancellationToken)
