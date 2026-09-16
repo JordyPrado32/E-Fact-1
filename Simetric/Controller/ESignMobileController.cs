@@ -845,9 +845,8 @@ public sealed class ESignMobileController : ControllerBase
 
     private static string CrearNombreArchivoSeguro(string fileName)
     {
-        var name = Path.GetFileNameWithoutExtension(fileName);
-        var cleanName = new string(name.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray()).Trim('_');
-        return $"{(string.IsNullOrWhiteSpace(cleanName) ? "documento" : cleanName)}.pdf";
+        var name = Path.GetFileNameWithoutExtension(fileName).Trim();
+        return $"{Uri.EscapeDataString(string.IsNullOrWhiteSpace(name) ? "documento" : name)}.pdf";
     }
 
     private static string CrearNombreVisibleDocumento(string fileName)
@@ -855,7 +854,10 @@ public sealed class ESignMobileController : ControllerBase
         var name = Path.GetFileNameWithoutExtension(fileName);
         var parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length > 2 && parts[0].Length == 14 && Guid.TryParse(parts[1], out _))
-            name = string.Join(" ", parts.Skip(2));
+            name = string.Join("_", parts.Skip(2));
+
+        try { name = Uri.UnescapeDataString(name); }
+        catch (UriFormatException) { /* Conserva los nombres ya almacenados con el formato anterior. */ }
 
         return $"{name.Replace('_', ' ').Trim()}.pdf";
     }
