@@ -448,7 +448,7 @@ public sealed class ESignMobileController : ControllerBase
         [FromForm] double xMm = 20,
         [FromForm] double yMm = 20,
         [FromForm] double anchoMm = 50,
-        [FromForm] string? documentoPendiente,
+        [FromForm] string? documentoPendiente = null,
         CancellationToken cancellationToken = default)
     {
         var userId = GetUserId();
