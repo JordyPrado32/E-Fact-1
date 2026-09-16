@@ -114,7 +114,7 @@ public sealed class ESignMobileController : ControllerBase
 
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var emisores = await db.Emisores.AsNoTracking()
-            .Where(e => e.Estado && e.IdUsuario == idCuenta)
+            .Where(e => e.Estado && !e.EsEmisorSistema && e.IdUsuario == idCuenta)
             .OrderByDescending(e => e.Codigo)
             .ToListAsync(cancellationToken);
 
@@ -198,6 +198,39 @@ public sealed class ESignMobileController : ControllerBase
         return accountId is null
             ? Unauthorized()
             : Ok(await _firmaRenovacionService.ObtenerPorUsuarioAsync(accountId.Value, cancellationToken: cancellationToken));
+    }
+
+    [HttpGet("plan")]
+    public async Task<IActionResult> ObtenerPlan(CancellationToken cancellationToken)
+    {
+        var accountId = await GetAccountIdAsync(cancellationToken);
+        if (accountId is null) return Unauthorized();
+
+        var solicitud = (await _solicitudService.ObtenerSolicitudesClienteAsync(accountId.Value))
+            .Where(item => item.SolPagoExitoso)
+            .OrderByDescending(item => item.SolFechaPago ?? item.SolFechaSolicitud)
+            .FirstOrDefault();
+        if (solicitud is null)
+            return Ok(new { tieneFirmaPagada = false, diasRestantes = 0, estado = "Compra una firma", fechaVencimiento = (DateTime?)null });
+
+        var fechaInicio = solicitud.SolFechaAprobacion ?? solicitud.SolFechaPago ?? solicitud.SolFechaSolicitud;
+        var match = Regex.Match(solicitud.SolVigencia ?? string.Empty, @"\d+");
+        var cantidad = match.Success && int.TryParse(match.Value, out var valor) ? valor : 1;
+        var fechaVencimiento = Regex.IsMatch(solicitud.SolVigencia ?? string.Empty, @"D[IÍ]AS?", RegexOptions.IgnoreCase)
+            ? fechaInicio.AddDays(Math.Max(cantidad, 1))
+            : fechaInicio.AddYears(Math.Clamp(cantidad, 1, 5));
+        var diasRestantes = Math.Max(0, (fechaVencimiento.Date - DateTime.Today).Days);
+
+        return Ok(new
+        {
+            tieneFirmaPagada = true,
+            solicitudId = solicitud.SolId,
+            vigencia = solicitud.SolVigencia,
+            fechaInicio,
+            fechaVencimiento,
+            diasRestantes,
+            estado = diasRestantes > 0 ? "Activo" : "Vencido"
+        });
     }
 
     [HttpGet("notificaciones")]
