@@ -561,7 +561,11 @@ public sealed class ESignMobileController : ControllerBase
 
         var directory = ObtenerDirectorioDocumentosPendientes(userId);
         Directory.CreateDirectory(directory);
-        var storedName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{CrearNombreArchivoSeguro(pdf.FileName)}";
+        var storedName = CrearNombreArchivoSeguro(pdf.FileName);
+        if (System.IO.File.Exists(Path.Combine(directory, storedName)))
+        {
+            storedName = $"{Path.GetFileNameWithoutExtension(storedName)}_{Guid.NewGuid():N}.pdf";
+        }
         var path = Path.Combine(directory, storedName);
         await using var input = pdf.OpenReadStream();
         await using var output = System.IO.File.Create(path);
@@ -631,14 +635,14 @@ public sealed class ESignMobileController : ControllerBase
 
     private async Task<bool> TieneAccesoFirmaDocumentosAsync(int userId, CancellationToken cancellationToken)
     {
-        if (await _emisionControlService.TienePlanDocumentosActivoAsync(userId))
-            return true;
-
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var usuario = await db.Usuarios.AsNoTracking()
             .Where(item => item.IdUsuario == userId)
-            .Select(item => new { item.estadoAsociado, item.idJefe })
+            .Select(item => new { item.estadoAsociado, item.idJefe, item.IdTipoUsuario })
             .FirstOrDefaultAsync(cancellationToken);
+        if (usuario?.IdTipoUsuario == 2 || await _emisionControlService.TienePlanDocumentosActivoAsync(userId))
+            return true;
+
         var idsCuenta = new[]
         {
             userId,

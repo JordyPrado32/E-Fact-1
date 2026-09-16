@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
+using Simetric.Models;
 using Simetric.Services;
 using Simetric.Services.ESign;
 
@@ -31,6 +32,21 @@ public sealed class ESignMobileCatalogController : ControllerBase
     [HttpGet("catalogos/stakeholder-productos")]
     public async Task<IActionResult> ObtenerProductosStakeholder([FromQuery] string? stakeholderUuid, CancellationToken cancellationToken) =>
         Ok(await _uanatacaApiService.ObtenerProductosStakeholderAsync(stakeholderUuid, cancellationToken));
+
+    [HttpGet("catalogos/solicitud")]
+    public IActionResult ObtenerCatalogosSolicitud() => Ok(new
+    {
+        nacionalidades = new[]
+        {
+            "ECUATORIANA", "ARGENTINA", "BOLIVIANA", "BRASILEÑA", "CHILENA", "COLOMBIANA",
+            "ESPAÑOLA", "ESTADOUNIDENSE", "MEXICANA", "PERUANA", "VENEZOLANA", "OTRA"
+        },
+        provincias = CatalogoUbicacionEcuador.Provincias.Select(item => new
+        {
+            nombre = item.Nombre,
+            cantones = item.Cantones
+        })
+    });
 
     [HttpGet("catalogos/saldo")]
     public async Task<IActionResult> ObtenerSaldo(CancellationToken cancellationToken)
