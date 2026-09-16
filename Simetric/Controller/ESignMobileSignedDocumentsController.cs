@@ -27,7 +27,10 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
         if (userId <= 0) return Unauthorized();
 
         var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", userId.ToString());
-        var physicalDirectory = Path.Combine(_hostEnvironment.WebRootPath, relativeDirectory);
+        var webRootPath = string.IsNullOrWhiteSpace(_hostEnvironment.WebRootPath)
+            ? Path.Combine(_hostEnvironment.ContentRootPath, "wwwroot")
+            : _hostEnvironment.WebRootPath;
+        var physicalDirectory = Path.Combine(webRootPath, relativeDirectory);
         if (!Directory.Exists(physicalDirectory)) return Ok(Array.Empty<object>());
 
         var documentos = Directory.EnumerateFiles(physicalDirectory, "*.pdf", SearchOption.TopDirectoryOnly)
