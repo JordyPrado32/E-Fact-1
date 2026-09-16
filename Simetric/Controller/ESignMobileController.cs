@@ -448,6 +448,7 @@ public sealed class ESignMobileController : ControllerBase
         [FromForm] double xMm = 20,
         [FromForm] double yMm = 20,
         [FromForm] double anchoMm = 50,
+        [FromForm] string? documentoPendiente,
         CancellationToken cancellationToken = default)
     {
         var userId = GetUserId();
@@ -516,8 +517,107 @@ public sealed class ESignMobileController : ControllerBase
         var physicalDirectory = Path.Combine(_hostEnvironment.WebRootPath, relativeDirectory);
         Directory.CreateDirectory(physicalDirectory);
         await System.IO.File.WriteAllBytesAsync(Path.Combine(physicalDirectory, storedFileName), resultado.Pdf, cancellationToken);
+        EliminarDocumentoPendiente(userId, documentoPendiente);
 
         return File(resultado.Pdf, resultado.ContentType ?? "application/pdf", downloadFileName);
+    }
+
+    [HttpGet("documentos/pendientes")]
+    public IActionResult ObtenerDocumentosPendientes()
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+
+        var directory = ObtenerDirectorioDocumentosPendientes(userId);
+        if (!Directory.Exists(directory)) return Ok(Array.Empty<object>());
+
+        var relativeDirectory = ObtenerDirectorioDocumentosPendientesRelativo(userId).Replace('\\', '/');
+        var documents = Directory.EnumerateFiles(directory, "*.pdf")
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.CreationTimeUtc)
+            .Select(file => new
+            {
+                id = file.Name,
+                nombreDocumento = CrearNombreVisibleDocumento(file.Name),
+                nombreArchivo = file.Name,
+                codigo = $"DOC-{file.CreationTime:yyyyMMdd-HHmm}",
+                tamanoBytes = file.Length,
+                fecha = file.CreationTime,
+                estado = "Pendiente",
+                url = $"/{relativeDirectory}/{Uri.EscapeDataString(file.Name)}"
+            });
+
+        return Ok(documents);
+    }
+
+    [HttpGet("documentos/firmados")]
+    public IActionResult ObtenerDocumentosFirmados()
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+
+        var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", userId.ToString()).Replace('\\', '/');
+        var directory = Path.Combine(_hostEnvironment.WebRootPath, relativeDirectory.Replace('/', Path.DirectorySeparatorChar));
+        if (!Directory.Exists(directory)) return Ok(Array.Empty<object>());
+
+        var documents = Directory.EnumerateFiles(directory, "*.pdf")
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.CreationTimeUtc)
+            .Select(file => new
+            {
+                id = file.Name,
+                nombreDocumento = CrearNombreVisibleDocumentoFirmado(file.Name),
+                nombreArchivo = file.Name,
+                tamanoBytes = file.Length,
+                fechaFirma = file.CreationTime,
+                estado = "Firmado",
+                url = $"/{relativeDirectory}/{Uri.EscapeDataString(file.Name)}"
+            });
+
+        return Ok(documents);
+    }
+
+    [HttpPost("documentos/pendientes")]
+    [RequestSizeLimit(12 * 1024 * 1024)]
+    public async Task<IActionResult> CargarDocumentoPendiente([FromForm] IFormFile? pdf, CancellationToken cancellationToken)
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+        if (pdf is null || !EsArchivo(pdf, ".pdf", 10 * 1024 * 1024))
+            return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 10 MB." });
+
+        var directory = ObtenerDirectorioDocumentosPendientes(userId);
+        Directory.CreateDirectory(directory);
+        var storedName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{CrearNombreArchivoSeguro(pdf.FileName)}";
+        var path = Path.Combine(directory, storedName);
+        await using var input = pdf.OpenReadStream();
+        await using var output = System.IO.File.Create(path);
+        await input.CopyToAsync(output, cancellationToken);
+
+        var file = new FileInfo(path);
+        var relativeDirectory = ObtenerDirectorioDocumentosPendientesRelativo(userId).Replace('\\', '/');
+        return Ok(new
+        {
+            id = storedName,
+            nombreDocumento = CrearNombreVisibleDocumento(storedName),
+            nombreArchivo = storedName,
+            codigo = $"DOC-{file.CreationTime:yyyyMMdd-HHmm}",
+            tamanoBytes = file.Length,
+            fecha = file.CreationTime,
+            estado = "Pendiente",
+            url = $"/{relativeDirectory}/{Uri.EscapeDataString(storedName)}"
+        });
+    }
+
+    [HttpDelete("documentos/pendientes/{nombreArchivo}")]
+    public IActionResult EliminarDocumentoPendienteEndpoint(string nombreArchivo)
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+        if (!EliminarDocumentoPendiente(userId, nombreArchivo))
+            return NotFound(new { mensaje = "Documento pendiente no encontrado." });
+
+        return Ok(new { eliminado = true });
     }
 
     private async Task<FirmaConfigurada?> CargarFirmaConfiguradaAsync(
@@ -715,6 +815,54 @@ public sealed class ESignMobileController : ControllerBase
         bytes.Length >= 8 &&
         ((bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) ||
          (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 && bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A));
+
+    private string ObtenerDirectorioDocumentosPendientes(int userId) =>
+        Path.Combine(_hostEnvironment.WebRootPath, ObtenerDirectorioDocumentosPendientesRelativo(userId));
+
+    private static string ObtenerDirectorioDocumentosPendientesRelativo(int userId) =>
+        Path.Combine("uploads", "e-rubrica", "por-firmar", userId.ToString());
+
+    private bool EliminarDocumentoPendiente(int userId, string? nombreArchivo)
+    {
+        var safeName = Path.GetFileName(nombreArchivo ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(safeName) || !string.Equals(safeName, nombreArchivo, StringComparison.Ordinal))
+            return false;
+
+        var directory = Path.GetFullPath(ObtenerDirectorioDocumentosPendientes(userId));
+        var path = Path.GetFullPath(Path.Combine(directory, safeName));
+        if (!path.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !System.IO.File.Exists(path))
+            return false;
+
+        System.IO.File.Delete(path);
+        return true;
+    }
+
+    private static string CrearNombreArchivoSeguro(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        var cleanName = new string(name.Where(character => char.IsLetterOrDigit(character) ? character : '_').ToArray()).Trim('_');
+        return $"{(string.IsNullOrWhiteSpace(cleanName) ? "documento" : cleanName)}.pdf";
+    }
+
+    private static string CrearNombreVisibleDocumento(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        var parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length > 2 && parts[0].Length == 14 && Guid.TryParse(parts[1], out _))
+            name = string.Join(" ", parts.Skip(2));
+
+        return $"{name.Replace('_', ' ').Trim()}.pdf";
+    }
+
+    private static string CrearNombreVisibleDocumentoFirmado(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        var parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length > 3 && parts[0].Length == 14 && Guid.TryParse(parts[1], out _) && parts[^1].Equals("firmado", StringComparison.OrdinalIgnoreCase))
+            name = string.Join(" ", parts.Skip(2).Take(parts.Length - 3));
+
+        return $"{name.Replace('_', ' ').Trim()} firmado.pdf";
+    }
 
     private static string Truncar(string? value, int maxLength)
     {
