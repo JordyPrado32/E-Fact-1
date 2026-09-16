@@ -12,7 +12,12 @@ public sealed class ToolDispatcher
         ToolDefinitions.CrearProducto,
         ToolDefinitions.RegistrarAbonoGeneral,
         ToolDefinitions.EmitirFactura,
-        ToolDefinitions.EmitirNotaCreditoDesdeFactura
+        ToolDefinitions.EmitirNotaCreditoDesdeFactura,
+        ToolDefinitions.EmitirNotaDebitoDesdeFactura,
+        ToolDefinitions.EmitirGuiaDesdeFactura,
+        ToolDefinitions.EmitirLiquidacionCompra,
+        ToolDefinitions.EmitirRetencion,
+        ToolDefinitions.SincronizarESignSolicitud
     };
 
     private readonly FacturacionTools _tools;
@@ -98,7 +103,56 @@ public sealed class ToolDispatcher
             ToolDefinitions.ObtenerResumenFactura => await _tools.ObtenerResumenFacturaAsync(state),
             ToolDefinitions.EmitirFactura => await _tools.EmitirFacturaAsync(state, cancellationToken),
             ToolDefinitions.EmitirNotaCreditoDesdeFactura => await _tools.EmitirNotaCreditoDesdeFacturaAsync(state, GetString(root, "referenciaFactura") ?? string.Empty, GetString(root, "motivo"), cancellationToken),
+            ToolDefinitions.EmitirNotaDebitoDesdeFactura => await _tools.EmitirNotaDebitoDesdeFacturaAsync(
+                state,
+                GetString(root, "referenciaFactura") ?? string.Empty,
+                GetString(root, "motivo") ?? string.Empty,
+                GetDecimal(root, "valor") ?? 0m,
+                GetDecimal(root, "tarifaPorcentaje") ?? 0m,
+                cancellationToken),
+            ToolDefinitions.EmitirGuiaDesdeFactura => await _tools.EmitirGuiaDesdeFacturaAsync(
+                state,
+                GetString(root, "referenciaFactura") ?? string.Empty,
+                GetString(root, "transportistaIdentificacion") ?? string.Empty,
+                GetString(root, "transportistaRazonSocial") ?? string.Empty,
+                GetString(root, "placa") ?? string.Empty,
+                GetString(root, "direccionPartida") ?? string.Empty,
+                GetString(root, "destinatarioIdentificacion") ?? string.Empty,
+                GetString(root, "destinatarioRazonSocial") ?? string.Empty,
+                GetString(root, "direccionDestino") ?? string.Empty,
+                GetString(root, "motivoTraslado") ?? "VENTA",
+                cancellationToken),
+            ToolDefinitions.EmitirLiquidacionCompra => await _tools.EmitirLiquidacionCompraAsync(
+                state,
+                GetString(root, "tipoIdentificacionProveedor") ?? string.Empty,
+                GetString(root, "identificacionProveedor") ?? string.Empty,
+                GetString(root, "razonSocialProveedor") ?? string.Empty,
+                GetString(root, "direccionProveedor") ?? string.Empty,
+                GetString(root, "descripcion") ?? string.Empty,
+                GetDecimal(root, "cantidad") ?? 0m,
+                GetDecimal(root, "precioUnitario") ?? 0m,
+                GetDecimal(root, "tarifaPorcentaje") ?? 0m,
+                GetString(root, "formaPago") ?? string.Empty,
+                GetString(root, "emailProveedor"),
+                GetInt(root, "plazo"),
+                cancellationToken),
+            ToolDefinitions.EmitirRetencion => await _tools.EmitirRetencionAsync(
+                state,
+                GetString(root, "referenciaRetencion") ?? string.Empty,
+                cancellationToken),
+            ToolDefinitions.ConsultarDocumentos => await _tools.ConsultarDocumentosAsync(
+                state,
+                GetString(root, "tipo"),
+                GetString(root, "filtro"),
+                GetString(root, "periodo"),
+                GetInt(root, "limite"),
+                cancellationToken),
             ToolDefinitions.ConsultarFacturas => await _tools.ConsultarFacturasAsync(state, GetString(root, "filtro"), GetString(root, "periodo"), GetInt(root, "limite"), cancellationToken),
+            ToolDefinitions.ConsultarESignEstado => await _tools.ConsultarESignEstadoAsync(state, cancellationToken),
+            ToolDefinitions.ConsultarESignSolicitudes => await _tools.ConsultarESignSolicitudesAsync(state, GetString(root, "filtro"), GetString(root, "estado"), GetInt(root, "limite"), cancellationToken),
+            ToolDefinitions.ConsultarESignDocumentos => await _tools.ConsultarESignDocumentosAsync(state, GetString(root, "filtro"), GetInt(root, "limite"), cancellationToken),
+            ToolDefinitions.SincronizarESignSolicitud => await _tools.SincronizarESignSolicitudAsync(state, GetInt(root, "solicitudId") ?? 0, cancellationToken),
+            ToolDefinitions.ConsultarESignPlanes => await _tools.ConsultarESignPlanesAsync(state, cancellationToken),
                 _ => new ToolResultDto
                 {
                     ToolName = toolName,
@@ -154,6 +208,11 @@ public sealed class ToolDispatcher
                 ToolDefinitions.RegistrarAbonoGeneral => $"registrar un abono de ${GetDecimal(root, "monto")?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) ?? "0.00"}",
                 ToolDefinitions.EmitirFactura => "emitir la factura del borrador actual",
                 ToolDefinitions.EmitirNotaCreditoDesdeFactura => $"emitir una nota de crédito para la factura '{GetString(root, "referenciaFactura") ?? "indicada"}'",
+                ToolDefinitions.EmitirNotaDebitoDesdeFactura => $"emitir una nota de débito de ${GetDecimal(root, "valor")?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) ?? "0.00"} para la factura '{GetString(root, "referenciaFactura") ?? "indicada"}'",
+                ToolDefinitions.EmitirGuiaDesdeFactura => $"emitir una guía de remisión para la factura '{GetString(root, "referenciaFactura") ?? "indicada"}'",
+                ToolDefinitions.EmitirLiquidacionCompra => $"emitir una liquidación de compra para '{GetString(root, "razonSocialProveedor") ?? "el proveedor indicado"}' por ${GetDecimal(root, "precioUnitario")?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) ?? "0.00"}",
+                ToolDefinitions.EmitirRetencion => $"emitir la retención '{GetString(root, "referenciaRetencion") ?? "indicada"}'",
+                ToolDefinitions.SincronizarESignSolicitud => $"actualizar el estado de la solicitud de E-Rúbrica #{GetInt(root, "solicitudId")?.ToString() ?? "indicada"}",
                 _ => "ejecutar esta operación"
             };
         }

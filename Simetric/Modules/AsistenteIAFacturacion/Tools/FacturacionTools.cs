@@ -653,6 +653,253 @@ public sealed class FacturacionTools
             new { factura.NumeroFactura, factura.Serie, result.NumeroNotaCredito, result.Autorizada });
     }
 
+    public async Task<ToolResultDto> EmitirNotaDebitoDesdeFacturaAsync(
+        FacturaConversationState state,
+        string referenciaFactura,
+        string motivo,
+        decimal valor,
+        decimal tarifaPorcentaje,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "emitir_nota_debito";
+        var result = await _facturacionService.EmitirNotaDebitoAsync(
+            state.UserId,
+            referenciaFactura,
+            motivo,
+            valor,
+            tarifaPorcentaje,
+            cancellationToken);
+
+        if (!result.Success)
+            return Fail(ToolDefinitions.EmitirNotaDebitoDesdeFactura, result.Message);
+
+        state.Emitida = true;
+        state.RequiereConfirmacion = false;
+        state.Estado = FacturaConversationStates.FacturaEmitida;
+
+        return Ok(
+            ToolDefinitions.EmitirNotaDebitoDesdeFactura,
+            result.Message,
+            new { result.NumeroNotaDebito, result.Autorizada });
+    }
+
+    public async Task<ToolResultDto> EmitirGuiaDesdeFacturaAsync(
+        FacturaConversationState state,
+        string referenciaFactura,
+        string transportistaIdentificacion,
+        string transportistaRazonSocial,
+        string placa,
+        string direccionPartida,
+        string destinatarioIdentificacion,
+        string destinatarioRazonSocial,
+        string direccionDestino,
+        string motivoTraslado,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "emitir_guia_remision";
+        var result = await _facturacionService.EmitirGuiaDesdeFacturaAsync(
+            state.UserId,
+            referenciaFactura,
+            transportistaIdentificacion,
+            transportistaRazonSocial,
+            placa,
+            direccionPartida,
+            destinatarioIdentificacion,
+            destinatarioRazonSocial,
+            direccionDestino,
+            motivoTraslado,
+            cancellationToken);
+
+        if (!result.Success)
+            return Fail(ToolDefinitions.EmitirGuiaDesdeFactura, result.Message);
+
+        state.Emitida = true;
+        state.RequiereConfirmacion = false;
+        state.Estado = FacturaConversationStates.FacturaEmitida;
+
+        return Ok(
+            ToolDefinitions.EmitirGuiaDesdeFactura,
+            result.Message,
+            new { result.NumeroGuia, result.Autorizada });
+    }
+
+    public async Task<ToolResultDto> EmitirLiquidacionCompraAsync(
+        FacturaConversationState state,
+        string tipoIdentificacionProveedor,
+        string identificacionProveedor,
+        string razonSocialProveedor,
+        string direccionProveedor,
+        string descripcion,
+        decimal cantidad,
+        decimal precioUnitario,
+        decimal tarifaPorcentaje,
+        string formaPago,
+        string? emailProveedor,
+        int? plazo,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "emitir_liquidacion_compra";
+        var result = await _facturacionService.EmitirLiquidacionCompraAsync(
+            state.UserId,
+            tipoIdentificacionProveedor,
+            identificacionProveedor,
+            razonSocialProveedor,
+            direccionProveedor,
+            descripcion,
+            cantidad,
+            precioUnitario,
+            tarifaPorcentaje,
+            formaPago,
+            emailProveedor,
+            plazo,
+            cancellationToken);
+
+        if (!result.Success)
+            return Fail(ToolDefinitions.EmitirLiquidacionCompra, result.Message);
+
+        state.Emitida = true;
+        state.RequiereConfirmacion = false;
+        state.Estado = FacturaConversationStates.FacturaEmitida;
+
+        return Ok(
+            ToolDefinitions.EmitirLiquidacionCompra,
+            result.Message,
+            new { result.NumeroLiquidacion, result.Autorizada, result.XmlUrl, result.PdfUrl });
+    }
+
+    public async Task<ToolResultDto> EmitirRetencionAsync(
+        FacturaConversationState state,
+        string referenciaRetencion,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "emitir_retencion";
+        var result = await _facturacionService.EmitirRetencionAsync(
+            state.UserId,
+            referenciaRetencion,
+            cancellationToken);
+
+        if (!result.Success)
+            return Fail(ToolDefinitions.EmitirRetencion, result.Message);
+
+        state.Emitida = true;
+        state.RequiereConfirmacion = false;
+        state.Estado = FacturaConversationStates.FacturaEmitida;
+
+        return Ok(
+            ToolDefinitions.EmitirRetencion,
+            result.Message,
+            new { result.NumeroRetencion, result.Autorizada, result.XmlUrl, result.PdfUrl });
+    }
+
+    public async Task<ToolResultDto> ConsultarDocumentosAsync(
+        FacturaConversationState state,
+        string? tipo,
+        string? filtro,
+        string? periodo,
+        int? limite,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "consultar_documentos";
+        var documentos = await _facturacionService.ConsultarDocumentosAsync(
+            state.UserId,
+            tipo,
+            filtro,
+            periodo,
+            limite ?? 10,
+            cancellationToken);
+
+        var mensaje = documentos.Count == 0
+            ? "No encontré documentos que coincidan con la consulta."
+            : $"Encontré {documentos.Count} documento(s).";
+
+        return Ok(ToolDefinitions.ConsultarDocumentos, mensaje, documentos);
+    }
+
+    public async Task<ToolResultDto> ConsultarESignEstadoAsync(FacturaConversationState state, CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "consultar_esign_estado";
+        var resultado = await _facturacionService.ConsultarESignEstadoAsync(state.UserId, cancellationToken);
+        return Ok(ToolDefinitions.ConsultarESignEstado, resultado.Mensaje, resultado);
+    }
+
+    public async Task<ToolResultDto> ConsultarESignSolicitudesAsync(
+        FacturaConversationState state,
+        string? filtro,
+        string? estado,
+        int? limite,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "consultar_esign_solicitudes";
+        var solicitudes = await _facturacionService.ConsultarESignSolicitudesAsync(
+            state.UserId,
+            filtro,
+            estado,
+            limite ?? 10,
+            cancellationToken);
+        var mensaje = solicitudes.Count == 0
+            ? "No encontré solicitudes de E-Rúbrica con ese criterio."
+            : string.Join("\n", solicitudes.Select(x =>
+                $"Solicitud #{x.Id}: {x.Estado}; formato {x.FormatoFirma}; vigencia {x.Vigencia}; " +
+                $"solicitada {x.FechaSolicitud:dd/MM/yyyy}; pago {(x.PagoExitoso ? "aprobado" : "pendiente")}; " +
+                $"certificado {(x.TieneCertificadoEmitido ? "emitido" : "no emitido")}."));
+
+        return Ok(ToolDefinitions.ConsultarESignSolicitudes, mensaje, solicitudes);
+    }
+
+    public async Task<ToolResultDto> ConsultarESignDocumentosAsync(
+        FacturaConversationState state,
+        string? filtro,
+        int? limite,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "consultar_esign_documentos";
+        var documentos = await _facturacionService.ConsultarESignDocumentosAsync(
+            state.UserId,
+            filtro,
+            limite ?? 10,
+            cancellationToken);
+        var mensaje = documentos.Count == 0
+            ? "No encontré PDF firmados en el historial de E-Rúbrica."
+            : string.Join("\n", documentos.Select(x =>
+                $"{x.Nombre} — actualizado {x.FechaActualizacion:dd/MM/yyyy HH:mm} — {x.TamanoBytes / 1024d:0.#} KB — {x.Url}"));
+
+        return Ok(ToolDefinitions.ConsultarESignDocumentos, mensaje, documentos);
+    }
+
+    public async Task<ToolResultDto> SincronizarESignSolicitudAsync(
+        FacturaConversationState state,
+        int solicitudId,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "sincronizar_esign_solicitud";
+        var resultado = await _facturacionService.SincronizarESignSolicitudAsync(
+            state.UserId,
+            solicitudId,
+            cancellationToken);
+        if (!resultado.Success)
+            return Fail(ToolDefinitions.SincronizarESignSolicitud, resultado.Message, resultado);
+
+        return Ok(
+            ToolDefinitions.SincronizarESignSolicitud,
+            string.IsNullOrWhiteSpace(resultado.EstadoProveedor)
+                ? resultado.Message
+                : $"{resultado.Message} Estado del proveedor: {resultado.EstadoProveedor}.",
+            resultado);
+    }
+
+    public async Task<ToolResultDto> ConsultarESignPlanesAsync(
+        FacturaConversationState state,
+        CancellationToken cancellationToken)
+    {
+        state.UltimaIntencion = "consultar_esign_planes";
+        var planes = await _facturacionService.ConsultarESignPlanesAsync(cancellationToken);
+        var mensaje = planes.Count == 0
+            ? "No encontré planes de certificados E-Rúbrica disponibles en este momento."
+            : string.Join("\n", planes.Select(x => $"{x.Nombre} ({x.Codigo}): ${x.Precio:0.00}"));
+
+        return Ok(ToolDefinitions.ConsultarESignPlanes, mensaje, planes);
+    }
+
     public static void Recalculate(FacturaDraftDto draft)
     {
         var items = draft.Items;

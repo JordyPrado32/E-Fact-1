@@ -25,7 +25,17 @@ public static class ToolDefinitions
     public const string ObtenerResumenFactura = "ObtenerResumenFactura";
     public const string EmitirFactura = "EmitirFactura";
     public const string EmitirNotaCreditoDesdeFactura = "EmitirNotaCreditoDesdeFactura";
+    public const string EmitirNotaDebitoDesdeFactura = "EmitirNotaDebitoDesdeFactura";
+    public const string EmitirGuiaDesdeFactura = "EmitirGuiaDesdeFactura";
+    public const string EmitirLiquidacionCompra = "EmitirLiquidacionCompra";
+    public const string EmitirRetencion = "EmitirRetencion";
+    public const string ConsultarDocumentos = "ConsultarDocumentos";
     public const string ConsultarFacturas = "ConsultarFacturas";
+    public const string ConsultarESignEstado = "ConsultarESignEstado";
+    public const string ConsultarESignSolicitudes = "ConsultarESignSolicitudes";
+    public const string ConsultarESignDocumentos = "ConsultarESignDocumentos";
+    public const string SincronizarESignSolicitud = "SincronizarESignSolicitud";
+    public const string ConsultarESignPlanes = "ConsultarESignPlanes";
 
     private static readonly object[] CachedTools =
     [
@@ -116,11 +126,64 @@ public static class ToolDefinitions
             Properties(
                 ("referenciaFactura", "string", "Numero o referencia de la factura origen.", true),
                 ("motivo", "string", "Motivo de la nota de credito.", false))),
+        Function(EmitirNotaDebitoDesdeFactura, "Emite una nota de debito por un valor adicional desde una factura autorizada existente. Requiere motivo, valor y tarifa de IVA.",
+            Properties(
+                ("referenciaFactura", "string", "Numero o referencia exacta de la factura origen.", true),
+                ("motivo", "string", "Motivo de la nota de debito, por ejemplo intereses o recargo.", true),
+                ("valor", "number", "Valor adicional antes de IVA.", true),
+                ("tarifaPorcentaje", "number", "Tarifa de IVA: 0, 5, 8, 12, 13, 14 o 15.", true))),
+        Function(EmitirGuiaDesdeFactura, "Emite una guia de remision vinculada a una factura autorizada y traslada todos sus productos.",
+            Properties(
+                ("referenciaFactura", "string", "Numero o referencia exacta de la factura origen.", true),
+                ("transportistaIdentificacion", "string", "Cedula o RUC del transportista.", true),
+                ("transportistaRazonSocial", "string", "Nombre o razon social del transportista.", true),
+                ("placa", "string", "Placa del vehiculo.", true),
+                ("direccionPartida", "string", "Direccion desde donde inicia el traslado.", true),
+                ("destinatarioIdentificacion", "string", "Cedula o RUC del destinatario.", true),
+                ("destinatarioRazonSocial", "string", "Nombre o razon social del destinatario.", true),
+                ("direccionDestino", "string", "Direccion de destino.", true),
+                ("motivoTraslado", "string", "Motivo del traslado, por ejemplo VENTA.", false))),
+        Function(EmitirLiquidacionCompra, "Guarda y emite una liquidación de compra con un detalle, generando sus archivos XML y PDF.",
+            Properties(
+                ("tipoIdentificacionProveedor", "string", "Tipo de identificación: 04 RUC, 05 cédula, 06 pasaporte u 08 exterior.", true),
+                ("identificacionProveedor", "string", "Identificación del proveedor.", true),
+                ("razonSocialProveedor", "string", "Nombre o razón social del proveedor.", true),
+                ("direccionProveedor", "string", "Dirección del proveedor.", true),
+                ("descripcion", "string", "Descripción del bien o servicio adquirido.", true),
+                ("cantidad", "number", "Cantidad adquirida, mayor a cero.", true),
+                ("precioUnitario", "number", "Precio unitario antes de IVA, mayor a cero.", true),
+                ("tarifaPorcentaje", "number", "Tarifa de IVA: 0, 5, 8 o 15.", true),
+                ("formaPago", "string", "Código o nombre de la forma de pago del catálogo de compras.", true),
+                ("emailProveedor", "string", "Correo del proveedor, opcional.", false),
+                ("plazo", "integer", "Plazo en días cuando la forma de pago sea a crédito.", false))),
+        Function(EmitirRetencion, "Emite al SRI una retención pendiente que ya fue generada en el sistema.",
+            Properties(("referenciaRetencion", "string", "Número de retención, serie completa o clave de acceso.", true))),
+        Function(ConsultarDocumentos, "Consulta documentos electrónicos del usuario con estado, tercero, totales y enlaces disponibles.",
+            Properties(
+                ("tipo", "string", "Tipo: todos, facturas, liquidaciones, retenciones, guías, notas de crédito o notas de débito.", false),
+                ("filtro", "string", "Número, cliente/proveedor, identificación o estado.", false),
+                ("periodo", "string", "Periodo opcional: hoy, mes o mes pasado.", false),
+                ("limite", "integer", "Cantidad máxima de resultados, entre 1 y 50.", false))),
         Function(ConsultarFacturas, "Consulta facturas reales del usuario y resume cantidad, ventas, autorizacion, pagos y saldos.",
             Properties(
                 ("filtro", "string", "Numero, cliente, identificacion o estado a buscar.", false),
                 ("periodo", "string", "Periodo: hoy, mes, mes pasado o todo.", false),
-                ("limite", "integer", "Cantidad maxima de resultados detallados, entre 1 y 20.", false)))
+                ("limite", "integer", "Cantidad maxima de resultados detallados, entre 1 y 20.", false))),
+        Function(ConsultarESignEstado, "Consulta si el certificado de E-Rúbrica está configurado sin revelar rutas ni claves.",
+            Properties()),
+        Function(ConsultarESignSolicitudes, "Consulta solicitudes de certificado E-Rúbrica del usuario y su estado de pago, aprobación y proveedor.",
+            Properties(
+                ("filtro", "string", "Id, formato, vigencia o estado de la solicitud.", false),
+                ("estado", "string", "Estado específico a filtrar, por ejemplo pendiente, aprobada o rechazada.", false),
+                ("limite", "integer", "Cantidad máxima de resultados, entre 1 y 50.", false))),
+        Function(ConsultarESignDocumentos, "Consulta los PDF firmados disponibles en el historial de E-Rúbrica del usuario.",
+            Properties(
+                ("filtro", "string", "Parte del nombre del documento.", false),
+                ("limite", "integer", "Cantidad máxima de resultados, entre 1 y 50.", false))),
+        Function(SincronizarESignSolicitud, "Actualiza el estado de una solicitud de E-Rúbrica contra el proveedor. Requiere confirmación explícita.",
+            Properties(("solicitudId", "integer", "Identificador local de la solicitud.", true))),
+        Function(ConsultarESignPlanes, "Consulta planes, vigencias y precios de certificados E-Rúbrica disponibles para la cuenta.",
+            Properties())
     ];
 
     public static object[] BuildTools() => CachedTools;

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -221,6 +222,10 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
     {
         var normalized = NormalizarMensaje(mensaje);
 
+        var restrictedResult = TryHandleRestrictedAdminQuery(normalized);
+        if (restrictedResult is not null)
+            return restrictedResult;
+
         if (ContainsAny(normalized, "cancela", "cancelar", "me equivoque") ||
             Regex.IsMatch(normalized, @"(?:^|\s)no(?:\s+(?:quiero|deseo|seguir|continuar|hacerlo))?\s*$", RegexOptions.IgnoreCase))
         {
@@ -244,6 +249,18 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             };
         }
 
+        var esignSyncResult = await TryHandleESignSyncCommandAsync(state, normalized, cancellationToken);
+        if (esignSyncResult is not null)
+            return esignSyncResult;
+
+        var esignPlansResult = await TryHandleESignPlansCommandAsync(state, normalized, cancellationToken);
+        if (esignPlansResult is not null)
+            return esignPlansResult;
+
+        var esignQueryResult = await TryHandleESignQueryCommandAsync(state, normalized, cancellationToken);
+        if (esignQueryResult is not null)
+            return esignQueryResult;
+
         var navigationResult = TryHandleNavigationCommand(normalized);
         if (navigationResult is not null)
             return navigationResult;
@@ -263,6 +280,10 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         var notaCreditoResult = await TryHandleNotaCreditoCommandAsync(state, mensaje, normalized, cancellationToken);
         if (notaCreditoResult is not null)
             return notaCreditoResult;
+
+        var notaDebitoResult = await TryHandleNotaDebitoCommandAsync(state, mensaje, normalized, cancellationToken);
+        if (notaDebitoResult is not null)
+            return notaDebitoResult;
 
         var notaCreditoRoute = ResolveNotaCreditoRoute(normalized);
         if (!string.IsNullOrWhiteSpace(notaCreditoRoute))
@@ -558,6 +579,9 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         if (string.IsNullOrWhiteSpace(normalized))
             return false;
 
+        if (IsRestrictedAdminQuery(normalized))
+            return true;
+
         if (ContainsAny(normalized, "cancela", "cancelar", "me equivoque", "me equivoqué"))
             return true;
 
@@ -571,13 +595,28 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         if (IsNotaCreditoIntent(normalized))
             return true;
 
+        if (IsNotaDebitoIntent(normalized))
+            return true;
+
+        if (IsLiquidacionEmissionIntent(normalized))
+            return false;
+
+        if (IsRetencionEmissionIntent(normalized))
+            return false;
+
+        if (IsDocumentQueryIntent(normalized))
+            return false;
+
         if (ContainsAny(normalized, "forma de pago", "efectivo", "contado", "credito", "crédito"))
             return true;
 
         if (ContainsAny(normalized, "cuentas por cobrar", "cartera", "facturas pendientes", "saldo a favor", "abono", "abonar", "registrar pago", "registrar abono", "clientes que deben", "clientes con cartera", "clientes con saldo pendiente", "quienes deben", "quien me debe"))
             return true;
 
-        if (ContainsAny(normalized, "mis facturas", "consultar facturas", "facturas del mes", "reporte de facturas", "reporte de ventas", "cuantas facturas", "cuántas facturas", "ventas del mes", "facturas de", "abrir facturas", "ir a facturas", "crear guia", "crear guía", "guia de remision", "guía de remisión", "abrir guia", "abrir guía", "crear retencion", "crear retención", "retenciones generadas", "ver retenciones", "crear nota de debito", "crear nota de débito", "notas de debito generadas", "notas de débito generadas", "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital", "llenar solicitud", "nueva solicitud", "solicitud de firma", "firmar documentos", "validar firmas", "documentos firmados", "historial solicitudes", "configurar firma", "mis firmas", "que puedes hacer", "qué puedes hacer", "ayuda", "que falta", "qué falta", "puedo emitir", "esta lista", "está lista"))
+        if (IsGuiaEmissionIntent(normalized))
+            return false;
+
+        if (ContainsAny(normalized, "mis facturas", "consultar facturas", "facturas del mes", "reporte de facturas", "reporte de ventas", "cuantas facturas", "cuántas facturas", "ventas del mes", "facturas de", "abrir facturas", "ir a facturas", "crear guia", "crear guía", "guia de remision", "guía de remisión", "abrir guia", "abrir guía", "crear retencion", "crear retención", "retenciones generadas", "ver retenciones", "crear nota de debito", "crear nota de débito", "notas de debito generadas", "notas de débito generadas", "crear liquidacion", "crear liquidación", "liquidacion de compra", "liquidación de compra", "liquidaciones generadas", "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital", "llenar solicitud", "nueva solicitud", "solicitud de firma", "firmar documentos", "validar firmas", "documentos firmados", "historial solicitudes", "configurar firma", "mis firmas", "que puedes hacer", "qué puedes hacer", "ayuda", "que falta", "qué falta", "puedo emitir", "esta lista", "está lista"))
             return true;
 
         if (state.Draft.Cliente is not null && state.Draft.Items.Count > 0 &&
@@ -664,6 +703,33 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         return mentionsNotaCredito;
     }
 
+    private static bool IsNotaDebitoIntent(string normalized)
+    {
+        if (string.IsNullOrWhiteSpace(normalized))
+            return false;
+
+        return normalized.Contains("nota de debito", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("nota de débito", StringComparison.OrdinalIgnoreCase)
+            || (normalized.Contains("nota", StringComparison.OrdinalIgnoreCase)
+                && normalized.Contains("debito", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsGuiaEmissionIntent(string normalized)
+        => ContainsAny(normalized, "guia de remision", "guía de remisión", "guia remision", "guía remisión")
+            && ContainsAny(normalized, "emitir", "emite", "genera", "generar", "crear", "crea", "haz");
+
+    private static bool IsLiquidacionEmissionIntent(string normalized)
+        => ContainsAny(normalized, "liquidacion de compra", "liquidación de compra", "liquidacion compra", "liquidación compra")
+            && ContainsAny(normalized, "emitir", "emite", "genera", "generar", "crear", "crea", "haz");
+
+    private static bool IsRetencionEmissionIntent(string normalized)
+        => ContainsAny(normalized, "retencion", "retención", "retenciones")
+            && ContainsAny(normalized, "emitir", "emite", "genera", "generar", "enviar", "manda");
+
+    private static bool IsDocumentQueryIntent(string normalized)
+        => ContainsAny(normalized, "consultar", "consulta", "listar", "lista", "mostrar", "muestra", "revisar", "revisa", "estado", "pendiente", "pendientes", "que tengo", "qué tengo")
+            && ContainsAny(normalized, "documento", "documentos", "comprobante", "factura", "retencion", "retención", "liquidacion", "liquidación", "guia", "guía", "nota");
+
     private static string? ResolveNotaCreditoRoute(string normalized)
     {
         if (!IsNotaCreditoIntent(normalized))
@@ -711,6 +777,42 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         };
     }
 
+    private async Task<OpenAIAsistenteResult?> TryHandleNotaDebitoCommandAsync(
+        FacturaConversationState state,
+        string mensaje,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        if (!IsNotaDebitoIntent(normalized) || !ContainsAny(normalized, "emit", "emite", "genera", "crear", "crea", "haz"))
+            return null;
+
+        var referenciaFactura = ExtractInvoiceReferenceForNotaCredito(mensaje);
+        var motivo = ExtractNotaDebitoReason(mensaje);
+        var valor = ExtractDecimal(mensaje, "(?:valor|monto|por)\\s*[:=]?\\s*\\$?\\s*");
+        var tarifa = ExtractDecimal(mensaje, "(?:iva|impuesto)\\s*(?:del?|de)?\\s*") ?? 0m;
+
+        if (string.IsNullOrWhiteSpace(referenciaFactura) || string.IsNullOrWhiteSpace(motivo) || !valor.HasValue)
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Para emitir la nota de débito necesito la factura autorizada, el motivo y el valor antes de IVA. Ejemplo: 'nota de débito a la factura 123 por intereses, valor 10, IVA 15%'.",
+                AccionDetectada = "emitir_nota_debito"
+            };
+        }
+
+        var result = await _toolDispatcher.DispatchAsync(
+            ToolDefinitions.EmitirNotaDebitoDesdeFactura,
+            JsonSerializer.Serialize(new { referenciaFactura, motivo, valor, tarifaPorcentaje = tarifa }),
+            state,
+            cancellationToken);
+
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = result.Message,
+            AccionDetectada = "emitir_nota_debito"
+        };
+    }
+
     private static string? ExtractInvoiceReferenceForNotaCredito(string mensaje)
     {
         var directMatch = Regex.Match(mensaje, @"\bfactura\s*(?:n(?:u|ú)mero\s*)?(?<num>\d{3,9})\b", RegexOptions.IgnoreCase);
@@ -725,6 +827,30 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
     {
         var motivoMatch = Regex.Match(mensaje, @"(?:motivo|por)\s+(?<motivo>.+)$", RegexOptions.IgnoreCase);
         return motivoMatch.Success ? motivoMatch.Groups["motivo"].Value.Trim() : null;
+    }
+
+    private static string? ExtractNotaDebitoReason(string mensaje)
+    {
+        var motivoMatch = Regex.Match(
+            mensaje,
+            @"(?:motivo|por)\s+(?<motivo>.+?)(?=\s+(?:valor|monto|iva|impuesto)\b|$)",
+            RegexOptions.IgnoreCase);
+        return motivoMatch.Success ? motivoMatch.Groups["motivo"].Value.Trim(' ', ',', '.') : null;
+    }
+
+    private static decimal? ExtractDecimal(string mensaje, string prefixPattern)
+    {
+        var match = Regex.Match(mensaje, prefixPattern + @"(?<valor>\d+(?:[\.,]\d+)?)", RegexOptions.IgnoreCase);
+        if (!match.Success)
+            return null;
+
+        return decimal.TryParse(
+            match.Groups["valor"].Value.Replace(',', '.'),
+            NumberStyles.Number,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : null;
     }
 
     private static string ClipForModel(string? content, int maxLength = 500)
@@ -1016,6 +1142,137 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         return null;
     }
 
+    private async Task<OpenAIAsistenteResult?> TryHandleESignQueryCommandAsync(
+        FacturaConversationState state,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        if (!IsESignDataQueryIntent(normalized))
+            return null;
+
+        ToolResultDto result;
+        string accion;
+        if (ContainsAny(normalized, "documentos firmados", "mis documentos firmados", "historial de documentos"))
+        {
+            result = await _toolDispatcher.DispatchAsync(ToolDefinitions.ConsultarESignDocumentos, "{}", state, cancellationToken);
+            accion = "consultar_esign_documentos";
+        }
+        else if (ContainsAny(normalized, "mis solicitudes", "historial solicitudes", "solicitudes de firma", "solicitudes pendientes"))
+        {
+            var estado = ContainsAny(normalized, "pendientes", "pendiente") ? "pendiente" : null;
+            result = await _toolDispatcher.DispatchAsync(
+                ToolDefinitions.ConsultarESignSolicitudes,
+                JsonSerializer.Serialize(new { estado }),
+                state,
+                cancellationToken);
+            accion = "consultar_esign_solicitudes";
+        }
+        else
+        {
+            result = await _toolDispatcher.DispatchAsync(ToolDefinitions.ConsultarESignEstado, "{}", state, cancellationToken);
+            accion = "consultar_esign_estado";
+        }
+
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = result.Message +
+                (result.Data is ESignEstadoDto { Configurado: false }
+                    ? " Puedes abrir la configuración de firma para completar el certificado."
+                    : string.Empty),
+            AccionDetectada = accion,
+            RutaSugerida = result.Data is ESignEstadoDto { Configurado: false }
+                ? "/e-rubrica/configuracion/firma"
+                : null
+        };
+    }
+
+    private async Task<OpenAIAsistenteResult?> TryHandleESignSyncCommandAsync(
+        FacturaConversationState state,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        if (!ContainsAny(normalized, "actualiza", "actualizar", "sincroniza", "sincronizar", "refresca", "refrescar") ||
+            !ContainsAny(normalized, "solicitud", "certificado", "uanataca"))
+            return null;
+
+        var match = Regex.Match(normalized, @"(?:solicitud|#)\s*(?:número\s*)?#?\s*(?<id>\d+)", RegexOptions.IgnoreCase);
+        if (!match.Success || !int.TryParse(match.Groups["id"].Value, out var solicitudId))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Indícame el número de la solicitud que deseas actualizar, por ejemplo: “actualiza la solicitud 123”.",
+                AccionDetectada = "solicitar_id_solicitud"
+            };
+        }
+
+        var result = await _toolDispatcher.DispatchAsync(
+            ToolDefinitions.SincronizarESignSolicitud,
+            JsonSerializer.Serialize(new { solicitudId }),
+            state,
+            cancellationToken);
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = result.Message,
+            AccionDetectada = "sincronizar_esign_solicitud"
+        };
+    }
+
+    private static OpenAIAsistenteResult? TryHandleRestrictedAdminQuery(string normalized)
+    {
+        if (!IsRestrictedAdminQuery(normalized))
+            return null;
+
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = "No puedo ayudar con esa consulta.",
+            AccionDetectada = "consulta_restringida"
+        };
+    }
+
+    private static bool IsRestrictedAdminQuery(string normalized)
+        => ContainsAny(
+            normalized,
+            "uanacreditos",
+            "uanacredito",
+            "uana credits",
+            "saldo uana",
+            "creditos uana",
+            "créditos uana");
+
+    private async Task<OpenAIAsistenteResult?> TryHandleESignPlansCommandAsync(
+        FacturaConversationState state,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        if (!ContainsAny(normalized, "planes", "precios", "vigencias", "cuanto cuesta", "cuánto cuesta", "tarifas") ||
+            !ContainsAny(normalized, "certificado", "firma", "e-rubrica", "erubrica"))
+            return null;
+
+        var result = await _toolDispatcher.DispatchAsync(ToolDefinitions.ConsultarESignPlanes, "{}", state, cancellationToken);
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = result.Message,
+            AccionDetectada = "consultar_esign_planes"
+        };
+    }
+
+    private static bool IsESignDataQueryIntent(string normalized)
+        => ContainsAny(
+            normalized,
+            "estado de mi certificado",
+            "tengo certificado",
+            "certificado configurado",
+            "certificado listo",
+            "estado de mi firma",
+            "mis firmas",
+            "mis solicitudes",
+            "historial solicitudes",
+            "solicitudes de firma",
+            "solicitudes pendientes",
+            "documentos firmados",
+            "mis documentos firmados",
+            "historial de documentos");
+
     private static OpenAIAsistenteResult? TryHandleHelpCommand(string normalized)
     {
         if (!ContainsAny(normalized, "ayuda", "que puedes hacer", "qué puedes hacer", "opciones", "funciones"))
@@ -1023,7 +1280,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
         return new OpenAIAsistenteResult
         {
-            Respuesta = "Puedo ayudarte con facturas, clientes, productos, IVA, descuentos, pagos, cartera, abonos, notas de crédito y débito, retenciones, guías de remisión y E-Rúbrica. En E-Rúbrica puedo abrir la solicitud de firma, guiarte para cargar documentos, firmarlos, revisar documentos firmados, validar firmas y consultar o configurar tu certificado. Ejemplos: “llévame a llenar la solicitud de firma”, “quiero firmar documentos” o “valida esta firma”.",
+            Respuesta = "Puedo ayudarte con facturas, clientes, productos, IVA, descuentos, pagos, cartera, abonos, notas de crédito y débito, retenciones, guías de remisión, liquidaciones de compra y E-Rúbrica. En E-Rúbrica puedo abrir la solicitud de firma, guiarte para cargar documentos, firmarlos, revisar documentos firmados, validar firmas y consultar o configurar tu certificado. Ejemplos: “llévame a llenar la solicitud de firma”, “quiero firmar documentos” o “valida esta firma”.",
             AccionDetectada = "mostrar_ayuda"
         };
     }
@@ -1091,7 +1348,8 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             };
         }
 
-        if (ContainsAny(normalized, "crear nota de debito", "crear nota de débito", "nueva nota de debito", "nueva nota de débito"))
+        if (ContainsAny(normalized, "crear nota de debito", "crear nota de débito", "nueva nota de debito", "nueva nota de débito") &&
+            !ContainsAny(normalized, "emitir", "emite", "genera", "por ", "motivo", "valor", "monto"))
         {
             return new OpenAIAsistenteResult
             {
@@ -1111,18 +1369,38 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             };
         }
 
-        if (ContainsAny(normalized,
-            "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital",
-            "llenar solicitud", "nueva solicitud", "solicitud de firma", "solicitar firma", "firmar documento", "firmar documentos",
-            "validar firma", "validar firmas", "documento firmado", "documentos firmados", "mis firmas", "historial solicitudes", "mis solicitudes", "configurar firma"))
+        if (ContainsAny(normalized, "crear liquidacion", "crear liquidación", "nueva liquidacion", "nueva liquidación", "liquidacion de compra", "liquidación de compra"))
         {
-            var ruta = ContainsAny(normalized, "historial solicitudes", "mis solicitudes", "historial de solicitudes", "mis pagos")
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al flujo de creación de la liquidación de compra.",
+                AccionDetectada = "navegar_liquidacion_compra",
+                RutaSugerida = "/compras/nueva-liquidacion"
+            };
+        }
+
+        if (ContainsAny(normalized, "ver liquidaciones", "listar liquidaciones", "liquidaciones generadas", "historial de liquidaciones"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al listado de liquidaciones de compra generadas.",
+                AccionDetectada = "navegar_liquidaciones_compra",
+                RutaSugerida = "/compras/liquidaciones-generadas"
+            };
+        }
+
+        if (ContainsAny(normalized,
+             "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital",
+             "llenar solicitud", "nueva solicitud", "solicitud de firma", "solicitar firma", "firmar documento", "firmar documentos",
+             "firmar pdf", "validar firma", "validar firmas", "validar pdf", "cargar documentos de solicitud", "subir documentos de solicitud", "documento firmado", "documentos firmados", "mis firmas", "historial solicitudes", "mis solicitudes", "mis pagos", "pagar certificado", "pago certificado", "configurar firma"))
+        {
+            var ruta = ContainsAny(normalized, "pagar certificado", "pago certificado", "pagar la solicitud", "pagar solicitud", "realizar pago", "mis pagos")
                 ? "/solicitud/pagos"
                 : ContainsAny(normalized, "configurar firma", "configuración de firma", "configuracion de firma")
                     ? "/e-rubrica/configuracion/firma"
                     : ContainsAny(normalized, "consultar certificado", "estado de mi firma", "mis firmas")
                         ? "/e-rubrica/mis-firmas"
-                        : ContainsAny(normalized, "llenar solicitud", "nueva solicitud", "solicitud de firma", "solicitar firma", "renovar", "comprar", "solicitud", "solicitudes")
+                        : ContainsAny(normalized, "llenar solicitud", "nueva solicitud", "solicitud de firma", "solicitar firma", "cargar documentos de solicitud", "subir documentos de solicitud", "renovar", "comprar", "solicitud", "solicitudes")
                             ? "/solicitud/nueva"
                 : ContainsAny(normalized, "firmar", "firma un documento")
                 ? "/e-rubrica/documentos/firmar"

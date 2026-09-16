@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Simetric.Data;
+using Simetric.Services;
 using Simetric.Services.ESign;
 
 namespace Simetric.Controllers;
@@ -11,10 +14,14 @@ namespace Simetric.Controllers;
 public sealed class ESignMobileCatalogController : ControllerBase
 {
     private readonly UanatacaApiService _uanatacaApiService;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
-    public ESignMobileCatalogController(UanatacaApiService uanatacaApiService)
+    public ESignMobileCatalogController(
+        UanatacaApiService uanatacaApiService,
+        IDbContextFactory<AppDbContext> dbFactory)
     {
         _uanatacaApiService = uanatacaApiService;
+        _dbFactory = dbFactory;
     }
 
     [HttpGet("catalogos/productos")]
@@ -26,8 +33,13 @@ public sealed class ESignMobileCatalogController : ControllerBase
         Ok(await _uanatacaApiService.ObtenerProductosStakeholderAsync(stakeholderUuid, cancellationToken));
 
     [HttpGet("catalogos/saldo")]
-    public async Task<IActionResult> ObtenerSaldo(CancellationToken cancellationToken) =>
-        Ok(new { balance = await _uanatacaApiService.ObtenerSaldoAsync(cancellationToken) });
+    public async Task<IActionResult> ObtenerSaldo(CancellationToken cancellationToken)
+    {
+        if (!await BackOfficePermissionHelper.PuedeGestionarUanacreditosAsync(User, _dbFactory))
+            return Forbid();
+
+        return Ok(new { balance = await _uanatacaApiService.ObtenerSaldoAsync(cancellationToken) });
+    }
 
     [HttpGet("proveedor/solicitudes")]
     public async Task<IActionResult> BuscarSolicitudesProveedor(

@@ -77,4 +77,21 @@ public static class BackOfficePermissionHelper
 
         return PuedeGestionarUanacreditos(emailActual);
     }
+
+    public static async Task<bool> PuedeGestionarUanacreditosAsync(
+        int userId,
+        IDbContextFactory<AppDbContext> dbFactory)
+    {
+        if (userId <= 0)
+            return false;
+
+        await using var context = await dbFactory.CreateDbContextAsync();
+        var emailActual = await context.Usuarios
+            .AsNoTracking()
+            .Where(usuario => usuario.IdUsuario == userId && usuario.Estado == true)
+            .Select(usuario => usuario.Email)
+            .FirstOrDefaultAsync();
+
+        return PuedeGestionarUanacreditos(emailActual);
+    }
 }

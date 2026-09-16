@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Simetric.Data;
 using Simetric.Services;
 using Simetric.Services.ESign;
 
@@ -12,11 +14,16 @@ public sealed class ESignUanatacaController : ControllerBase
 {
     private readonly UanatacaApiService _uanatacaApiService;
     private readonly SolicitudService _solicitudService;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
-    public ESignUanatacaController(UanatacaApiService uanatacaApiService, SolicitudService solicitudService)
+    public ESignUanatacaController(
+        UanatacaApiService uanatacaApiService,
+        SolicitudService solicitudService,
+        IDbContextFactory<AppDbContext> dbFactory)
     {
         _uanatacaApiService = uanatacaApiService;
         _solicitudService = solicitudService;
+        _dbFactory = dbFactory;
     }
 
     [HttpGet("productos")]
@@ -29,7 +36,12 @@ public sealed class ESignUanatacaController : ControllerBase
 
     [HttpGet("saldo")]
     public async Task<IActionResult> ObtenerSaldo(CancellationToken cancellationToken)
-        => Ok(new { balance = await _uanatacaApiService.ObtenerSaldoAsync(cancellationToken) });
+    {
+        if (!await BackOfficePermissionHelper.PuedeGestionarUanacreditosAsync(User, _dbFactory))
+            return Forbid();
+
+        return Ok(new { balance = await _uanatacaApiService.ObtenerSaldoAsync(cancellationToken) });
+    }
 
     [HttpGet("solicitudes")]
     public async Task<IActionResult> BuscarSolicitudes(
