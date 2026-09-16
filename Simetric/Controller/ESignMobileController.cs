@@ -304,7 +304,7 @@ public sealed class ESignMobileController : ControllerBase
             return BadRequest(new { mensaje = "La fecha de nacimiento no es válida." });
 
         var tipoPersona = EsRepresentanteLegal(request.TipoPersona) ? "JURIDICA" : "NATURAL";
-        var tieneRuc = tipoPersona == "JURIDICA" || !string.IsNullOrWhiteSpace(request.Ruc);
+        var tieneRuc = tipoPersona == "JURIDICA" || request.PoseeRuc;
         var solicitud = new UsuSolicitudFirma
         {
             SolIdUsuarioCliente = accountId.Value,
@@ -323,7 +323,7 @@ public sealed class ESignMobileController : ControllerBase
             SolCorreo1 = NormalizarTexto(request.Correo).ToLowerInvariant(),
             SolCorreo2 = NormalizarTexto(request.CorreoSecundario).ToLowerInvariant(),
             SolTieneRuc = tieneRuc,
-            SolNroRuc = SoloDigitosOTexto(request.Ruc),
+            SolNroRuc = tieneRuc ? SoloDigitosOTexto(request.Ruc) : null,
             SolProvincia = NormalizarTexto(request.Provincia),
             SolCanton = NormalizarTexto(request.Canton),
             SolDireccion = NormalizarTexto(request.Direccion),
@@ -915,6 +915,7 @@ public sealed class ESignMobileController : ControllerBase
         public string? Identificacion { get; set; }
         public string? CodigoDactilar { get; set; }
         public string? Ruc { get; set; }
+        public bool PoseeRuc { get; set; }
         public string? Nombres { get; set; }
         public string? PrimerApellido { get; set; }
         public string? SegundoApellido { get; set; }
