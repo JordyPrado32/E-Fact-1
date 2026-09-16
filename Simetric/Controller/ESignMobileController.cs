@@ -840,7 +840,7 @@ public sealed class ESignMobileController : ControllerBase
     private static string CrearNombreArchivoSeguro(string fileName)
     {
         var name = Path.GetFileNameWithoutExtension(fileName);
-        var cleanName = new string(name.Where(character => char.IsLetterOrDigit(character) ? character : '_').ToArray()).Trim('_');
+        var cleanName = new string(name.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray()).Trim('_');
         return $"{(string.IsNullOrWhiteSpace(cleanName) ? "documento" : cleanName)}.pdf";
     }
 

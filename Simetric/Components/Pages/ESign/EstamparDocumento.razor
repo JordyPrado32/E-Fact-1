@@ -22,6 +22,7 @@
 @inject FirmaStampApiService FirmaStampApiService
 @inject FirmaPathResolver FirmaPathResolver
 @inject EmisorCertificadoProtector CertificadoProtector
+@inject FirmaConfiguracionService FirmaConfiguracionService
 @inject EmisionControlService EmisionControlService
 @inject IJSRuntime JS
 @inject SweetAlertService AlertService
@@ -328,6 +329,7 @@
     private DocumentoGuardadoItem? documentoGuardadoSeleccionado;
     private readonly List<DocumentoGuardadoItem> documentosGuardados = [];
     private Simetric.Models.Emisor? emisor;
+    private FirmaConfiguracionCuenta? firmaConfiguracion;
     private List<Simetric.Models.Emisor> emisoresCuenta = [];
     private bool emisorConfigurado;
     private string estadoEmisorMensaje = "Validando configuración de E-Rúbrica...";
@@ -431,10 +433,12 @@
     private bool TieneCertificadoDisponible =>
         !string.IsNullOrWhiteSpace(pathCertificadoPendiente) ||
         !string.IsNullOrWhiteSpace(rutaCertificadoEmisor) ||
+        !string.IsNullOrWhiteSpace(firmaConfiguracion?.PathCertificado) ||
         !string.IsNullOrWhiteSpace(emisor?.PathCertificado);
 
     private bool TieneClaveDisponible =>
         !string.IsNullOrWhiteSpace(claveCertificadoInput) ||
+        firmaConfiguracion?.TieneClaveCertificado == true ||
         !string.IsNullOrWhiteSpace(emisor?.ClaveCertificado);
 
     private string NombreCertificadoConfiguracion =>
@@ -601,6 +605,16 @@
 
     private async Task CargarEmisorAsync()
     {
+        firmaConfiguracion = await FirmaConfiguracionService.ObtenerAsync(currentUserId);
+        if (firmaConfiguracion?.EsConfiguracionCuenta == true)
+        {
+            emisor = null;
+            emisoresCuenta = [];
+            emisorConfigurado = ValidarConfiguracionEmisor(out var estadoCuenta);
+            estadoEmisorMensaje = estadoCuenta;
+            return;
+        }
+
         await using var context = await DbFactory.CreateDbContextAsync();
         var usuario = await context.Usuarios
             .AsNoTracking()
@@ -838,6 +852,31 @@
     {
         rutaCertificadoEmisor = null;
 
+        if (firmaConfiguracion?.EsConfiguracionCuenta == true)
+        {
+            if (string.IsNullOrWhiteSpace(firmaConfiguracion.PathCertificado))
+            {
+                estado = "Falta el archivo .p12. Configura el certificado para estampar documentos.";
+                return false;
+            }
+
+            if (!firmaConfiguracion.TieneClaveCertificado)
+            {
+                estado = "Falta la clave del archivo .p12. Configúrala para estampar documentos.";
+                return false;
+            }
+
+            rutaCertificadoEmisor = ResolverRutaCertificado(firmaConfiguracion.PathCertificado);
+            if (string.IsNullOrWhiteSpace(rutaCertificadoEmisor))
+            {
+                estado = "El certificado configurado no está disponible. Sube nuevamente el archivo .p12.";
+                return false;
+            }
+
+            estado = "Archivo .p12 y clave listos para E-Rúbrica.";
+            return true;
+        }
+
         if (emisor is null)
         {
             estado = "No se encontró un emisor activo para E-Rúbrica. Configura un emisor, firma .p12 y clave.";
@@ -869,10 +908,24 @@
 
     private async Task<RecursosFirma?> ResolverRecursosFirmaAsync()
     {
-        if (emisor is null)
-            return null;
+        string? rutaConfigurada;
+        string? clave;
+        if (firmaConfiguracion?.EsConfiguracionCuenta == true)
+        {
+            var credenciales = await FirmaConfiguracionService.ObtenerCredencialesAsync(currentUserId);
+            rutaConfigurada = credenciales?.PathCertificado;
+            clave = credenciales?.ClaveCertificado;
+        }
+        else
+        {
+            if (emisor is null)
+                return null;
 
-        var certificado = CrearCertificadoDesdeEmisor();
+            rutaConfigurada = emisor.PathCertificado;
+            clave = ObtenerClaveCertificado();
+        }
+
+        var certificado = CrearCertificadoDesdeRuta(rutaConfigurada);
         if (certificado is null)
         {
             Error("No se encontro el certificado configurado en EFact.");
@@ -885,10 +938,9 @@
             return null;
         }
 
-        var clave = ObtenerClaveCertificado();
         if (string.IsNullOrWhiteSpace(clave))
         {
-            Error("El emisor no tiene clave de certificado configurada en EFact.");
+            Error("No hay una clave de certificado configurada en E-Rúbrica.");
             return null;
         }
 
@@ -898,10 +950,12 @@
 
     private FirmaStampApiFile? CrearCertificadoDesdeEmisor()
     {
-        if (emisor is null)
-            return null;
+        return CrearCertificadoDesdeRuta(emisor?.PathCertificado);
+    }
 
-        var rutaCertificado = rutaCertificadoEmisor ?? ResolverRutaCertificadoValidada();
+    private FirmaStampApiFile? CrearCertificadoDesdeRuta(string? rutaConfigurada)
+    {
+        var rutaCertificado = rutaCertificadoEmisor ?? ResolverRutaCertificado(rutaConfigurada);
         if (string.IsNullOrWhiteSpace(rutaCertificado) || !File.Exists(rutaCertificado))
             return null;
 
@@ -913,14 +967,19 @@
 
     private string? ResolverRutaCertificadoValidada()
     {
-        if (emisor is null)
+        return ResolverRutaCertificado(emisor?.PathCertificado);
+    }
+
+    private string? ResolverRutaCertificado(string? rutaConfigurada)
+    {
+        if (string.IsNullOrWhiteSpace(rutaConfigurada))
             return null;
 
-        var rutaUsadaPorFirmaInfo = FirmaPathResolver.ResolverRutaParaApi(emisor.PathCertificado);
+        var rutaUsadaPorFirmaInfo = FirmaPathResolver.ResolverRutaParaApi(rutaConfigurada);
         if (!string.IsNullOrWhiteSpace(rutaUsadaPorFirmaInfo) && File.Exists(rutaUsadaPorFirmaInfo))
             return rutaUsadaPorFirmaInfo;
 
-        return FirmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
+        return FirmaPathResolver.ResolverRutaExistente(rutaConfigurada);
     }
 
     private string? ObtenerClaveCertificado()

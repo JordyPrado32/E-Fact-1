@@ -15,22 +15,24 @@
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject SweetAlertService AlertService
+@inject FirmaConfiguracionService FirmaConfiguracionService
+@inject EmisorCertificadoValidator CertificadoValidator
 
-<PageTitle>Firma, clave y logo | E-Rúbrica</PageTitle>
+<PageTitle>Firma y clave | E-Rúbrica</PageTitle>
 
 <div class="esign-config-page">
     @if (cargando)
     {
         <ESignLoadingState Title="Cargando configuracion"
-                           Description="Estamos consultando emisores, firma y datos de estampado disponibles." />
+                           Description="Estamos consultando la firma configurada para tu cuenta." />
     }
     else
     {
         <header class="esign-config-header">
             <div>
                 <span class="header-kicker">E-Rúbrica</span>
-                <h1>Firma, clave y logo</h1>
-                <p>La configuracion existente de E-Fact se carga automaticamente; completa solo los datos pendientes.</p>
+                <h1>Firma y clave</h1>
+                <p>Configura el archivo .p12 y la clave que se utilizarán para firmar tus documentos.</p>
             </div>
             <button class="btn-back" @onclick='() => NavManager.NavigateTo("/e-rubrica")'>
                 <i class="bi bi-arrow-left"></i>
@@ -38,39 +40,12 @@
             </button>
         </header>
 
-        @if (!emisores.Any())
-        {
-            <section class="config-empty">
-                <i class="bi bi-building-x"></i>
-                <h3>No hay emisores activos</h3>
-                <p>Primero registra o selecciona un emisor para poder guardar logo, firma .p12 y clave en E-Rúbrica.</p>
-                <button type="button" class="esign-btn-primary" @onclick='() => NavManager.NavigateTo("/emisor")'>
-                    <i class="bi bi-building"></i>
-                    <span>Registrar emisor</span>
-                </button>
-            </section>
-        }
-        else
-        {
-            <section class="config-grid">
-                <aside class="config-emisores">
-                    <span class="header-kicker">Emisor</span>
-                    @foreach (var emisor in emisores)
-                    {
-                        <button type="button"
-                                class="emisor-option @(modelo.Codigo == emisor.Codigo ? "is-active" : null)"
-                                @onclick="() => SeleccionarEmisorAsync(emisor)">
-                            <strong>@GetNombreEmisor(emisor)</strong>
-                            <span>@(string.IsNullOrWhiteSpace(emisor.Ruc) ? "Sin RUC" : emisor.Ruc)</span>
-                        </button>
-                    }
-                </aside>
-
-                <EditForm Model="modelo" OnValidSubmit="GuardarAsync" class="config-form">
+        <section class="config-grid">
+            <EditForm Model="modelo" OnValidSubmit="GuardarAsync" class="config-form">
                     <div class="config-form-head">
                         <div>
                             <span class="header-kicker">Configuracion activa</span>
-                            <h3>@GetNombreModelo()</h3>
+                            <h3>Firma de la cuenta</h3>
                         </div>
                         <span class="status-pill @(ConfiguracionCompleta ? "is-ready" : "is-pending")">
                             @(ConfiguracionCompleta ? "Completa" : "Pendiente")
@@ -100,18 +75,8 @@
                                    @bind="modelo.ClaveCertificado"
                                    placeholder="Escribe una nueva clave solo si quieres actualizarla"
                                    autocomplete="new-password" />
-                            <small>@(tieneClaveGuardada && string.IsNullOrWhiteSpace(modelo.ClaveCertificado) ? "Ya existe una clave guardada en E-Fact." : "Esta clave se guardara para este emisor.")</small>
+                            <small>@(tieneClaveGuardada && string.IsNullOrWhiteSpace(modelo.ClaveCertificado) ? "Ya existe una clave guardada." : "Esta clave se guardara para tu cuenta.")</small>
                         </div>
-
-                        <label class="config-upload-card @(TieneLogo ? "is-ready" : "is-missing")">
-                            <InputFile class="upload-input" accept="image/jpeg,image/png,.jpg,.jpeg,.png" OnChange="SubirLogoAsync" />
-                            <span class="upload-card-icon"><i class="bi bi-image"></i></span>
-                            <span class="upload-card-main">
-                                <strong>Logo de empresa</strong>
-                                <small>@NombreLogo</small>
-                            </span>
-                            <span class="upload-card-status">@(TieneLogo ? "Cargado" : "Pendiente")</span>
-                        </label>
                     </div>
 
                     <section class="firma-validation-card @(FirmaEstadoClass)">
@@ -143,28 +108,19 @@
                         </button>
                     </section>
 
-                    @if (!string.IsNullOrWhiteSpace(modelo.LogoImagen))
-                    {
-                        <div class="logo-preview">
-                            <img src="@modelo.LogoImagen" alt="Logo de empresa" />
-                        </div>
-                    }
-
                     <div class="form-actions">
                         <button type="submit" class="esign-btn-primary" disabled="@guardando">
                             <i class="bi bi-save"></i>
                             <span>@(guardando ? "Guardando..." : "Guardar configuracion")</span>
                         </button>
                     </div>
-                </EditForm>
-            </section>
-        }
+            </EditForm>
+        </section>
     }
 </div>
 
 @code {
     private const long MaxCertificadoSize = 5 * 1024 * 1024;
-    private const long MaxLogoSize = 2 * 1024 * 1024;
     private bool cargando = true;
     private bool guardando;
     private bool esError;
@@ -173,23 +129,18 @@
     private string? mensaje;
     private string? mensajeValidacionFirma;
     private string? certificadoSeleccionado;
-    private string? logoSeleccionado;
     private FirmaEstadoDto? firmaEstadoActual;
     private int currentUserId;
-    private readonly List<EmisorDto> emisores = new();
-    private EmisorDto? emisorSeleccionado;
     private EmisorUpsertDto modelo = new();
 
     private bool ConfiguracionCompleta =>
-        TieneCertificado && TieneClave && TieneLogo;
+        TieneCertificado && TieneClave;
 
     private bool TieneCertificado => !string.IsNullOrWhiteSpace(modelo.PathCertificado);
 
     private bool TieneClave => tieneClaveGuardada || !string.IsNullOrWhiteSpace(modelo.ClaveCertificado);
 
-    private bool TieneLogo => !string.IsNullOrWhiteSpace(modelo.LogoImagen);
-
-    private bool PuedeValidarFirma => modelo.Codigo > 0 && TieneCertificado && TieneClave;
+    private bool PuedeValidarFirma => TieneCertificado && TieneClave;
 
     private string FirmaEstadoClass =>
         firmaEstadoActual is null
@@ -221,10 +172,6 @@
         ?? ObtenerNombreArchivo(modelo.PathCertificado)
         ?? "Ningun .p12 seleccionado";
 
-    private string NombreLogo =>
-        logoSeleccionado
-        ?? (!string.IsNullOrWhiteSpace(modelo.LogoImagen) ? "Logo actual cargado" : "Ningun logo seleccionado");
-
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -251,43 +198,29 @@
         }
 
         await SelectedAppServiceState.SetCurrentServiceKeyAsync(ESignRoutes.ServiceKey);
-        await CargarEmisoresAsync();
+        await CargarConfiguracionAsync();
         cargando = false;
     }
 
-    private async Task CargarEmisoresAsync()
+    private async Task CargarConfiguracionAsync()
     {
-        emisores.Clear();
-        var data = await Http.GetFromJsonAsync<List<EmisorDto>>($"api/emisores?idUsuario={currentUserId}") ?? new();
-        emisores.AddRange(data.Where(e => e.Estado != false));
-        await SeleccionarEmisorAsync(emisores.FirstOrDefault());
-    }
-
-    private async Task SeleccionarEmisorAsync(EmisorDto? emisor)
-    {
-        emisorSeleccionado = emisor;
+        var configuracion = await FirmaConfiguracionService.ObtenerAsync(currentUserId);
         certificadoSeleccionado = null;
-        logoSeleccionado = null;
         mensaje = null;
         firmaEstadoActual = null;
         mensajeValidacionFirma = null;
 
-        modelo = emisor is null ? new EmisorUpsertDto() : CrearModeloDesdeEmisor(emisor);
-        tieneClaveGuardada = emisor?.TieneClaveCertificadoConfigurada == true;
+        modelo = new EmisorUpsertDto { PathCertificado = configuracion?.PathCertificado };
+        tieneClaveGuardada = configuracion?.TieneClaveCertificado == true;
         if (PuedeValidarFirma)
-        {
             await ValidarFirmaActualAsync();
-        }
     }
 
     private async Task GuardarAsync()
     {
-        if (modelo.Codigo <= 0)
-            return;
-
         if (string.IsNullOrWhiteSpace(modelo.PathCertificado))
         {
-            await MostrarMensajeAsync("Debes cargar o clonar la firma .p12.", true);
+            await MostrarMensajeAsync("Debes cargar el archivo .p12.", true);
             return;
         }
 
@@ -297,29 +230,18 @@
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(modelo.LogoImagen))
-        {
-            await MostrarMensajeAsync("Debes cargar o clonar el logo de empresa.", true);
-            return;
-        }
-
         guardando = true;
         try
         {
             MigrarCertificadoSistemaARutaCompartida();
-            modelo.IdUsuario = currentUserId;
             modelo.PathCertificado = modelo.PathCertificado?.Trim();
-            var response = await Http.PutAsJsonAsync($"api/emisores/{modelo.Codigo}", modelo);
-            if (!response.IsSuccessStatusCode)
-            {
-                var detalle = await LeerMensajeErrorHttpAsync(
-                    response,
-                    "No se pudo guardar la configuracion de firma y logo.");
-                await MostrarMensajeAsync(detalle, true);
-                return;
-            }
-
-            await CargarEmisoresAsync();
+            await FirmaConfiguracionService.GuardarAsync(
+                currentUserId,
+                modelo.PathCertificado!,
+                modelo.ClaveCertificado);
+            tieneClaveGuardada = true;
+            modelo.ClaveCertificado = null;
+            await CargarConfiguracionAsync();
             await MostrarMensajeAsync("Configuracion de E-Rúbrica guardada correctamente.", false);
         }
         catch (Exception ex)
@@ -436,64 +358,6 @@
         }
     }
 
-    private async Task SubirLogoAsync(InputFileChangeEventArgs e)
-    {
-        try
-        {
-            if (e.FileCount != 1 || e.File is null)
-            {
-                await MostrarMensajeAsync("Selecciona un solo logo.", true);
-                return;
-            }
-
-            var file = e.File;
-            var extension = Path.GetExtension(file.Name)?.ToLowerInvariant();
-            if (extension is not ".jpg" and not ".jpeg" and not ".png")
-            {
-                await MostrarMensajeAsync("Solo se permiten logos JPG, JPEG o PNG.", true);
-                return;
-            }
-
-            var contentType = (file.ContentType ?? string.Empty).Trim().ToLowerInvariant();
-            if (contentType is not "image/jpeg" and not "image/png")
-            {
-                await MostrarMensajeAsync("El logo seleccionado no tiene un formato valido.", true);
-                return;
-            }
-
-            if (file.Size <= 0)
-            {
-                await MostrarMensajeAsync("El archivo de logo esta vacio.", true);
-                return;
-            }
-
-            if (file.Size > MaxLogoSize)
-            {
-                await MostrarMensajeAsync("El logo excede el tamaño máximo de 2 MB.", true);
-                return;
-            }
-
-            await using var stream = file.OpenReadStream(MaxLogoSize);
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer);
-            var bytes = buffer.ToArray();
-            if (bytes.Length == 0)
-            {
-                await MostrarMensajeAsync("No se pudo leer el logo seleccionado.", true);
-                return;
-            }
-
-            var result = LogoImageProcessor.Normalize(bytes, contentType);
-            modelo.LogoImagen = $"data:{result.ContentType};base64,{Convert.ToBase64String(result.Bytes)}";
-            logoSeleccionado = file.Name;
-            await MostrarMensajeAsync("Logo cargado correctamente. Guarda para confirmar.", false);
-        }
-        catch (Exception ex)
-        {
-            await MostrarMensajeAsync(FormatearMensajeError(ex.Message), true);
-        }
-    }
-
     private async Task MostrarMensajeAsync(string texto, bool error)
     {
         mensaje = string.IsNullOrWhiteSpace(texto) ? null : texto.Trim('"', ' ', '\r', '\n');
@@ -596,17 +460,36 @@
 
         try
         {
-            var estado = await Http.GetFromJsonAsync<FirmaEstadoDto>(
-                $"api/emisores/{modelo.Codigo}/firma/estado?idUsuario={currentUserId}");
+            var credenciales = await FirmaConfiguracionService.ObtenerCredencialesAsync(currentUserId);
+            if (credenciales is null || string.IsNullOrWhiteSpace(credenciales.ClaveCertificado))
+            {
+                mensajeValidacionFirma = "No se pudo obtener la clave de la firma.";
+                return;
+            }
 
-            firmaEstadoActual = estado;
-            mensajeValidacionFirma = estado is null
-                ? "No se pudo obtener el estado de la firma."
-                : estado.EsValida
-                    ? estado.LogGuardado
-                        ? "Validacion correcta. El JSON de la API fue registrado."
-                        : "Validacion correcta. No se pudo registrar el JSON en la tabla."
-                    : FirstFilled(estado.Mensaje, "La API no valido la firma.");
+            var resultado = await CertificadoValidator.ConsultarArchivoConApiAsync(
+                credenciales.PathCertificado,
+                credenciales.ClaveCertificado);
+            if (!resultado.Success || resultado.Info is null)
+            {
+                mensajeValidacionFirma = FirstFilled(resultado.Message, "La API no valido la firma.");
+                return;
+            }
+
+            var info = resultado.Info;
+            firmaEstadoActual = new FirmaEstadoDto
+            {
+                EsValida = info.EsValida,
+                EstadoVigencia = info.EstadoVigencia,
+                Mensaje = info.Mensaje,
+                NombreTitular = info.NombreTitular,
+                Identificacion = FirstFilled(info.Ruc, info.Cedula),
+                FechaExpiracion = info.FechaExpiracion?.LocalDateTime,
+                DiasRestantes = info.DiasRestantes
+            };
+            mensajeValidacionFirma = info.EsValida
+                ? "Validacion correcta. La firma esta lista para usar."
+                : FirstFilled(info.Mensaje, "La API no valido la firma.");
         }
         catch (Exception ex)
         {

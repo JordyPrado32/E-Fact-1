@@ -15,6 +15,7 @@ public sealed class AppAccessService
     public const string EContaxRoute = EContaxRoutes.Root;
     public const string EDeclaraServiceKey = EDeclaraRoutes.ServiceKey;
     public const string EDeclaraRoute = EDeclaraRoutes.Root;
+    public const string AllyPortalServiceKey = "portal-aliados";
 
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static bool _schemaEnsured;
@@ -255,6 +256,38 @@ public sealed class AppAccessService
             {
                 HasAccess = false,
                 DenialReason = "Acceso restringido a personal de Backoffice.",
+                StatusText = "No autorizado"
+            };
+        }
+
+        if (string.Equals(service.Clave, AllyPortalServiceKey, StringComparison.OrdinalIgnoreCase))
+        {
+            var userObj = await context.Usuarios
+                .AsNoTracking()
+                .Where(u => u.IdUsuario == userId)
+                .Select(u => new { u.IdTipoUsuario })
+                .FirstOrDefaultAsync();
+            var esAliado = userObj is not null && await context.TipoUsuario
+                .AsNoTracking()
+                .AnyAsync(t => t.IdTipoUsuario == userObj.IdTipoUsuario &&
+                              t.Estado == true &&
+                              (t.NombreTipo == AliadoPortalService.RoleName ||
+                               t.NombreTipo == AliadoPortalService.AdminRoleName));
+
+            if (isSuperAdmin || esAliado)
+            {
+                return new AppServiceAccessDecision
+                {
+                    HasAccess = true,
+                    IsSuperAdmin = isSuperAdmin,
+                    StatusText = isSuperAdmin ? "Acceso por rol administrador" : "Acceso Portal de Aliados"
+                };
+            }
+
+            return new AppServiceAccessDecision
+            {
+                HasAccess = false,
+                DenialReason = "Acceso restringido al rol Aliado Comercial.",
                 StatusText = "No autorizado"
             };
         }
@@ -572,7 +605,8 @@ USING (VALUES
     (N'e-declara',  N'E-DECLARA',  N'Declaraciones tributarias con acceso segun plan activo.',                       N'/e-declara',        CAST(1 AS bit), CAST(1 AS bit), 4, N'ri-government-line',  N'#fd7e14'),
     (N'e-people',   N'E-PEOPLE',   N'Gestion de talento humano y colaboradores bajo suscripcion.',                  N'/servicios/e-people',CAST(1 AS bit), CAST(1 AS bit), 5, N'ri-team-line',        N'#6f42c1'),
     (N'e-sign',     N'E-Rúbrica',   N'E-Rúbrica para firma electronica y certificado digital de documentos en linea.', N'/e-rubrica',            CAST(0 AS bit), CAST(1 AS bit), 2, N'ri-key-2-line',        N'#2E7D32'),
-    (N'backoffice', N'BACKOFFICE', N'Acceso exclusivo para administradores y personal de backoffice.',               N'/backoffice',        CAST(0 AS bit), CAST(1 AS bit), 6, N'ri-shield-user-line', N'#0a1c3e')
+    (N'backoffice', N'BACKOFFICE', N'Acceso exclusivo para administradores y personal de backoffice.',               N'/backoffice',        CAST(0 AS bit), CAST(1 AS bit), 6, N'ri-shield-user-line', N'#0a1c3e'),
+    (N'portal-aliados', N'PORTAL DE ALIADOS', N'Gestion comercial de clientes, renovaciones y comisiones para aliados.', N'/aliados', CAST(0 AS bit), CAST(1 AS bit), 7, N'ri-team-line', N'#7B1E3A')
 ) AS source ([Clave], [Nombre], [Descripcion], [RutaAcceso], [RequiereSuscripcion], [Estado], [OrdenVisual], [Icono], [ColorHex])
 ON target.[Clave] = source.[Clave]
 WHEN MATCHED THEN

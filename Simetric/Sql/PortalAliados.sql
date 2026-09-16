@@ -24,16 +24,34 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_VENDEDOR_BACKOFFICE_c
 IF COL_LENGTH('dbo.Usuarios', 'idVendedor') IS NULL
     ALTER TABLE dbo.Usuarios ADD idVendedor INT NULL;
 
+IF OBJECT_ID(N'dbo.APP_SERVICIOS', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM dbo.APP_SERVICIOS WHERE Clave = N'portal-aliados')
+        INSERT INTO dbo.APP_SERVICIOS (Clave, Nombre, Descripcion, RutaAcceso, RequiereSuscripcion, Estado, OrdenVisual, Icono, ColorHex)
+        VALUES (N'portal-aliados', N'PORTAL DE ALIADOS', N'Gestion comercial de clientes, renovaciones y comisiones para aliados.', N'/aliados', 0, 1, 7, N'ri-team-line', N'#7B1E3A');
+    ELSE
+        UPDATE dbo.APP_SERVICIOS
+        SET Nombre = N'PORTAL DE ALIADOS', Descripcion = N'Gestion comercial de clientes, renovaciones y comisiones para aliados.', RutaAcceso = N'/aliados', RequiereSuscripcion = 0, Estado = 1, Icono = N'ri-team-line', ColorHex = N'#7B1E3A'
+        WHERE Clave = N'portal-aliados';
+END
+
 IF NOT EXISTS (SELECT 1 FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'Aliado Comercial')
     INSERT INTO dbo.TIPOUSUARIO (NOMBRETIPO, DESCRIPCION, ESTADO)
     VALUES (N'Aliado Comercial', N'Acceso externo al Portal de Aliados Numerica.', 1);
+IF NOT EXISTS (SELECT 1 FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'Administrador Portal de Aliados')
+    INSERT INTO dbo.TIPOUSUARIO (NOMBRETIPO, DESCRIPCION, ESTADO)
+    VALUES (N'Administrador Portal de Aliados', N'Administración interna del Portal de Aliados Numerica.', 1);
 
-DECLARE @idTipo INT = (SELECT TOP 1 IdTipoUsuario FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'Aliado Comercial' AND ESTADO = 1 ORDER BY IdTipoUsuario);
+DECLARE @idTipoAliado INT = (SELECT TOP 1 IdTipoUsuario FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'Aliado Comercial' AND ESTADO = 1 ORDER BY IdTipoUsuario);
+DECLARE @idTipoAdmin INT = (SELECT TOP 1 IdTipoUsuario FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'Administrador Portal de Aliados' AND ESTADO = 1 ORDER BY IdTipoUsuario);
 
-IF NOT EXISTS (SELECT 1 FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipo AND ESTADOROL = 1)
-    INSERT INTO dbo.ROLES (DESCRIPCIONROL, IDTIPOUSUARIO, ESTADOROL) VALUES (N'Aliado Comercial', @idTipo, 1);
+IF NOT EXISTS (SELECT 1 FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipoAliado AND ESTADOROL = 1)
+    INSERT INTO dbo.ROLES (DESCRIPCIONROL, IDTIPOUSUARIO, ESTADOROL) VALUES (N'Aliado Comercial', @idTipoAliado, 1);
+IF NOT EXISTS (SELECT 1 FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipoAdmin AND ESTADOROL = 1)
+    INSERT INTO dbo.ROLES (DESCRIPCIONROL, IDTIPOUSUARIO, ESTADOROL) VALUES (N'Administrador Portal de Aliados', @idTipoAdmin, 1);
 
-DECLARE @idRol INT = (SELECT TOP 1 IDROL FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipo AND ESTADOROL = 1 ORDER BY IDROL);
+DECLARE @idRolAliado INT = (SELECT TOP 1 IDROL FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipoAliado AND ESTADOROL = 1 ORDER BY IDROL);
+DECLARE @idRolAdmin INT = (SELECT TOP 1 IDROL FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipoAdmin AND ESTADOROL = 1 ORDER BY IDROL);
 DECLARE @padre INT = (SELECT TOP 1 IDMENU FROM dbo.MENUS WHERE RUTAMENU = N'/aliados' AND ESTADOMENU = 1);
 
 IF @padre IS NULL
@@ -50,19 +68,26 @@ FROM (VALUES
     (N'Mis clientes', N'/aliados/clientes', N'ri-user-3-line', 2),
     (N'Renovaciones', N'/aliados/renovaciones', N'ri-refresh-line', 3),
     (N'Comisiones', N'/aliados/comisiones', N'ri-hand-coin-line', 4),
-    (N'Mi perfil', N'/aliados/perfil', N'ri-user-settings-line', 5)
+    (N'Mi perfil', N'/aliados/perfil', N'ri-user-settings-line', 5),
+    (N'Administración de aliados', N'/aliados/admin', N'ri-admin-line', 10)
 ) v(Nombre, Ruta, Icono, Orden)
 WHERE NOT EXISTS (SELECT 1 FROM dbo.MENUS m WHERE m.RUTAMENU = v.Ruta);
 
 UPDATE dbo.MENUS
 SET ESTADOMENU = 1, MOSTRAR_EFACT = 1, MOSTRAR_EDECLARA = 0
-WHERE RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/perfil');
+WHERE RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/perfil', N'/aliados/admin');
 
 INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
-SELECT @idRol, m.IDMENU
+SELECT @idRolAliado, m.IDMENU
 FROM dbo.MENUS m
 WHERE m.RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/perfil')
-  AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRol AND rm.IDMENU = m.IDMENU);
+  AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAliado AND rm.IDMENU = m.IDMENU);
+
+INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
+SELECT @idRolAdmin, m.IDMENU
+FROM dbo.MENUS m
+WHERE m.RUTAMENU = N'/aliados/admin'
+  AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAdmin AND rm.IDMENU = m.IDMENU);
 
 IF OBJECT_ID(N'dbo.ALIADO_RENOVACION_GESTION', N'U') IS NULL
 BEGIN

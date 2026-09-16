@@ -9,7 +9,9 @@ namespace Simetric.Services;
 public sealed class AliadoPortalService
 {
     public const string RoleName = "Aliado Comercial";
+    public const string AdminRoleName = "Administrador Portal de Aliados";
     public const string RootRoute = "/aliados";
+    public const string AdminRoute = "/aliados/admin";
 
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static bool _schemaEnsured;
@@ -71,7 +73,7 @@ public sealed class AliadoPortalService
             })
             .FirstOrDefaultAsync();
 
-        if (usuario?.IdVendedor is not > 0 || usuario.IdTipoUsuario is not > 0)
+        if (usuario?.IdTipoUsuario is not > 0)
             return null;
 
         var tipo = await context.TipoUsuario
@@ -80,7 +82,26 @@ public sealed class AliadoPortalService
             .Select(x => x.NombreTipo)
             .FirstOrDefaultAsync();
 
-        if (!string.Equals(tipo, RoleName, StringComparison.OrdinalIgnoreCase))
+        var esAdministrador = string.Equals(tipo, AdminRoleName, StringComparison.OrdinalIgnoreCase) ||
+                              usuario.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId;
+        if (!esAdministrador && !string.Equals(tipo, RoleName, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (esAdministrador)
+        {
+            return new AliadoPortalContext
+            {
+                IdUsuario = usuario.IdUsuario,
+                IdTipoUsuario = usuario.IdTipoUsuario.Value,
+                Nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim(),
+                Email = usuario.Email,
+                Celular = usuario.Celular,
+                NombreAliado = "Administración del Portal",
+                EsAdministrador = true
+            };
+        }
+
+        if (usuario.IdVendedor is not > 0)
             return null;
 
         var aliado = await context.VendedoresBackOffice
@@ -334,7 +355,7 @@ public sealed class AliadoPortalService
             .ToListAsync();
     }
 
-    public async Task<(bool Success, string Message)> CrearCuentaAliadoAsync(int actorId, string nombre, string email, string password, decimal porcentajeBase = 30m)
+    public async Task<(bool Success, string Message)> CrearCuentaAliadoAsync(int actorId, string nombre, string email, string password, decimal porcentajeBase = 30m, bool esAdministradorPortal = false)
     {
         await EnsureSchemaAsync();
         nombre = nombre.Trim();
@@ -346,30 +367,47 @@ public sealed class AliadoPortalService
             return (false, "El porcentaje debe estar entre 0 y 100.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var actor = await db.Usuarios
+            .AsNoTracking()
+            .Where(x => x.IdUsuario == actorId && x.Estado == true)
+            .Select(x => new { x.IdTipoUsuario, Tipo = x.IdTipoUsuarioNavigation!.NombreTipo })
+            .FirstOrDefaultAsync();
+        var actorEsSuperAdministrador = actor?.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId;
+        var actorEsBackOffice = actor?.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId;
+        var actorEsAdministradorPortal = string.Equals(actor?.Tipo, AdminRoleName, StringComparison.OrdinalIgnoreCase);
+        if ((!actorEsSuperAdministrador && !actorEsBackOffice && !actorEsAdministradorPortal) ||
+            (esAdministradorPortal && !actorEsSuperAdministrador))
+            return (false, "No tienes permisos para crear este tipo de cuenta.");
+
         if (await db.Usuarios.AnyAsync(x => x.Email.ToLower() == email.ToLower()))
             return (false, "Ya existe una cuenta con ese correo.");
 
+        var roleName = esAdministradorPortal ? AdminRoleName : RoleName;
         var roleId = await db.TipoUsuario
-            .Where(x => x.NombreTipo == RoleName && x.Estado == true)
+            .Where(x => x.NombreTipo == roleName && x.Estado == true)
             .Select(x => (int?)x.IdTipoUsuario)
             .FirstOrDefaultAsync();
         if (!roleId.HasValue)
-            return (false, "No se encontró el rol Aliado Comercial.");
+            return (false, $"No se encontró el rol {roleName}.");
 
-        var codigo = await GenerarCodigoAsync(db, nombre);
         await using var transaction = await db.Database.BeginTransactionAsync();
-        var aliado = new VendedorBackOffice
+        VendedorBackOffice? aliado = null;
+        if (!esAdministradorPortal)
         {
-            Nombre = nombre,
-            CodigoReferencia = codigo,
-            Activo = true,
-            EsSistema = false,
-            PorcentajeBase = porcentajeBase,
-            IdUsuarioCreacion = actorId > 0 ? actorId : null,
-            FechaCreacion = DateTime.Now
-        };
-        db.VendedoresBackOffice.Add(aliado);
-        await db.SaveChangesAsync();
+            var codigo = await GenerarCodigoAsync(db, nombre);
+            aliado = new VendedorBackOffice
+            {
+                Nombre = nombre,
+                CodigoReferencia = codigo,
+                Activo = true,
+                EsSistema = false,
+                PorcentajeBase = porcentajeBase,
+                IdUsuarioCreacion = actorId > 0 ? actorId : null,
+                FechaCreacion = DateTime.Now
+            };
+            db.VendedoresBackOffice.Add(aliado);
+            await db.SaveChangesAsync();
+        }
 
         db.Usuarios.Add(new Usuario
         {
@@ -378,7 +416,7 @@ public sealed class AliadoPortalService
             Email = email,
             PasswordHash = SecurityHelper.HashPassword(password),
             IdTipoUsuario = roleId,
-            IdVendedor = aliado.IdVendedor,
+            IdVendedor = aliado?.IdVendedor,
             Estado = true,
             ClaveTemporal = true,
             CuentaBloqueada = false,
@@ -387,7 +425,9 @@ public sealed class AliadoPortalService
         });
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
-        return (true, "Cuenta de aliado creada correctamente con el rol Aliado Comercial.");
+        return (true, esAdministradorPortal
+            ? "Cuenta creada correctamente con el rol Administrador Portal de Aliados."
+            : "Cuenta de aliado creada correctamente con el rol Aliado Comercial.");
     }
 
     private async Task<List<FacturaPortalRow>> ObtenerFacturasAsync(int idVendedor, int? idCliente = null)
@@ -471,10 +511,17 @@ BEGIN
     INSERT INTO dbo.TIPOUSUARIO (NOMBRETIPO, DESCRIPCION, ESTADO)
     VALUES (N'{RoleName}', N'Acceso externo al Portal de Aliados Numerica.', 1);
 END
-DECLARE @idTipo int = (SELECT TOP 1 IdTipoUsuario FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'{RoleName}' AND ESTADO = 1 ORDER BY IdTipoUsuario);
-IF NOT EXISTS (SELECT 1 FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipo AND ESTADOROL = 1)
-    INSERT INTO dbo.ROLES (DESCRIPCIONROL, IDTIPOUSUARIO, ESTADOROL) VALUES (N'{RoleName}', @idTipo, 1);
-DECLARE @idRol int = (SELECT TOP 1 IDROL FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipo AND ESTADOROL = 1 ORDER BY IDROL);
+IF NOT EXISTS (SELECT 1 FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'{AdminRoleName}')
+BEGIN
+    INSERT INTO dbo.TIPOUSUARIO (NOMBRETIPO, DESCRIPCION, ESTADO)
+    VALUES (N'{AdminRoleName}', N'Administración interna del Portal de Aliados Numerica.', 1);
+END
+DECLARE @idTipoAliado int = (SELECT TOP 1 IdTipoUsuario FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'{RoleName}' AND ESTADO = 1 ORDER BY IdTipoUsuario);
+DECLARE @idTipoAdmin int = (SELECT TOP 1 IdTipoUsuario FROM dbo.TIPOUSUARIO WHERE NOMBRETIPO = N'{AdminRoleName}' AND ESTADO = 1 ORDER BY IdTipoUsuario);
+IF NOT EXISTS (SELECT 1 FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipoAliado AND ESTADOROL = 1)
+    INSERT INTO dbo.ROLES (DESCRIPCIONROL, IDTIPOUSUARIO, ESTADOROL) VALUES (N'{RoleName}', @idTipoAliado, 1);
+IF NOT EXISTS (SELECT 1 FROM dbo.ROLES WHERE IDTIPOUSUARIO = @idTipoAdmin AND ESTADOROL = 1)
+    INSERT INTO dbo.ROLES (DESCRIPCIONROL, IDTIPOUSUARIO, ESTADOROL) VALUES (N'{AdminRoleName}', @idTipoAdmin, 1);
 DECLARE @padre int = (SELECT TOP 1 IDMENU FROM dbo.MENUS WHERE RUTAMENU = N'{RootRoute}' AND ESTADOMENU = 1);
 IF @padre IS NULL
 BEGIN
@@ -485,7 +532,8 @@ END
 """;
 
         yield return $"""
-DECLARE @idRol int = (SELECT TOP 1 r.IDROL FROM dbo.ROLES r INNER JOIN dbo.TIPOUSUARIO t ON t.IdTipoUsuario = r.IDTIPOUSUARIO WHERE t.NOMBRETIPO = N'{RoleName}' AND r.ESTADOROL = 1 ORDER BY r.IDROL);
+DECLARE @idRolAliado int = (SELECT TOP 1 r.IDROL FROM dbo.ROLES r INNER JOIN dbo.TIPOUSUARIO t ON t.IdTipoUsuario = r.IDTIPOUSUARIO WHERE t.NOMBRETIPO = N'{RoleName}' AND r.ESTADOROL = 1 ORDER BY r.IDROL);
+DECLARE @idRolAdmin int = (SELECT TOP 1 r.IDROL FROM dbo.ROLES r INNER JOIN dbo.TIPOUSUARIO t ON t.IdTipoUsuario = r.IDTIPOUSUARIO WHERE t.NOMBRETIPO = N'{AdminRoleName}' AND r.ESTADOROL = 1 ORDER BY r.IDROL);
 DECLARE @padre int = (SELECT TOP 1 IDMENU FROM dbo.MENUS WHERE RUTAMENU = N'{RootRoute}' AND ESTADOMENU = 1);
 DECLARE @menus TABLE (Nombre nvarchar(100), Ruta nvarchar(200), Icono nvarchar(50), Orden int);
 INSERT INTO @menus VALUES
@@ -493,18 +541,23 @@ INSERT INTO @menus VALUES
     (N'Mis clientes', N'{RootRoute}/clientes', N'ri-user-3-line', 2),
     (N'Renovaciones', N'{RootRoute}/renovaciones', N'ri-refresh-line', 3),
     (N'Comisiones', N'{RootRoute}/comisiones', N'ri-hand-coin-line', 4),
-    (N'Mi perfil', N'{RootRoute}/perfil', N'ri-user-settings-line', 5);
+    (N'Mi perfil', N'{RootRoute}/perfil', N'ri-user-settings-line', 5),
+    (N'Administración de aliados', N'{AdminRoute}', N'ri-admin-line', 10);
 INSERT INTO dbo.MENUS (NOMBREMENU, RUTAMENU, ICONOMENU, IDMENUPADRE, ESTADOMENU, MOSTRAR_EFACT, MOSTRAR_EDECLARA, orden_menu)
 SELECT m.Nombre, m.Ruta, m.Icono, CASE WHEN m.Ruta = N'{RootRoute}' THEN 0 ELSE @padre END, 1, 1, 0, m.Orden
 FROM @menus m
 WHERE NOT EXISTS (SELECT 1 FROM dbo.MENUS existing WHERE existing.RUTAMENU = m.Ruta);
 UPDATE dbo.MENUS
 SET ESTADOMENU = 1, MOSTRAR_EFACT = 1, MOSTRAR_EDECLARA = 0
-WHERE RUTAMENU IN (N'{RootRoute}', N'{RootRoute}/clientes', N'{RootRoute}/renovaciones', N'{RootRoute}/comisiones', N'{RootRoute}/perfil');
+ WHERE RUTAMENU IN (N'{RootRoute}', N'{RootRoute}/clientes', N'{RootRoute}/renovaciones', N'{RootRoute}/comisiones', N'{RootRoute}/perfil', N'{AdminRoute}');
 INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
-SELECT @idRol, m.IDMENU FROM dbo.MENUS m
+ SELECT @idRolAliado, m.IDMENU FROM dbo.MENUS m
 WHERE m.RUTAMENU IN (N'{RootRoute}', N'{RootRoute}/clientes', N'{RootRoute}/renovaciones', N'{RootRoute}/comisiones', N'{RootRoute}/perfil')
-  AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRol AND rm.IDMENU = m.IDMENU);
+   AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAliado AND rm.IDMENU = m.IDMENU);
+INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
+SELECT @idRolAdmin, m.IDMENU FROM dbo.MENUS m
+WHERE m.RUTAMENU = N'{AdminRoute}'
+  AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAdmin AND rm.IDMENU = m.IDMENU);
 """;
 
         yield return """
@@ -543,6 +596,7 @@ public sealed class AliadoPortalContext
     public string CodigoReferencia { get; init; } = string.Empty;
     public decimal PorcentajeBase { get; init; }
     public string EnlaceRegistro { get; init; } = string.Empty;
+    public bool EsAdministrador { get; init; }
 }
 
 public sealed class AliadoDashboardDto

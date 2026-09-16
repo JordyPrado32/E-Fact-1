@@ -1278,6 +1278,8 @@
     private Usuario? selectedUser;
     private bool mostrarDropdownClientes = false;
     private List<Usuario> vendedoresList = new();
+    private readonly Dictionary<string, int> vendedorIdsPorNombre = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<int, HashSet<int>> vendedorIdsPorVenta = new();
     private string currentOperatorName = "";
 
     protected override async Task OnInitializedAsync()
@@ -1346,6 +1348,8 @@
     private async Task LoadVentasData()
     {
         isLoading = true;
+        vendedorIdsPorNombre.Clear();
+        vendedorIdsPorVenta.Clear();
         try
         {
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -1467,6 +1471,38 @@
                     .Where(v => !EsVentaAnulada(v) && !BackOfficeReportDataFilter.IsTestData(v))
                     .ToList();
                 vendedoresList = vendedoresTask.Result;
+
+                var perfilesVendedores = await VendedorBackOfficeService.ListarAsync();
+                foreach (var vendedor in vendedoresList)
+                {
+                    var nombre = $"{vendedor.Nombres} {vendedor.Apellidos}".Trim();
+                    var perfil = perfilesVendedores.FirstOrDefault(p =>
+                        p.IdVendedor == vendedor.IdVendedor ||
+                        p.IdUsuarioCreacion == vendedor.IdUsuario);
+                    if (!string.IsNullOrWhiteSpace(nombre) && perfil is not null)
+                        vendedorIdsPorNombre[nombre] = perfil.IdVendedor;
+                }
+
+                var clientesAsignados = await context.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.IdVendedor.HasValue && u.IdVendedor.Value > 0 && u.Email != null)
+                    .Select(u => new { u.Email, u.IdVendedor })
+                    .ToListAsync();
+                var vendedorPorCorreo = clientesAsignados
+                    .Where(c => !string.IsNullOrWhiteSpace(c.Email) && c.IdVendedor.HasValue)
+                    .GroupBy(c => c.Email!.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.Select(c => c.IdVendedor!.Value).ToHashSet(),
+                        StringComparer.OrdinalIgnoreCase);
+
+                foreach (var venta in ventasList)
+                {
+                    var correoCliente = ExtraerEmailClienteReporte(venta.Cliente);
+                    if (vendedorPorCorreo.TryGetValue(correoCliente, out var ids))
+                        vendedorIdsPorVenta[venta.IdReporte] = ids;
+                }
+
                 if (ventasList.Any(v => v.Producto == "e-sign"))
                 {
                     try
@@ -1664,8 +1700,7 @@
         }
 
         var query = ventasList
-            .Where(v => !EsVentaAnulada(v))
-            .AsQueryable();
+            .Where(v => !EsVentaAnulada(v));
 
         // Product filter
         if (filterProducto != "ALL")
@@ -1693,7 +1728,14 @@
 
         if (filterVendedor != "ALL")
         {
-            query = query.Where(v => (v.Vendedor ?? "Sistema") == filterVendedor);
+            var vendedorSeleccionado = vendedorIdsPorNombre.TryGetValue(filterVendedor.Trim(), out var idVendedor)
+                ? idVendedor
+                : 0;
+            query = query.Where(v =>
+                string.Equals(v.Vendedor?.Trim() ?? "Sistema", filterVendedor.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                (vendedorSeleccionado > 0 &&
+                 vendedorIdsPorVenta.TryGetValue(v.IdReporte, out var ids) &&
+                 ids.Contains(vendedorSeleccionado)));
         }
 
         if (filterFechaInicio.HasValue)

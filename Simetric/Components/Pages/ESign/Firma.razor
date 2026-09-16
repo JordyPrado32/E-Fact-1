@@ -5,6 +5,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Simetric.Services
+@using Simetric.Services.ESign
 @using System.IO
 @using System.Security.Claims
 @using System.Text.Json
@@ -15,6 +16,7 @@
 @inject NavigationManager NavManager
 @inject EmisorOnboardingService EmisorOnboardingService
 @inject EmisionControlService EmisionControlService
+@inject FirmaConfiguracionService FirmaConfiguracionService
 @inject SweetAlertService AlertService
 
 @rendermode InteractiveServer
@@ -61,7 +63,7 @@
                         <i class="bi bi-shield-x"></i>
                     </div>
                     <h3>No se puede guardar la firma</h3>
-                    <p>No se encontro una cuenta activa disponible para asociar tu archivo .p12.</p>
+                    <p>La firma la configura el titular de la cuenta mediante su archivo .p12 y su clave.</p>
                 </div>
             }
             else
@@ -245,11 +247,12 @@
     private FirmaEstadoDto? firmaEstadoEditor;
     private bool cargandoEstadosFirma;
     private bool firmaPendienteValidacion;
+    private FirmaConfiguracionCuenta? firmaConfiguracion;
     private bool MostrarVolverInicioOnboarding =>
         EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false;
 
     private string tipoPassword => mostrarPassword ? "text" : "password";
-    private bool FirmaDisponible => firmaModel.Codigo > 0;
+    private bool FirmaDisponible => firmaModel.Codigo > 0 || !esAsociado;
 
     private string? NombrePathCertificadoActual => nombrePathCertificadoSeleccionado ?? ObtenerNombreArchivo(firmaModel.PathCertificado);
     private bool TieneClaveCertificadoActual =>
@@ -328,18 +331,26 @@
             }
 
             var seleccionadoPrevio = firmaModel.Codigo;
+            firmaConfiguracion = await FirmaConfiguracionService.ObtenerAsync(idUsuario.Value);
             var data = await Http.GetFromJsonAsync<List<EmisorDto>>($"api/emisores?idUsuario={idUsuario.Value}") ?? new();
 
             emisores.Clear();
             emisores.AddRange(data);
 
-            var seleccionado = seleccionadoPrevio > 0
-                ? emisores.FirstOrDefault(e => e.Codigo == seleccionadoPrevio)
-                : null;
+            if (firmaConfiguracion?.EsConfiguracionCuenta == true)
+            {
+                SeleccionarConfiguracionCuenta();
+            }
+            else
+            {
+                var seleccionado = seleccionadoPrevio > 0
+                    ? emisores.FirstOrDefault(e => e.Codigo == seleccionadoPrevio)
+                    : null;
 
-            SeleccionarEmisorFirma(seleccionado ?? emisores.FirstOrDefault(e => e.Estado == true) ?? emisores.FirstOrDefault());
-            await CargarEstadosFirmaAsync(idUsuario.Value);
-            firmaEstadoEditor = ObtenerEstadoFirma(firmaModel.Codigo);
+                SeleccionarEmisorFirma(seleccionado ?? emisores.FirstOrDefault(e => e.Estado == true) ?? emisores.FirstOrDefault());
+                await CargarEstadosFirmaAsync(idUsuario.Value);
+                firmaEstadoEditor = ObtenerEstadoFirma(firmaModel.Codigo);
+            }
             await EmisorOnboardingService.RefreshRequirementAsync(idUsuario);
             emisionEstado = await EmisionControlService.ObtenerEstadoAsync(idUsuario);
         }
@@ -372,6 +383,18 @@
         firmaPendienteValidacion = false;
     }
 
+    private void SeleccionarConfiguracionCuenta()
+    {
+        firmaModel = new EmisorUpsertDto
+        {
+            PathCertificado = firmaConfiguracion?.PathCertificado
+        };
+        nombrePathCertificadoSeleccionado = null;
+        emisorSeleccionadoTieneClaveCertificado = firmaConfiguracion?.TieneClaveCertificado == true;
+        firmaEstadoEditor = null;
+        firmaPendienteValidacion = false;
+    }
+
     private async Task GuardarFirma()
     {
         if (!FirmaDisponible || esAsociado || guardandoFirma)
@@ -400,6 +423,21 @@
             if (!string.IsNullOrWhiteSpace(firmaModel.ClaveCertificado))
             {
                 firmaModel.EliminarClaveCertificado = false;
+            }
+
+            if (firmaModel.Codigo <= 0)
+            {
+                await FirmaConfiguracionService.GuardarAsync(
+                    idUsuario.Value,
+                    firmaModel.PathCertificado ?? string.Empty,
+                    firmaModel.ClaveCertificado);
+
+                await CargarTodo();
+                EmisionControlService.NotifyChanged();
+                EmisorOnboardingService.NotifyChanged();
+                mensaje = "Firma electronica guardada correctamente.";
+                await AlertService.ShowSuccessAsync("La firma electronica se guardo correctamente.", "Firma guardada");
+                return;
             }
 
             var response = await Http.PutAsJsonAsync($"api/emisores/{firmaModel.Codigo}", firmaModel);

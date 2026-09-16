@@ -1,0 +1,97 @@
+@page "/aliados/admin"
+
+<PageTitle>Administración | Portal de Aliados</PageTitle>
+
+<div class="ally-page">
+    <section class="ally-hero">
+        <div><span class="ally-eyebrow">ADMINISTRACIÓN INTERNA</span><h2>Portal de Aliados</h2><p>Administra cuentas, canales y porcentajes de comisión.</p></div>
+        <span class="ally-readonly">Rol administrador</span>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="ally-feedback">@mensaje</div>
+    }
+
+    <div class="ally-admin-grid">
+        <section class="ally-panel">
+            <div class="ally-panel-heading"><div><span class="ally-label">NUEVA CUENTA</span><h3>Crear acceso</h3></div></div>
+            <label class="ally-admin-label">Tipo de cuenta</label>
+            <select class="ally-select" @bind="tipoCuenta">
+                <option value="aliado">Usuario Aliado Comercial</option>
+                @if (puedeCrearAdministrador)
+                {
+                    <option value="administrador">Administrador Portal de Aliados</option>
+                }
+            </select>
+            <label class="ally-admin-label">Nombre</label>
+            <input class="ally-admin-input" @bind="nombre" placeholder="Nombre de la cuenta o aliado" />
+            <label class="ally-admin-label">Correo</label>
+            <input class="ally-admin-input" type="email" @bind="email" />
+            <label class="ally-admin-label">Clave inicial</label>
+            <input class="ally-admin-input" type="password" @bind="password" />
+            @if (tipoCuenta == "aliado")
+            {
+                <label class="ally-admin-label">Porcentaje base</label>
+                <input class="ally-admin-input" type="number" min="0" max="100" step=".01" @bind="porcentaje" />
+            }
+            <button class="ally-button" type="button" @onclick="CrearAsync" disabled="@guardando">@(guardando ? "Creando..." : "Crear cuenta")</button>
+        </section>
+
+        <section class="ally-panel">
+            <div class="ally-panel-heading"><div><span class="ally-label">CANALES</span><h3>Aliados registrados</h3></div><span class="ally-readonly">Solo lectura</span></div>
+            <div class="ally-table-wrap">
+                <table class="ally-table">
+                    <thead><tr><th>Aliado</th><th>Cuenta</th><th>Canal</th><th>Comisión</th><th>Estado</th></tr></thead>
+                    <tbody>
+                        @foreach (var aliado in aliados)
+                        {
+                            <tr @key="aliado.IdVendedor"><td><strong>@aliado.Nombre</strong></td><td>@(aliado.Usuario ?? "Sin cuenta")</td><td>@aliado.CodigoReferencia</td><td>@aliado.PorcentajeBase.ToString("0.##")%</td><td><span class="ally-badge @(aliado.Activo ? "success" : "danger")">@(aliado.Activo ? "Activo" : "Inactivo")</span></td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
+    [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
+
+    private List<AliadoAdminRow> aliados = new();
+    private string tipoCuenta = "aliado";
+    private string nombre = string.Empty;
+    private string email = string.Empty;
+    private string password = string.Empty;
+    private decimal porcentaje = 30m;
+    private string? mensaje;
+    private bool guardando;
+    private bool puedeCrearAdministrador;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        puedeCrearAdministrador = auth.User.IsInRole(BackOfficePermissionHelper.SuperAdministradorRoleId.ToString());
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync() => aliados = (await AliadoService.ListarAliadosAsync()).ToList();
+
+    private async Task CrearAsync()
+    {
+        if (guardando) return;
+        guardando = true;
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var actorId);
+        var resultado = await AliadoService.CrearCuentaAliadoAsync(actorId, nombre, email, password, porcentaje, tipoCuenta == "administrador");
+        mensaje = resultado.Message;
+        if (resultado.Success)
+        {
+            nombre = email = password = string.Empty;
+            porcentaje = 30m;
+            await CargarAsync();
+        }
+        guardando = false;
+    }
+}

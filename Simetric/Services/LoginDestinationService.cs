@@ -63,6 +63,11 @@ public sealed class LoginDestinationService
             return "/backoffice";
         }
 
+        if (await EsAliadoAdministradorAsync(effectiveRoleId))
+        {
+            return AliadoPortalService.AdminRoute;
+        }
+
         if (await EsAliadoAsync(effectiveRoleId))
         {
             return AliadoPortalService.RootRoute;
@@ -101,6 +106,19 @@ public sealed class LoginDestinationService
             .AnyAsync(x => x.IdTipoUsuario == roleId.Value &&
                           x.Estado == true &&
                           x.NombreTipo == AliadoPortalService.RoleName);
+    }
+
+    private async Task<bool> EsAliadoAdministradorAsync(int? roleId)
+    {
+        if (roleId is not > 0)
+            return false;
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        return await context.TipoUsuario
+            .AsNoTracking()
+            .AnyAsync(x => x.IdTipoUsuario == roleId.Value &&
+                          x.Estado == true &&
+                          x.NombreTipo == AliadoPortalService.AdminRoleName);
     }
 
     private static bool IsLocalUrl(string url)

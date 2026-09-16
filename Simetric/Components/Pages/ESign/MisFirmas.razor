@@ -10,6 +10,8 @@
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject HttpClient Http
+@inject FirmaConfiguracionService FirmaConfiguracionService
+@inject EmisorCertificadoValidator CertificadoValidator
 
 <PageTitle>Mi firma activa | E-Rubrica</PageTitle>
 
@@ -62,11 +64,11 @@
                         <div><strong>Consultando certificado</strong><small>Esto puede tardar unos segundos.</small></div>
                     </div>
                 }
-                else if (emisorActivo is null)
+                else if (emisorActivo is null && firmaConfiguracion is null)
                 {
                     <div class="panel-state is-warning">
-                        <i class="bi bi-building-exclamation"></i>
-                        <div><strong>No hay un emisor activo</strong><small>Registra un emisor para asociar y consultar su firma.</small></div>
+                        <i class="bi bi-key"></i>
+                        <div><strong>No hay una firma configurada</strong><small>Configura el archivo .p12 y su clave.</small></div>
                     </div>
                 }
                 else if (firmaActiva is null)
@@ -97,7 +99,7 @@
                         </article>
                         <article>
                             <span><i class="bi bi-credit-card-2-front"></i> Identificacion</span>
-                            <strong>@Valor(firmaActiva.Identificacion ?? emisorActivo.Ruc)</strong>
+                            <strong>@Valor(firmaActiva.Identificacion ?? emisorActivo?.Ruc)</strong>
                         </article>
                         <article>
                             <span><i class="bi bi-calendar-check"></i> Emitida</span>
@@ -211,6 +213,7 @@
     private bool cargandoPagina = true;
     private bool cargandoFirmaActiva;
     private EmisorCuentaDto? emisorActivo;
+    private FirmaConfiguracionCuenta? firmaConfiguracion;
     private FirmaDetalleDto? firmaActiva;
     private string mensajeFirmaActiva = "La firma activa aun no ha sido consultada.";
 
@@ -227,7 +230,7 @@
     private void AlternarVisibilidadClave() => mostrarClavePrueba = !mostrarClavePrueba;
 
     private string NombreEmisorActivo => emisorActivo is null
-        ? "Cuenta sin emisor"
+        ? firmaConfiguracion is null ? "Cuenta sin firma" : "Firma de la cuenta"
         : FirstFilled(emisorActivo.NomComercial, emisorActivo.RazonSocial, $"Emisor #{emisorActivo.Codigo}");
 
     private string EstadoFirmaActiva => firmaActiva?.EsValida == true
@@ -310,6 +313,45 @@
         firmaActiva = null;
         try
         {
+            firmaConfiguracion = await FirmaConfiguracionService.ObtenerAsync(usuarioId);
+            if (firmaConfiguracion?.EsConfiguracionCuenta == true)
+            {
+                emisorActivo = null;
+                var credenciales = await FirmaConfiguracionService.ObtenerCredencialesAsync(usuarioId);
+                if (credenciales is null || string.IsNullOrWhiteSpace(credenciales.ClaveCertificado))
+                {
+                    mensajeFirmaActiva = "Carga el archivo .p12 y su clave desde Configurar firma.";
+                    return;
+                }
+
+                var validacion = await CertificadoValidator.ConsultarArchivoConApiAsync(
+                    credenciales.PathCertificado,
+                    credenciales.ClaveCertificado);
+                if (!validacion.Success || validacion.Info is null)
+                {
+                    mensajeFirmaActiva = LimpiarMensaje(validacion.Message);
+                    return;
+                }
+
+                var info = validacion.Info;
+                firmaActiva = new FirmaDetalleDto
+                {
+                    EsValida = info.EsValida,
+                    EstadoVigencia = info.EstadoVigencia,
+                    Mensaje = info.Mensaje,
+                    NombreTitular = info.NombreTitular,
+                    Identificacion = info.Ruc ?? info.Cedula,
+                    Emisor = info.EmisorCertificado,
+                    NumeroSerie = info.NumeroSerie,
+                    HuellaDigital = info.HuellaDigital,
+                    FechaEmision = info.FechaEmision?.LocalDateTime,
+                    FechaExpiracion = info.FechaExpiracion?.LocalDateTime,
+                    DiasRestantes = info.DiasRestantes
+                };
+                mensajeFirmaActiva = FirstFilled(firmaActiva.Mensaje, "La firma configurada fue consultada correctamente.");
+                return;
+            }
+
             var emisores = await Http.GetFromJsonAsync<List<EmisorCuentaDto>>($"api/emisores?idUsuario={usuarioId}") ?? [];
             emisorActivo = emisores.FirstOrDefault();
             if (emisorActivo is null)

@@ -286,6 +286,7 @@ builder.Services.AddScoped<EContaxOrganizacionBootstrapService>();
 builder.Services.AddScoped<EDeclaraSharedDataService>();
 builder.Services.AddScoped<IEDeclaraMenuService, EDeclaraMenuService>();
 builder.Services.AddScoped<IESignMenuService, ESignMenuService>();
+builder.Services.AddScoped<FirmaConfiguracionService>();
 builder.Services.AddScoped<UanatacaApiService>();
 builder.Services.AddHttpClient<CedulaLookupService>(client =>
 {
