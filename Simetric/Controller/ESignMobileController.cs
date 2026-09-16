@@ -550,33 +550,6 @@ public sealed class ESignMobileController : ControllerBase
         return Ok(documents);
     }
 
-    [HttpGet("documentos/firmados")]
-    public IActionResult ObtenerDocumentosFirmados()
-    {
-        var userId = GetUserId();
-        if (userId <= 0) return Unauthorized();
-
-        var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", userId.ToString()).Replace('\\', '/');
-        var directory = Path.Combine(_hostEnvironment.WebRootPath, relativeDirectory.Replace('/', Path.DirectorySeparatorChar));
-        if (!Directory.Exists(directory)) return Ok(Array.Empty<object>());
-
-        var documents = Directory.EnumerateFiles(directory, "*.pdf")
-            .Select(path => new FileInfo(path))
-            .OrderByDescending(file => file.CreationTimeUtc)
-            .Select(file => new
-            {
-                id = file.Name,
-                nombreDocumento = CrearNombreVisibleDocumentoFirmado(file.Name),
-                nombreArchivo = file.Name,
-                tamanoBytes = file.Length,
-                fechaFirma = file.CreationTime,
-                estado = "Firmado",
-                url = $"/{relativeDirectory}/{Uri.EscapeDataString(file.Name)}"
-            });
-
-        return Ok(documents);
-    }
-
     [HttpPost("documentos/pendientes")]
     [RequestSizeLimit(12 * 1024 * 1024)]
     public async Task<IActionResult> CargarDocumentoPendiente([FromForm] IFormFile? pdf, CancellationToken cancellationToken)
@@ -852,16 +825,6 @@ public sealed class ESignMobileController : ControllerBase
             name = string.Join(" ", parts.Skip(2));
 
         return $"{name.Replace('_', ' ').Trim()}.pdf";
-    }
-
-    private static string CrearNombreVisibleDocumentoFirmado(string fileName)
-    {
-        var name = Path.GetFileNameWithoutExtension(fileName);
-        var parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 3 && parts[0].Length == 14 && Guid.TryParse(parts[1], out _) && parts[^1].Equals("firmado", StringComparison.OrdinalIgnoreCase))
-            name = string.Join(" ", parts.Skip(2).Take(parts.Length - 3));
-
-        return $"{name.Replace('_', ' ').Trim()} firmado.pdf";
     }
 
     private static string Truncar(string? value, int maxLength)
