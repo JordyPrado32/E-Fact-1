@@ -458,7 +458,7 @@ public sealed class ESignMobileController : ControllerBase
             return BadRequest(new { mensaje = "Para firmar documentos necesitas un plan de documentos activo o una solicitud de firma electrónica pagada y vigente." });
         if (pdf is null || !EsArchivo(pdf, ".pdf", 15 * 1024 * 1024))
             return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 15 MB." });
-        if (pagina <= 0 || xMm < 0 || yMm < 0 || anchoMm <= 0)
+        if (pagina <= 0 || !double.IsFinite(xMm) || !double.IsFinite(yMm) || !double.IsFinite(anchoMm) || xMm < 0 || yMm < 0 || anchoMm <= 0)
             return BadRequest(new { mensaje = "La posición y el tamaño de la firma no son válidos." });
 
         byte[] certificadoBytes;
