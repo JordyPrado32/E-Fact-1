@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -457,7 +458,7 @@ public sealed class ESignMobileController : ControllerBase
             return BadRequest(new { mensaje = "Para firmar documentos necesitas un plan de documentos activo o una solicitud de firma electrónica pagada y vigente." });
         if (pdf is null || !EsArchivo(pdf, ".pdf", 15 * 1024 * 1024))
             return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 15 MB." });
-        if (pagina <= 0 || xMm < 0 || yMm < 0 || anchoMm <= 0)
+        if (pagina <= 0 || !double.IsFinite(xMm) || !double.IsFinite(yMm) || !double.IsFinite(anchoMm) || xMm < 0 || yMm < 0 || anchoMm <= 0)
             return BadRequest(new { mensaje = "La posición y el tamaño de la firma no son válidos." });
 
         byte[] certificadoBytes;
@@ -510,6 +511,15 @@ public sealed class ESignMobileController : ControllerBase
 
         if (!resultado.Success || resultado.Pdf is null)
             return BadRequest(new { mensaje = resultado.Message, estado = resultado.HttpStatusCode });
+
+        if (!EsPdfFirmadoValido(resultado.Pdf))
+        {
+            return BadRequest(new
+            {
+                mensaje = "El servicio de firmado devolvió un archivo inválido. El documento original no fue modificado; intenta nuevamente o contacta a soporte.",
+                estado = resultado.HttpStatusCode
+            });
+        }
 
         var downloadFileName = $"{Path.GetFileNameWithoutExtension(pdf.FileName)}-firmado.pdf";
         var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{downloadFileName}";
@@ -842,6 +852,16 @@ public sealed class ESignMobileController : ControllerBase
     private static bool EsArchivo(IFormFile archivo, string extension, long maxBytes) =>
         archivo.Length > 0 && archivo.Length <= maxBytes &&
         string.Equals(Path.GetExtension(archivo.FileName), extension, StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsPdfFirmadoValido(byte[] contenido)
+    {
+        if (contenido.Length < 16 || !Encoding.ASCII.GetString(contenido, 0, 5).Equals("%PDF-", StringComparison.Ordinal))
+            return false;
+
+        var inicioCola = Math.Max(0, contenido.Length - 2048);
+        return Encoding.ASCII.GetString(contenido, inicioCola, contenido.Length - inicioCola)
+            .Contains("%%EOF", StringComparison.Ordinal);
+    }
 
     private int GetUserId()
     {
