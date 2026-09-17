@@ -837,10 +837,16 @@ public sealed class ESignMobileController : ControllerBase
         if (parts.Length > 2 && parts[0].Length == 14 && Guid.TryParse(parts[1], out _))
             name = string.Join("_", parts.Skip(2));
 
+        // Si el usuario carga de nuevo un nombre existente se agrega un GUID al
+        // archivo físico para no sobrescribirlo; no debe mostrarse al usuario.
+        var collisionParts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (collisionParts.Length > 1 && Guid.TryParse(collisionParts[^1], out _))
+            name = string.Join("_", collisionParts[..^1]);
+
         try { name = Uri.UnescapeDataString(name); }
         catch (UriFormatException) { /* Conserva los nombres ya almacenados con el formato anterior. */ }
 
-        return $"{name.Replace('_', ' ').Trim()}.pdf";
+        return $"{name.Trim()}.pdf";
     }
 
     private static string Truncar(string? value, int maxLength)
