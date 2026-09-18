@@ -595,7 +595,7 @@ public sealed class ESignMobileController : ControllerBase
 
     [HttpPost("documentos/pendientes")]
     [RequestSizeLimit(12 * 1024 * 1024)]
-    public async Task<IActionResult> CargarDocumentoPendiente([FromForm] IFormFile? pdf, CancellationToken cancellationToken)
+    public async Task<IActionResult> CargarDocumentoPendiente([FromForm] IFormFile? pdf, [FromForm] string? nombreOriginal, CancellationToken cancellationToken)
     {
         var userId = GetUserId();
         if (userId <= 0) return Unauthorized();
@@ -604,7 +604,8 @@ public sealed class ESignMobileController : ControllerBase
 
         var directory = ObtenerDirectorioDocumentosPendientes(userId);
         Directory.CreateDirectory(directory);
-        var storedName = CrearNombreArchivoSeguro(pdf.FileName);
+        var nombreParaGuardar = EsNombrePdfValido(nombreOriginal) ? nombreOriginal! : pdf.FileName;
+        var storedName = CrearNombreArchivoSeguro(nombreParaGuardar);
         if (System.IO.File.Exists(Path.Combine(directory, storedName)))
         {
             storedName = $"{Path.GetFileNameWithoutExtension(storedName)}_{Guid.NewGuid():N}.pdf";
@@ -891,6 +892,10 @@ public sealed class ESignMobileController : ControllerBase
     private static bool EsArchivo(IFormFile archivo, string extension, long maxBytes) =>
         archivo.Length > 0 && archivo.Length <= maxBytes &&
         string.Equals(Path.GetExtension(archivo.FileName), extension, StringComparison.OrdinalIgnoreCase);
+
+    private static bool EsNombrePdfValido(string? fileName) =>
+        !string.IsNullOrWhiteSpace(fileName) &&
+        string.Equals(Path.GetExtension(Path.GetFileName(fileName)), ".pdf", StringComparison.OrdinalIgnoreCase);
 
     private static bool EsPdfFirmadoValido(byte[] contenido)
     {
