@@ -3,6 +3,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Hosting
 @using System.Globalization
+@using System.Net.Http.Json
 @using System.Security.Claims
 @using Simetric.DTOs
 @using Simetric.Services
@@ -13,6 +14,9 @@
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject SolicitudService SolicitudService
+@inject HttpClient Http
+@inject FirmaConfiguracionService FirmaConfiguracionService
+@inject EmisorCertificadoValidator CertificadoValidator
 @inject IWebHostEnvironment HostEnvironment
 @inject IJSRuntime JS
 
@@ -273,11 +277,11 @@
     private bool chartsRenderPending;
     private CancellationTokenSource? sincronizacionCts;
     private Task? tareaSincronizacion;
+    private FirmaEstadoDto? firmaActiva;
 
     private int SolicitudesAnuladas => solicitudes.Count(s => s.SolIdEstadoNumerica == 4);
     private IEnumerable<SolicitudPagoClienteDto> SolicitudesPagadas => solicitudes.Where(s => s.SolPagoExitoso);
     private string ApprovalRateLabel => FormatPercent(certificadosEmitidos, Math.Max(totalSolicitudes, 1));
-    private SolicitudPagoClienteDto? FirmaPrincipal => SolicitudesPagadas.FirstOrDefault();
     private SolicitudPagoClienteDto? SolicitudPrincipal => solicitudes.OrderByDescending(s => s.SolFechaSolicitud).FirstOrDefault();
     private string EstadoPagoFirma => SolicitudPrincipal?.SolPagoExitoso == true ? "Pagado" : "Pendiente";
     private string ClaseEstadoPagoFirma => SolicitudPrincipal?.SolPagoExitoso == true ? "is-success" : "is-pending";
@@ -289,14 +293,16 @@
     private string ClaseEstadoUanatacaFirma => EstadoUanatacaFirma.Equals("No enviado", StringComparison.OrdinalIgnoreCase)
         ? "is-not-sent"
         : "is-success";
-    private string FirmaTitular => FirmaPrincipal is null ? currentUserName : $"{FirmaPrincipal.SolNombres} {FirmaPrincipal.SolPrimerApellido}".Trim();
-    private string FirmaStatusLabel => FirmaPrincipal is null ? "Sin firma activa" : "Activa";
-    private string FirmaVigenciaLabel => FirmaPrincipal is null
+    private string FirmaTitular => string.IsNullOrWhiteSpace(firmaActiva?.NombreTitular)
+        ? currentUserName
+        : firmaActiva.NombreTitular;
+    private string FirmaStatusLabel => firmaActiva?.EsValida == true ? "Activa" : "Sin firma activa";
+    private string FirmaVigenciaLabel => firmaActiva?.FechaExpiracion is null
         ? "Sin vigencia"
-        : $"{FirmaPrincipal.SolFechaSolicitud:dd MMM yyyy} - {GetFechaVencimiento(FirmaPrincipal):dd MMM yyyy}";
-    private string FirmaDiasRestantesLabel => FirmaPrincipal is null
+        : firmaActiva.FechaExpiracion.Value.ToString("dd MMM yyyy", new CultureInfo("es-EC"));
+    private string FirmaDiasRestantesLabel => firmaActiva?.DiasRestantes is null
         ? "0 dias"
-        : $"{Math.Max(0, (GetFechaVencimiento(FirmaPrincipal).Date - DateTime.Today).Days)} dias";
+        : firmaActiva.DiasRestantes < 0 ? "Vencida" : $"{firmaActiva.DiasRestantes} dias";
 
     protected override async Task OnInitializedAsync()
     {
@@ -366,6 +372,7 @@
                 currentUserName = "Usuario";
 
             solicitudes = await SolicitudService.ObtenerSolicitudesClienteAsync(currentUserId);
+            firmaActiva = await ObtenerFirmaActivaAsync();
             totalSolicitudes = solicitudes.Count;
             pagosExitosos = solicitudes.Count(s => s.SolPagoExitoso);
             pendientesPago = solicitudes.Count(s => !s.SolPagoExitoso && s.SolIdEstadoNumerica != 4);
@@ -394,6 +401,42 @@
 
         sincronizacionCts = new CancellationTokenSource();
         tareaSincronizacion = SincronizarPeriodicamenteAsync(sincronizacionCts.Token);
+    }
+
+    private async Task<FirmaEstadoDto?> ObtenerFirmaActivaAsync()
+    {
+        var configuracion = await FirmaConfiguracionService.ObtenerAsync(currentUserId);
+        if (configuracion?.EsConfiguracionCuenta == true)
+        {
+            var credenciales = await FirmaConfiguracionService.ObtenerCredencialesAsync(currentUserId);
+            if (credenciales is null || string.IsNullOrWhiteSpace(credenciales.ClaveCertificado))
+                return null;
+
+            var validacion = await CertificadoValidator.ConsultarArchivoConApiAsync(
+                credenciales.PathCertificado,
+                credenciales.ClaveCertificado);
+            if (!validacion.Success || validacion.Info is null)
+                return null;
+
+            var info = validacion.Info;
+            return new FirmaEstadoDto
+            {
+                EsValida = info.EsValida,
+                NombreTitular = info.NombreTitular,
+                FechaExpiracion = info.FechaExpiracion?.LocalDateTime,
+                DiasRestantes = info.DiasRestantes
+            };
+        }
+
+        var emisores = await Http.GetFromJsonAsync<List<EmisorFirmaDto>>(
+            $"api/emisores?idUsuario={currentUserId}") ?? [];
+        var emisor = emisores.FirstOrDefault(item =>
+            !string.IsNullOrWhiteSpace(item.PathCertificado) && item.TieneClaveCertificadoConfigurada);
+
+        return emisor is null
+            ? null
+            : await Http.GetFromJsonAsync<FirmaEstadoDto>(
+                $"api/emisores/{emisor.Codigo}/firma/estado?idUsuario={currentUserId}");
     }
 
     private async Task SincronizarPeriodicamenteAsync(CancellationToken cancellationToken)
@@ -499,19 +542,6 @@
         var first = string.IsNullOrWhiteSpace(sol.SolNombres) ? "U" : sol.SolNombres.Trim()[0].ToString();
         var last = string.IsNullOrWhiteSpace(sol.SolPrimerApellido) ? string.Empty : sol.SolPrimerApellido.Trim()[0].ToString();
         return $"{first}{last}".ToUpperInvariant();
-    }
-
-    private static DateTime GetFechaVencimiento(SolicitudPagoClienteDto sol)
-    {
-        var fechaInicio = sol.SolFechaAprobacion ?? sol.SolFechaPago ?? sol.SolFechaSolicitud;
-        var match = System.Text.RegularExpressions.Regex.Match(sol.SolVigencia ?? string.Empty, @"\d+");
-
-        if (!match.Success || !int.TryParse(match.Value, out var cantidad))
-            return fechaInicio.AddYears(1);
-
-        return System.Text.RegularExpressions.Regex.IsMatch(sol.SolVigencia, @"D[IÍ]AS?", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
-            ? fechaInicio.AddDays(Math.Max(cantidad, 1))
-            : fechaInicio.AddYears(Math.Clamp(cantidad, 1, 5));
     }
 
     private List<DocumentoRecienteItem> CargarDocumentosRecientes()
@@ -628,4 +658,19 @@
     }
 
     private sealed record DocumentoRecienteItem(string Nombre, string NombreArchivo, string Descripcion, DateTime Fecha, string Url);
+
+    private sealed class EmisorFirmaDto
+    {
+        public int Codigo { get; set; }
+        public string? PathCertificado { get; set; }
+        public bool TieneClaveCertificadoConfigurada { get; set; }
+    }
+
+    private sealed class FirmaEstadoDto
+    {
+        public bool EsValida { get; set; }
+        public string? NombreTitular { get; set; }
+        public DateTime? FechaExpiracion { get; set; }
+        public int? DiasRestantes { get; set; }
+    }
 }
