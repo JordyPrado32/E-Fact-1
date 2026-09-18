@@ -201,13 +201,16 @@ public sealed class ESignMobileController : ControllerBase
             esValida = validacion.IsValid,
             estadoVigencia = validacion.EstadoVigencia,
             mensaje = validacion.Message,
-            nombreTitular = validacion.NombreTitular,
+            nombreTitular = string.IsNullOrWhiteSpace(validacion.NombreTitular)
+                ? emisor.RazonSocial
+                : validacion.NombreTitular,
             identificacion = validacion.IdentificacionExtraida,
             fechaEmision = validacion.FechaEmision,
             fechaExpiracion = validacion.FechaExpiracion,
             diasRestantes = validacion.DiasRestantes,
             numeroSerie = validacion.NumeroSerie,
-            huellaDigital = validacion.HuellaDigital
+            huellaDigital = validacion.HuellaDigital,
+            emisor = validacion.EmisorCertificado
         });
     }
 
