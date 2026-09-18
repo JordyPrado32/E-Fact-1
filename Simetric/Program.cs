@@ -264,6 +264,7 @@ builder.Services.AddHttpClient<FirmaStampApiService>(client =>
     client.Timeout = TimeSpan.FromSeconds(90);
 });
 builder.Services.AddScoped<SolicitudService>();
+builder.Services.AddScoped<SolicitudFirmaBorradorService>();
 builder.Services.AddScoped<UbicacionEcuadorCatalogService>();
 builder.Services.AddScoped<SweetAlertService>();
 builder.Services.AddScoped<ComprobanteCorreoEstadoService>();
@@ -359,6 +360,9 @@ try
 
     var facturaPersistenceSchemaService = scope.ServiceProvider.GetRequiredService<FacturaPersistenceSchemaService>();
     await facturaPersistenceSchemaService.EnsureSchemaAsync();
+
+    var solicitudFirmaBorradorService = scope.ServiceProvider.GetRequiredService<SolicitudFirmaBorradorService>();
+    await solicitudFirmaBorradorService.EnsureSchemaAsync();
 
     var edeclaraMenuService = scope.ServiceProvider.GetRequiredService<IEDeclaraMenuService>();
     await edeclaraMenuService.EnsureSchemaAsync();

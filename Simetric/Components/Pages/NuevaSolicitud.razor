@@ -10,6 +10,7 @@
 @using Simetric.Services
 @inject PagoService PagoService
 @inject SolicitudService SolicitudService
+@inject SolicitudFirmaBorradorService SolicitudFirmaBorradorService
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
@@ -1854,7 +1855,8 @@
             .Where(item => !string.Equals(item.Id, borrador.Id, StringComparison.Ordinal))
             .ToList();
 
-        await GuardarBorradoresGuardadosAsync(borradoresGuardados);
+        if (usuarioActualId > 0)
+            await SolicitudFirmaBorradorService.EliminarAsync(usuarioActualId, borrador.Id);
         tieneBorrador = borradoresGuardados.Any();
         if (!tieneBorrador)
         {
@@ -1874,55 +1876,37 @@
             return new List<SolicitudFirmaDraftItem>();
         }
 
-        var raw = await JS.InvokeAsync<string?>("localStorage.getItem", DraftStorageKey);
-        if (string.IsNullOrWhiteSpace(raw))
-        {
+        if (usuarioActualId <= 0)
             return new List<SolicitudFirmaDraftItem>();
-        }
 
-        try
+        var items = await SolicitudFirmaBorradorService.ObtenerAsync(usuarioActualId);
+        return items.Select(item =>
         {
-            var items = JsonSerializer.Deserialize<List<SolicitudFirmaDraftItem>>(raw);
-            if (items is { Count: > 0 })
+            try
             {
-                return items
-                    .Where(item => item.Datos is not null)
-                    .OrderByDescending(item => item.FechaGuardado)
-                    .ToList();
+                var datos = JsonSerializer.Deserialize<SolicitudFirmaDraft>(item.DatosJson);
+                return datos is null ? null : new SolicitudFirmaDraftItem
+                {
+                    Id = item.Id,
+                    FechaGuardado = item.FechaGuardado.ToLocalTime(),
+                    Titulo = item.Titulo,
+                    Datos = datos
+                };
             }
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            var draft = JsonSerializer.Deserialize<SolicitudFirmaDraft>(raw);
-            if (draft is not null)
-            {
-                return
-                [
-                    new SolicitudFirmaDraftItem
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        FechaGuardado = DateTime.Now,
-                        Titulo = "Solicitud anterior",
-                        Datos = draft
-                    }
-                ];
-            }
-        }
-        catch
-        {
-        }
-
-        return new List<SolicitudFirmaDraftItem>();
+            catch { return null; }
+        }).Where(item => item is not null).Cast<SolicitudFirmaDraftItem>().ToList();
     }
 
     private async Task GuardarBorradoresGuardadosAsync(List<SolicitudFirmaDraftItem> borradores)
     {
-        var json = JsonSerializer.Serialize(borradores);
-        await JS.InvokeVoidAsync("localStorage.setItem", DraftStorageKey, json);
+        if (usuarioActualId <= 0 || borradores.Count == 0)
+            return;
+
+        var ultimo = borradores[0];
+        await SolicitudFirmaBorradorService.GuardarAsync(
+            usuarioActualId,
+            ultimo.Titulo,
+            JsonSerializer.Serialize(ultimo.Datos));
     }
 
     private string CrearTituloBorrador()

@@ -38,6 +38,7 @@ public sealed class ESignMobileController : ControllerBase
     private readonly IWebHostEnvironment _hostEnvironment;
     private readonly IEmailService _emailService;
     private readonly EmisionControlService _emisionControlService;
+    private readonly SolicitudFirmaBorradorService _borradorService;
 
     public ESignMobileController(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -51,7 +52,8 @@ public sealed class ESignMobileController : ControllerBase
         PagoService pagoService,
         IWebHostEnvironment hostEnvironment,
         IEmailService emailService,
-        EmisionControlService emisionControlService)
+        EmisionControlService emisionControlService,
+        SolicitudFirmaBorradorService borradorService)
     {
         _dbFactory = dbFactory;
         _solicitudService = solicitudService;
@@ -65,6 +67,37 @@ public sealed class ESignMobileController : ControllerBase
         _hostEnvironment = hostEnvironment;
         _emailService = emailService;
         _emisionControlService = emisionControlService;
+        _borradorService = borradorService;
+    }
+
+    [HttpGet("solicitudes/borradores")]
+    public async Task<IActionResult> ObtenerBorradores(CancellationToken cancellationToken)
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+        var borradores = await _borradorService.ObtenerAsync(userId, cancellationToken);
+        return Ok(borradores.Select(item => new { id = item.Id, titulo = item.Titulo, fechaGuardado = item.FechaGuardado, datosJson = item.DatosJson }));
+    }
+
+    [HttpPost("solicitudes/borradores")]
+    public async Task<IActionResult> GuardarBorrador([FromBody] MobileSolicitudBorradorRequest? request, CancellationToken cancellationToken)
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+        if (request is null || string.IsNullOrWhiteSpace(request.Titulo) || string.IsNullOrWhiteSpace(request.DatosJson))
+            return BadRequest(new { mensaje = "El borrador no contiene datos válidos." });
+        var borrador = await _borradorService.GuardarAsync(userId, request.Titulo, request.DatosJson, cancellationToken);
+        return Ok(new { id = borrador.Id, titulo = borrador.Titulo, fechaGuardado = borrador.FechaGuardado, datosJson = borrador.DatosJson });
+    }
+
+    [HttpDelete("solicitudes/borradores/{id}")]
+    public async Task<IActionResult> EliminarBorrador(string id, CancellationToken cancellationToken)
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+        return await _borradorService.EliminarAsync(userId, id, cancellationToken)
+            ? Ok(new { eliminado = true })
+            : NotFound(new { mensaje = "Borrador no encontrado." });
     }
 
     [HttpGet("dashboard")]
@@ -902,6 +935,12 @@ public sealed class ESignMobileController : ControllerBase
         public string? CuentaOrigen { get; set; }
         public string? NumeroComprobante { get; set; }
         public IFormFile? Comprobante { get; set; }
+    }
+
+    public sealed class MobileSolicitudBorradorRequest
+    {
+        public string? Titulo { get; set; }
+        public string? DatosJson { get; set; }
     }
 
     public sealed class MobileSolicitudFirmaRequest
