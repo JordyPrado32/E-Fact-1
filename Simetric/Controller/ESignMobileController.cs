@@ -167,7 +167,6 @@ public sealed class ESignMobileController : ControllerBase
             {
                 id = emisor.Codigo,
                 razonSocial = emisor.RazonSocial,
-                nombreTitular = validacion?.NombreTitular ?? emisor.RazonSocial,
                 ruc = emisor.Ruc,
                 email = emisor.Email,
                 telefono = emisor.Telefono,
