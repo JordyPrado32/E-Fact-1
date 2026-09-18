@@ -65,6 +65,7 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
             return $"{nombreOriginal}_firmado.pdf";
 
         var nombre = Path.GetFileNameWithoutExtension(file.Name);
+        nombre = nombre.Replace("-firmado", "_firmado", StringComparison.OrdinalIgnoreCase);
         var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
         if (partes.Length >= 3 &&
             partes[0].Length == 14 &&
@@ -85,6 +86,7 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
     {
         nombreOriginal = string.Empty;
         var nombre = Path.GetFileNameWithoutExtension(fileName);
+        nombre = nombre.Replace("-firmado", "_firmado", StringComparison.OrdinalIgnoreCase);
         var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
         if (partes.Length < 4 ||
             partes[0].Length != 14 ||

@@ -521,7 +521,7 @@ public sealed class ESignMobileController : ControllerBase
             });
         }
 
-        var downloadFileName = $"{Path.GetFileNameWithoutExtension(pdf.FileName)}-firmado.pdf";
+        var downloadFileName = $"{Path.GetFileNameWithoutExtension(pdf.FileName)}_firmado.pdf";
         var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{downloadFileName}";
         var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", userId.ToString());
         var physicalDirectory = Path.Combine(_hostEnvironment.WebRootPath, relativeDirectory);
