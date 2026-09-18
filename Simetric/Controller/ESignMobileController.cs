@@ -483,6 +483,7 @@ public sealed class ESignMobileController : ControllerBase
         [FromForm] double yMm = 20,
         [FromForm] double anchoMm = 50,
         [FromForm] string? documentoPendiente = null,
+        [FromForm] string? nombreOriginal = null,
         CancellationToken cancellationToken = default)
     {
         var userId = GetUserId();
@@ -525,11 +526,12 @@ public sealed class ESignMobileController : ControllerBase
             claveFirma = firmaConfigurada.Clave;
         }
 
+        var nombrePdfOriginal = ObtenerNombrePdfOriginal(nombreOriginal, pdf.FileName);
         await using var pdfStream = pdf.OpenReadStream();
 
         var resultado = await _firmaStampApiService.EstamparAsync(
             pdfStream,
-            Path.GetFileName(pdf.FileName),
+            $"{nombrePdfOriginal}.pdf",
             pdf.Length,
             pdf.ContentType,
             new FirmaStampApiFile(certificadoBytes, nombreCertificado, "application/x-pkcs12"),
@@ -554,8 +556,9 @@ public sealed class ESignMobileController : ControllerBase
             });
         }
 
-        var downloadFileName = $"{Path.GetFileNameWithoutExtension(pdf.FileName)}_firmado.pdf";
-        var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{downloadFileName}";
+        var downloadFileName = $"{nombrePdfOriginal}_firmado.pdf";
+        var nombreSeguro = Path.GetFileNameWithoutExtension(CrearNombreArchivoSeguro($"{nombrePdfOriginal}.pdf"));
+        var storedFileName = $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{nombreSeguro}_firmado.pdf";
         var relativeDirectory = Path.Combine("uploads", "e-rubrica", "estampados", userId.ToString());
         var physicalDirectory = Path.Combine(_hostEnvironment.WebRootPath, relativeDirectory);
         Directory.CreateDirectory(physicalDirectory);
@@ -896,6 +899,13 @@ public sealed class ESignMobileController : ControllerBase
     private static bool EsNombrePdfValido(string? fileName) =>
         !string.IsNullOrWhiteSpace(fileName) &&
         string.Equals(Path.GetExtension(Path.GetFileName(fileName)), ".pdf", StringComparison.OrdinalIgnoreCase);
+
+    private static string ObtenerNombrePdfOriginal(string? nombreOriginal, string fileName)
+    {
+        var nombre = EsNombrePdfValido(nombreOriginal) ? nombreOriginal! : fileName;
+        var baseName = Path.GetFileNameWithoutExtension(Path.GetFileName(nombre)).Trim();
+        return string.IsNullOrWhiteSpace(baseName) ? "documento" : baseName;
+    }
 
     private static bool EsPdfFirmadoValido(byte[] contenido)
     {
