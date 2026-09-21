@@ -57,7 +57,8 @@ public sealed class FirmaStampApiService
             xMm,
             yMm,
             anchoMm,
-            cancellationToken);
+            cancellationToken,
+            posiciones);
     }
 
     public async Task<FirmaStampApiResult> EstamparAsync(

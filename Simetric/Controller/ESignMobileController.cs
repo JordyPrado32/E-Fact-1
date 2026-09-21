@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -485,6 +486,7 @@ public sealed class ESignMobileController : ControllerBase
         [FromForm] double xMm = 20,
         [FromForm] double yMm = 20,
         [FromForm] double anchoMm = 50,
+        [FromForm] string? posiciones = null,
         [FromForm] string? documentoPendiente = null,
         [FromForm] string? nombreOriginal = null,
         CancellationToken cancellationToken = default)
@@ -497,6 +499,26 @@ public sealed class ESignMobileController : ControllerBase
             return BadRequest(new { mensaje = "Debes enviar un archivo PDF válido de hasta 15 MB." });
         if (pagina <= 0 || !double.IsFinite(xMm) || !double.IsFinite(yMm) || !double.IsFinite(anchoMm) || xMm < 0 || yMm < 0 || anchoMm <= 0)
             return BadRequest(new { mensaje = "La posición y el tamaño de la firma no son válidos." });
+
+        IReadOnlyList<FirmaStampApiPlacement>? posicionesFirma = null;
+        if (!string.IsNullOrWhiteSpace(posiciones))
+        {
+            try
+            {
+                posicionesFirma = JsonSerializer.Deserialize<List<FirmaStampApiPlacement>>(posiciones);
+            }
+            catch (JsonException)
+            {
+                return BadRequest(new { mensaje = "Las posiciones de firma no tienen un formato válido." });
+            }
+
+            if (posicionesFirma is not { Count: > 0 } || posicionesFirma.Any(posicion =>
+                    posicion.Pagina <= 0 || !double.IsFinite(posicion.XMm) || !double.IsFinite(posicion.YMm) ||
+                    !double.IsFinite(posicion.AnchoMm) || posicion.XMm < 0 || posicion.YMm < 0 || posicion.AnchoMm <= 0))
+            {
+                return BadRequest(new { mensaje = "Una o más posiciones de firma no son válidas." });
+            }
+        }
 
         byte[] certificadoBytes;
         string nombreCertificado;
@@ -545,7 +567,8 @@ public sealed class ESignMobileController : ControllerBase
             xMm,
             yMm,
             anchoMm,
-            cancellationToken);
+            cancellationToken,
+            posicionesFirma);
 
         if (!resultado.Success || resultado.Pdf is null)
             return BadRequest(new { mensaje = resultado.Message, estado = resultado.HttpStatusCode });

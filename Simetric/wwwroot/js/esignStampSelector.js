@@ -235,7 +235,7 @@ export async function init(options, dotNetRef) {
         activePlacementIndex = index;
         updateFootprints();
         setStatus(
-            `Firma ${index + 1}: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm${rotation ? " - cuadro girado 90°" : ""}`);
+            `Ubicación Firma ${index + 1}: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm${rotation ? " - cuadro girado 90°" : ""}`);
 
         if (shouldNotify) {
             await notifySelections();
@@ -401,7 +401,7 @@ export async function init(options, dotNetRef) {
 
         footprints[index].setPointerCapture(event.pointerId);
         stage.classList.add("is-dragging");
-        setStatus(`Arrastra el recuadro ${index + 1} para ajustar la ubicación.`);
+        setStatus(`Arrastra Ubicación Firma ${index + 1} para ajustar la ubicación.`);
     };
 
     const onFootprintPointerMove = async event => {
