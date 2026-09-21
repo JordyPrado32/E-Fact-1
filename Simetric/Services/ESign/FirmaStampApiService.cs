@@ -40,7 +40,8 @@ public sealed class FirmaStampApiService
         double xMm,
         double yMm,
         double anchoMm,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<FirmaStampApiPlacement>? posiciones = null)
     {
         await using var pdfStream = pdf.OpenReadStream(MaxFileBytes, cancellationToken);
         return await EstamparAsync(
@@ -72,7 +73,8 @@ public sealed class FirmaStampApiService
         double xMm,
         double yMm,
         double anchoMm,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<FirmaStampApiPlacement>? posiciones = null)
     {
         var baseUri = GetBaseUri();
         var apiKey = GetApiKey();
@@ -102,6 +104,12 @@ public sealed class FirmaStampApiService
         form.Add(new StringContent(xMm.ToString(CultureInfo.InvariantCulture)), "xMm");
         form.Add(new StringContent(yMm.ToString(CultureInfo.InvariantCulture)), "yMm");
         form.Add(new StringContent(anchoMm.ToString(CultureInfo.InvariantCulture)), "anchoMm");
+        if (posiciones is { Count: > 0 })
+        {
+            form.Add(
+                new StringContent(JsonSerializer.Serialize(posiciones, JsonOptions)),
+                "posiciones");
+        }
 
         var endpoint = BuildEndpointUri(baseUri, "EstamparPath", "api/documentos/estampar");
         var correlationId = Guid.NewGuid().ToString("N");
@@ -138,6 +146,7 @@ public sealed class FirmaStampApiService
             ClaveRecibida = !string.IsNullOrEmpty(clave),
             ClaveLongitud = clave.Length,
             Posicion = new { pagina, xMm, yMm, anchoMm },
+            Posiciones = posiciones,
             Razon = razon,
             Ubicacion = ubicacion
         });
@@ -812,6 +821,13 @@ public sealed record FirmaStampApiFile(
     byte[] Content,
     string FileName,
     string ContentType);
+
+public sealed record FirmaStampApiPlacement(
+    int Pagina,
+    double XMm,
+    double YMm,
+    double AnchoMm,
+    int Rotacion = 0);
 
 public sealed record FirmaStampApiResult(
     bool Success,

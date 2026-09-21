@@ -138,7 +138,7 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         if (formaPago is null)
             return Fail("No se encontró una forma de pago válida para la emisión.");
 
-        var numeroFactura = await _facturacionService.GetNextFacturaNumeroAsync(userId);
+        var numeroFactura = await _facturacionService.GetNextFacturaNumeroAsync(userId, emisor.Codigo);
         var fechaEmision = DateTime.Now;
         var esCredito = IsCreditPayment(formaPago, draft.FormaPago);
         var diasCredito = esCredito
@@ -323,7 +323,10 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
             return FailNotaDebito("La factura de origen debe estar autorizada por el SRI.");
 
         var resolucion = await _cajaSerieResolver.ResolverNotaDebitoAsync(ownerId);
-        var secuencial = await _facturacionService.GetNextSecuencialNotaDebitoAsync(ownerId, resolucion.SerieRaw);
+        var secuencial = await _facturacionService.GetNextSecuencialNotaDebitoAsync(
+            ownerId,
+            resolucion.SerieRaw,
+            factura.Codemisor);
         var detalle = new NotaDebitoService.DetalleNdDto
         {
             Codproducto = 0,

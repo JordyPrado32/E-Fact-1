@@ -175,7 +175,7 @@ namespace Simetric.Controllers
         }
 
         [HttpGet("nc/next-secuencial")]
-        public async Task<IActionResult> GetNextNc([FromQuery] int idUsuario, [FromQuery] string? serie = null)
+        public async Task<IActionResult> GetNextNc([FromQuery] int idUsuario, [FromQuery] string? serie = null, [FromQuery] int? codEmisor = null)
         {
             idUsuario = ResolverIdUsuario(idUsuario);
             if (idUsuario <= 0) return Unauthorized();
@@ -186,13 +186,13 @@ namespace Simetric.Controllers
             if (string.IsNullOrWhiteSpace(serieNc))
                 return BadRequest(new { error = "Caja sin SerieNotasCred." });
 
-            var next = await _service.GetNextSecuencialNotaCreditoAsync(idUsuario, serieNc);
+            var next = await _service.GetNextSecuencialNotaCreditoAsync(idUsuario, serieNc, codEmisor);
 
             return Ok(new { serieNc, proximo = next });
         }
 
         [HttpGet("nd/next-secuencial")]
-        public async Task<IActionResult> GetNextNd([FromQuery] int idUsuario, [FromQuery] string? serie = null)
+        public async Task<IActionResult> GetNextNd([FromQuery] int idUsuario, [FromQuery] string? serie = null, [FromQuery] int? codEmisor = null)
         {
             idUsuario = ResolverIdUsuario(idUsuario);
             if (idUsuario <= 0) return Unauthorized();
@@ -203,7 +203,7 @@ namespace Simetric.Controllers
             if (string.IsNullOrWhiteSpace(serieNd))
                 return BadRequest(new { error = "Caja sin SerieDebitos." });
 
-            var next = await _service.GetNextSecuencialNotaDebitoAsync(idUsuario, serieNd);
+            var next = await _service.GetNextSecuencialNotaDebitoAsync(idUsuario, serieNd, codEmisor);
 
             return Ok(new { serieNd, proximo = next });
         }

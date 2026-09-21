@@ -356,7 +356,8 @@ public class CajasController : ControllerBase
                         x.Usuario.HasValue &&
                         usuariosCuenta.Contains(x.Usuario.Value) &&
                         x.Serie != null &&
-                        x.Serie.Replace("-", "") == serieRaw)
+                        x.Serie.Replace("-", "") == serieRaw &&
+                        (!codEmisor.HasValue || x.CodEmisor == codEmisor.Value))
                     .Select(x => x.NumNotaCredito)
                     .ToListAsync();
                 break;
@@ -368,7 +369,8 @@ public class CajasController : ControllerBase
                         x.Usuario.HasValue &&
                         usuariosCuenta.Contains(x.Usuario.Value) &&
                         x.Serie != null &&
-                        x.Serie.Replace("-", "") == serieRaw)
+                        x.Serie.Replace("-", "") == serieRaw &&
+                        (!codEmisor.HasValue || x.CodEmisor == codEmisor.Value))
                     .Select(x => x.NumNotaDebito)
                     .ToListAsync();
                 break;
@@ -400,13 +402,24 @@ public class CajasController : ControllerBase
                 break;
 
             case "retencion":
-                secuenciales = await _context.RetencionInfo
+                var retencionesQuery = _context.RetencionInfo
                     .AsNoTracking()
                     .Where(x =>
                         x.Usuario.HasValue &&
                         usuariosCuenta.Contains(x.Usuario.Value) &&
                         x.Serie != null &&
-                        x.Serie.Replace("-", "") == serieRaw)
+                        x.Serie.Replace("-", "") == serieRaw);
+
+                if (codEmisor is > 0)
+                {
+                    retencionesQuery = retencionesQuery.Where(x =>
+                        x.IcCompra.HasValue &&
+                        _context.ComprasFacturas.Any(c =>
+                            c.CodFactura == x.IcCompra.Value &&
+                            c.CodEmisor == codEmisor.Value));
+                }
+
+                secuenciales = await retencionesQuery
                     .Select(x => x.NumRetencion)
                     .ToListAsync();
                 break;

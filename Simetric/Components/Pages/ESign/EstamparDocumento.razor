@@ -107,7 +107,7 @@
             <article class="stamp-panel stamp-preview-panel">
                 <div class="panel-heading">
                     <h2><span class="step-number">2.</span> Ubicación de la firma</h2>
-                    <p>Haz clic o arrastra para mover la firma. El ancho se mantiene fijo en 60 mm.</p>
+                    <p>Haz clic o arrastra para mover la firma. Puedes ubicarla en dos lugares y girarla automáticamente en páginas horizontales.</p>
                 </div>
 
                 <div class="selection-hint">
@@ -125,6 +125,10 @@
                         </button>
                         <span>Página <strong id="stampCurrentPage">1</strong> de <strong id="stampPageCount">0</strong></span>
                         <span class="toolbar-spacer"></span>
+                        <label class="placement-toggle">
+                            <input type="checkbox" id="stampSecondPlacementToggle" @bind="firmarDosLugares" @bind:after="CambiarModoDosFirmasAsync" />
+                            <span>Firmar en dos lugares</span>
+                        </label>
                         <button type="button" class="toolbar-ghost" id="stampZoomOut" aria-label="Alejar">
                             <i class="bi bi-dash"></i>
                         </button>
@@ -142,12 +146,22 @@
                             <canvas id="stampPdfCanvas" hidden></canvas>
                             <div class="stamp-footprint" id="stampFootprint" hidden>
                                 <span class="position-dot"></span>
-                                <span class="footprint-copy">Ubicación de firma</span>
+                                <span class="footprint-copy">Firma 1</span>
                                 <button
                                     type="button"
                                     class="resize-handle"
                                     id="stampResizeHandle"
                                     aria-label="Tamaño fijo del sello"
+                                    title="Ancho fijo: 60 mm"></button>
+                            </div>
+                            <div class="stamp-footprint stamp-footprint-secondary" id="stampFootprintSecondary" hidden>
+                                <span class="position-dot"></span>
+                                <span class="footprint-copy">Firma 2</span>
+                                <button
+                                    type="button"
+                                    class="resize-handle"
+                                    id="stampResizeHandleSecondary"
+                                    aria-label="Tamaño fijo del segundo sello"
                                     title="Ancho fijo: 60 mm"></button>
                             </div>
                             <div class="pdf-placeholder" id="stampPdfPlaceholder">
@@ -325,6 +339,9 @@
     private double xMm = 10;
     private double yMm = 10;
     private double anchoMm = StampWidthMm;
+    private int rotacion;
+    private bool firmarDosLugares;
+    private StampSelection? segundaUbicacion;
     private IBrowserFile? pdfFile;
     private DocumentoGuardadoItem? documentoGuardadoSeleccionado;
     private readonly List<DocumentoGuardadoItem> documentosGuardados = [];
@@ -397,7 +414,7 @@
 
         stampSelectorInitialized = true;
         dotNetRef = DotNetObjectReference.Create(this);
-        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js?v=20260824-1");
+        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js?v=20260921-2");
         stampSelectorInstance = await stampSelectorModule.InvokeAsync<IJSObjectReference>(
             "init",
             new
@@ -416,7 +433,10 @@
                 thumbnailsId = "stampPdfThumbnails",
                 zoomOutButtonId = "stampZoomOut",
                 zoomInButtonId = "stampZoomIn",
-                zoomLabelId = "stampZoomLabel"
+                zoomLabelId = "stampZoomLabel",
+                secondaryFootprintId = "stampFootprintSecondary",
+                secondaryResizeHandleId = "stampResizeHandleSecondary",
+                secondPlacementToggleId = "stampSecondPlacementToggle"
             },
             dotNetRef);
 
@@ -428,6 +448,7 @@
     {
         pdfFile = e.File;
         documentoGuardadoSeleccionado = null;
+        RestablecerUbicaciones();
     }
 
     private bool TieneCertificadoDisponible =>
@@ -457,10 +478,30 @@
         xMm = Math.Round(selectedX, 2);
         yMm = Math.Round(selectedY, 2);
         anchoMm = StampWidthMm;
+        rotacion = 0;
         if (usarPreferenciaSiempre)
             await GuardarPreferenciaInternaAsync(false, false);
 
         StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnStampSelectionsChanged(string selectionsJson)
+    {
+        var selections = JsonSerializer.Deserialize<List<StampSelection>>(selectionsJson) ?? [];
+        var primera = selections.FirstOrDefault();
+        if (primera is not null)
+        {
+            pagina = primera.Page;
+            xMm = Math.Round(primera.XMm, 2);
+            yMm = Math.Round(primera.YMm, 2);
+            anchoMm = StampWidthMm;
+            rotacion = primera.Rotation;
+        }
+
+        segundaUbicacion = selections.Skip(1).FirstOrDefault();
+        StateHasChanged();
+        await Task.CompletedTask;
     }
 
     [JSInvokable]
@@ -555,7 +596,8 @@
                 pagina,
                 xMm,
                 yMm,
-                anchoMm);
+                anchoMm,
+                posiciones: ObtenerPosicionesApi());
         }
 
         return await FirmaStampApiService.EstamparAsync(
@@ -567,7 +609,8 @@
             pagina,
             xMm,
             yMm,
-            anchoMm);
+            anchoMm,
+            posiciones: ObtenerPosicionesApi());
     }
 
     private bool ValidarFormulario()
@@ -601,6 +644,26 @@
         anchoMm = StampWidthMm;
 
         return true;
+    }
+
+    private IReadOnlyList<FirmaStampApiPlacement> ObtenerPosicionesApi()
+    {
+        var posiciones = new List<FirmaStampApiPlacement>
+        {
+            new(pagina, xMm, yMm, StampWidthMm, rotacion)
+        };
+
+        if (firmarDosLugares && segundaUbicacion is not null)
+        {
+            posiciones.Add(new(
+                segundaUbicacion.Page,
+                segundaUbicacion.XMm,
+                segundaUbicacion.YMm,
+                StampWidthMm,
+                segundaUbicacion.Rotation));
+        }
+
+        return posiciones;
     }
 
     private async Task CargarEmisorAsync()
@@ -1102,6 +1165,16 @@
         }
     }
 
+    private void RestablecerUbicaciones()
+    {
+        pagina = 1;
+        xMm = 10;
+        yMm = 10;
+        anchoMm = StampWidthMm;
+        rotacion = 0;
+        segundaUbicacion = null;
+    }
+
     private async Task LimpiarFormularioAsync()
     {
         pdfFile = null;
@@ -1116,6 +1189,9 @@
         xMm = 10;
         yMm = 10;
         anchoMm = StampWidthMm;
+        rotacion = 0;
+        firmarDosLugares = false;
+        segundaUbicacion = null;
 
         if (stampSelectorInstance is not null)
             await stampSelectorInstance.InvokeVoidAsync("loadFromUrl", string.Empty);
@@ -1143,6 +1219,15 @@
             false);
     }
 
+    private async Task CambiarModoDosFirmasAsync()
+    {
+        if (stampSelectorInstance is not null)
+            await stampSelectorInstance.InvokeVoidAsync("setSecondPlacementEnabled", firmarDosLugares);
+
+        if (!firmarDosLugares)
+            segundaUbicacion = null;
+    }
+
     private void AbrirModalDocumentos() => mostrarModalDocumentos = true;
 
     private void CerrarModalDocumentos() => mostrarModalDocumentos = false;
@@ -1151,6 +1236,7 @@
     {
         documentoGuardadoSeleccionado = doc;
         pdfFile = null;
+        RestablecerUbicaciones();
         mostrarModalDocumentos = false;
         SetMensaje($"Documento seleccionado: {doc.Nombre}", false);
 
@@ -1161,6 +1247,7 @@
     private async Task LimpiarDocumentoGuardado()
     {
         documentoGuardadoSeleccionado = null;
+        RestablecerUbicaciones();
         if (stampSelectorInstance is not null)
             await stampSelectorInstance.InvokeVoidAsync("loadFromUrl", string.Empty);
     }
@@ -1394,6 +1481,13 @@
         double XMm,
         double YMm,
         double WidthMm);
+
+    private sealed record StampSelection(
+        int Page,
+        double XMm,
+        double YMm,
+        double WidthMm,
+        int Rotation);
 
     private sealed record RecursosFirma(
         FirmaStampApiFile Certificado,

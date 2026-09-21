@@ -993,6 +993,15 @@ namespace Simetric.Services
                 })
                 .ToListAsync();
 
+            var facturasAnuladasPorTotal = await (
+                from f in context.Facturas.AsNoTracking()
+                join nc in context.NotaCreditos.AsNoTracking() on f.Codfactura equals nc.IdDocModificado
+                where facturaIds.Contains(f.Codfactura) && nc.Estado == true
+                group nc by new { f.Codfactura, TotalFactura = f.Valortotal ?? 0m } into grupo
+                where grupo.Key.TotalFactura > 0m && grupo.Sum(nc => nc.ValorTotal ?? 0m) >= grupo.Key.TotalFactura
+                select grupo.Key.Codfactura
+            ).ToHashSetAsync();
+
             var facturasConSaldo = detallesFactura
                 .GroupBy(d => d.Codfactura)
                 .Where(grupo =>
@@ -1010,7 +1019,7 @@ namespace Simetric.Services
                 .ToHashSet();
 
             return candidatos
-                .Where(x => facturasConSaldo.Contains(x.Codfactura))
+                .Where(x => !facturasAnuladasPorTotal.Contains(x.Codfactura) && facturasConSaldo.Contains(x.Codfactura))
                 .Take(10)
                 .ToList();
         }
@@ -3269,7 +3278,7 @@ IF @resultado < 0
                 .FirstOrDefaultAsync();
         }
 
-        public async Task<string> GetNextSecuencialNotaCreditoAsync(int idUsuario, string serieNc)
+        public async Task<string> GetNextSecuencialNotaCreditoAsync(int idUsuario, string serieNc, int? codEmisor = null)
         {
             serieNc = (serieNc ?? "").Replace("-", "").Trim();
             if (idUsuario <= 0 || string.IsNullOrWhiteSpace(serieNc))
@@ -3284,16 +3293,17 @@ IF @resultado < 0
                 .Where(n => n.Usuario.HasValue &&
                             usuariosCuenta.Contains(n.Usuario.Value) &&
                             n.Serie != null &&
-                            n.Serie.Replace("-", "") == serieNc)
+                            n.Serie.Replace("-", "") == serieNc &&
+                            (!codEmisor.HasValue || n.CodEmisor == codEmisor.Value))
                 .Select(n => n.NumNotaCredito)
                 .ToListAsync();
 
-            var estadoSecuencia = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-credito", serieNc);
+            var estadoSecuencia = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-credito", serieNc, codEmisor);
             var siguiente = _initialSequencePromptService.ResolveFirstAvailableSequence(list, estadoSecuencia);
             return string.IsNullOrWhiteSpace(siguiente) ? "000000001" : siguiente;
         }
 
-        public async Task<string> GetNextSecuencialNotaDebitoAsync(int idUsuario, string serieNd)
+        public async Task<string> GetNextSecuencialNotaDebitoAsync(int idUsuario, string serieNd, int? codEmisor = null)
         {
             serieNd = (serieNd ?? "").Replace("-", "").Trim();
             if (idUsuario <= 0 || string.IsNullOrWhiteSpace(serieNd))
@@ -3308,11 +3318,12 @@ IF @resultado < 0
                 .Where(n => n.Usuario.HasValue &&
                             usuariosCuenta.Contains(n.Usuario.Value) &&
                             n.Serie != null &&
-                            n.Serie.Replace("-", "") == serieNd)
+                            n.Serie.Replace("-", "") == serieNd &&
+                            (!codEmisor.HasValue || n.CodEmisor == codEmisor.Value))
                 .Select(n => n.NumNotaDebito)
                 .ToListAsync();
 
-            var estadoSecuencia = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-debito", serieNd);
+            var estadoSecuencia = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-debito", serieNd, codEmisor);
             var siguiente = _initialSequencePromptService.ResolveFirstAvailableSequence(list, estadoSecuencia);
             return string.IsNullOrWhiteSpace(siguiente) ? "000000001" : siguiente;
         }

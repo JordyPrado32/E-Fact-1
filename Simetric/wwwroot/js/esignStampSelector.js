@@ -3,8 +3,14 @@ export async function init(options, dotNetRef) {
     const canvas = document.getElementById(options.canvasId);
     const stage = document.getElementById(options.stageId);
     const placeholder = document.getElementById(options.placeholderId);
-    const footprint = document.getElementById(options.footprintId);
-    const resizeHandle = document.getElementById(options.resizeHandleId);
+    const footprints = [
+        document.getElementById(options.footprintId),
+        document.getElementById(options.secondaryFootprintId)
+    ];
+    const resizeHandles = [
+        document.getElementById(options.resizeHandleId),
+        document.getElementById(options.secondaryResizeHandleId)
+    ];
     const previousButton = document.getElementById(options.previousButtonId);
     const nextButton = document.getElementById(options.nextButtonId);
     const currentPageLabel = document.getElementById(options.currentPageLabelId);
@@ -13,9 +19,9 @@ export async function init(options, dotNetRef) {
     const thumbnails = document.getElementById(options.thumbnailsId);
     const zoomOutButton = document.getElementById(options.zoomOutButtonId);
     const zoomInButton = document.getElementById(options.zoomInButtonId);
-    const zoomLabel = document.getElementById(options.zoomLabelId);
+    const secondPlacementToggle = document.getElementById(options.secondPlacementToggleId);
 
-    if (!pdfInput || !canvas || !stage || !footprint || !resizeHandle) {
+    if (!pdfInput || !canvas || !stage || !footprints[0]) {
         return null;
     }
 
@@ -27,16 +33,18 @@ export async function init(options, dotNetRef) {
     let pageWidthMm = 0;
     let pageHeightMm = 0;
     let renderTask = null;
-    let selectedPosition = null;
-    let resizeStart = null;
     let dragStart = null;
     let pageNumber = 1;
     let preferredSelection = null;
     let autoApplyPreferred = false;
     let thumbnailTasks = [];
     let zoomPercent = 100;
+    let secondPlacementEnabled = Boolean(secondPlacementToggle?.checked);
+    let activePlacementIndex = 0;
+    let selectedPositions = [null, null];
 
     const fixedStampWidthMm = 60;
+    const stampHeightRatio = 0.5;
     const minZoomPercent = 50;
     const maxZoomPercent = 200;
     const zoomStepPercent = 25;
@@ -50,7 +58,20 @@ export async function init(options, dotNetRef) {
             page: Number(selection.page ?? selection.Page ?? 1),
             xMm: Number(selection.xMm ?? selection.XMm ?? 0),
             yMm: Number(selection.yMm ?? selection.YMm ?? 0),
-            widthMm: fixedStampWidthMm
+            widthMm: fixedStampWidthMm,
+            rotation: Number(selection.rotation ?? selection.Rotacion ?? selection.rotacion ?? 0)
+        };
+    };
+
+    const getRotation = () => pageWidthMm > pageHeightMm ? 90 : 0;
+
+    const getPlacementBounds = placement => {
+        const widthMm = placement.widthMm;
+        const heightMm = widthMm * stampHeightRatio;
+        const rotated = placement.rotation === 90 || placement.rotation === 270;
+        return {
+            widthMm: rotated ? heightMm : widthMm,
+            heightMm: rotated ? widthMm : heightMm
         };
     };
 
@@ -59,17 +80,10 @@ export async function init(options, dotNetRef) {
         selectionStatus.classList.toggle("is-error", isError);
     };
 
-    const notifySelection = async () => {
-        if (!selectedPosition) {
-            return;
-        }
-
+    const notifySelections = async () => {
         await dotNetRef.invokeMethodAsync(
-            "OnStampSelectionChanged",
-            selectedPosition.page,
-            selectedPosition.xMm,
-            selectedPosition.yMm,
-            selectedPosition.widthMm);
+            "OnStampSelectionsChanged",
+            JSON.stringify(selectedPositions.filter(Boolean)));
     };
 
     const updateNavigation = () => {
@@ -78,10 +92,6 @@ export async function init(options, dotNetRef) {
         pageCountLabel.textContent = total.toString();
         previousButton.disabled = !pdfDocument || pageNumber <= 1;
         nextButton.disabled = !pdfDocument || pageNumber >= total;
-
-        if (zoomLabel) {
-            zoomLabel.textContent = `${zoomPercent}%`;
-        }
 
         if (zoomOutButton) {
             zoomOutButton.disabled = !pdfDocument || zoomPercent <= minZoomPercent;
@@ -129,7 +139,6 @@ export async function init(options, dotNetRef) {
             const thumbCanvas = document.createElement("canvas");
             const label = document.createElement("strong");
             label.textContent = pageIndex.toString();
-
             item.append(thumbCanvas, label);
             item.addEventListener("click", async () => {
                 pageNumber = pageIndex;
@@ -166,19 +175,39 @@ export async function init(options, dotNetRef) {
         updateNavigation();
     };
 
-    const updateFootprint = () => {
-        if (!selectedPosition || !pdfPage) {
-            footprint.hidden = true;
+    const updateFootprint = index => {
+        const footprint = footprints[index];
+        const placement = selectedPositions[index];
+        if (!footprint || !placement || !pdfPage || placement.page !== pageNumber) {
+            if (footprint) {
+                footprint.hidden = true;
+            }
             return;
         }
 
         const displayedWidth = canvas.clientWidth;
         const displayedHeight = canvas.clientHeight;
-        footprint.style.left = `${canvas.offsetLeft + (selectedPosition.xMm / pageWidthMm) * displayedWidth}px`;
-        footprint.style.top = `${canvas.offsetTop + (selectedPosition.yMm / pageHeightMm) * displayedHeight}px`;
-        footprint.style.width = `${(selectedPosition.widthMm / pageWidthMm) * displayedWidth}px`;
-        footprint.style.height = `${((selectedPosition.widthMm * 0.4) / pageHeightMm) * displayedHeight}px`;
+        const bounds = getPlacementBounds(placement);
+        const originalWidthPx = (placement.widthMm / pageWidthMm) * displayedWidth;
+        const originalHeightPx = ((placement.widthMm * stampHeightRatio) / pageHeightMm) * displayedHeight;
+        const boundsWidthPx = (bounds.widthMm / pageWidthMm) * displayedWidth;
+        const boundsHeightPx = (bounds.heightMm / pageHeightMm) * displayedHeight;
+        const left = canvas.offsetLeft + (placement.xMm / pageWidthMm) * displayedWidth;
+        const top = canvas.offsetTop + (placement.yMm / pageHeightMm) * displayedHeight;
+
+        footprint.style.left = `${left + ((boundsWidthPx - originalWidthPx) / 2)}px`;
+        footprint.style.top = `${top + ((boundsHeightPx - originalHeightPx) / 2)}px`;
+        footprint.style.width = `${originalWidthPx}px`;
+        footprint.style.height = `${originalHeightPx}px`;
+        footprint.style.transform = placement.rotation === 0 ? "" : `rotate(${placement.rotation}deg)`;
+        footprint.classList.toggle("is-active", activePlacementIndex === index);
+        footprint.classList.toggle("is-landscape", placement.rotation === 90 || placement.rotation === 270);
         footprint.hidden = false;
+    };
+
+    const updateFootprints = () => {
+        updateFootprint(0);
+        updateFootprint(1);
     };
 
     const getPagePoint = event => {
@@ -189,26 +218,27 @@ export async function init(options, dotNetRef) {
         };
     };
 
-    const applySelection = async (rawX, rawY, requestedWidth, shouldNotify = true) => {
-        const widthMm = Math.min(
-            fixedStampWidthMm,
-            pageWidthMm,
-            pageHeightMm / 0.4);
-        const xMm = Math.max(0, Math.min(rawX, pageWidthMm - widthMm));
-        const yMm = Math.max(0, Math.min(rawY, pageHeightMm - (widthMm * 0.4)));
+    const applySelection = async (rawX, rawY, index, shouldNotify = true) => {
+        const widthMm = Math.min(fixedStampWidthMm, pageWidthMm, pageHeightMm / stampHeightRatio);
+        const rotation = getRotation();
+        const bounds = getPlacementBounds({ widthMm, rotation });
+        const xMm = Math.max(0, Math.min(rawX, pageWidthMm - bounds.widthMm));
+        const yMm = Math.max(0, Math.min(rawY, pageHeightMm - bounds.heightMm));
 
-        selectedPosition = {
+        selectedPositions[index] = {
             page: pageNumber,
             xMm,
             yMm,
-            widthMm
+            widthMm,
+            rotation
         };
-
-        updateFootprint();
-        setStatus(`Posicion: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm - Ancho 60.00 mm`);
+        activePlacementIndex = index;
+        updateFootprints();
+        setStatus(
+            `Firma ${index + 1}: X ${xMm.toFixed(2)} mm - Y ${yMm.toFixed(2)} mm${rotation ? " - cuadro girado 90°" : ""}`);
 
         if (shouldNotify) {
-            await notifySelection();
+            await notifySelections();
         }
     };
 
@@ -256,15 +286,13 @@ export async function init(options, dotNetRef) {
             await renderTask.promise;
             placeholder.hidden = true;
             canvas.hidden = false;
-            selectedPosition = pageNumber === selectedPosition?.page ? selectedPosition : null;
-            updateFootprint();
-            setStatus("Haz clic o arrastra el recuadro para ubicar la firma. El ancho se mantiene fijo en 60 mm.");
+            updateFootprints();
+            setStatus(pageWidthMm > pageHeightMm
+                ? "Página horizontal: el cuadro se gira automáticamente 90°."
+                : "Haz clic o arrastra cada recuadro para ubicar las firmas.");
             await dotNetRef.invokeMethodAsync("OnStampPageChanged", pageNumber);
-            if (!selectedPosition && autoApplyPreferred && preferredSelection?.page === pageNumber) {
-                await applySelection(
-                    preferredSelection.xMm,
-                    preferredSelection.yMm,
-                    preferredSelection.widthMm);
+            if (!selectedPositions[0] && autoApplyPreferred && preferredSelection?.page === pageNumber) {
+                await applySelection(preferredSelection.xMm, preferredSelection.yMm, 0);
             }
         } catch (error) {
             if (error?.name !== "RenderingCancelledException") {
@@ -280,10 +308,7 @@ export async function init(options, dotNetRef) {
             return;
         }
 
-        const nextZoom = Math.max(
-            minZoomPercent,
-            Math.min(maxZoomPercent, zoomPercent + delta));
-
+        const nextZoom = Math.max(minZoomPercent, Math.min(maxZoomPercent, zoomPercent + delta));
         if (nextZoom === zoomPercent) {
             updateNavigation();
             return;
@@ -295,8 +320,13 @@ export async function init(options, dotNetRef) {
     };
 
     const loadPdfBytes = async (arrayBuffer, preferredPage) => {
-        selectedPosition = null;
-        footprint.hidden = true;
+        selectedPositions = [null, null];
+        activePlacementIndex = 0;
+        footprints.forEach(footprint => {
+            if (footprint) {
+                footprint.hidden = true;
+            }
+        });
         clearThumbnails();
 
         if (!arrayBuffer) {
@@ -310,8 +340,8 @@ export async function init(options, dotNetRef) {
             pageNumber = preferredPage
                 ? Math.min(pdfDocument.numPages, Math.max(1, preferredPage))
                 : autoApplyPreferred && preferredSelection?.page
-                ? Math.min(pdfDocument.numPages, Math.max(1, preferredSelection.page))
-                : 1;
+                    ? Math.min(pdfDocument.numPages, Math.max(1, preferredSelection.page))
+                    : 1;
             await renderThumbnails();
             await renderPage();
         } catch {
@@ -326,13 +356,12 @@ export async function init(options, dotNetRef) {
 
     const onPdfChange = async () => {
         const file = pdfInput.files?.[0];
-
         if (!file) {
             return;
         }
 
         if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-            setStatus("Selecciona un archivo PDF valido.", true);
+            setStatus("Selecciona un archivo PDF válido.", true);
             return;
         }
 
@@ -345,28 +374,34 @@ export async function init(options, dotNetRef) {
         }
 
         event.preventDefault();
+        const index = secondPlacementEnabled && selectedPositions[0] && !selectedPositions[1]
+            ? 1
+            : activePlacementIndex;
         const point = getPagePoint(event);
-        await applySelection(point.xMm, point.yMm, fixedStampWidthMm);
+        await applySelection(point.xMm, point.yMm, index);
     };
 
-    const onFootprintPointerDown = event => {
-        if (!selectedPosition || event.button !== 0) {
+    const onFootprintPointerDown = (index, event) => {
+        const placement = selectedPositions[index];
+        if (!placement || event.button !== 0) {
             return;
         }
 
         event.preventDefault();
         event.stopPropagation();
-
+        activePlacementIndex = index;
+        updateFootprints();
         const point = getPagePoint(event);
         dragStart = {
             pointerId: event.pointerId,
-            offsetXMm: point.xMm - selectedPosition.xMm,
-            offsetYMm: point.yMm - selectedPosition.yMm
+            index,
+            offsetXMm: point.xMm - placement.xMm,
+            offsetYMm: point.yMm - placement.yMm
         };
 
-        footprint.setPointerCapture(event.pointerId);
+        footprints[index].setPointerCapture(event.pointerId);
         stage.classList.add("is-dragging");
-        setStatus("Arrastra el recuadro para ajustar la ubicacion de la firma.");
+        setStatus(`Arrastra el recuadro ${index + 1} para ajustar la ubicación.`);
     };
 
     const onFootprintPointerMove = async event => {
@@ -384,7 +419,7 @@ export async function init(options, dotNetRef) {
         await applySelection(
             point.xMm - dragStart.offsetXMm,
             point.yMm - dragStart.offsetYMm,
-            fixedStampWidthMm);
+            dragStart.index);
     };
 
     const finishDragging = event => {
@@ -392,7 +427,8 @@ export async function init(options, dotNetRef) {
             return;
         }
 
-        if (footprint.hasPointerCapture(event.pointerId)) {
+        const footprint = footprints[dragStart.index];
+        if (footprint?.hasPointerCapture(event.pointerId)) {
             footprint.releasePointerCapture(event.pointerId);
         }
 
@@ -401,42 +437,27 @@ export async function init(options, dotNetRef) {
     };
 
     const onResizePointerDown = event => {
-        if (!selectedPosition || event.button !== 0) {
-            return;
-        }
-
         event.preventDefault();
         event.stopPropagation();
-        resizeStart = {
-            pointerId: event.pointerId,
-            xMm: selectedPosition.xMm,
-            yMm: selectedPosition.yMm
-        };
-        stage.classList.add("is-resizing");
-        setStatus("El ancho de la firma se mantiene fijo en 60 mm.");
     };
 
-    const onWindowPointerMove = async event => {
-        if (!resizeStart || resizeStart.pointerId !== event.pointerId) {
-            return;
+    const setSecondPlacementEnabled = async enabled => {
+        secondPlacementEnabled = Boolean(enabled);
+        if (secondPlacementToggle) {
+            secondPlacementToggle.checked = secondPlacementEnabled;
         }
 
-        if ((event.buttons & 1) === 0) {
-            finishResize(event);
-            return;
+        if (!secondPlacementEnabled) {
+            selectedPositions[1] = null;
+            activePlacementIndex = 0;
+            updateFootprints();
+            await notifySelections();
+        } else {
+            activePlacementIndex = selectedPositions[0] ? 1 : 0;
+            setStatus(selectedPositions[0]
+                ? "Haz clic en el PDF para ubicar la segunda firma."
+                : "Haz clic en el PDF para ubicar la primera firma.");
         }
-
-        event.preventDefault();
-        await applySelection(resizeStart.xMm, resizeStart.yMm, fixedStampWidthMm);
-    };
-
-    const finishResize = event => {
-        if (!resizeStart || resizeStart.pointerId !== event.pointerId) {
-            return;
-        }
-
-        resizeStart = null;
-        stage.classList.remove("is-resizing");
     };
 
     const onPrevious = async () => {
@@ -449,26 +470,24 @@ export async function init(options, dotNetRef) {
         await renderPage();
     };
 
-    const onZoomOut = async () => {
-        await changeZoom(-zoomStepPercent);
-    };
-
-    const onZoomIn = async () => {
-        await changeZoom(zoomStepPercent);
-    };
+    const onZoomOut = async () => await changeZoom(-zoomStepPercent);
+    const onZoomIn = async () => await changeZoom(zoomStepPercent);
 
     pdfInput.addEventListener("change", onPdfChange);
     canvas.addEventListener("pointerdown", onCanvasPointerDown);
-    footprint.addEventListener("pointerdown", onFootprintPointerDown);
-    footprint.addEventListener("pointermove", onFootprintPointerMove);
-    footprint.addEventListener("pointerup", finishDragging);
-    footprint.addEventListener("pointercancel", finishDragging);
-    resizeHandle.addEventListener("pointerdown", onResizePointerDown);
-    window.addEventListener("pointermove", onWindowPointerMove);
+    footprints.forEach((footprint, index) => {
+        if (!footprint) {
+            return;
+        }
+
+        footprint.addEventListener("pointerdown", event => onFootprintPointerDown(index, event));
+        footprint.addEventListener("pointermove", onFootprintPointerMove);
+        footprint.addEventListener("pointerup", finishDragging);
+        footprint.addEventListener("pointercancel", finishDragging);
+    });
+    resizeHandles.forEach(handle => handle?.addEventListener("pointerdown", onResizePointerDown));
     window.addEventListener("pointerup", finishDragging);
     window.addEventListener("pointercancel", finishDragging);
-    window.addEventListener("pointerup", finishResize);
-    window.addEventListener("pointercancel", finishResize);
     previousButton.addEventListener("click", onPrevious);
     nextButton.addEventListener("click", onNext);
     zoomOutButton?.addEventListener("click", onZoomOut);
@@ -478,9 +497,6 @@ export async function init(options, dotNetRef) {
     return {
         async setPreferredSelection(selection, autoApply) {
             preferredSelection = normalizeSelection(selection);
-            autoApplyPreferred = Boolean(autoApply);
-        },
-        async setAutoApplyPreferred(autoApply) {
             autoApplyPreferred = Boolean(autoApply);
         },
         async applyPreferredSelection(selection) {
@@ -495,18 +511,22 @@ export async function init(options, dotNetRef) {
             }
 
             if (pdfDocument) {
-                await applySelection(
-                    preferredSelection.xMm,
-                    preferredSelection.yMm,
-                    preferredSelection.widthMm);
+                await applySelection(preferredSelection.xMm, preferredSelection.yMm, 0);
             }
+        },
+        async setSecondPlacementEnabled(enabled) {
+            await setSecondPlacementEnabled(enabled);
         },
         async loadFromUrl(url) {
             if (!url) {
                 pdfDocument = null;
                 pdfPage = null;
-                selectedPosition = null;
-                footprint.hidden = true;
+                selectedPositions = [null, null];
+                footprints.forEach(footprint => {
+                    if (footprint) {
+                        footprint.hidden = true;
+                    }
+                });
                 canvas.hidden = true;
                 placeholder.hidden = false;
                 pageNumber = 1;
@@ -533,58 +553,39 @@ export async function init(options, dotNetRef) {
                 clearThumbnails();
             }
         },
-        async previewCurrentSelection() {
-            if (!pdfDocument) {
-                setStatus("Carga un PDF para previsualizar.", true);
-                return false;
-            }
-
-            if (!selectedPosition) {
-                setStatus("Selecciona la posición de la firma para previsualizar.", true);
-                return false;
-            }
-
-            updateFootprint();
-            setStatus("Previsualizacion activa: asi quedara ubicada la firma.");
-            return true;
-        },
         async getPreviewSnapshot() {
-            if (!pdfDocument || !selectedPosition || canvas.hidden) {
+            const placement = selectedPositions[0];
+            if (!pdfDocument || !placement || canvas.hidden) {
                 return null;
             }
 
             const displayedWidth = canvas.clientWidth;
             const displayedHeight = canvas.clientHeight;
-            const left = (selectedPosition.xMm / pageWidthMm) * displayedWidth;
-            const top = (selectedPosition.yMm / pageHeightMm) * displayedHeight;
-            const stampWidth = (selectedPosition.widthMm / pageWidthMm) * displayedWidth;
-            const stampHeight = ((selectedPosition.widthMm * 0.4) / pageHeightMm) * displayedHeight;
-
+            const bounds = getPlacementBounds(placement);
             return {
                 imageDataUrl: canvas.toDataURL("image/png"),
                 width: displayedWidth,
                 height: displayedHeight,
-                left,
-                top,
-                stampWidth,
-                stampHeight,
-                page: selectedPosition.page
+                left: (placement.xMm / pageWidthMm) * displayedWidth,
+                top: (placement.yMm / pageHeightMm) * displayedHeight,
+                stampWidth: (bounds.widthMm / pageWidthMm) * displayedWidth,
+                stampHeight: (bounds.heightMm / pageHeightMm) * displayedHeight,
+                page: placement.page,
+                placements: selectedPositions.filter(Boolean)
             };
         },
         dispose() {
             clearThumbnails();
             pdfInput.removeEventListener("change", onPdfChange);
             canvas.removeEventListener("pointerdown", onCanvasPointerDown);
-            footprint.removeEventListener("pointerdown", onFootprintPointerDown);
-            footprint.removeEventListener("pointermove", onFootprintPointerMove);
-            footprint.removeEventListener("pointerup", finishDragging);
-            footprint.removeEventListener("pointercancel", finishDragging);
-            resizeHandle.removeEventListener("pointerdown", onResizePointerDown);
-            window.removeEventListener("pointermove", onWindowPointerMove);
+            footprints.forEach(footprint => {
+                footprint?.removeEventListener("pointermove", onFootprintPointerMove);
+                footprint?.removeEventListener("pointerup", finishDragging);
+                footprint?.removeEventListener("pointercancel", finishDragging);
+            });
+            resizeHandles.forEach(handle => handle?.removeEventListener("pointerdown", onResizePointerDown));
             window.removeEventListener("pointerup", finishDragging);
             window.removeEventListener("pointercancel", finishDragging);
-            window.removeEventListener("pointerup", finishResize);
-            window.removeEventListener("pointercancel", finishResize);
             previousButton.removeEventListener("click", onPrevious);
             nextButton.removeEventListener("click", onNext);
             zoomOutButton?.removeEventListener("click", onZoomOut);

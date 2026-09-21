@@ -119,7 +119,8 @@ public class LiquidacionesCompraController : UsuarioApiControllerBase
     {
         idUsuario = ResolverIdUsuario(idUsuario);
         if (idUsuario <= 0) return Unauthorized();
-        if (request.Retenciones.Count == 0) return BadRequest("Agrega al menos una retencion.");
+        if (request is null || request.Retenciones is null || request.Retenciones.Count == 0)
+            return BadRequest("Agrega al menos una retencion.");
 
         var detalle = await _service.GetLiquidacionDetalleUsuarioAsync(codFactura, idUsuario);
         if (detalle is null) return NotFound();
@@ -188,17 +189,24 @@ public class LiquidacionesCompraController : UsuarioApiControllerBase
             Retenciones = request.Retenciones
         };
 
-        await _comprasXmlService.GuardarCompraDesdePreviewAsync(preview);
-        var codRetencion = await _retencionCorreoService.RegistrarDestinatariosRetencionPorCompraAsync(
-            codFactura,
-            request.CorreoPrincipal ?? liquidacion.EmailProveedor,
-            request.Correos);
-
-        return Ok(new
+        try
         {
-            codLiquidacion = codFactura,
-            codRetencion,
-            numeroRetencion = preview.NumeroRetencionGenerado
-        });
+            await _comprasXmlService.GuardarCompraDesdePreviewAsync(preview);
+            var codRetencion = await _retencionCorreoService.RegistrarDestinatariosRetencionPorCompraAsync(
+                codFactura,
+                request.CorreoPrincipal ?? liquidacion.EmailProveedor,
+                request.Correos);
+
+            return Ok(new
+            {
+                codLiquidacion = codFactura,
+                codRetencion,
+                numeroRetencion = preview.NumeroRetencionGenerado
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { mensaje = ex.Message });
+        }
     }
 }

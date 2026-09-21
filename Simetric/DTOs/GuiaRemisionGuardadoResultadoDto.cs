@@ -13,5 +13,6 @@ namespace Simetric.DTOs
         public string RutaPdf { get; set; } = string.Empty;
         public string NombreArchivoPdf { get; set; } = string.Empty;
         public string ClaveAcceso { get; set; } = string.Empty;
+        public string Mensaje { get; set; } = string.Empty;
     }
 }

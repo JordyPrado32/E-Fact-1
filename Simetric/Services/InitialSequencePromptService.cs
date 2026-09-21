@@ -491,9 +491,8 @@ WHERE [titularUserId] = @titularUserId
             next = previous + 1;
         }
 
-        var firstIssued = issued.Count > 0 ? issued.Min() : 0;
-        if (firstIssued > 0 && firstIssued < next)
-            next = firstIssued + 1;
+        if (issued.Count > 0 && issued.Max() + 1 < next)
+            next = issued.Max() + 1;
 
         while (issued.Contains(next) && next <= 999999999)
             next++;

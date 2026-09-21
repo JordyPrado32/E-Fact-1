@@ -137,7 +137,7 @@ namespace Simetric.Services
             await using var context = await _dbFactory.CreateDbContextAsync();
             var usuariosCuenta = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
             var filtroNumerico = new string(filtro.Where(char.IsDigit).ToArray());
-            return await (
+            var candidatos = await (
                 from f in context.Facturas.AsNoTracking()
                 join c in context.Clientes.AsNoTracking() on f.Codclientes equals c.Codcliente into cliJoin
                 from c in cliJoin.DefaultIfEmpty()
@@ -166,6 +166,74 @@ namespace Simetric.Services
                 })
                 .Take(40)
                 .ToListAsync();
+
+            return await FiltrarFacturasConSaldoDisponibleAsync(context, candidatos);
+        }
+
+        private static async Task<List<FacturaBusquedaDto>> FiltrarFacturasConSaldoDisponibleAsync(
+            AppDbContext context,
+            List<FacturaBusquedaDto> candidatos)
+        {
+            if (!candidatos.Any())
+                return candidatos;
+
+            var facturaIds = candidatos.Select(x => x.Codfactura).Distinct().ToList();
+
+            var detallesFactura = await context.Detallefacturas
+                .AsNoTracking()
+                .Where(d => facturaIds.Contains(d.Codfactura))
+                .Select(d => new
+                {
+                    d.Codfactura,
+                    d.Codproducto,
+                    Cantidad = d.Cantproducto,
+                    Subtotal = d.Valortproducto
+                })
+                .ToListAsync();
+
+            var anulados = await (
+                from nc in context.NotaCreditos.AsNoTracking()
+                join dnc in context.DetallesNotaCredito.AsNoTracking() on nc.Sec equals dnc.CodNotaCredito
+                where nc.Estado == true &&
+                      nc.IdDocModificado.HasValue &&
+                      facturaIds.Contains(nc.IdDocModificado.Value)
+                select new
+                {
+                    CodFactura = nc.IdDocModificado!.Value,
+                    dnc.CodProducto,
+                    Cantidad = dnc.CantProducto ?? 0m,
+                    Subtotal = dnc.ValorTProducto ?? 0m
+                })
+                .ToListAsync();
+
+            var facturasAnuladasPorTotal = await (
+                from f in context.Facturas.AsNoTracking()
+                join nc in context.NotaCreditos.AsNoTracking() on f.Codfactura equals nc.IdDocModificado
+                where facturaIds.Contains(f.Codfactura) && nc.Estado == true
+                group nc by new { f.Codfactura, TotalFactura = f.Valortotal ?? 0m } into grupo
+                where grupo.Key.TotalFactura > 0m && grupo.Sum(nc => nc.ValorTotal ?? 0m) >= grupo.Key.TotalFactura
+                select grupo.Key.Codfactura
+            ).ToHashSetAsync();
+
+            var facturasConSaldo = detallesFactura
+                .GroupBy(d => d.Codfactura)
+                .Where(grupo => grupo.Any(detalle =>
+                {
+                    var anuladosProducto = anulados.Where(a =>
+                        a.CodFactura == detalle.Codfactura &&
+                        a.CodProducto == detalle.Codproducto);
+
+                    var cantidadRestante = detalle.Cantidad - anuladosProducto.Sum(a => a.Cantidad);
+                    var subtotalRestante = detalle.Subtotal - anuladosProducto.Sum(a => a.Subtotal);
+                    return cantidadRestante > 0m && subtotalRestante > 0m;
+                }))
+                .Select(grupo => grupo.Key)
+                .ToHashSet();
+
+            return candidatos
+                .Where(x => !facturasAnuladasPorTotal.Contains(x.Codfactura) && facturasConSaldo.Contains(x.Codfactura))
+                .Take(10)
+                .ToList();
         }
 
         public async Task<Transportista> GuardarTransportistaAsync(Transportista transportistaData)
@@ -174,6 +242,7 @@ namespace Simetric.Services
             var ident = Limpiar(transportistaData.NumeroIdentificacion);
             if (string.IsNullOrWhiteSpace(ident)) throw new Exception("Debes ingresar la identificacion del transportista.");
             if (string.IsNullOrWhiteSpace(transportistaData.RazonSocial)) throw new Exception("Debes ingresar la razon social del transportista.");
+            if (string.IsNullOrWhiteSpace(transportistaData.Direccion)) throw new Exception("Debes ingresar la direccion del transportista.");
             transportistaData.TipoIdentificacion = ResolverTipoIdentificacionTransportista(
                 transportistaData.TipoIdentificacion,
                 ident);
@@ -224,8 +293,6 @@ namespace Simetric.Services
             GuiaDestinatario destinatarioData,
             List<DetalleGuiaRemision> detallesData)
         {
-            await _emisionControlService.AsegurarPuedeEmitirAsync(idUsuario);
-
             if (transportistaData == null) throw new Exception("Debes ingresar la informacion del transportista.");
             if (guiaData == null) throw new Exception("Debes ingresar la informacion de la guia.");
             if (destinatarioData == null) throw new Exception("Debes ingresar la informacion del destinatario.");
@@ -246,6 +313,7 @@ namespace Simetric.Services
                 await using var context = await _dbFactory.CreateDbContextAsync();
                 await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
                 string? rutaXml = null;
+                var mensajeGuardado = "Guia de remision guardada correctamente.";
 
                 try
                 {
@@ -254,6 +322,17 @@ namespace Simetric.Services
                         : null;
                     if (codfactura.GetValueOrDefault() > 0 && facturaDb == null)
                         throw new Exception("La factura seleccionada no existe o no pertenece al usuario actual.");
+                    if (facturaDb != null && facturaDb.Estado != true)
+                        throw new Exception("La factura seleccionada está anulada y no puede vincularse a una guía de remisión.");
+                    var totalFactura = facturaDb?.Valortotal ?? 0m;
+                    if (facturaDb != null && totalFactura > 0m)
+                    {
+                        var totalNotasCredito = await context.NotaCreditos.AsNoTracking()
+                            .Where(nc => nc.Estado == true && nc.IdDocModificado == facturaDb.Codfactura)
+                            .SumAsync(nc => nc.ValorTotal ?? 0m);
+                        if (totalNotasCredito >= totalFactura)
+                            throw new Exception("La factura seleccionada ya fue anulada mediante nota de crédito y no puede vincularse a una guía de remisión.");
+                    }
                     if (facturaDb != null &&
                         await context.GuiasRemision.AsNoTracking().AnyAsync(g => g.Codfactura == facturaDb.Codfactura && g.IdUsuario == idUsuario))
                         throw new Exception("La factura seleccionada ya tiene una guia de remision registrada.");
@@ -329,7 +408,9 @@ namespace Simetric.Services
                     transportistaDb.Telefono = Limpiar(transportistaData.Telefono);
                     await context.SaveChangesAsync();
 
-                    var codigoEmisor = facturaDb?.Codemisor ?? codEmisor;
+                    var codigoEmisor = facturaDb?.Codemisor.GetValueOrDefault() > 0
+                        ? facturaDb.Codemisor
+                        : codEmisor;
                     var emisorDb = codigoEmisor.GetValueOrDefault() > 0
                         ? await context.Emisores.AsNoTracking().FirstOrDefaultAsync(e => e.Codigo == codigoEmisor.Value)
                         : null;
@@ -421,12 +502,29 @@ namespace Simetric.Services
                         facturaDb.Codtransportista = transportistaDb.Codigo;
                     }
                     await context.SaveChangesAsync();
-                    await _emisionControlService.ConsumirDocumentoAsync(context, idUsuario);
 
-                    var xml = GenerarXml(guiaDb, destinatarioDb, detallesDb, transportistaDb, emisorDb);
-                    rutaXml = await GuardarXmlAsync(xml, ConstruirNombreArchivo(emisorDb.Ruc, serieNorm, secuencial));
+                    try
+                    {
+                        var xml = GenerarXml(guiaDb, destinatarioDb, detallesDb, transportistaDb, emisorDb);
+                        rutaXml = await GuardarXmlAsync(xml, ConstruirNombreArchivo(emisorDb.Ruc, serieNorm, secuencial));
+                    }
+                    catch (Exception ex)
+                    {
+                        mensajeGuardado = $"Guia guardada, pero no se pudo preparar el XML para autorizarla: {ex.Message}";
+                    }
 
                     await transaction.CommitAsync();
+
+                    try
+                    {
+                        await using var postCommitContext = await _dbFactory.CreateDbContextAsync();
+                        await _emisionControlService.ConsumirDocumentoValidadoAsync(postCommitContext, idUsuario);
+                    }
+                    catch (Exception ex)
+                    {
+                        mensajeGuardado = $"{mensajeGuardado} No se pudo descontar el documento de emisión: {ex.Message}";
+                    }
+
                     return new GuiaRemisionGuardadoResultadoDto
                     {
                         SecGuiaRemision = guiaDb.Sec,
@@ -439,7 +537,8 @@ namespace Simetric.Services
                         NombreArchivoXml = Path.GetFileName(rutaXml),
                         RutaPdf = ConstruirPdfRutaLocal(emisorDb.Ruc, serieNorm, secuencial),
                         NombreArchivoPdf = ConstruirNombreArchivoPdf(emisorDb.Ruc, serieNorm, secuencial),
-                        ClaveAcceso = claveAcceso
+                        ClaveAcceso = claveAcceso,
+                        Mensaje = mensajeGuardado
                     };
                 }
                 catch
@@ -584,9 +683,10 @@ namespace Simetric.Services
                     g.Serie,
                     g.Fecha,
                     g.FechaIniTransporte,
-                    g.FechaFinTransporte,
-                    g.EstadoSRI,
-                    g.NumAutorizacion,
+                     g.FechaFinTransporte,
+                     g.EstadoSRI,
+                     g.Mensaje,
+                     g.NumAutorizacion,
                     g.FechaAutorizacion,
                     g.CodClave,
                     g.IdEmpresa,
@@ -637,9 +737,10 @@ namespace Simetric.Services
                     IdentificacionDestinatario = x.IdentificacionDestinatario ?? "",
                     Transportista = x.Transportista ?? "",
                     FacturaSustento = FormatearNumeroDocumento(x.SerieDocSustento, x.NumDocSustento),
-                    MotivoTraslado = x.MotivoTraslado ?? "",
-                    EstadoSri = x.EstadoSRI ?? "",
-                    NumeroAutorizacion = x.NumAutorizacion ?? "",
+                     MotivoTraslado = x.MotivoTraslado ?? "",
+                     EstadoSri = x.EstadoSRI ?? "",
+                     MensajeSri = x.Mensaje ?? "",
+                     NumeroAutorizacion = x.NumAutorizacion ?? "",
                     FechaAutorizacion = x.FechaAutorizacion ?? "",
                     ClaveAcceso = x.CodClave ?? "",
                     XmlUrl = !string.IsNullOrWhiteSpace(ruc)
@@ -1253,6 +1354,7 @@ namespace Simetric.Services
             ValidarTextoObligatorio(transportista.RazonSocial, 300, "razon social del transportista");
             ValidarTextoObligatorio(transportista.TipoIdentificacion, 2, "tipo de identificacion del transportista");
             ValidarTextoObligatorio(transportista.NumeroIdentificacion, 13, "identificacion del transportista");
+            ValidarTextoObligatorio(transportista.Direccion, 350, "direccion del transportista");
             ValidarTextoObligatorio(guia.Placa ?? transportista.Placa, 20, "placa");
             ValidarTextoObligatorio(destinatario.IdDestinatario, 20, "identificacion del destinatario");
             ValidarTextoObligatorio(destinatario.RazonSocial, 300, "razon social del destinatario");

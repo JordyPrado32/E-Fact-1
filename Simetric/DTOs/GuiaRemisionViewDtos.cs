@@ -17,6 +17,7 @@ public class GuiaRemisionListDto
     public string FacturaSustento { get; set; } = "";
     public string MotivoTraslado { get; set; } = "";
     public string EstadoSri { get; set; } = "";
+    public string MensajeSri { get; set; } = "";
     public string NumeroAutorizacion { get; set; } = "";
     public string FechaAutorizacion { get; set; } = "";
     public string ClaveAcceso { get; set; } = "";

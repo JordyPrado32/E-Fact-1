@@ -1419,6 +1419,15 @@ public class NotaDebitoService
             })
             .ToListAsync();
 
+        var facturasAnuladasPorTotal = await (
+            from f in db.Facturas.AsNoTracking()
+            join nc in db.NotaCreditos.AsNoTracking() on f.Codfactura equals nc.IdDocModificado
+            where facturaIds.Contains(f.Codfactura) && nc.Estado == true
+            group nc by new { f.Codfactura, TotalFactura = f.Valortotal ?? 0m } into grupo
+            where grupo.Key.TotalFactura > 0m && grupo.Sum(nc => nc.ValorTotal ?? 0m) >= grupo.Key.TotalFactura
+            select grupo.Key.Codfactura
+        ).ToHashSetAsync();
+
         var facturasConSaldo = detallesFactura
             .GroupBy(d => d.Codfactura)
             .Where(grupo =>
@@ -1436,7 +1445,7 @@ public class NotaDebitoService
             .ToHashSet();
 
         return candidatos
-            .Where(x => facturasConSaldo.Contains(x.Codfactura))
+            .Where(x => !facturasAnuladasPorTotal.Contains(x.Codfactura) && facturasConSaldo.Contains(x.Codfactura))
             .Take(10)
             .ToList();
     }

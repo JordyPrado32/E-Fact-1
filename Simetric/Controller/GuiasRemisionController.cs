@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Simetric.Models;
 using Simetric.Services;
 
@@ -10,11 +11,13 @@ public class GuiasRemisionController : UsuarioApiControllerBase
 {
     private readonly GuiaRemisionService _service;
     private readonly FacturacionService _facturacionService;
+    private readonly ILogger<GuiasRemisionController> _logger;
 
-    public GuiasRemisionController(GuiaRemisionService service, FacturacionService facturacionService)
+    public GuiasRemisionController(GuiaRemisionService service, FacturacionService facturacionService, ILogger<GuiasRemisionController> logger)
     {
         _service = service;
         _facturacionService = facturacionService;
+        _logger = logger;
     }
 
     public sealed class CrearGuiaRemisionDto
@@ -42,15 +45,23 @@ public class GuiasRemisionController : UsuarioApiControllerBase
         if (dto.Transportista is null || dto.Guia is null || dto.Destinatario is null || dto.Detalles.Count == 0)
             return BadRequest(new { mensaje = "La guía debe contener transportista, cabecera, destinatario y detalles." });
 
-        var resultado = await _service.GuardarGuiaRemisionCompletaAsync(
-            idUsuario,
-            dto.CodFactura,
-            dto.CodEmisor,
-            dto.Transportista,
-            dto.Guia,
-            dto.Destinatario,
-            dto.Detalles);
-        return Ok(resultado);
+        try
+        {
+            var resultado = await _service.GuardarGuiaRemisionCompletaAsync(
+                idUsuario,
+                dto.CodFactura,
+                dto.CodEmisor,
+                dto.Transportista,
+                dto.Guia,
+                dto.Destinatario,
+                dto.Detalles);
+            return Ok(resultado);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo guardar la guia de remision para el usuario {IdUsuario}.", idUsuario);
+            return BadRequest(new { mensaje = string.IsNullOrWhiteSpace(ex.Message) ? "No se pudo guardar la guia de remision." : ex.Message });
+        }
     }
 
     [HttpGet]

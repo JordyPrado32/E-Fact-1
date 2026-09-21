@@ -110,7 +110,7 @@ public class RetencionesController : ControllerBase
         var term = Clean(search).ToLower();
         var data = await _context.RetencionRenta
             .AsNoTracking()
-            .Where(x => term == "" || x.Codigo.ToLower().Contains(term) || (x.Descripcion ?? "").ToLower().Contains(term))
+            .Where(x => x.Estado != false && (term == "" || x.Codigo.ToLower().Contains(term) || (x.Descripcion ?? "").ToLower().Contains(term)))
             .OrderBy(x => x.Codigo)
             .ToListAsync();
         return Ok(data);

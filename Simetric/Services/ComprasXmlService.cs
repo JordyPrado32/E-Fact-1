@@ -15,6 +15,7 @@ public class ComprasXmlService
     private readonly IRetencionPdfService _retencionPdfService;
     private readonly RetencionGeneradaService _retencionGeneradaService;
     private readonly EmisionControlService _emisionControlService;
+    private readonly InitialSequencePromptService _initialSequencePromptService;
 
     public ComprasXmlService(
         AppDbContext context,
@@ -22,7 +23,8 @@ public class ComprasXmlService
         ComprobanteRetencionGenerator retencionXmlGenerator,
         IRetencionPdfService retencionPdfService,
         RetencionGeneradaService retencionGeneradaService,
-        EmisionControlService emisionControlService)
+        EmisionControlService emisionControlService,
+        InitialSequencePromptService initialSequencePromptService)
     {
         _context = context;
         _dbFactory = dbFactory;
@@ -30,6 +32,7 @@ public class ComprasXmlService
         _retencionPdfService = retencionPdfService;
         _retencionGeneradaService = retencionGeneradaService;
         _emisionControlService = emisionControlService;
+        _initialSequencePromptService = initialSequencePromptService;
     }
 
     public async Task<CompraXmlPreviewDto> LeerCompraDesdeXmlAsync(string xmlContent)
@@ -585,7 +588,7 @@ public class ComprasXmlService
             FormaPagoNombre = await ObtenerDescripcionFormaPagoAsync(formaPago),
             NumeroAutorizacion = numeroAutorizacion,
             FechaAutorizacionSri = fechaAutorizacionSri,
-            NumeroRetencionGenerado = await GenerarSecuenciaRetencionAsync(),
+            NumeroRetencionGenerado = string.Empty,
             Detalles = new List<CompraXmlDetalleDto>(),
             Retenciones = new List<CompraRetValorDto>()
         };
@@ -596,11 +599,16 @@ public class ComprasXmlService
 
         if (liquidacionExistente != null)
         {
+            var tieneRetencionRegistrada = await _context.RetencionInfo
+                .AsNoTracking()
+                .AnyAsync(x => x.IcCompra == liquidacionExistente.CodFactura);
+
             dto.YaImportado = true;
             dto.CodFacturaExistente = liquidacionExistente.CodFactura;
-            dto.NumeroRetencionGenerado = string.IsNullOrWhiteSpace(liquidacionExistente.NumRetencion)
-                ? dto.NumeroRetencionGenerado
-                : liquidacionExistente.NumRetencion!;
+            dto.TieneRetencionGenerada = tieneRetencionRegistrada;
+            dto.NumeroRetencionGenerado = tieneRetencionRegistrada && !string.IsNullOrWhiteSpace(liquidacionExistente.NumRetencion)
+                ? liquidacionExistente.NumRetencion!
+                : string.Empty;
         }
 
         var emisor = await _context.Emisores
@@ -1181,7 +1189,7 @@ public class ComprasXmlService
             if (retencionesValidas.Any())
             {
                 numeroRetencionGenerado = string.IsNullOrWhiteSpace(preview.NumeroRetencionGenerado)
-                    ? await GenerarSecuenciaRetencionAsync(preview.Usuario, preview.Serie)
+                    ? await GenerarSecuenciaRetencionAsync(preview.Usuario, preview.Serie, preview.CodEmisor)
                     : new string(preview.NumeroRetencionGenerado.Where(char.IsDigit).ToArray()).PadLeft(9, '0')[^9..];
                 preview.NumeroRetencionGenerado = numeroRetencionGenerado;
             }
@@ -1512,7 +1520,7 @@ public class ComprasXmlService
         bool existe = tipo switch
         {
             "IVA" => idRet.HasValue && await _context.RetencionIva.AnyAsync(x => x.Codigo == idRet.Value),
-            "RENTA" => !string.IsNullOrWhiteSpace(codigoTexto) && await _context.RetencionRenta.AnyAsync(x => x.Codigo == codigoTexto),
+            "RENTA" => !string.IsNullOrWhiteSpace(codigoTexto) && await _context.RetencionRenta.AnyAsync(x => x.Codigo == codigoTexto && x.Estado != false),
             _ => false
         };
 
@@ -1525,20 +1533,44 @@ public class ComprasXmlService
         if (preview.Retenciones == null || !preview.Retenciones.Any())
             return;
 
+        var cantidadIva = preview.Retenciones.Count(x => string.Equals(x.Tipo?.Trim(), "IVA", StringComparison.OrdinalIgnoreCase));
+        var cantidadRenta = preview.Retenciones.Count(x => string.Equals(x.Tipo?.Trim(), "RENTA", StringComparison.OrdinalIgnoreCase));
+        if (cantidadIva > 2 || cantidadRenta > 2)
+            throw new Exception("Solo se permiten hasta dos retenciones de IVA y dos de renta por comprobante.");
+
+        decimal totalBaseIva = 0m;
+        decimal totalValorIva = 0m;
+        decimal totalBaseRenta = 0m;
+        decimal totalValorRenta = 0m;
+
         foreach (var ret in preview.Retenciones)
         {
             if (string.IsNullOrWhiteSpace(ret.Tipo))
-                continue;
+                throw new Exception("Debes seleccionar el tipo de retención.");
 
             var tipo = ret.Tipo.Trim().ToUpperInvariant();
+            if (tipo != "IVA" && tipo != "RENTA")
+                throw new Exception("El tipo de retención debe ser IVA o RENTA.");
+
+            if (!ret.IdRet.HasValue || ret.IdRet.Value <= 0)
+                throw new Exception("Debes ingresar un código válido en IdRet.");
+
             decimal valorRetenido = ret.ValorRetenido ?? 0m;
             decimal baseRet = ret.Base ?? 0m;
+            decimal porcentaje = ret.PorcentajeRetencion ?? ret.Valor ?? 0m;
 
-            if (valorRetenido < 0m)
-                throw new Exception("No se permiten valores retenidos negativos.");
+            if (valorRetenido <= 0m)
+                throw new Exception("El valor retenido debe ser mayor que cero.");
 
-            if (baseRet < 0m)
-                throw new Exception("No se permite base imponible negativa en retenciones.");
+            if (baseRet <= 0m)
+                throw new Exception("La base de la retención debe ser mayor que cero.");
+
+            if (porcentaje <= 0m || porcentaje > 100m)
+                throw new Exception("El porcentaje de retención debe estar entre 0 y 100.");
+
+            var valorEsperado = decimal.Round(baseRet * porcentaje / 100m, 2, MidpointRounding.AwayFromZero);
+            if (Math.Abs(valorEsperado - valorRetenido) > 0.01m)
+                throw new Exception($"El valor retenido no coincide con la base y el porcentaje seleccionados ({valorEsperado:N2}).");
 
             if (valorRetenido > baseRet)
             {
@@ -1566,8 +1598,22 @@ public class ComprasXmlService
 
                 if (baseRet > preview.Iva)
                     throw new Exception($"La base de retención de IVA no puede ser mayor al IVA Total ({preview.Iva:N2}).");
+
+                totalBaseIva += baseRet;
+                totalValorIva += valorRetenido;
+            }
+            else
+            {
+                totalBaseRenta += baseRet;
+                totalValorRenta += valorRetenido;
             }
         }
+
+        if (totalBaseIva > preview.Iva || totalValorIva > preview.Iva)
+            throw new Exception($"La suma de las retenciones de IVA no puede superar el IVA Total ({preview.Iva:N2}).");
+
+        if (totalBaseRenta > preview.TotalSinImpuestos || totalValorRenta > preview.TotalSinImpuestos)
+            throw new Exception($"La suma de las retenciones de renta no puede superar el Total sin Impuestos ({preview.TotalSinImpuestos:N2}).");
     }
 
     private static void AcumularPorcentaje(
@@ -2002,7 +2048,7 @@ public class ComprasXmlService
         return string.IsNullOrWhiteSpace(valor) ? "." : valor.Trim();
     }
 
-    public async Task<string> GenerarSecuenciaRetencionAsync(int? usuario = null, string? serie = null)
+    public async Task<string> GenerarSecuenciaRetencionAsync(int? usuario = null, string? serie = null, int? codEmisor = null)
     {
         var query = _context.RetencionInfo
             .AsNoTracking()
@@ -2012,7 +2058,7 @@ public class ComprasXmlService
             query = query.Where(x => x.Usuario == usuario.Value);
 
         var registros = await query
-            .Select(x => new { x.NumRetencion, x.Serie })
+            .Select(x => new { x.NumRetencion, x.Serie, x.IcCompra })
             .ToListAsync();
 
         var serieLimpia = LimpiarSerieRetencion(serie);
@@ -2021,6 +2067,35 @@ public class ComprasXmlService
             registros = registros
                 .Where(x => LimpiarSerieRetencion(x.Serie) == serieLimpia)
                 .ToList();
+        }
+
+        if (codEmisor is > 0)
+        {
+            var comprasDelEmisor = _context.ComprasFacturas
+                .AsNoTracking()
+                .Where(x => x.CodEmisor == codEmisor.Value)
+                .Select(x => x.CodFactura);
+
+            registros = registros
+                .Where(x => x is not null && comprasDelEmisor.Contains(x.IcCompra ?? 0))
+                .ToList();
+        }
+
+        if (usuario is > 0 && !string.IsNullOrWhiteSpace(serie))
+        {
+            var state = await _initialSequencePromptService.GetStateAsync(
+                usuario.Value,
+                "retencion",
+                serie,
+                codEmisor);
+            if (state.Initialized)
+            {
+                var siguienteConfigurado = _initialSequencePromptService.ResolveFirstAvailableSequence(
+                    registros.Select(x => x.NumRetencion),
+                    state);
+                if (!string.IsNullOrWhiteSpace(siguienteConfigurado))
+                    return siguienteConfigurado;
+            }
         }
 
         int maximo = 0;
@@ -2279,9 +2354,9 @@ public class ComprasXmlService
                 compra.GuiaRemision,
                 ObtenerEstabDesdeSerie(compra.Serie),
                 ObtenerPtoEmiDesdeSerie(compra.Serie)) ?? "",
-            NumeroRetencionGenerado = string.IsNullOrWhiteSpace(compra.NumRetencion)
-                ? await GenerarSecuenciaRetencionAsync(compra.Usuario, compra.Serie)
-                : compra.NumRetencion!,
+            NumeroRetencionGenerado = tieneRetencionGenerada && !string.IsNullOrWhiteSpace(compra.NumRetencion)
+                ? compra.NumRetencion!
+                : await GenerarSecuenciaRetencionAsync(compra.Usuario, compra.Serie, compra.CodEmisor),
             NumeroAutorizacion = compra.NumAutorizacion ?? "",
             FechaAutorizacionSri = compra.FechaAutoSRI ?? "",
             Subtotal12 = compra.Subtotal12 ?? 0m,
