@@ -21,6 +21,7 @@ public static class BackOfficeRoutes
     public const string Configuracion = "/backoffice/configuracion";
     public const string Normativa = "/backoffice/configuracion/normativa";
     public const string Perfil = "/backoffice/perfil";
+    public const string Telemetria = "/backoffice/telemetria";
 
     public static bool IsBackOfficePath(NavigationManager navigationManager, string location)
     {

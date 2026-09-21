@@ -19,21 +19,37 @@ else if (contexto is not null)
 {
     <div class="ally-shell">
         <aside class="ally-sidebar">
-            <div class="ally-brand">
-                <span class="ally-brand-mark">N</span>
-                <div><strong>Numérica</strong><small>Portal de Aliados</small></div>
-            </div>
-            <AliadosNavMenu Menus="menus" Contexto="contexto" OnLogout="CerrarSesion" />
+            <AliadosNavMenu Menus="menus" Contexto="contexto" />
         </aside>
         <main class="ally-main">
             <header class="ally-topbar">
-                <div>
-                    <span class="ally-eyebrow">PORTAL DE ALIADOS</span>
-                    <h1>@ObtenerTitulo()</h1>
+                <div class="ally-service-card">
+                    <span class="ally-service-mark">N</span>
+                    <div class="ally-service-name">PORTAL DE ALIADOS <i class="ri-arrow-down-s-line" aria-hidden="true"></i></div>
                 </div>
-                <div class="ally-user">
-                    <span class="ally-avatar">@ObtenerIniciales(contexto.Nombre)</span>
-                    <span><strong>@contexto.Nombre</strong><small>@(contexto.EsAdministrador ? "Administrador Portal de Aliados" : contexto.NombreAliado)</small></span>
+                <div class="ally-session-card">
+                    <div class="ally-profile-menu">
+                        <div class="ally-user">
+                            <span><small>Sesión activa</small><strong>@contexto.Nombre</strong></span>
+                            <button type="button" class="ally-avatar-trigger" aria-haspopup="menu" aria-expanded="@mostrarMenuPerfil" aria-label="Abrir opciones de perfil" @onclick="ToggleMenuPerfil">
+                                @if (!string.IsNullOrWhiteSpace(avatarUrl))
+                                {
+                                    <img src="@avatarUrl" class="ally-user-avatar" alt="Foto de perfil de @contexto.Nombre" />
+                                }
+                                else
+                                {
+                                    <span class="ally-avatar-fallback">@ObtenerIniciales(contexto.Nombre)</span>
+                                }
+                            </button>
+                        </div>
+                        @if (mostrarMenuPerfil)
+                        {
+                            <div class="ally-profile-dropdown" role="menu">
+                                <NavLink href="/aliados/perfil" class="ally-profile-action" role="menuitem"><i class="bi bi-person-circle"></i><span>Mi perfil</span></NavLink>
+                                <button type="button" class="ally-profile-action is-danger" role="menuitem" @onclick="CerrarSesion"><i class="bi bi-box-arrow-right"></i><span>Salir</span></button>
+                            </div>
+                        }
+                    </div>
                 </div>
             </header>
             <section class="ally-content">@Body</section>
@@ -46,6 +62,8 @@ else if (contexto is not null)
     private List<Menu> menus = new();
     private bool cargando = true;
     private bool redireccionando;
+    private bool mostrarMenuPerfil;
+    private string? avatarUrl;
 
     protected override async Task OnInitializedAsync()
     {
@@ -69,6 +87,8 @@ else if (contexto is not null)
             NavManager.NavigateTo("/dashboard");
             return;
         }
+
+        avatarUrl = NormalizarAvatar(auth.User.FindFirst("AvatarUrl")?.Value);
 
         menus = (await MenuService.GetMenusByRol(contexto.IdTipoUsuario))
             .Where(x => !string.IsNullOrWhiteSpace(x.RutaMenu) &&
@@ -99,7 +119,10 @@ else if (contexto is not null)
             return;
 
         var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].TrimEnd('/');
-        if (contexto.EsAdministrador && !ruta.Equals(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase))
+        var rutaPerfil = $"{AliadoPortalService.RootRoute.Trim('/')}/perfil";
+        if (contexto.EsAdministrador &&
+            !ruta.Equals(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase) &&
+            !ruta.Equals(rutaPerfil, StringComparison.OrdinalIgnoreCase))
         {
             redireccionando = true;
             NavManager.NavigateTo(AliadoPortalService.AdminRoute);
@@ -147,6 +170,22 @@ else if (contexto is not null)
             : (partes.FirstOrDefault()?.FirstOrDefault().ToString() ?? "A").ToUpperInvariant();
     }
 
+    private static string? NormalizarAvatar(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || url.EndsWith("default.png", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var valor = url.Trim().Replace('\\', '/');
+        return valor.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+               valor.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+               valor.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+               valor.StartsWith("/", StringComparison.Ordinal)
+            ? valor
+            : $"/{valor.TrimStart('/')}";
+    }
+
+    private void ToggleMenuPerfil() => mostrarMenuPerfil = !mostrarMenuPerfil;
+
     private async Task CerrarSesion()
     {
         await JS.InvokeVoidAsync("numericaLogoutAndRedirect", "/login");
@@ -156,6 +195,7 @@ else if (contexto is not null)
     {
         _ = InvokeAsync(async () =>
         {
+            mostrarMenuPerfil = false;
             await ValidarRutaAsync();
             StateHasChanged();
         });

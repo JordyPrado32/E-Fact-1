@@ -20,6 +20,9 @@ public static class BackOfficePermissionHelper
             (tipoCliente == AdministradorBackOfficeTipoCliente ||
              tipoCliente == CobranzasBackOfficeTipoCliente));
 
+    public static bool PuedeVerTelemetria(int? idTipoUsuario, int? tipoCliente) =>
+        idTipoUsuario == SuperAdministradorRoleId;
+
     public static bool PuedeVerERubrica(string? email) =>
         string.Equals(email?.Trim(), UsuarioERubricaEmail, StringComparison.OrdinalIgnoreCase);
 
