@@ -51,7 +51,10 @@
         <section class="kpi-grid">
             @foreach (var kpi in BuildKpis())
             {
-                <article class="kpi-card @kpi.Tone">
+                <article class="kpi-card @kpi.Tone @(kpi.Route is null ? string.Empty : "is-actionable")"
+                         role="@(kpi.Route is null ? null : "link")"
+                         tabindex="@(kpi.Route is null ? null : "0")"
+                         @onclick="() => NavigateTo(kpi.Route)">
                     <div class="kpi-icon-wrap">
                         <i class="@kpi.Icon"></i>
                     </div>
@@ -301,6 +304,7 @@
     private decimal ingresosMesVal;
     private int renovacionesProximasVal;
     private int suscripcionesVencidasVal;
+    private bool puedeVerTelemetria;
 
     // Variables para los paneles premium agregados
     private List<DotDto> graphDots = new();
@@ -324,6 +328,7 @@
     {
         try
         {
+            var usuarioActualId = 0;
             isLoading = true;
             loadError = null;
             var hoy = DateTime.Today;
@@ -340,6 +345,7 @@
                 var user = authState.User;
                 if (user.Identity?.IsAuthenticated == true)
                 {
+                    _ = int.TryParse(user.FindFirst("IdUsuario")?.Value, out usuarioActualId);
                     var name = user.Identity.Name ?? "";
                     var surname = user.FindFirst(ClaimTypes.Surname)?.Value ?? "";
                     var fullName = $"{name} {surname}".Trim();
@@ -355,6 +361,18 @@
             }
 
             await using var context = await DbFactory.CreateDbContextAsync();
+
+            if (usuarioActualId > 0)
+            {
+                var actor = await context.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.IdUsuario == usuarioActualId && u.Estado == true)
+                    .Select(u => new { u.IdTipoUsuario, u.TipoCliente })
+                    .FirstOrDefaultAsync();
+
+                puedeVerTelemetria = actor is not null &&
+                    BackOfficePermissionHelper.PuedeVerTelemetria(actor.IdTipoUsuario, actor.TipoCliente);
+            }
 
             var ventas = await context.ReporteVentasBackOffice
                 .AsNoTracking()
@@ -1198,17 +1216,32 @@
 
     private static string Money(decimal value) => value.ToString("C2", CultureInfo.GetCultureInfo("en-US"));
 
-    private void NavigateTo(string path) => NavManager.NavigateTo(path);
+    private void NavigateTo(string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            NavManager.NavigateTo(path);
+        }
+    }
 
-    private List<KpiDashboardDto> BuildKpis() =>
-    [
-        new KpiDashboardDto("ri-file-list-3-line", "blue", "Documentos emitidos hoy", documentosHoyVal.ToString("N0", CultureInfo.InvariantCulture), "vs. ayer"),
-        new KpiDashboardDto("ri-wifi-line", "cyan", "Usuarios conectados", ConnectedUsers.Count.ToString("N0", CultureInfo.InvariantCulture), "en este momento", "Telemetría E-Fact"),
-        new KpiDashboardDto("ri-group-line", "green", "Clientes activos", clientesActivosVal.ToString("N0", CultureInfo.InvariantCulture), "este mes"),
-        new KpiDashboardDto("ri-money-dollar-circle-line", "orange", "Ingresos del mes", Money(ingresosMesVal), "ventas registradas"),
-        new KpiDashboardDto("ri-box-3-line", "purple", "Productos vendidos", ventasMesCount.ToString("N0", CultureInfo.InvariantCulture), "por periodo"),
-        new KpiDashboardDto("ri-send-plane-fill", "rose", "Solicitudes por gestionar", solicitudesFirmaPendientes.ToString("N0", CultureInfo.InvariantCulture), "Servicio E-RÚBRICA", "Uanataca")
-    ];
+    private List<KpiDashboardDto> BuildKpis()
+    {
+        var kpis = new List<KpiDashboardDto>
+        {
+            new("ri-file-list-3-line", "blue", "Documentos emitidos hoy", documentosHoyVal.ToString("N0", CultureInfo.InvariantCulture), "vs. ayer"),
+            new("ri-group-line", "green", "Clientes activos", clientesActivosVal.ToString("N0", CultureInfo.InvariantCulture), "este mes"),
+            new("ri-money-dollar-circle-line", "orange", "Ingresos del mes", Money(ingresosMesVal), "ventas registradas"),
+            new("ri-box-3-line", "purple", "Productos vendidos", ventasMesCount.ToString("N0", CultureInfo.InvariantCulture), "por periodo"),
+            new("ri-send-plane-fill", "rose", "Solicitudes por gestionar", solicitudesFirmaPendientes.ToString("N0", CultureInfo.InvariantCulture), "Servicio E-RÚBRICA", "Uanataca")
+        };
+
+        if (puedeVerTelemetria)
+        {
+            kpis.Insert(1, new KpiDashboardDto("ri-wifi-line", "cyan", "Usuarios conectados", ConnectedUsers.Count.ToString("N0", CultureInfo.InvariantCulture), "en este momento", "Telemetría E-Fact", BackOfficeRoutes.Telemetria));
+        }
+
+        return kpis;
+    }
 
     public void Dispose()
     {
@@ -1221,7 +1254,8 @@
         string Label, 
         string Value,
         string Note,
-        string SubLabel = ""
+        string SubLabel = "",
+        string? Route = null
     );
     private sealed record CanalDashboardDto(string Nombre, decimal Total, int Transacciones, string Color);
     private sealed record DonutSegmentDto(string DashArray, double Offset, string Color);

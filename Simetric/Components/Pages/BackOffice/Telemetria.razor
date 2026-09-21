@@ -1,0 +1,150 @@
+@page "/backoffice/telemetria"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
+@using Simetric.Services
+@implements IDisposable
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject ConnectedUsersService ConnectedUsers
+@inject NavigationManager NavManager
+
+<PageTitle>Telemetría | BackOffice</PageTitle>
+
+@if (cargando)
+{
+    <div class="telemetry-loading"><i class="ri-loader-4-line"></i><span>Cargando telemetría...</span></div>
+}
+else if (!autorizado)
+{
+    <div class="telemetry-loading"><i class="ri-shield-keyhole-line"></i><span>Validando permisos...</span></div>
+}
+else
+{
+    <div class="telemetry-page">
+        <section class="telemetry-hero">
+            <div>
+                <span>OPERACIÓN Y SEGURIDAD</span>
+                <h2>Telemetría de sesiones</h2>
+                <p>Consulta las sesiones activas de E‑Fact y su información de conexión.</p>
+            </div>
+            <button type="button" class="telemetry-refresh" @onclick="CargarSesionesAsync"><i class="ri-refresh-line"></i> Actualizar</button>
+        </section>
+
+        <section class="telemetry-summary">
+            <article><i class="ri-wifi-line"></i><div><span>Usuarios conectados</span><strong>@sesiones.Select(x => x.UserId).Distinct().Count()</strong></div></article>
+            <article><i class="ri-computer-line"></i><div><span>Sesiones activas</span><strong>@sesiones.Count</strong></div></article>
+            <article><i class="ri-global-line"></i><div><span>IP distintas</span><strong>@sesiones.Select(x => x.IpAddress).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count()</strong></div></article>
+        </section>
+
+        <section class="telemetry-panel">
+            <div class="telemetry-panel-heading"><div><h3>Sesiones en línea</h3><span>Datos actualizados cuando se conecta o desconecta un usuario.</span></div><span class="telemetry-live"><i></i> En vivo</span></div>
+            @if (sesiones.Count == 0)
+            {
+                <div class="telemetry-empty"><i class="ri-wifi-off-line"></i><span>No hay usuarios conectados en este momento.</span></div>
+            }
+            else
+            {
+                <div class="telemetry-table-wrap">
+                    <table class="telemetry-table">
+                        <thead><tr><th>Usuario</th><th>Servicio</th><th>Correo</th><th>Dirección IP</th><th>Conectado desde</th><th>Última actividad</th><th>Cliente</th></tr></thead>
+                        <tbody>
+                            @foreach (var sesion in sesiones)
+                            {
+                                <tr @key="sesion.SessionId">
+                                    <td><strong>@sesion.Name</strong><small>@sesion.Role</small></td>
+                                    <td><span class="telemetry-service">@sesion.Service</span></td>
+                                    <td>@(sesion.Email ?? "No registrado")</td>
+                                    <td><code>@(sesion.IpAddress ?? "No disponible")</code></td>
+                                    <td>@sesion.ConnectedAtUtc.LocalDateTime.ToString("dd/MM/yyyy HH:mm")</td>
+                                    <td>@sesion.LastSeenUtc.LocalDateTime.ToString("dd/MM/yyyy HH:mm")</td>
+                                    <td title="@sesion.UserAgent">@ResumirCliente(sesion.UserAgent)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+}
+
+@code {
+    private readonly List<TelemetrySessionRow> sesiones = new();
+    private bool cargando = true;
+    private bool autorizado;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ConnectedUsers.Changed += OnConnectedUsersChanged;
+        await CargarSesionesAsync();
+    }
+
+    private async Task CargarSesionesAsync()
+    {
+        cargando = true;
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            if (!int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var idUsuario) || idUsuario <= 0)
+            {
+                NavManager.NavigateTo("/login");
+                return;
+            }
+
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var actor = await context.Usuarios.AsNoTracking()
+                .Where(x => x.IdUsuario == idUsuario && x.Estado == true)
+                .Select(x => new { x.IdTipoUsuario, x.TipoCliente })
+                .FirstOrDefaultAsync();
+            autorizado = actor is not null && BackOfficePermissionHelper.PuedeVerTelemetria(actor.IdTipoUsuario, actor.TipoCliente);
+            if (!autorizado)
+            {
+                NavManager.NavigateTo(BackOfficeRoutes.Dashboard);
+                return;
+            }
+
+            var activas = ConnectedUsers.GetActiveSessions();
+            var ids = activas.Select(x => x.UserId).Distinct().ToList();
+            var usuarios = await context.Usuarios.AsNoTracking()
+                .Where(x => ids.Contains(x.IdUsuario))
+                .Select(x => new { x.IdUsuario, x.Nombres, x.Apellidos, x.Email, x.IdTipoUsuario, x.TipoCliente })
+                .ToDictionaryAsync(x => x.IdUsuario);
+
+            sesiones.Clear();
+            sesiones.AddRange(activas.Select(sesion =>
+            {
+                usuarios.TryGetValue(sesion.UserId, out var usuario);
+                return new TelemetrySessionRow(
+                    sesion.SessionId,
+                    sesion.UserId,
+                    $"{usuario?.Nombres} {usuario?.Apellidos}".Trim() is { Length: > 0 } nombre ? nombre : $"Usuario #{sesion.UserId}",
+                    usuario?.Email,
+                    ObtenerRol(usuario?.IdTipoUsuario, usuario?.TipoCliente),
+                    sesion.IpAddress,
+                    sesion.UserAgent,
+                    sesion.Service,
+                    sesion.ConnectedAtUtc,
+                    sesion.LastSeenUtc);
+            }));
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private void OnConnectedUsersChanged() => _ = InvokeAsync(CargarSesionesAsync);
+
+    private static string ObtenerRol(int? idTipoUsuario, int? tipoCliente) =>
+        idTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId ? "Super Admin" :
+        idTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId && tipoCliente == BackOfficePermissionHelper.AdministradorBackOfficeTipoCliente ? "Administrador BackOffice" :
+        idTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId ? "BackOffice" : "Usuario";
+
+    private static string ResumirCliente(string? userAgent) =>
+        string.IsNullOrWhiteSpace(userAgent) ? "No disponible" : userAgent.Length <= 72 ? userAgent : $"{userAgent[..72]}…";
+
+    public void Dispose() => ConnectedUsers.Changed -= OnConnectedUsersChanged;
+
+    private sealed record TelemetrySessionRow(string SessionId, int UserId, string Name, string? Email, string Role, string? IpAddress, string? UserAgent, string Service, DateTimeOffset ConnectedAtUtc, DateTimeOffset LastSeenUtc);
+}

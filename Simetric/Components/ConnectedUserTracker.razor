@@ -3,11 +3,13 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject Simetric.Services.ConnectedUsersService ConnectedUsers
 @inject Simetric.Services.ConnectedUserCircuitHandler CircuitHandler
+@inject NavigationManager NavManager
 
 @code {
     protected override async Task OnInitializedAsync()
     {
         AuthStateProvider.AuthenticationStateChanged += OnAuthenticationStateChanged;
+        NavManager.LocationChanged += OnLocationChanged;
         await UpdateRegistrationAsync(await AuthStateProvider.GetAuthenticationStateAsync());
     }
 
@@ -22,7 +24,7 @@
         if (authenticationState.User.Identity?.IsAuthenticated == true &&
             int.TryParse(userIdValue, out var userId) && userId > 0)
         {
-            ConnectedUsers.Register(CircuitHandler.SessionId, userId);
+            ConnectedUsers.Register(CircuitHandler.SessionId, userId, CircuitHandler.IpAddress, CircuitHandler.UserAgent, ObtenerServicioActual());
         }
         else
         {
@@ -32,9 +34,27 @@
         return Task.CompletedTask;
     }
 
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs args) =>
+        ConnectedUsers.UpdateService(CircuitHandler.SessionId, ObtenerServicioActual());
+
+    private string ObtenerServicioActual()
+    {
+        var path = NavManager.ToBaseRelativePath(NavManager.Uri).TrimStart('/').ToLowerInvariant();
+        return path switch
+        {
+            var value when value.StartsWith("backoffice") => "BackOffice",
+            var value when value.StartsWith("e-contax") => "E-CONTAX",
+            var value when value.StartsWith("aliados") => "Portal de Aliados",
+            var value when value.StartsWith("e-rubrica") => "E-RÚBRICA",
+            var value when value.StartsWith("e-declara") => "E-DECLARA",
+            _ => "E-FACT"
+        };
+    }
+
     public void Dispose()
     {
         AuthStateProvider.AuthenticationStateChanged -= OnAuthenticationStateChanged;
+        NavManager.LocationChanged -= OnLocationChanged;
         ConnectedUsers.Unregister(CircuitHandler.SessionId);
     }
 }
