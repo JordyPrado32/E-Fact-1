@@ -517,6 +517,12 @@ export async function init(options, dotNetRef) {
         async setSecondPlacementEnabled(enabled) {
             await setSecondPlacementEnabled(enabled);
         },
+        getSelections() {
+            return {
+                pageCount: pdfDocument?.numPages ?? 0,
+                positions: selectedPositions.filter(Boolean)
+            };
+        },
         async loadFromUrl(url) {
             if (!url) {
                 pdfDocument = null;

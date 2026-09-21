@@ -418,7 +418,7 @@
 
         stampSelectorInitialized = true;
         dotNetRef = DotNetObjectReference.Create(this);
-        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js?v=20260921-2");
+        stampSelectorModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignStampSelector.js?v=20260921-3");
         stampSelectorInstance = await stampSelectorModule.InvokeAsync<IJSObjectReference>(
             "init",
             new
@@ -532,6 +532,9 @@
             return;
         }
 
+        if (!await SincronizarUbicacionesSelectorAsync())
+            return;
+
         if (!ValidarFormulario())
             return;
 
@@ -618,6 +621,47 @@
             yMm,
             anchoMm,
             posiciones: ObtenerPosicionesApi());
+    }
+
+    private async Task<bool> SincronizarUbicacionesSelectorAsync()
+    {
+        if (stampSelectorInstance is null)
+            return Error("El visor del PDF aún no está listo.");
+
+        StampSelectorState? selector;
+        try
+        {
+            selector = await stampSelectorInstance.InvokeAsync<StampSelectorState>("getSelections");
+        }
+        catch (JSException)
+        {
+            return Error("No se pudo leer la ubicación seleccionada en el PDF.");
+        }
+
+        var posiciones = selector?.Positions ?? [];
+        if (selector is null || selector.PageCount < 1 || posiciones.Count < 1)
+            return Error("Ubica la firma en el documento antes de continuar.");
+
+        if (posiciones.Any(posicion =>
+                posicion.Page < 1 || posicion.Page > selector.PageCount ||
+                !double.IsFinite(posicion.XMm) || !double.IsFinite(posicion.YMm) ||
+                posicion.XMm < 0 || posicion.YMm < 0))
+        {
+            return Error("Una ubicación de firma no corresponde al PDF cargado.");
+        }
+
+        var primera = posiciones[0];
+        pagina = primera.Page;
+        xMm = Math.Round(primera.XMm, 2);
+        yMm = Math.Round(primera.YMm, 2);
+        anchoMm = StampWidthMm;
+        rotacion = primera.Rotation;
+        segundaUbicacion = firmarDosLugares ? posiciones.Skip(1).FirstOrDefault() : null;
+
+        if (firmarDosLugares && segundaUbicacion is null)
+            return Error("Ubica la segunda firma en el documento.");
+
+        return true;
     }
 
     private bool ValidarFormulario()
@@ -1138,6 +1182,9 @@
             return;
         }
 
+        if (!await SincronizarUbicacionesSelectorAsync())
+            return;
+
         if (!ValidarFormulario())
             return;
 
@@ -1515,6 +1562,10 @@
         double YMm,
         double WidthMm,
         int Rotation);
+
+    private sealed record StampSelectorState(
+        int PageCount,
+        List<StampSelection> Positions);
 
     private sealed record RecursosFirma(
         FirmaStampApiFile Certificado,
