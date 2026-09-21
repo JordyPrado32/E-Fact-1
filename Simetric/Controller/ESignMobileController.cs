@@ -505,7 +505,12 @@ public sealed class ESignMobileController : ControllerBase
         {
             try
             {
-                posicionesFirma = JsonSerializer.Deserialize<List<FirmaStampApiPlacement>>(posiciones);
+                posicionesFirma = JsonSerializer.Deserialize<List<FirmaStampApiPlacement>>(
+                    posiciones,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
             }
             catch (JsonException)
             {
