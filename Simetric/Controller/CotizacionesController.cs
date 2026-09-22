@@ -47,6 +47,7 @@ public sealed class CotizacionesController : ControllerBase
         public decimal PrecioUnitario { get; set; }
         public int Cantidad { get; set; }
         public decimal Descuento { get; set; }
+        public int? TarifaIva { get; set; }
         public string? Detalle { get; set; }
     }
 
@@ -285,7 +286,7 @@ public sealed class CotizacionesController : ControllerBase
         if (input.Titulo.Trim().Length > 200) return (null, null, "El título no puede superar los 200 caracteres.");
         if (input.IdCliente <= 0) return (null, null, "Selecciona un cliente.");
         if (input.Detalles.Count == 0) return (null, null, "Agrega al menos un producto.");
-        if (input.Detalles.Any(x => x.CodigoProducto <= 0 || x.Cantidad < 1 || x.PrecioUnitario < 0 || x.PrecioUnitario > PrecioMaximo || x.Descuento < 0 || x.Descuento > x.PrecioUnitario * x.Cantidad))
+        if (input.Detalles.Any(x => x.CodigoProducto <= 0 || x.Cantidad < 1 || x.PrecioUnitario < 0 || x.PrecioUnitario > PrecioMaximo || x.Descuento < 0 || x.Descuento > x.PrecioUnitario * x.Cantidad || x.TarifaIva is < 0 or > 100))
             return (null, null, "Revisa cantidades, precios y descuentos.");
 
         await _schema.EnsureSchemaAsync();
@@ -312,7 +313,9 @@ public sealed class CotizacionesController : ControllerBase
         foreach (var item in input.Detalles)
         {
             var producto = productos[item.CodigoProducto];
-            var tarifa = ObtenerTarifaIva(producto.Porcentajeimpuesto);
+            var tarifa = item.TarifaIva.HasValue
+                ? Math.Clamp(item.TarifaIva.Value, 0, 100)
+                : ObtenerTarifaIva(producto.Porcentajeimpuesto);
             var precio = decimal.Round(item.PrecioUnitario, 2, MidpointRounding.AwayFromZero);
             var descuento = decimal.Round(item.Descuento, 2, MidpointRounding.AwayFromZero);
             var baseImponible = Math.Max(0m, precio * item.Cantidad - descuento);

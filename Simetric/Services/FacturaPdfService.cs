@@ -644,6 +644,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
         var subtotalConDescuento = Math.Max(0m, subtotal);
         var subtotalBaseGravada = lineas.Where(x => x.TarifaIva > 0 || x.ValorIva > 0).Sum(x => x.Cantidad * x.PrecioUnitario);
         var subtotalBaseCero = lineas.Where(x => x.TarifaIva == 0 && x.ValorIva == 0).Sum(x => x.Cantidad * x.PrecioUnitario);
+        var subtotalesPorTarifa = lineas.Where(x => x.TarifaIva > 0 && x.TarifaIva != 10).GroupBy(x => x.TarifaIva).OrderBy(x => x.Key).Select(x => new { Tarifa = x.Key, Valor = x.Sum(y => y.Cantidad * y.PrecioUnitario) }).ToList();
         if (lineas.Count == 0)
         {
             subtotalBaseGravada = subtotal12;
@@ -651,7 +652,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
         }
         var subtotalSinImpuestos = Math.Max(0m, subtotalBaseGravada + subtotalBaseCero + subtotalNoObjeto + subtotalExento);
         var servicio10 = Math.Max(0m, lineas.Where(x => x.TarifaIva == 10).Sum(x => x.ValorIva));
-        var iva15 = Math.Max(0m, iva - servicio10);
+        var ivaPorTarifa = lineas.Where(x => x.TarifaIva > 0 && x.TarifaIva != 10).GroupBy(x => x.TarifaIva).OrderBy(x => x.Key).Select(x => new { Tarifa = x.Key, Valor = x.Sum(y => y.ValorIva) }).ToList();
 
         container.Border(1)
             .BorderColor(Colors.Blue.Lighten4)
@@ -688,7 +689,15 @@ public sealed class FacturaPdfService : IFacturaPdfService
                             .SemiBold();
                     }
 
-                    AgregarFila("Subtotal base gravada", FormatearMoneda(subtotalBaseGravada));
+                    if (subtotalesPorTarifa.Count > 0)
+                    {
+                        foreach (var subtotalTarifa in subtotalesPorTarifa)
+                            AgregarFila($"Subtotal base {subtotalTarifa.Tarifa}%", FormatearMoneda(subtotalTarifa.Valor));
+                    }
+                    else
+                    {
+                        AgregarFila("Subtotal base gravada", FormatearMoneda(subtotalBaseGravada));
+                    }
                     AgregarFila("Subtotal base 0%", FormatearMoneda(subtotalBaseCero));
                     AgregarFila("Subtotal no objeto IVA", FormatearMoneda(subtotalNoObjeto));
                     AgregarFila("Subtotal exento IVA", FormatearMoneda(subtotalExento));
@@ -696,7 +705,8 @@ public sealed class FacturaPdfService : IFacturaPdfService
                     AgregarFila("Total descuento", FormatearMoneda(descuentos));
                     AgregarFila("Subtotal con descuento", FormatearMoneda(subtotalConDescuento));
                     AgregarFila("ICE", FormatearMoneda(ice));
-                    AgregarFila("IVA 15%", FormatearMoneda(iva15));
+                    foreach (var ivaTarifa in ivaPorTarifa)
+                        AgregarFila($"IVA {ivaTarifa.Tarifa}%", FormatearMoneda(ivaTarifa.Valor));
                     AgregarFila("Servicio 10%", FormatearMoneda(servicio10));
                     AgregarFila("Valor total", FormatearMoneda(total), true);
                 });
