@@ -906,6 +906,8 @@ public class ComprasXmlService
         if (emisor == null)
             throw new Exception("No se encontró el emisor relacionado con la compra.");
 
+        await AplicarEmisorConfiguradoAsync(preview);
+
         ComprasFactura? compraExistente = null;
 
         if (preview.YaImportado && preview.CodFacturaExistente.HasValue)

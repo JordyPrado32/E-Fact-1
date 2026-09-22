@@ -61,9 +61,12 @@ namespace Simetric.Models
         [Column("SOL_SEXO")]
         public string SolSexo { get; set; } = string.Empty;
 
+        [Required(ErrorMessage = "Ingrese un celular de 10 dígitos, sin el código de país 593.")]
+        [RegularExpression(@"^(?!593)[0-9]{10}$", ErrorMessage = "El celular debe tener exactamente 10 dígitos y no incluir el código de país 593.")]
         [Column("SOL_TELEFONO_1")]
         public string SolTelefono1 { get; set; } = string.Empty;
 
+        [RegularExpression(@"^(?!593)[0-9]{10}$", ErrorMessage = "El teléfono debe tener exactamente 10 dígitos y no incluir el código de país 593.")]
         [Column("SOL_TELEFONO_2")]
         public string? SolTelefono2 { get; set; }
 

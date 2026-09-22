@@ -16,6 +16,27 @@ public class Cotizacion
     [Column("FECHA_CREACION")]
     public DateTime FechaCreacion { get; set; }
 
+    [Column("TITULO")]
+    public string? Titulo { get; set; }
+
+    [Column("ID_CLIENTE")]
+    public int? IdCliente { get; set; }
+
+    [Column("FORMA_PAGO")]
+    public string? FormaPago { get; set; }
+
+    [Column("DETALLE")]
+    public string? Detalle { get; set; }
+
+    [Column("ESTADO")]
+    public string? Estado { get; set; }
+
+    [Column("FECHA_APROBACION")]
+    public DateTime? FechaAprobacion { get; set; }
+
+    [Column("CODFACTURA")]
+    public int? CodFactura { get; set; }
+
     [Column("TOTAL_ESTIMADO", TypeName = "decimal(18,2)")]
     public decimal TotalEstimado { get; set; }
 
@@ -46,6 +67,15 @@ public class CotizacionDetalle
 
     [Column("TOTAL_LINEA", TypeName = "decimal(18,2)")]
     public decimal TotalLinea { get; set; }
+
+    [Column("DETALLE")]
+    public string? Detalle { get; set; }
+
+    [Column("DESCUENTO", TypeName = "decimal(18,2)")]
+    public decimal Descuento { get; set; }
+
+    [Column("TARIFA_IVA")]
+    public int TarifaIva { get; set; }
 
     [ForeignKey(nameof(IdCotizacion))]
     public Cotizacion? Cotizacion { get; set; }

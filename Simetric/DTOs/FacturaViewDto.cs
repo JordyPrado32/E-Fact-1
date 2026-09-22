@@ -10,6 +10,7 @@ namespace Simetric.DTOs
         public string FormaPagoNombre { get; set; } = string.Empty;
         public decimal? DescuentoGlobalPct { get; set; }
         public decimal? DescuentoGlobalValor { get; set; }
+        public string? TituloDocumento { get; set; }
 
 
         public List<Detallefactura> Detalles { get; set; } = new();

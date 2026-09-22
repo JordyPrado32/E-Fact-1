@@ -2473,11 +2473,7 @@ namespace Simetric.Services
             if (string.IsNullOrWhiteSpace(telefono))
                 return null;
 
-            var soloDigitos = Regex.Replace(telefono, "[^0-9]", string.Empty);
-            if (soloDigitos.StartsWith("593", StringComparison.Ordinal))
-                soloDigitos = soloDigitos[3..];
-
-            return string.IsNullOrWhiteSpace(soloDigitos) ? null : soloDigitos;
+            return Regex.Replace(telefono, "[^0-9]", string.Empty);
         }
 
         private static void AplicarDatosSolicitudRemota(

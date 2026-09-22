@@ -1,56 +1,551 @@
 @page "/cotizaciones"
 @using System.Net.Http.Json
+@using System.Net
 @using System.Security.Claims
+@using System.Globalization
 @using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
 @inject HttpClient Http
+@inject FacturacionService FacturacionService
 @inject AuthenticationStateProvider AuthStateProvider
-@inject NavigationManager NavManager
+@inject SweetAlertService AlertService
 @rendermode InteractiveServer
 
 <PageTitle>Cotizaciones | Numerica e-fact</PageTitle>
 
 <div class="quotes-shell">
+    @if (idCotizacionMenuAbierto.HasValue)
+    {
+        <div class="row-menu-backdrop" @onclick="CerrarMenus"></div>
+    }
+
     <section class="quotes-header">
-        <div><span>GESTIÓN COMERCIAL</span><h2>Cotizaciones</h2><p>Consulta las cotizaciones generadas y sus productos registrados.</p></div>
-        <button type="button" class="primary-btn" @onclick='() => NavManager.NavigateTo("/productos")'><i class="bi bi-plus-lg"></i><span>Nueva cotización</span></button>
+        <div><span>GESTIÓN COMERCIAL</span><h2>Cotizaciones</h2><p>Prepara, comparte y convierte tus proformas en facturas.</p></div>
+        <button type="button" class="primary-btn" @onclick="NuevaCotizacion"><i class="bi bi-plus-lg"></i><span>Nueva cotización</span></button>
     </section>
 
+    @if (!string.IsNullOrWhiteSpace(errorCarga))
+    {
+        <div class="quotes-error">@errorCarga</div>
+    }
+
+    @if (mostrarEditor)
+    {
+        <div class="quote-modal-backdrop" @onclick="CerrarEditor"></div>
+        <div class="quote-modal-shell" role="dialog" aria-modal="true" aria-labelledby="quote-modal-title">
+            <section class="quote-modal">
+                <header class="quote-modal-header">
+                    <div class="quote-modal-header-main">
+                        <span class="quote-modal-icon"><i class="bi bi-receipt-cutoff"></i></span>
+                        <div>
+                            <span class="quote-modal-kicker">DOCUMENTO DE VENTA · PROFORMA</span>
+                            <h2 id="quote-modal-title">@(editor.Id == 0 ? "Nueva cotización" : "Editar cotización")</h2>
+                            <p>Completa cliente, detalle, descuentos y forma de pago con el mismo flujo de una factura.</p>
+                        </div>
+                    </div>
+                    <div class="quote-modal-header-actions">
+                        <span class="quote-modal-chip">@editor.Detalles.Count línea(s)</span>
+                        <button type="button" class="quote-modal-close" @onclick="CerrarEditor" aria-label="Cerrar">×</button>
+                    </div>
+                </header>
+
+                <div class="quote-modal-body">
+                    <section class="quote-modal-card">
+                        <div class="quote-modal-card-head">
+                            <div><span class="quote-card-kicker">CABECERA</span><h3>Información de la proforma</h3><p>Identifica al cliente y las condiciones comerciales.</p></div>
+                        </div>
+                        <div class="quote-form-grid">
+                            <label class="quote-field quote-field-wide">Título de la proforma<input class="quote-input" @bind="editor.Titulo" maxlength="200" placeholder="Ej. Propuesta mantenimiento anual" /></label>
+                            <div class="quote-field quote-field-wide quote-lookup-field">
+                                <label for="quote-client-search">Cliente *</label>
+                                @if (editor.IdCliente > 0)
+                                {
+                                    <div class="quote-selected-card">
+                                        <span class="quote-selected-icon"><i class="bi bi-person-check"></i></span>
+                                        <div><small>Cliente seleccionado</small><strong>@editor.NombreCliente</strong><span>@editor.IdentificacionCliente</span></div>
+                                        <button type="button" class="quote-link-btn" @onclick="LimpiarClienteAsync">Cambiar</button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="quote-search-box"><i class="bi bi-search"></i><input id="quote-client-search" class="quote-input" value="@filtroCliente" @oninput="@(e => BuscarClientesAsync(e.Value?.ToString()))" @onfocus="MostrarClientesAsync" placeholder="Buscar por identificación, nombres, apellidos o razón social" autocomplete="off" /></div>
+                                    @if (clientesSugeridos.Count > 0)
+                                    {
+                                        <div class="quote-suggestions">@foreach (var cliente in clientesSugeridos) { <button type="button" @key="cliente.Codcliente" @onclick="() => SeleccionarCliente(cliente)"><span class="quote-suggestion-icon"><i class="bi bi-person"></i></span><span><strong>@NombreCliente(cliente)</strong><small>@cliente.Numeroidentificacion</small></span><i class="bi bi-chevron-right"></i></button> }</div>
+                                    }
+                                }
+                            </div>
+                            <label class="quote-field">Forma de pago *<select class="quote-input quote-select" @bind="editor.FormaPago"><option value="">Selecciona...</option>@foreach (var pago in formasPago) { <option value="@pago.Codigo">@pago.Descripcion</option>}</select></label>
+                            <label class="quote-field">Detalle general<textarea class="quote-input quote-textarea" @bind="editor.Detalle" rows="2" maxlength="1000" placeholder="Condiciones, vigencia u observaciones"></textarea></label>
+                        </div>
+                    </section>
+
+                    <section class="quote-modal-card quote-detail-card">
+                        <div class="quote-modal-card-head">
+                            <div><span class="quote-card-kicker">DETALLE</span><h3>Productos y servicios</h3><p>Busca como en una factura y agrega cada línea con cantidad, precio, descuento e IVA.</p></div>
+                            <span class="quote-card-count">@editor.Detalles.Count producto(s)</span>
+                        </div>
+                        <div class="quote-product-search quote-lookup-field">
+                            <label for="quote-product-search">Buscar producto o servicio *</label>
+                            <div class="quote-search-box"><i class="bi bi-search"></i><input id="quote-product-search" class="quote-input" value="@filtroProducto" @oninput="@(e => BuscarProductosAsync(e.Value?.ToString()))" @onfocus="MostrarProductosAsync" placeholder="Buscar por código, nombre o descripción" autocomplete="off" /></div>
+                            @if (productosSugeridos.Count > 0 && productoSeleccionado is null)
+                            {
+                                <div class="quote-suggestions">@foreach (var producto in productosSugeridos) { <button type="button" @key="producto.Codproducto" @onclick="() => SeleccionarProducto(producto)"><span class="quote-suggestion-icon"><i class="bi bi-box-seam"></i></span><span><strong>@producto.Descripcion</strong><small>@producto.Codprincipal · IVA @producto.TarifaIva% · @producto.PrecioUnitario.ToString("C2")</small></span><i class="bi bi-chevron-right"></i></button> }</div>
+                            }
+                        </div>
+                        @if (productoSeleccionado is not null)
+                        {
+                            <div class="quote-product-entry">
+                                <div class="quote-selected-product"><span class="quote-selected-icon"><i class="bi bi-box-seam"></i></span><div><small>Producto seleccionado</small><strong>@productoSeleccionado.Descripcion</strong><span>@productoSeleccionado.Codprincipal · IVA @productoSeleccionado.TarifaIva%</span></div><button type="button" class="quote-link-btn" @onclick="CambiarProductoAsync">Cambiar</button></div>
+                                <div class="quote-line-entry-grid"><label>Cantidad<input class="quote-input" type="number" min="1" @bind="cantidadNueva" /></label><label>Precio unitario<input class="quote-input" type="number" min="0" step="0.01" @bind="precioNuevo" /></label><label>Descuento<div class="quote-discount-editor"><div class="quote-discount-mode" role="group" aria-label="Modo de descuento"><button type="button" class="@(modoDescuentoNuevo == ModoDescuento.Porcentaje ? "is-active" : string.Empty)" @onclick="() => CambiarModoDescuentoNuevo(ModoDescuento.Porcentaje)">%</button><button type="button" class="@(modoDescuentoNuevo == ModoDescuento.Moneda ? "is-active" : string.Empty)" @onclick="() => CambiarModoDescuentoNuevo(ModoDescuento.Moneda)">$</button></div><div class="quote-discount-input-wrap"><input class="quote-input" type="number" min="0" step="@(modoDescuentoNuevo == ModoDescuento.Porcentaje ? "1" : "0.01")" max="@(modoDescuentoNuevo == ModoDescuento.Porcentaje ? "100" : null)" value="@GetDescuentoNuevoVisual()" @oninput="@(e => OnDescuentoNuevoInput(e.Value?.ToString()))" /><span>@(modoDescuentoNuevo == ModoDescuento.Porcentaje ? "%" : "$")</span></div></div></label><label class="quote-line-detail-field">Detalle de línea<input class="quote-input" @bind="detalleNuevo" placeholder="Opcional" /></label><button type="button" class="quote-add-line-btn" @onclick="AgregarLinea"><i class="bi bi-plus-lg"></i> Agregar línea</button></div>
+                            </div>
+                        }
+                        @if (editor.Detalles.Count == 0)
+                        {
+                            <div class="quote-empty-lines"><i class="bi bi-cart4"></i><strong>Aún no hay productos en la proforma</strong><span>Busca un producto arriba para agregarlo al detalle.</span></div>
+                        }
+                        else
+                        {
+                            <div class="quote-lines-table-wrap"><table class="quote-lines-table"><thead><tr><th>Cód.</th><th>Concepto</th><th>Detalle</th><th class="text-center">Cant.</th><th class="text-end">Precio</th><th class="text-end">Descuento</th><th class="text-end">Desc. apl.</th><th class="text-end">Base imp.</th><th class="text-end">IVA</th><th class="text-end">Total</th><th></th></tr></thead><tbody>@foreach (var linea in editor.Detalles) { var baseLinea = BaseImponible(linea); var ivaLinea = IvaLinea(linea); <tr @key="linea.Key"><td><span class="quote-code">@linea.CodigoProducto</span></td><td><strong>@linea.NombreProducto</strong></td><td><input class="quote-table-input quote-detail-input" @bind="linea.Detalle" placeholder="Detalle" /></td><td><input class="quote-table-input quote-number-input" type="number" min="1" value="@GetCantidadVisual(linea)" @oninput="@(e => OnCantidadLineaInput(linea, e.Value?.ToString()))" /></td><td><input class="quote-table-input quote-number-input" type="number" min="0" step="0.01" value="@GetPrecioVisual(linea)" @oninput="@(e => OnPrecioLineaInput(linea, e.Value?.ToString()))" /></td><td><div class="quote-discount-editor"><div class="quote-discount-mode" role="group" aria-label="Modo de descuento de la línea"><button type="button" class="@(linea.ModoDescuento == ModoDescuento.Porcentaje ? "is-active" : string.Empty)" title="Descuento por porcentaje" @onclick="() => CambiarModoDescuento(linea, ModoDescuento.Porcentaje)">%</button><button type="button" class="@(linea.ModoDescuento == ModoDescuento.Moneda ? "is-active" : string.Empty)" title="Descuento por valor" @onclick="() => CambiarModoDescuento(linea, ModoDescuento.Moneda)">$</button></div><div class="quote-discount-input-wrap"><input class="quote-table-input quote-number-input" type="number" min="0" step="@(linea.ModoDescuento == ModoDescuento.Porcentaje ? "1" : "0.01")" max="@(linea.ModoDescuento == ModoDescuento.Porcentaje ? "100" : null)" value="@GetDescuentoVisual(linea)" @oninput="@(e => OnDescuentoLineaInput(linea, e.Value?.ToString()))" /><span>@(linea.ModoDescuento == ModoDescuento.Porcentaje ? "%" : "$")</span></div></div></td><td class="text-end quote-discount-cell">@DescuentoEfectivo(linea).ToString("N2")</td><td class="text-end">@baseLinea.ToString("N2")</td><td class="text-end">@ivaLinea.ToString("N2")</td><td class="text-end quote-line-total">@TotalLinea(linea).ToString("N2")</td><td><button type="button" class="quote-remove-btn" @onclick="() => editor.Detalles.Remove(linea)" aria-label="Quitar línea"><i class="bi bi-trash3"></i></button></td></tr> }</tbody></table></div>
+                        }
+                    </section>
+
+                    @{ var totales = TotalesEditor(); }
+                    <section class="quote-summary-layout">
+                        <div class="quote-notes-card"><span class="quote-card-kicker">NOTAS</span><h3>Observaciones</h3><p>@(string.IsNullOrWhiteSpace(editor.Detalle) ? "Agrega condiciones, vigencia o información adicional en la cabecera." : editor.Detalle)</p></div>
+                        <div class="quote-totals-card"><div class="quote-totals-head"><div><span class="quote-card-kicker">RESUMEN</span><h3>Totales de la proforma</h3></div><i class="bi bi-calculator"></i></div><div class="quote-total-list"><div><span>SUBTOTAL BASE GRAVADA</span><strong>$ @totales.SubtotalGravada.ToString("N2")</strong></div><div><span>SUBTOTAL BASE 0%</span><strong>$ @totales.SubtotalCero.ToString("N2")</strong></div><div><span>SUBTOTAL NO OBJETO IVA</span><strong>$ 0.00</strong></div><div><span>SUBTOTAL EXENTO IVA</span><strong>$ 0.00</strong></div><div class="quote-total-discount"><span>DESCUENTO</span><strong>$ @totales.Descuento.ToString("N2")</strong></div><div><span>SUBTOTAL CON DESCUENTO</span><strong>$ @totales.BaseImponible.ToString("N2")</strong></div><div><span>ICE</span><strong>$ 0.00</strong></div>@foreach (var iva in totales.IvaPorTarifa) { <div class="quote-total-tax"><span>IVA TARIFA @iva.Tarifa%</span><strong>$ @iva.Valor.ToString("N2")</strong></div> }<div><span>SERVICIO 10%</span><strong>$ 0.00</strong></div><div><span>IRBPNR</span><strong>$ 0.00</strong></div></div><div class="quote-total-grand"><span>TOTAL</span><strong>$ @totales.Total.ToString("N2")</strong></div></div>
+                    </section>
+                </div>
+
+                <footer class="quote-modal-footer"><div class="quote-footer-note"><i class="bi bi-info-circle"></i><span>Revisa los datos antes de generar la proforma.</span></div><div class="quote-footer-actions"><button type="button" class="quote-secondary-btn" @onclick="CerrarEditor">Cancelar</button><button type="button" class="quote-primary-btn" @onclick="GuardarCotizacionAsync" disabled="@guardando"><i class="bi bi-file-earmark-check"></i>@(guardando ? "Guardando..." : "Generar proforma")</button></div></footer>
+            </section>
+        </div>
+    }
+
     <section class="quotes-card">
-        @if (cargando)
-        {
-            <p class="quotes-state">Cargando cotizaciones...</p>
-        }
-        else if (!cotizaciones.Any())
-        {
-            <div class="quotes-state"><i class="bi bi-calculator"></i><h3>No hay cotizaciones</h3><p>Desde Productos, selecciona “Cotizar” para generar la primera.</p></div>
-        }
+        @if (cargando) { <p class="quotes-state">Cargando cotizaciones...</p> }
+        else if (!cotizaciones.Any()) { <div class="quotes-state"><i class="bi bi-file-earmark-text"></i><h3>Aún no tienes proformas</h3><p>Empieza con una nueva cotización para preparar tu primera propuesta.</p></div> }
         else
         {
-            <div class="table-wrap"><table class="table table-hover align-middle mb-0"><thead><tr><th>Fecha</th><th>Productos</th><th class="text-end">Total estimado</th></tr></thead><tbody>
-                @foreach (var cotizacion in cotizaciones)
-                {
-                    <tr @key="cotizacion.Id"><td>@cotizacion.FechaCreacion.ToString("dd/MM/yyyy HH:mm")</td><td>@string.Join(", ", cotizacion.Detalles.Select(x => $"{x.NombreProducto} x{x.Cantidad}"))</td><td class="text-end"><strong>@cotizacion.TotalEstimado.ToString("C2")</strong></td></tr>
-                }
+            <div class="table-wrap"><table class="table align-middle mb-0 responsive-list-table"><thead><tr><th>Proforma</th><th>Cliente</th><th>Fecha</th><th>Estado</th><th class="text-end">Total</th><th class="text-end actions-header-facturas">Acciones</th></tr></thead><tbody>
+            @foreach (var cotizacion in cotizaciones)
+            {
+                var openUp = cotizaciones.Count <= 2 || cotizaciones.IndexOf(cotizacion) >= cotizaciones.Count - 2;
+                <tr @key="cotizacion.Id"><td data-label="Proforma"><button type="button" class="quote-title" @onclick="() => AlternarDetalle(cotizacion.Id)"><strong>@cotizacion.Titulo</strong><small>#@cotizacion.Id.ToString("D6") · @cotizacion.Detalles.Count producto(s)</small></button></td><td data-label="Cliente">@cotizacion.NombreCliente<small class="table-subtitle">@cotizacion.IdentificacionCliente</small></td><td data-label="Fecha">@cotizacion.FechaCreacion.ToString("dd/MM/yyyy HH:mm")</td><td data-label="Estado"><span class="status-pill @EstadoCss(cotizacion.Estado)">@cotizacion.Estado</span></td><td class="text-end" data-label="Total"><strong>@cotizacion.TotalEstimado.ToString("C2")</strong></td><td class="text-end actions-cell" data-label="Acciones"><div class="actions-mobile-dropdown row-actions-dropdown @(openUp ? "dropdown-open-up" : string.Empty)" @onclick:stopPropagation><button class="row-actions-trigger" type="button" title="Acciones" @onclick="() => ToggleMenu(cotizacion.Id)" @onclick:stopPropagation><i class="bi bi-three-dots"></i></button>@if (idCotizacionMenuAbierto == cotizacion.Id) { <div class="action-dropdown-menu" @onclick:stopPropagation><a class="action-dropdown-item item-view" href="@PdfUrl(cotizacion.Id)" target="_blank" @onclick="CerrarMenus"><i class="bi bi-eye"></i><span>Ver proforma</span></a><a class="action-dropdown-item item-pdf" href="@PdfUrl(cotizacion.Id)" download="@NombrePdf(cotizacion.Id)" @onclick="CerrarMenus"><i class="bi bi-file-earmark-pdf"></i><span>Descargar proforma</span></a>@if (EsPendiente(cotizacion)) { <button class="action-dropdown-item item-view" type="button" @onclick="async () => { CerrarMenus(); await EditarCotizacionAsync(cotizacion); }"><i class="bi bi-pencil"></i><span>Editar proforma</span></button><button class="action-dropdown-item item-sri" type="button" @onclick="async () => { CerrarMenus(); await AprobarCotizacionAsync(cotizacion); }"><i class="bi bi-check2-circle"></i><span>Proforma aprobada</span></button> } else if (EsAprobada(cotizacion)) { <button class="action-dropdown-item item-sri" type="button" @onclick="async () => { CerrarMenus(); await EmitirFacturaAsync(cotizacion); }"><i class="bi bi-receipt"></i><span>Emitir factura</span></button> } @if (PuedeDarDeBaja(cotizacion)) { <button class="action-dropdown-item item-cancel" type="button" @onclick="async () => { CerrarMenus(); await DarDeBajaCotizacionAsync(cotizacion); }"><i class="bi bi-trash3"></i><span>Dar de baja</span></button> } <button class="action-dropdown-item item-view" type="button" @onclick="async () => { CerrarMenus(); await ReutilizarAsync(cotizacion); }"><i class="bi bi-copy"></i><span>Reutilizar</span></button></div> }</div></td></tr>
+                @if (detalleVisibleId == cotizacion.Id)
+                { <tr class="detail-row"><td colspan="6"><div class="quote-detail"><div><h4>@cotizacion.Titulo</h4><p>@(string.IsNullOrWhiteSpace(cotizacion.Detalle) ? "Sin observaciones generales." : cotizacion.Detalle)</p><div class="detail-items">@foreach (var linea in cotizacion.Detalles) { <span>@linea.Cantidad x @linea.NombreProducto · @TotalLinea(linea).ToString("C2")</span> }</div></div><div class="quote-detail-summary"><span>Forma de pago<strong>@cotizacion.FormaPago</strong></span><span>Total<strong>@cotizacion.TotalEstimado.ToString("C2")</strong></span></div></div></td></tr> }
+            }
             </tbody></table></div>
         }
     </section>
 </div>
 
 @code {
+    private int usuarioId;
     private bool cargando = true;
+    private bool guardando;
+    private bool mostrarEditor;
+    private int? idCotizacionMenuAbierto;
+    private int detalleVisibleId;
     private List<CotizacionDto> cotizaciones = new();
+    private List<ClienteLookupDto> clientesSugeridos = new();
+    private List<ProductoLookupDto> productosSugeridos = new();
+    private List<FormaPagoDto> formasPago = new();
+    private EditorModel editor = new();
+    private ProductoLookupDto? productoSeleccionado;
+    private string filtroCliente = string.Empty;
+    private string filtroProducto = string.Empty;
+    private int cantidadNueva = 1;
+    private decimal precioNuevo;
+    private decimal descuentoNuevo;
+    private decimal porcentajeDescuentoNuevo;
+    private ModoDescuento modoDescuentoNuevo = ModoDescuento.Porcentaje;
+    private string detalleNuevo = string.Empty;
+    private string? errorCarga;
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    protected override async Task OnInitializedAsync()
     {
-        if (!firstRender) return;
         var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
         var id = user.FindFirst("IdUsuario")?.Value ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (int.TryParse(id, out var userId) && userId > 0)
-            cotizaciones = await Http.GetFromJsonAsync<List<CotizacionDto>>($"api/productos/cotizaciones?userId={userId}") ?? new();
-        cargando = false;
-        await InvokeAsync(StateHasChanged);
+        int.TryParse(id, out usuarioId);
+        await CargarAsync();
     }
 
-    private class CotizacionDto { public int Id { get; set; } public DateTime FechaCreacion { get; set; } public decimal TotalEstimado { get; set; } public List<CotizacionDetalleDto> Detalles { get; set; } = new(); }
-    private class CotizacionDetalleDto { public string NombreProducto { get; set; } = string.Empty; public int Cantidad { get; set; } }
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        errorCarga = null;
+        try
+        {
+            if (usuarioId <= 0)
+            {
+                cotizaciones = new();
+                return;
+            }
+
+            var response = await Http.GetAsync($"api/cotizaciones?userId={usuarioId}");
+            if (!response.IsSuccessStatusCode)
+            {
+                cotizaciones = new();
+                errorCarga = response.StatusCode == HttpStatusCode.Unauthorized
+                    ? "Tu sesión no está autorizada para consultar cotizaciones."
+                    : "No se pudieron cargar las cotizaciones.";
+                return;
+            }
+
+            cotizaciones = await response.Content.ReadFromJsonAsync<List<CotizacionDto>>() ?? new();
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task NuevaCotizacion()
+    {
+        editor = new EditorModel { Titulo = $"Proforma {DateTime.Now:yyyy-MM-dd}" };
+        mostrarEditor = true;
+        productoSeleccionado = null;
+        filtroCliente = filtroProducto = string.Empty;
+        clientesSugeridos.Clear();
+        productosSugeridos.Clear();
+        modoDescuentoNuevo = ModoDescuento.Porcentaje;
+        porcentajeDescuentoNuevo = 0;
+        descuentoNuevo = 0;
+        formasPago = (await FacturacionService.ObtenerFormasPagoAsync())
+            .Select(x => new FormaPagoDto { Codigo = x.Codigo, Descripcion = x.Descripcion })
+            .ToList();
+    }
+
+    private void CerrarEditor() => mostrarEditor = false;
+
+    private async Task BuscarClientesAsync(string? filtro)
+    {
+        filtroCliente = filtro ?? string.Empty;
+        if (usuarioId <= 0) return;
+        clientesSugeridos = (await FacturacionService.BuscarClientesFiltroAsync(usuarioId, filtroCliente))
+            .Select(x => new ClienteLookupDto
+            {
+                Codcliente = x.Codcliente,
+                Nombres = x.Nombres,
+                Apellidos = x.Apellidos,
+                Nombrecomercial = x.Nombrecomercial,
+                Nombrerazonsocial = x.Nombrerazonsocial,
+                Numeroidentificacion = x.Numeroidentificacion
+            })
+            .ToList();
+    }
+
+    private Task MostrarClientesAsync() => BuscarClientesAsync(filtroCliente);
+
+    private async Task BuscarProductosAsync(string? filtro)
+    {
+        filtroProducto = filtro ?? string.Empty;
+        if (usuarioId <= 0) return;
+        productosSugeridos = (await FacturacionService.BuscarProductosFiltroAsync(usuarioId, filtroProducto))
+            .Select(x => new ProductoLookupDto
+            {
+                Codproducto = x.Codproducto,
+                Codprincipal = x.Codprincipal,
+                Descripcion = x.Descripcion,
+                PrecioUnitario = x.PrecioUnitario,
+                TarifaIva = x.TarifaIva
+            })
+            .ToList();
+    }
+
+    private Task MostrarProductosAsync() => BuscarProductosAsync(filtroProducto);
+
+    private void SeleccionarCliente(ClienteLookupDto cliente)
+    {
+        editor.IdCliente = cliente.Codcliente;
+        editor.NombreCliente = NombreCliente(cliente);
+        editor.IdentificacionCliente = cliente.Numeroidentificacion;
+        clientesSugeridos.Clear();
+        filtroCliente = editor.NombreCliente;
+    }
+
+    private void LimpiarClienteAsync()
+    {
+        editor.IdCliente = 0;
+        editor.NombreCliente = string.Empty;
+        editor.IdentificacionCliente = string.Empty;
+        filtroCliente = string.Empty;
+        clientesSugeridos.Clear();
+    }
+
+    private void SeleccionarProducto(ProductoLookupDto producto)
+    {
+        productoSeleccionado = producto;
+        precioNuevo = producto.PrecioUnitario;
+        cantidadNueva = 1;
+        descuentoNuevo = 0;
+        porcentajeDescuentoNuevo = 0;
+        modoDescuentoNuevo = ModoDescuento.Porcentaje;
+        detalleNuevo = string.Empty;
+    }
+
+    private void CambiarProductoAsync()
+    {
+        productoSeleccionado = null;
+        filtroProducto = string.Empty;
+        productosSugeridos.Clear();
+    }
+
+    private void AgregarLinea()
+    {
+        if (productoSeleccionado is null || cantidadNueva < 1 || precioNuevo < 0 || descuentoNuevo < 0) return;
+        var bruto = Red2(precioNuevo * cantidadNueva);
+        var descuento = modoDescuentoNuevo == ModoDescuento.Porcentaje
+            ? Red2(bruto * porcentajeDescuentoNuevo / 100m)
+            : Math.Clamp(Red2(descuentoNuevo), 0m, bruto);
+        editor.Detalles.Add(new LineaModel { CodigoProducto = productoSeleccionado.Codproducto, NombreProducto = productoSeleccionado.Descripcion ?? "Producto / servicio", PrecioUnitario = precioNuevo, Cantidad = cantidadNueva, Descuento = descuento, PorcentajeDescuento = modoDescuentoNuevo == ModoDescuento.Porcentaje ? porcentajeDescuentoNuevo : 0m, ModoDescuento = modoDescuentoNuevo, TarifaIva = productoSeleccionado.TarifaIva, Detalle = string.IsNullOrWhiteSpace(detalleNuevo) ? null : detalleNuevo.Trim() });
+        productoSeleccionado = null;
+        filtroProducto = string.Empty;
+        descuentoNuevo = 0;
+        porcentajeDescuentoNuevo = 0;
+        modoDescuentoNuevo = ModoDescuento.Porcentaje;
+    }
+
+    private async Task GuardarCotizacionAsync()
+    {
+        if (editor.IdCliente <= 0 || string.IsNullOrWhiteSpace(editor.FormaPago) || editor.Detalles.Count == 0) { await AlertService.ShowWarningAsync("Selecciona cliente, forma de pago y al menos un producto."); return; }
+        guardando = true;
+        var body = new { titulo = editor.Titulo, idCliente = editor.IdCliente, formaPago = editor.FormaPago, detalle = editor.Detalle, detalles = editor.Detalles.Select(x => new { codigoProducto = x.CodigoProducto, precioUnitario = x.PrecioUnitario, cantidad = x.Cantidad, descuento = DescuentoEfectivo(x), detalle = x.Detalle }) };
+        var response = editor.Id == 0 ? await Http.PostAsJsonAsync($"api/cotizaciones?userId={usuarioId}", body) : await Http.PutAsJsonAsync($"api/cotizaciones/{editor.Id}?userId={usuarioId}", body);
+        guardando = false;
+        if (!response.IsSuccessStatusCode) { await AlertService.ShowErrorAsync(await LeerMensajeAsync(response)); return; }
+        mostrarEditor = false;
+        await CargarAsync();
+        await AlertService.ShowSuccessAsync("La proforma quedó guardada.");
+    }
+
+    private async Task AprobarCotizacionAsync(CotizacionDto cotizacion)
+    {
+        if (!await AlertService.ConfirmAsync($"¿Aprobar la proforma \"{cotizacion.Titulo}\"? Después ya no podrá editarse.", "Aprobar proforma", "Sí, aprobar")) return;
+        var response = await Http.PostAsync($"api/cotizaciones/{cotizacion.Id}/aprobar?userId={usuarioId}", null);
+        if (!response.IsSuccessStatusCode) { await AlertService.ShowErrorAsync(await LeerMensajeAsync(response)); return; }
+        await CargarAsync();
+        var aprobada = cotizaciones.FirstOrDefault(x => x.Id == cotizacion.Id);
+        if (aprobada is not null && await AlertService.ConfirmAsync("La proforma fue aprobada. ¿Deseas generar la factura de inmediato?", "Proforma aprobada", "Sí, generar factura", "Más tarde")) await EmitirFacturaAsync(aprobada);
+    }
+
+    private async Task DarDeBajaCotizacionAsync(CotizacionDto cotizacion)
+    {
+        if (!PuedeDarDeBaja(cotizacion)) return;
+        if (!await AlertService.ConfirmAsync($"¿Dar de baja la proforma \"{cotizacion.Titulo}\"? Ya no podrá editarse ni aprobarse.", "Dar de baja proforma", "Sí, dar de baja", "Cancelar")) return;
+
+        var response = await Http.PostAsync($"api/cotizaciones/{cotizacion.Id}/dar-baja?userId={usuarioId}", null);
+        if (!response.IsSuccessStatusCode) { await AlertService.ShowErrorAsync(await LeerMensajeAsync(response)); return; }
+        await CargarAsync();
+        await AlertService.ShowSuccessAsync("La proforma fue dada de baja.");
+    }
+
+    private async Task EmitirFacturaAsync(CotizacionDto cotizacion)
+    {
+        var emisor = (await FacturacionService.GetEmisoresActivosAsync(usuarioId)).FirstOrDefault();
+        var serie = (await FacturacionService.GetSeriesFacturaHabilitadasAsync(usuarioId)).FirstOrDefault();
+        var cajaConfigurada = await FacturacionService.GetCajaUsuarioAsync(usuarioId);
+        if (emisor is null || serie is null) { await AlertService.ShowWarningAsync("Debes configurar un emisor y una caja con serie de factura antes de emitir."); return; }
+        var debeConfigurar = await FacturacionService.DebePreguntarSecuenciaInicialAsync(usuarioId, emisor.Codigo, serie.SerieRaw);
+        var secuencia = await FacturacionService.GetNextFacturaNumeroAsync(usuarioId, emisor.Codigo, serie.SerieRaw);
+        secuencia = string.IsNullOrWhiteSpace(secuencia) ? "000000001" : secuencia;
+        var caja = cajaConfigurada is null ? "Caja configurada" : $"Caja {cajaConfigurada.NumCaja} · {cajaConfigurada.SerieFactura}";
+        if (!await AlertService.ConfirmAsync($"{caja}\nEmisor: {emisor.RazonSocial}\nSecuencia: {secuencia}\n\n¿Confirmas emitir la factura?", "Confirmar emisión", "Sí, emitir")) return;
+        if (debeConfigurar) await FacturacionService.ConfigurarSecuenciaInicialFacturaAsync(usuarioId, false, null, emisor.Codigo, serie.SerieRaw);
+        var response = await Http.PostAsJsonAsync($"api/cotizaciones/{cotizacion.Id}/emitir", new { idUsuario = usuarioId, codEmisor = emisor.Codigo, serie = serie.SerieRaw });
+        if (!response.IsSuccessStatusCode) { await AlertService.ShowErrorAsync(await LeerMensajeAsync(response), "No se pudo emitir la factura"); return; }
+        await CargarAsync();
+        await AlertService.ShowSuccessAsync("La factura se emitió correctamente.");
+    }
+
+    private async Task EditarCotizacionAsync(CotizacionDto cotizacion) { editor = EditorModel.From(cotizacion); mostrarEditor = true; detalleVisibleId = 0; await CargarEditorCatalogosAsync(); }
+    private async Task ReutilizarAsync(CotizacionDto cotizacion) { editor = EditorModel.From(cotizacion); editor.Id = 0; editor.Titulo = $"{cotizacion.Titulo} (copia)"; mostrarEditor = true; detalleVisibleId = 0; await CargarEditorCatalogosAsync(); }
+    private async Task CargarEditorCatalogosAsync()
+    {
+        formasPago = (await FacturacionService.ObtenerFormasPagoAsync())
+            .Select(x => new FormaPagoDto { Codigo = x.Codigo, Descripcion = x.Descripcion })
+            .ToList();
+        clientesSugeridos.Clear();
+        productosSugeridos.Clear();
+        filtroCliente = string.Empty;
+        filtroProducto = string.Empty;
+    }
+    private void ToggleMenu(int id) => idCotizacionMenuAbierto = idCotizacionMenuAbierto == id ? null : id;
+    private void CerrarMenus() => idCotizacionMenuAbierto = null;
+    private void AlternarDetalle(int id) => detalleVisibleId = detalleVisibleId == id ? 0 : id;
+    private string PdfUrl(int id) => $"api/cotizaciones/{id}/pdf?userId={usuarioId}";
+    private static string NombrePdf(int id) => $"proforma-{id:D6}.pdf";
+    private static bool EsPendiente(CotizacionDto x) => string.Equals(x.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase);
+    private static bool EsAprobada(CotizacionDto x) => string.Equals(x.Estado, "Aprobada", StringComparison.OrdinalIgnoreCase);
+    private static bool PuedeDarDeBaja(CotizacionDto x) => EsPendiente(x) || EsAprobada(x);
+    private static string EstadoCss(string estado) => estado.ToLowerInvariant() switch { "aprobada" => "approved", "facturada" => "invoiced", "baja" => "cancelled", _ => "pending" };
+    private void CambiarModoDescuentoNuevo(ModoDescuento modo)
+    {
+        if (modoDescuentoNuevo == modo)
+            return;
+
+        var bruto = Red2(cantidadNueva * precioNuevo);
+        if (modo == ModoDescuento.Porcentaje)
+        {
+            porcentajeDescuentoNuevo = bruto > 0m ? NormalizarPorcentaje((descuentoNuevo / bruto) * 100m) : 0m;
+            descuentoNuevo = Red2(bruto * porcentajeDescuentoNuevo / 100m);
+        }
+        else
+        {
+            descuentoNuevo = Math.Clamp(Red2(descuentoNuevo), 0m, bruto);
+            porcentajeDescuentoNuevo = 0m;
+        }
+
+        modoDescuentoNuevo = modo;
+    }
+
+    private string GetDescuentoNuevoVisual() => modoDescuentoNuevo == ModoDescuento.Porcentaje
+        ? porcentajeDescuentoNuevo.ToString("0", CultureInfo.InvariantCulture)
+        : descuentoNuevo.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private void OnDescuentoNuevoInput(string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var descuento))
+        {
+            porcentajeDescuentoNuevo = 0m;
+            descuentoNuevo = 0m;
+            return;
+        }
+
+        var bruto = Red2(cantidadNueva * precioNuevo);
+        if (modoDescuentoNuevo == ModoDescuento.Porcentaje)
+        {
+            porcentajeDescuentoNuevo = NormalizarPorcentaje(descuento);
+            descuentoNuevo = Red2(bruto * porcentajeDescuentoNuevo / 100m);
+        }
+        else
+        {
+            descuentoNuevo = Math.Clamp(Red2(descuento), 0m, bruto);
+            porcentajeDescuentoNuevo = 0m;
+        }
+    }
+
+    private string GetCantidadVisual(LineaModel x) => x.Cantidad.ToString("0", CultureInfo.InvariantCulture);
+    private string GetPrecioVisual(LineaModel x) => x.PrecioUnitario.ToString("0.##", CultureInfo.InvariantCulture);
+    private string GetDescuentoVisual(LineaModel x) => x.ModoDescuento == ModoDescuento.Porcentaje
+        ? x.PorcentajeDescuento.ToString("0", CultureInfo.InvariantCulture)
+        : x.Descuento.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private void CambiarModoDescuento(LineaModel x, ModoDescuento modo)
+    {
+        if (x.ModoDescuento == modo)
+            return;
+
+        var bruto = SubtotalBruto(x);
+        if (modo == ModoDescuento.Porcentaje)
+        {
+            x.PorcentajeDescuento = bruto > 0m ? NormalizarPorcentaje((x.Descuento / bruto) * 100m) : 0m;
+            x.Descuento = Red2(bruto * x.PorcentajeDescuento / 100m);
+        }
+        else
+        {
+            x.Descuento = Math.Clamp(Red2(DescuentoEfectivo(x)), 0m, bruto);
+            x.PorcentajeDescuento = 0m;
+        }
+
+        x.ModoDescuento = modo;
+    }
+
+    private void OnDescuentoLineaInput(LineaModel x, string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var descuento))
+        {
+            x.PorcentajeDescuento = 0m;
+            x.Descuento = 0m;
+            return;
+        }
+
+        var bruto = SubtotalBruto(x);
+        if (x.ModoDescuento == ModoDescuento.Porcentaje)
+        {
+            x.PorcentajeDescuento = NormalizarPorcentaje(descuento);
+            x.Descuento = Red2(bruto * x.PorcentajeDescuento / 100m);
+        }
+        else
+        {
+            x.Descuento = Math.Clamp(Red2(descuento), 0m, bruto);
+            x.PorcentajeDescuento = 0m;
+        }
+    }
+
+    private void OnCantidadLineaInput(LineaModel x, string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var cantidad))
+            return;
+
+        x.Cantidad = Math.Max(1, (int)decimal.Truncate(cantidad));
+        RecalcularDescuentoLinea(x);
+    }
+
+    private void OnPrecioLineaInput(LineaModel x, string? valor)
+    {
+        if (!TryParseDecimalFlexible(valor, out var precio))
+            return;
+
+        x.PrecioUnitario = Math.Max(0m, precio);
+        RecalcularDescuentoLinea(x);
+    }
+
+    private static void RecalcularDescuentoLinea(LineaModel x)
+    {
+        var bruto = SubtotalBruto(x);
+        if (x.ModoDescuento == ModoDescuento.Porcentaje)
+            x.Descuento = Red2(bruto * x.PorcentajeDescuento / 100m);
+        else
+            x.Descuento = Math.Clamp(Red2(x.Descuento), 0m, bruto);
+    }
+
+    private static decimal SubtotalBruto(LineaModel x) => Red2(x.PrecioUnitario * x.Cantidad);
+    private static decimal DescuentoEfectivo(LineaModel x) => x.ModoDescuento == ModoDescuento.Porcentaje
+        ? Red2(SubtotalBruto(x) * x.PorcentajeDescuento / 100m)
+        : Math.Clamp(Red2(x.Descuento), 0m, SubtotalBruto(x));
+    private static decimal BaseImponible(LineaModel x) => Math.Max(0m, Red2(SubtotalBruto(x) - DescuentoEfectivo(x)));
+    private static decimal IvaLinea(LineaModel x) => Red2(BaseImponible(x) * x.TarifaIva / 100m);
+    private static decimal TotalLinea(LineaModel x) => Red2(BaseImponible(x) + IvaLinea(x));
+    private static decimal TotalLinea(CotizacionDetalleDto x) => x.TotalLinea;
+    private TotalesModel TotalesEditor()
+    {
+        var lineas = editor.Detalles.Select(x => new
+        {
+            Tarifa = x.TarifaIva,
+            Bruto = SubtotalBruto(x),
+            Descuento = DescuentoEfectivo(x),
+            Base = BaseImponible(x),
+            Iva = IvaLinea(x)
+        }).ToList();
+
+        return new TotalesModel
+        {
+            SubtotalGravada = lineas.Where(x => x.Tarifa > 0).Sum(x => x.Bruto),
+            SubtotalCero = lineas.Where(x => x.Tarifa == 0).Sum(x => x.Bruto),
+            Descuento = lineas.Sum(x => x.Descuento),
+            BaseImponible = lineas.Sum(x => x.Base),
+            Total = lineas.Sum(x => Red2(x.Base + x.Iva)),
+            IvaPorTarifa = lineas.Where(x => x.Tarifa > 0 && x.Iva > 0).GroupBy(x => x.Tarifa).OrderBy(x => x.Key).Select(x => new IvaTotalModel { Tarifa = x.Key, Valor = x.Sum(y => y.Iva) }).ToList()
+        };
+    }
+
+    private decimal TotalEditor() => TotalesEditor().Total;
+    private static string NombreCliente(ClienteLookupDto x) => string.Join(" ", new[] { x.Nombrerazonsocial ?? x.Nombrecomercial, x.Nombres, x.Apellidos }.Where(y => !string.IsNullOrWhiteSpace(y))).Trim();
+    private static async Task<string> LeerMensajeAsync(HttpResponseMessage response) => await response.Content.ReadAsStringAsync();
+
+    private enum ModoDescuento { Porcentaje, Moneda }
+    private static decimal Red2(decimal valor) => Math.Round(valor, 2, MidpointRounding.AwayFromZero);
+    private static decimal NormalizarPorcentaje(decimal valor) => Math.Clamp(Math.Round(valor, 0, MidpointRounding.AwayFromZero), 0m, 100m);
+    private static bool TryParseDecimalFlexible(string? valor, out decimal resultado) => decimal.TryParse(valor, NumberStyles.Any, CultureInfo.CurrentCulture, out resultado) || decimal.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out resultado);
+    private sealed class EditorModel { public int Id { get; set; } public string Titulo { get; set; } = "Proforma"; public int IdCliente { get; set; } public string NombreCliente { get; set; } = string.Empty; public string? IdentificacionCliente { get; set; } public string? FormaPago { get; set; } public string? Detalle { get; set; } public List<LineaModel> Detalles { get; set; } = new(); public static EditorModel From(CotizacionDto x) => new() { Id = x.Id, Titulo = x.Titulo, IdCliente = x.IdCliente ?? 0, NombreCliente = x.NombreCliente, IdentificacionCliente = x.IdentificacionCliente, FormaPago = x.FormaPago, Detalle = x.Detalle, Detalles = x.Detalles.Select(d => new LineaModel { CodigoProducto = d.CodigoProducto, NombreProducto = d.NombreProducto, PrecioUnitario = d.PrecioUnitario, Cantidad = d.Cantidad, Descuento = d.Descuento, ModoDescuento = d.Descuento > 0m ? ModoDescuento.Moneda : ModoDescuento.Porcentaje, TarifaIva = d.TarifaIva, Detalle = d.Detalle }).ToList() }; }
+    private sealed class LineaModel { public Guid Key { get; } = Guid.NewGuid(); public int CodigoProducto { get; set; } public string NombreProducto { get; set; } = string.Empty; public decimal PrecioUnitario { get; set; } public int Cantidad { get; set; } = 1; public decimal Descuento { get; set; } public decimal PorcentajeDescuento { get; set; } public ModoDescuento ModoDescuento { get; set; } = ModoDescuento.Porcentaje; public int TarifaIva { get; set; } public string? Detalle { get; set; } }
+    private sealed class CotizacionDto { public int Id { get; set; } public string Titulo { get; set; } = "Proforma"; public int? IdCliente { get; set; } public string NombreCliente { get; set; } = string.Empty; public string? IdentificacionCliente { get; set; } public DateTime FechaCreacion { get; set; } public string Estado { get; set; } = "Pendiente"; public string? FormaPago { get; set; } public string? Detalle { get; set; } public decimal TotalEstimado { get; set; } public List<CotizacionDetalleDto> Detalles { get; set; } = new(); }
+    private sealed class CotizacionDetalleDto { public int CodigoProducto { get; set; } public string NombreProducto { get; set; } = string.Empty; public decimal PrecioUnitario { get; set; } public int Cantidad { get; set; } public decimal Descuento { get; set; } public int TarifaIva { get; set; } public string? Detalle { get; set; } public decimal TotalLinea { get; set; } }
+    private sealed class ClienteLookupDto { public int Codcliente { get; set; } public string? Nombres { get; set; } public string? Apellidos { get; set; } public string? Nombrecomercial { get; set; } public string? Nombrerazonsocial { get; set; } public string? Numeroidentificacion { get; set; } }
+    private sealed class ProductoLookupDto { public int Codproducto { get; set; } public string? Codprincipal { get; set; } public string? Descripcion { get; set; } public decimal PrecioUnitario { get; set; } public int TarifaIva { get; set; } }
+    private sealed class FormaPagoDto { public string Codigo { get; set; } = string.Empty; public string? Descripcion { get; set; } }
+    private sealed class TotalesModel { public decimal SubtotalGravada { get; set; } public decimal SubtotalCero { get; set; } public decimal Descuento { get; set; } public decimal BaseImponible { get; set; } public decimal Total { get; set; } public List<IvaTotalModel> IvaPorTarifa { get; set; } = new(); }
+    private sealed class IvaTotalModel { public int Tarifa { get; set; } public decimal Valor { get; set; } }
 }

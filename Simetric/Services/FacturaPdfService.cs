@@ -13,6 +13,7 @@ namespace Simetric.Services;
 public interface IFacturaPdfService
 {
     Task<string> GenerarPdfFacturaAsync(FacturaViewDto facturaView, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4);
+    Task<string> GenerarPdfProformaAsync(FacturaViewDto facturaView, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4);
     Task<string> GenerarPdfFacturaTemporalAsync(FacturaViewDto facturaView, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4);
     Task<bool> EliminarPdfFacturaTemporalAsync(string rutaRelativaPdf);
 }
@@ -75,6 +76,20 @@ public sealed class FacturaPdfService : IFacturaPdfService
         return Task.FromResult(rutaPdf);
     }
 
+    public Task<string> GenerarPdfProformaAsync(FacturaViewDto facturaView, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    {
+        if (facturaView?.Factura == null)
+            throw new InvalidOperationException("No se encontro la informacion necesaria para generar el PDF de la proforma.");
+
+        var carpetaProformas = Path.Combine(ObtenerWebRootPath(), "ProformasGeneradas");
+        Directory.CreateDirectory(carpetaProformas);
+        var identificador = LimpiarSegmentoArchivo(facturaView.Factura.Codfactura.ToString(Cultura), "proforma");
+        var rutaPdf = Path.Combine(carpetaProformas, $"proforma_{identificador}{formato.ObtenerSufijoArchivo()}.pdf");
+
+        GenerarPdfFacturaInterno(facturaView, formato, rutaPdf, true);
+        return Task.FromResult(rutaPdf);
+    }
+
     public Task<string> GenerarPdfFacturaTemporalAsync(FacturaViewDto facturaView, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
     {
         if (facturaView?.Factura == null)
@@ -111,7 +126,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
         return Task.FromResult(false);
     }
 
-    private void GenerarPdfFacturaInterno(FacturaViewDto facturaView, FormatoImpresionDocumento formato, string rutaPdf)
+    private void GenerarPdfFacturaInterno(FacturaViewDto facturaView, FormatoImpresionDocumento formato, string rutaPdf, bool esProforma = false)
     {
         var logoSistema = CargarLogoDocumento(facturaView.Emisor);
         var lineas = ConstruirLineas(facturaView);
@@ -132,8 +147,8 @@ public sealed class FacturaPdfService : IFacturaPdfService
                     page.PageColor(Colors.White);
                     page.DefaultTextStyle(EstiloBasePdf);
 
-                    page.Header().Element(header => ComponerEncabezado(header, facturaView, logoSistema));
-                    page.Content().Element(content => ComponerContenido(content, facturaView, lineas));
+                    page.Header().Element(header => ComponerEncabezado(header, facturaView, logoSistema, esProforma));
+                    page.Content().Element(content => ComponerContenido(content, facturaView, lineas, esProforma));
                     page.Footer().Element(footer => ComponerPie(footer));
                 }
             });
@@ -241,12 +256,12 @@ public sealed class FacturaPdfService : IFacturaPdfService
             .FontSize(FuenteBasePdf)
             .LineHeight(1.1f);
 
-    private static void ComponerEncabezado(IContainer container, FacturaViewDto facturaView, byte[]? logoSistema)
+    private static void ComponerEncabezado(IContainer container, FacturaViewDto facturaView, byte[]? logoSistema, bool esProforma = false)
     {
         var factura = facturaView.Factura;
         var emisor = facturaView.Emisor;
         var estaAutorizada = DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri);
-        var numeroDocumento = ObtenerNumeroDocumento(factura);
+        var numeroDocumento = esProforma ? factura.Codfactura.ToString("D6", Cultura) : ObtenerNumeroDocumento(factura);
         var numeroAutorizacion = DocumentoAutorizacionHelper.ObtenerNumeroAutorizacionVisual(
             factura.Estadoenviosri,
             estaAutorizada,
@@ -254,7 +269,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
         var claveAcceso = ObtenerTextoOGuion(factura.Codclave);
         var ambiente = ObtenerAmbienteVisual(factura.Ambiente, emisor?.TipoAmbiente);
         var tipoEmision = ObtenerTipoEmisionVisualFromEmisor(emisor?.TipoEmision);
-        var estadoDocumento = estaAutorizada ? "Autorizada" : "Emitida";
+        var estadoDocumento = esProforma ? "Cotización vigente" : estaAutorizada ? "Autorizada" : "Emitida";
 
         container.PaddingBottom(6).Row(row =>
         {
@@ -299,7 +314,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
                             .Background(Colors.Blue.Lighten5)
                             .PaddingVertical(2)
                             .PaddingHorizontal(5)
-                            .Text("Facturación Electrónica")
+                            .Text(esProforma ? "Documento comercial" : "Facturación Electrónica")
                             .FontSize(FuenteEtiquetaPdf)
                             .SemiBold()
                             .FontColor(Colors.Blue.Darken3);
@@ -346,40 +361,48 @@ public sealed class FacturaPdfService : IFacturaPdfService
                     column.Item().AlignCenter().Text(text =>
                     {
                         text.DefaultTextStyle(x => x.FontSize(10.2f).SemiBold());
-                        text.Span("Factura").FontColor(Colors.Blue.Darken3).FontSize(12.2f);
+                        text.Span(esProforma ? "Proforma" : "Factura").FontColor(Colors.Blue.Darken3).FontSize(12.2f);
                         text.Span($"  No. {numeroDocumento}").FontColor(Colors.Black);
                     });
 
+                    if (!string.IsNullOrWhiteSpace(facturaView.TituloDocumento))
+                        column.Item().AlignCenter().Text(facturaView.TituloDocumento.Trim()).SemiBold().FontColor(Colors.Blue.Darken3);
                     column.Item().Element(item => ComponerLineaEncabezado(item, "Estado del documento:", estadoDocumento));
-                    column.Item().PaddingTop(2).Element(item => ComponerCajaDatoEncabezado(item, "Clave de acceso", ObtenerTextoOGuion(claveAcceso)));
-                    column.Item().PaddingTop(2).Element(item => ComponerCajaDatoEncabezado(item, "Número de autorización", ObtenerTextoOGuion(numeroAutorizacion)));
-
-                    if (factura.Fchautorizacion.HasValue)
-                        column.Item().PaddingTop(2).Text($"Fecha y hora de autorización: {factura.Fchautorizacion.Value:dd/MM/yyyy HH:mm}")
-                            .FontSize(8);
-
-                    column.Item().PaddingTop(2).Element(item => ComponerLineaEncabezado(item, "Ambiente:", ambiente));
-
-                    column.Item().Element(item => ComponerLineaEncabezado(item, "Tipo emisión:", tipoEmision));
-
-                    var barcodeBytes = GenerarBarcodeNumeroAutorizacion(factura.Codclave);
-                    if (barcodeBytes != null)
+                    if (esProforma)
                     {
-                        column.Item().PaddingTop(4)
-                            .Border(1)
-                            .BorderColor(Colors.Blue.Lighten3)
-                            .Background(Colors.White)
-                            .Padding(5)
-                            .AlignCenter()
-                            .MaxWidth(220)
-                            .Image(barcodeBytes)
-                            .FitWidth();
+                        column.Item().Element(item => ComponerLineaEncabezado(item, "Fecha de emisión:", ObtenerFechaEmisionFactura(factura).ToString("dd/MM/yyyy")));
+                    }
+                    else
+                    {
+                        column.Item().PaddingTop(2).Element(item => ComponerCajaDatoEncabezado(item, "Clave de acceso", ObtenerTextoOGuion(claveAcceso)));
+                        column.Item().PaddingTop(2).Element(item => ComponerCajaDatoEncabezado(item, "Número de autorización", ObtenerTextoOGuion(numeroAutorizacion)));
+
+                        if (factura.Fchautorizacion.HasValue)
+                            column.Item().PaddingTop(2).Text($"Fecha y hora de autorización: {factura.Fchautorizacion.Value:dd/MM/yyyy HH:mm}")
+                                .FontSize(8);
+
+                        column.Item().PaddingTop(2).Element(item => ComponerLineaEncabezado(item, "Ambiente:", ambiente));
+                        column.Item().Element(item => ComponerLineaEncabezado(item, "Tipo emisión:", tipoEmision));
+
+                        var barcodeBytes = GenerarBarcodeNumeroAutorizacion(factura.Codclave);
+                        if (barcodeBytes != null)
+                        {
+                            column.Item().PaddingTop(4)
+                                .Border(1)
+                                .BorderColor(Colors.Blue.Lighten3)
+                                .Background(Colors.White)
+                                .Padding(5)
+                                .AlignCenter()
+                                .MaxWidth(220)
+                                .Image(barcodeBytes)
+                                .FitWidth();
+                        }
                     }
                 });
         });
     }
 
-    private static void ComponerContenido(IContainer container, FacturaViewDto facturaView, IReadOnlyCollection<FacturaPdfLinea> lineas)
+    private static void ComponerContenido(IContainer container, FacturaViewDto facturaView, IReadOnlyCollection<FacturaPdfLinea> lineas, bool esProforma = false)
     {
         var factura = facturaView.Factura;
         var cliente = facturaView.Cliente;
@@ -425,7 +448,9 @@ public sealed class FacturaPdfService : IFacturaPdfService
                     lineas));
             });
 
-            column.Item().PaddingTop(1).Text("Documento generado por el sistema de facturacion electronica.")
+            column.Item().PaddingTop(1).Text(esProforma
+                    ? "Documento comercial referencial. No reemplaza una factura autorizada."
+                    : "Documento generado por el sistema de facturacion electronica.")
                 .FontSize(FuenteEtiquetaPdf)
                 .FontColor(Colors.Grey.Darken1);
         });
