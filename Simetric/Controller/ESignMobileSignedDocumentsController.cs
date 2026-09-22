@@ -43,11 +43,33 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
                 fechaFirma = file.CreationTime,
                 estado = "Válido",
                 tamano = $"{Math.Max(1, Math.Ceiling(file.Length / 1024d))} KB",
-                downloadUrl = "/" + Path.Combine(relativeDirectory, Uri.EscapeDataString(file.Name)).Replace('\\', '/'),
-                previewUrl = "/" + Path.Combine(relativeDirectory, Uri.EscapeDataString(file.Name)).Replace('\\', '/')
+                downloadUrl = CrearUrlArchivoFirmado(file.Name),
+                previewUrl = CrearUrlArchivoFirmado(file.Name)
             });
 
         return Ok(documentos);
+    }
+
+    [HttpGet("firmados/archivo")]
+    public IActionResult DescargarFirmado([FromQuery] string? nombreArchivo)
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(nombreArchivo) ||
+            !string.Equals(nombreArchivo, Path.GetFileName(nombreArchivo), StringComparison.Ordinal) ||
+            !string.Equals(Path.GetExtension(nombreArchivo), ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { mensaje = "El nombre del documento no es válido." });
+        }
+
+        var webRootPath = string.IsNullOrWhiteSpace(_hostEnvironment.WebRootPath)
+            ? Path.Combine(_hostEnvironment.ContentRootPath, "wwwroot")
+            : _hostEnvironment.WebRootPath;
+        var physicalPath = Path.Combine(webRootPath, "uploads", "e-rubrica", "estampados", userId.ToString(), nombreArchivo);
+        if (!System.IO.File.Exists(physicalPath)) return NotFound();
+
+        return PhysicalFile(physicalPath, "application/pdf", enableRangeProcessing: true);
     }
 
     private int GetUserId()
@@ -58,6 +80,9 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
             ?? User.FindFirstValue("sub");
         return int.TryParse(value, out var userId) ? userId : 0;
     }
+
+    private static string CrearUrlArchivoFirmado(string fileName) =>
+        $"/api/mobile/e-rubrica/documentos/firmados/archivo?nombreArchivo={Uri.EscapeDataString(fileName)}";
 
     private static string CrearNombreVisible(FileInfo file)
     {
