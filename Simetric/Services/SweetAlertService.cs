@@ -77,6 +77,53 @@ public sealed class SweetAlertService
         return false;
     }
 
+    public async ValueTask<string?> SelectAsync(
+        string title,
+        string text,
+        IReadOnlyDictionary<string, string> options,
+        string confirmButtonText = "Continuar",
+        string cancelButtonText = "Cancelar")
+    {
+        try
+        {
+            var result = await _js.InvokeAsync<JsonElement>("Swal.fire", new
+            {
+                title,
+                text,
+                input = "select",
+                inputOptions = options,
+                inputPlaceholder = "Selecciona una opción",
+                showCancelButton = true,
+                confirmButtonText,
+                cancelButtonText,
+                allowOutsideClick = false
+            });
+
+            if (result.TryGetProperty("isConfirmed", out var confirmed) && confirmed.GetBoolean() &&
+                result.TryGetProperty("value", out var value))
+            {
+                var selected = value.GetString();
+                return string.IsNullOrWhiteSpace(selected) ? null : selected;
+            }
+        }
+        catch (TaskCanceledException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.Contains("JavaScript interop calls cannot be issued", StringComparison.OrdinalIgnoreCase) ||
+            ex.Message.Contains("disconnected", StringComparison.OrdinalIgnoreCase))
+        {
+        }
+
+        return null;
+    }
+
     public async ValueTask ShowLoadingAsync(string title, string text)
     {
         await InvokeSafeVoidAsync("Swal.fire", new
