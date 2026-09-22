@@ -214,6 +214,10 @@
                 </div>
                 <div class="table-head-actions">
                     <span class="table-badge">@totalFilteredProducts registros</span>
+                    <button type="button" class="secondary-btn" @onclick="AbrirCotizacion">
+                        <i class="bi bi-calculator"></i>
+                        <span>Cotizar</span>
+                    </button>
                     <button type="button" class="primary-btn" @onclick="AbrirNuevoProductoModal">
                         <i class="bi bi-plus-lg"></i>
                         <span>Nuevo producto</span>
@@ -781,6 +785,61 @@
 
 </div>
 
+@if (mostrarCotizacion)
+{
+    <div class="products-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+    <div class="products-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="cotizacionProductosTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+        <div class="products-modal-content cotizacion-modal-content" @onclick:stopPropagation="true">
+            <div class="products-modal-header">
+                <div>
+                    <span class="modal-kicker">Cotización rápida</span>
+                    <h3 id="cotizacionProductosTitulo">Selecciona tus productos</h3>
+                    <p>Agrega los productos y define sus cantidades para calcular el total estimado.</p>
+                </div>
+                <button type="button" class="modal-close" @onclick="CerrarCotizacion" aria-label="Cerrar cotización"><span aria-hidden="true">&times;</span></button>
+            </div>
+            <div class="products-modal-body cotizacion-modal-body">
+                <div class="cotizacion-search">
+                    <i class="bi bi-search"></i>
+                    <input placeholder="Buscar producto o código" @bind="filtroCotizacion" @bind:event="oninput" />
+                </div>
+                <div class="cotizacion-productos">
+                    @if (!ProductosCotizables.Any())
+                    {
+                        <p class="cotizacion-empty">No hay productos activos disponibles para cotizar.</p>
+                    }
+                    else
+                    {
+                        @foreach (var producto in ProductosCotizables)
+                        {
+                            var linea = ObtenerLineaCotizacion(producto);
+                            <div class="cotizacion-producto @(linea is not null ? "is-selected" : "")" @key="producto.Codigo">
+                                <button type="button" class="cotizacion-producto-main" @onclick="() => AlternarProductoCotizacion(producto)">
+                                    <span class="cotizacion-check"><i class="bi @(linea is not null ? "bi-check-lg" : "bi-plus-lg")"></i></span>
+                                    <span><strong>@(string.IsNullOrWhiteSpace(producto.Nombre) ? "Sin nombre" : producto.Nombre)</strong><small>@(string.IsNullOrWhiteSpace(producto.CodigoPrincipal) ? $"Código #{producto.Codigo}" : producto.CodigoPrincipal)</small></span>
+                                </button>
+                                <div class="cotizacion-producto-price">
+                                    <strong>@FormatCurrency(linea?.PrecioUnitario ?? producto.ValorUnitario)</strong>
+                                    @if (linea is not null)
+                                    {
+                                        <label><span>Precio</span><input type="number" min="0" step="0.01" @bind="linea.PrecioUnitario" /></label>
+                                        <label><span>Cant.</span><input type="number" min="1" step="1" @bind="linea.Cantidad" /></label>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+            <div class="products-modal-footer cotizacion-footer">
+                <div><span>@lineasCotizacion.Count producto@(lineasCotizacion.Count == 1 ? string.Empty : "s") seleccionado@(lineasCotizacion.Count == 1 ? string.Empty : "s")</span><strong>Total estimado: @FormatCurrency(TotalCotizacion)</strong></div>
+                <button type="button" class="secondary-btn" @onclick="CerrarCotizacion">Cerrar</button>
+                <button type="button" class="primary-btn" @onclick="GenerarCotizacionAsync" disabled="@(generandoCotizacion || !lineasCotizacion.Any())">@(generandoCotizacion ? "Generando..." : "Generar")</button>
+            </div>
+        </div>
+    </div>
+}
+
 @if (mostrarImportacion)
 {
     <div class="products-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
@@ -1038,6 +1097,13 @@
         public int? Idusuario { get; set; }
     }
 
+    private class CotizacionLinea
+    {
+        public ProductoDto Producto { get; set; } = default!;
+        public decimal PrecioUnitario { get; set; }
+        public int Cantidad { get; set; } = 1;
+    }
+
     private class ProductoUpsertDto : IValidatableObject
     {
         private const decimal PrecioMaximoPermitido = 99999999.99m;
@@ -1219,6 +1285,10 @@
     private string? debugError;
     private bool isSaving;
     private bool mostrarModalFormularioProducto;
+    private bool mostrarCotizacion;
+    private bool generandoCotizacion;
+    private string filtroCotizacion = string.Empty;
+    private List<CotizacionLinea> lineasCotizacion = new();
     private int pageSize = 10;
     private int currentPage = 1;
 
@@ -1632,6 +1702,58 @@
     private int CurrentTotalPages => Math.Max(1, (int)Math.Ceiling(CurrentTotalRecords / (double)CurrentPageSize));
     private int CurrentPageStart => CurrentTotalRecords == 0 ? 0 : ((currentPage - 1) * CurrentPageSize) + 1;
     private int CurrentPageEnd => CurrentTotalRecords == 0 ? 0 : Math.Min(CurrentTotalRecords, currentPage * CurrentPageSize);
+
+    private IEnumerable<ProductoDto> ProductosCotizables => productos
+        .Where(producto => producto.Estado == true &&
+            (string.IsNullOrWhiteSpace(filtroCotizacion) ||
+             (producto.Nombre?.Contains(filtroCotizacion, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             (producto.CodigoPrincipal?.Contains(filtroCotizacion, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             producto.Codigo.ToString(CultureInfo.InvariantCulture).Contains(filtroCotizacion, StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(producto => producto.Nombre, StringComparer.OrdinalIgnoreCase);
+
+    private decimal TotalCotizacion => lineasCotizacion.Sum(linea => Math.Max(0, linea.PrecioUnitario) * Math.Max(1, linea.Cantidad));
+
+    private void AbrirCotizacion()
+    {
+        filtroCotizacion = string.Empty;
+        lineasCotizacion.Clear();
+        mostrarCotizacion = true;
+    }
+
+    private void CerrarCotizacion() => mostrarCotizacion = false;
+
+    private async Task GenerarCotizacionAsync()
+    {
+        if (generandoCotizacion || !lineasCotizacion.Any()) return;
+        generandoCotizacion = true;
+        try
+        {
+            var response = await Http.PostAsJsonAsync($"api/productos/cotizaciones?userId={usuarioLogueadoId}", new
+            {
+                detalles = lineasCotizacion.Select(linea => new { codigoProducto = linea.Producto.Codigo, precioUnitario = Math.Max(0, linea.PrecioUnitario), cantidad = Math.Max(1, linea.Cantidad) })
+            });
+            if (!response.IsSuccessStatusCode) { mensaje = await response.Content.ReadAsStringAsync(); return; }
+            CerrarCotizacion();
+            NavManager.NavigateTo("/cotizaciones");
+        }
+        catch (Exception ex) { debugError = ex.Message; }
+        finally { generandoCotizacion = false; }
+    }
+
+    private CotizacionLinea? ObtenerLineaCotizacion(ProductoDto producto) =>
+        lineasCotizacion.FirstOrDefault(linea => linea.Producto.Codigo == producto.Codigo);
+
+    private void AlternarProductoCotizacion(ProductoDto producto)
+    {
+        var linea = ObtenerLineaCotizacion(producto);
+        if (linea is null)
+        {
+            lineasCotizacion.Add(new CotizacionLinea { Producto = producto, PrecioUnitario = producto.ValorUnitario.GetValueOrDefault() });
+            return;
+        }
+
+        lineasCotizacion.Remove(linea);
+    }
 
     private void AbrirNuevoProductoModal()
     {

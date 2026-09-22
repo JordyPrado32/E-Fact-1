@@ -1,0 +1,56 @@
+@page "/cotizaciones"
+@using System.Net.Http.Json
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@rendermode InteractiveServer
+
+<PageTitle>Cotizaciones | Numerica e-fact</PageTitle>
+
+<div class="quotes-shell">
+    <section class="quotes-header">
+        <div><span>GESTIÓN COMERCIAL</span><h2>Cotizaciones</h2><p>Consulta las cotizaciones generadas y sus productos registrados.</p></div>
+        <button type="button" class="primary-btn" @onclick='() => NavManager.NavigateTo("/productos")'><i class="bi bi-plus-lg"></i><span>Nueva cotización</span></button>
+    </section>
+
+    <section class="quotes-card">
+        @if (cargando)
+        {
+            <p class="quotes-state">Cargando cotizaciones...</p>
+        }
+        else if (!cotizaciones.Any())
+        {
+            <div class="quotes-state"><i class="bi bi-calculator"></i><h3>No hay cotizaciones</h3><p>Desde Productos, selecciona “Cotizar” para generar la primera.</p></div>
+        }
+        else
+        {
+            <div class="table-wrap"><table class="table table-hover align-middle mb-0"><thead><tr><th>Fecha</th><th>Productos</th><th class="text-end">Total estimado</th></tr></thead><tbody>
+                @foreach (var cotizacion in cotizaciones)
+                {
+                    <tr @key="cotizacion.Id"><td>@cotizacion.FechaCreacion.ToString("dd/MM/yyyy HH:mm")</td><td>@string.Join(", ", cotizacion.Detalles.Select(x => $"{x.NombreProducto} x{x.Cantidad}"))</td><td class="text-end"><strong>@cotizacion.TotalEstimado.ToString("C2")</strong></td></tr>
+                }
+            </tbody></table></div>
+        }
+    </section>
+</div>
+
+@code {
+    private bool cargando = true;
+    private List<CotizacionDto> cotizaciones = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        var id = user.FindFirst("IdUsuario")?.Value ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (int.TryParse(id, out var userId) && userId > 0)
+            cotizaciones = await Http.GetFromJsonAsync<List<CotizacionDto>>($"api/productos/cotizaciones?userId={userId}") ?? new();
+        cargando = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private class CotizacionDto { public int Id { get; set; } public DateTime FechaCreacion { get; set; } public decimal TotalEstimado { get; set; } public List<CotizacionDetalleDto> Detalles { get; set; } = new(); }
+    private class CotizacionDetalleDto { public string NombreProducto { get; set; } = string.Empty; public int Cantidad { get; set; } }
+}

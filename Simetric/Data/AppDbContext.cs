@@ -32,6 +32,8 @@ namespace Simetric.Data
         public DbSet<LogIniciosSesion> LogIniciosSesiones { get; set; }
         public DbSet<Porcentajeiva> Porcentajeivas { get; set; }
         public DbSet<Producto> Productos { get; set; }
+        public DbSet<Cotizacion> Cotizaciones { get; set; }
+        public DbSet<CotizacionDetalle> CotizacionDetalles { get; set; }
         public DbSet<Productosubtipo> Productosubtipos { get; set; }
         public DbSet<Productotipo> Productotipos { get; set; }
         public DbSet<Tipocliente> Tipoclientes { get; set; }
@@ -137,6 +139,12 @@ namespace Simetric.Data
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
+            modelBuilder.Entity<Cotizacion>()
+                .HasMany(x => x.Detalles)
+                .WithOne(x => x.Cotizacion)
+                .HasForeignKey(x => x.IdCotizacion)
+                .OnDelete(DeleteBehavior.Cascade);
+
             modelBuilder.Entity<NormativaLegal>(entity =>
             {
                 entity.HasIndex(e => e.Codigo).IsUnique();

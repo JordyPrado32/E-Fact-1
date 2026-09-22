@@ -304,6 +304,7 @@ builder.Services.AddHttpClient<WhatsAppSupportService>(client =>
     client.Timeout = TimeSpan.FromSeconds(20);
 });
 builder.Services.AddSingleton<FacturaPersistenceSchemaService>();
+builder.Services.AddSingleton<CotizacionSchemaService>();
 builder.Services.AddSingleton<IFacturaConversationStore, SqlFacturaConversationStore>();
 builder.Services.AddScoped<Simetric.Modules.AsistenteIAFacturacion.Services.IClienteService, SystemClienteServiceAdapter>();
 builder.Services.AddScoped<IProductoService, SystemProductoServiceAdapter>();
@@ -360,6 +361,9 @@ try
 
     var facturaPersistenceSchemaService = scope.ServiceProvider.GetRequiredService<FacturaPersistenceSchemaService>();
     await facturaPersistenceSchemaService.EnsureSchemaAsync();
+
+    var cotizacionSchemaService = scope.ServiceProvider.GetRequiredService<CotizacionSchemaService>();
+    await cotizacionSchemaService.EnsureSchemaAsync();
 
     var solicitudFirmaBorradorService = scope.ServiceProvider.GetRequiredService<SolicitudFirmaBorradorService>();
     await solicitudFirmaBorradorService.EnsureSchemaAsync();

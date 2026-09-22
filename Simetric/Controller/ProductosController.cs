@@ -12,10 +12,12 @@ public class ProductosController : ControllerBase
 {
     private const decimal PrecioMaximoPermitido = 99999999.99m;
     private readonly AppDbContext _db;
+    private readonly CotizacionSchemaService _cotizacionSchemaService;
 
-    public ProductosController(AppDbContext db)
+    public ProductosController(AppDbContext db, CotizacionSchemaService cotizacionSchemaService)
     {
         _db = db;
+        _cotizacionSchemaService = cotizacionSchemaService;
     }
 
     // Métodos de ayuda para la jerarquía
@@ -72,7 +74,98 @@ public class ProductosController : ControllerBase
         public int Creados { get; set; }
         public List<string> Errores { get; set; } = new();
     }
+
+    public class CotizacionCrearDto
+    {
+        public List<CotizacionDetalleCrearDto> Detalles { get; set; } = new();
+    }
+
+    public class CotizacionDetalleCrearDto
+    {
+        public int CodigoProducto { get; set; }
+        public decimal PrecioUnitario { get; set; }
+        public int Cantidad { get; set; }
+    }
+
+    public class CotizacionDto
+    {
+        public int Id { get; set; }
+        public DateTime FechaCreacion { get; set; }
+        public decimal TotalEstimado { get; set; }
+        public List<CotizacionDetalleDto> Detalles { get; set; } = new();
+    }
+
+    public class CotizacionDetalleDto
+    {
+        public string NombreProducto { get; set; } = string.Empty;
+        public decimal PrecioUnitario { get; set; }
+        public int Cantidad { get; set; }
+        public decimal TotalLinea { get; set; }
+    }
     #endregion
+
+    [HttpGet("cotizaciones")]
+    public async Task<ActionResult<List<CotizacionDto>>> GetCotizaciones([FromQuery] int userId)
+    {
+        if (!IsValidUser(userId)) return Unauthorized();
+        var ownerId = await GetOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound();
+        await _cotizacionSchemaService.EnsureSchemaAsync();
+
+        return await _db.Cotizaciones.AsNoTracking()
+            .Where(x => x.IdUsuario == ownerId.Value)
+            .OrderByDescending(x => x.FechaCreacion)
+            .Select(x => new CotizacionDto
+            {
+                Id = x.Id,
+                FechaCreacion = x.FechaCreacion,
+                TotalEstimado = x.TotalEstimado,
+                Detalles = x.Detalles.Select(d => new CotizacionDetalleDto
+                {
+                    NombreProducto = d.NombreProducto,
+                    PrecioUnitario = d.PrecioUnitario,
+                    Cantidad = d.Cantidad,
+                    TotalLinea = d.TotalLinea
+                }).ToList()
+            }).ToListAsync();
+    }
+
+    [HttpPost("cotizaciones")]
+    public async Task<ActionResult> CrearCotizacion([FromQuery] int userId, [FromBody] CotizacionCrearDto model)
+    {
+        if (!IsValidUser(userId)) return Unauthorized();
+        var ownerId = await GetOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound();
+        if (model.Detalles.Count == 0) return BadRequest("Selecciona al menos un producto.");
+        if (model.Detalles.Any(x => x.Cantidad < 1 || x.PrecioUnitario < 0 || x.PrecioUnitario > PrecioMaximoPermitido))
+            return BadRequest("Revisa los precios y cantidades de la cotización.");
+
+        await _cotizacionSchemaService.EnsureSchemaAsync();
+        var codigos = model.Detalles.Select(x => x.CodigoProducto).Distinct().ToList();
+        var productos = await _db.Productos.AsNoTracking()
+            .Where(x => x.Idusuario == ownerId.Value && x.Estado == true && codigos.Contains(x.Codigo))
+            .Select(x => new { x.Codigo, x.Nombre })
+            .ToDictionaryAsync(x => x.Codigo, x => x.Nombre ?? "Sin nombre");
+        if (productos.Count != codigos.Count) return BadRequest("Uno o más productos ya no están disponibles.");
+
+        var cotizacion = new Cotizacion { IdUsuario = ownerId.Value, FechaCreacion = DateTime.Now };
+        foreach (var detalle in model.Detalles)
+        {
+            var precio = decimal.Round(detalle.PrecioUnitario, 2, MidpointRounding.AwayFromZero);
+            cotizacion.Detalles.Add(new CotizacionDetalle
+            {
+                CodigoProducto = detalle.CodigoProducto,
+                NombreProducto = productos[detalle.CodigoProducto],
+                PrecioUnitario = precio,
+                Cantidad = detalle.Cantidad,
+                TotalLinea = decimal.Round(precio * detalle.Cantidad, 2, MidpointRounding.AwayFromZero)
+            });
+        }
+        cotizacion.TotalEstimado = cotizacion.Detalles.Sum(x => x.TotalLinea);
+        _db.Cotizaciones.Add(cotizacion);
+        await _db.SaveChangesAsync();
+        return Ok(new { cotizacion.Id });
+    }
 
     [HttpGet("lookups")]
     public async Task<ActionResult> Lookups([FromQuery] int userId)
