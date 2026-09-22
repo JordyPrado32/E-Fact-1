@@ -68,19 +68,20 @@ FROM (VALUES
     (N'Mis clientes', N'/aliados/clientes', N'ri-user-3-line', 2),
     (N'Renovaciones', N'/aliados/renovaciones', N'ri-refresh-line', 3),
     (N'Comisiones', N'/aliados/comisiones', N'ri-hand-coin-line', 4),
-    (N'Mi perfil', N'/aliados/perfil', N'ri-user-settings-line', 5),
+    (N'Liquidaciones', N'/aliados/liquidaciones', N'ri-bank-card-line', 5),
+    (N'Mi perfil', N'/aliados/perfil', N'ri-user-settings-line', 6),
     (N'Administración de aliados', N'/aliados/admin', N'ri-admin-line', 10)
 ) v(Nombre, Ruta, Icono, Orden)
 WHERE NOT EXISTS (SELECT 1 FROM dbo.MENUS m WHERE m.RUTAMENU = v.Ruta);
 
 UPDATE dbo.MENUS
 SET ESTADOMENU = 1, MOSTRAR_EFACT = 1, MOSTRAR_EDECLARA = 0
-WHERE RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/perfil', N'/aliados/admin');
+WHERE RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/liquidaciones', N'/aliados/perfil', N'/aliados/admin');
 
 INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
 SELECT @idRolAliado, m.IDMENU
 FROM dbo.MENUS m
-WHERE m.RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/perfil')
+WHERE m.RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/liquidaciones', N'/aliados/perfil')
   AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAliado AND rm.IDMENU = m.IDMENU);
 
 INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
@@ -106,4 +107,17 @@ END
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ALIADO_GESTION_CANAL_FACTURA' AND object_id = OBJECT_ID(N'dbo.ALIADO_RENOVACION_GESTION'))
     CREATE INDEX IX_ALIADO_GESTION_CANAL_FACTURA ON dbo.ALIADO_RENOVACION_GESTION (IdVendedor, IdFactura, FechaGestion DESC);
-        
+
+IF OBJECT_ID(N'dbo.ALIADO_LIQUIDACION', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ALIADO_LIQUIDACION
+    (
+        IdLiquidacion INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        IdVendedor INT NOT NULL,
+        Periodo NVARCHAR(20) NOT NULL,
+        Total DECIMAL(18,2) NOT NULL,
+        Fecha DATETIME2 NOT NULL,
+        Estado NVARCHAR(30) NOT NULL,
+        ReferenciaPago NVARCHAR(100) NULL
+    );
+END

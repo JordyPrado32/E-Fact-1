@@ -6,7 +6,6 @@
 @using Simetric.Services
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
-@inject IMenuService MenuService
 @inject AliadoPortalService AliadoService
 @inject IJSRuntime JS
 @implements IDisposable
@@ -59,7 +58,7 @@ else if (contexto is not null)
 
 @code {
     private AliadoPortalContext? contexto;
-    private List<Menu> menus = new();
+    private List<AliadoPortalMenu> menus = new();
     private bool cargando = true;
     private bool redireccionando;
     private bool mostrarMenuPerfil;
@@ -90,25 +89,7 @@ else if (contexto is not null)
 
         avatarUrl = NormalizarAvatar(auth.User.FindFirst("AvatarUrl")?.Value);
 
-        menus = (await MenuService.GetMenusByRol(contexto.IdTipoUsuario))
-            .Where(x => !string.IsNullOrWhiteSpace(x.RutaMenu) &&
-                        (contexto.EsAdministrador || !x.RutaMenu.Equals(AliadoPortalService.AdminRoute, StringComparison.OrdinalIgnoreCase)) &&
-                        (x.RutaMenu.Equals(AliadoPortalService.RootRoute, StringComparison.OrdinalIgnoreCase) ||
-                         x.RutaMenu.StartsWith(AliadoPortalService.RootRoute + "/", StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-        if (contexto.EsAdministrador)
-            menus = menus.Where(x => x.RutaMenu!.Equals(AliadoPortalService.AdminRoute, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (contexto.EsAdministrador && menus.Count == 0)
-        {
-            menus.Add(new Menu
-            {
-                NombreMenu = "Administración de aliados",
-                RutaMenu = AliadoPortalService.AdminRoute,
-                IconoMenu = "ri-admin-line",
-                IdMenuPadre = 0,
-                OrdenMenu = 1
-            });
-        }
+        menus = (await AliadoService.ObtenerMenusAsync(contexto.IdRolPortal)).ToList();
         cargando = false;
         await ValidarRutaAsync();
     }
@@ -121,7 +102,7 @@ else if (contexto is not null)
         var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].TrimEnd('/');
         var rutaPerfil = $"{AliadoPortalService.RootRoute.Trim('/')}/perfil";
         if (contexto.EsAdministrador &&
-            !ruta.Equals(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase) &&
+            !ruta.StartsWith(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase) &&
             !ruta.Equals(rutaPerfil, StringComparison.OrdinalIgnoreCase))
         {
             redireccionando = true;
@@ -137,9 +118,7 @@ else if (contexto is not null)
         if (ruta.Equals("aliados", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var rutaPermitida = menus.Any(x => !string.IsNullOrWhiteSpace(x.RutaMenu) &&
-            (ruta.Equals(x.RutaMenu.Trim('/'), StringComparison.OrdinalIgnoreCase) ||
-             ruta.StartsWith($"{x.RutaMenu.Trim('/')}/", StringComparison.OrdinalIgnoreCase)));
+        var rutaPermitida = menus.Any(x => ruta.Equals(x.Ruta.Trim('/'), StringComparison.OrdinalIgnoreCase) || ruta.StartsWith($"{x.Ruta.Trim('/')}/", StringComparison.OrdinalIgnoreCase));
         if (!rutaPermitida)
         {
             redireccionando = true;
@@ -156,11 +135,13 @@ else if (contexto is not null)
             "aliados/clientes" => "Mis clientes",
             "aliados/renovaciones" => "Renovaciones",
             "aliados/comisiones" => "Comisiones",
+            "aliados/liquidaciones" => "Liquidaciones",
             "aliados/perfil" => "Mi perfil",
             "aliados/admin" => "Administración de aliados",
             _ => "Inicio"
         };
     }
+
 
     private static string ObtenerIniciales(string nombre)
     {

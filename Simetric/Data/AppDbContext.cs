@@ -77,6 +77,11 @@ namespace Simetric.Data
         public DbSet<ReporteVentaBackOffice> ReporteVentasBackOffice { get; set; }
         public DbSet<VendedorBackOffice> VendedoresBackOffice { get; set; }
         public DbSet<AliadoRenovacionGestion> AliadoRenovacionGestiones { get; set; }
+        public DbSet<AliadoLiquidacion> AliadoLiquidaciones { get; set; }
+        public DbSet<AliadoPortalRol> AliadoPortalRoles { get; set; }
+        public DbSet<AliadoPortalMenu> AliadoPortalMenus { get; set; }
+        public DbSet<AliadoPortalRolMenu> AliadoPortalRolesMenus { get; set; }
+        public DbSet<AliadoPortalUsuarioRol> AliadoPortalUsuariosRoles { get; set; }
         public DbSet<ContribuyenteEdeclare> ContribuyentesEdeclare { get; set; }
         public DbSet<EContaxRol> EContaxRoles { get; set; }
         public DbSet<EContaxMenu> EContaxMenus { get; set; }
