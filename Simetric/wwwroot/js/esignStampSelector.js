@@ -517,6 +517,23 @@ export async function init(options, dotNetRef) {
         async setSecondPlacementEnabled(enabled) {
             await setSecondPlacementEnabled(enabled);
         },
+        async clearPlacement(index) {
+            if (index !== 0 && index !== 1) {
+                return;
+            }
+
+            if (index === 0 && selectedPositions[1]) {
+                selectedPositions[0] = selectedPositions[1];
+                selectedPositions[1] = null;
+            } else {
+                selectedPositions[index] = null;
+            }
+
+            activePlacementIndex = index === 0 && selectedPositions[0] ? 1 : index;
+            updateFootprints();
+            setStatus(`Haz clic en el PDF para ubicar la Firma ${activePlacementIndex + 1}.`);
+            await notifySelections();
+        },
         getSelections() {
             return {
                 pageCount: pdfDocument?.numPages ?? 0,

@@ -43,8 +43,8 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
                 fechaFirma = file.CreationTime,
                 estado = "Válido",
                 tamano = $"{Math.Max(1, Math.Ceiling(file.Length / 1024d))} KB",
-                downloadUrl = "/" + Path.Combine(relativeDirectory, file.Name).Replace('\\', '/'),
-                previewUrl = "/" + Path.Combine(relativeDirectory, file.Name).Replace('\\', '/')
+                downloadUrl = "/" + Path.Combine(relativeDirectory, Uri.EscapeDataString(file.Name)).Replace('\\', '/'),
+                previewUrl = "/" + Path.Combine(relativeDirectory, Uri.EscapeDataString(file.Name)).Replace('\\', '/')
             });
 
         return Ok(documentos);
