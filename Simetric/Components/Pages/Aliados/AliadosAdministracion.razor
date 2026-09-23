@@ -69,19 +69,23 @@
     }
 
     <section class="ally-panel">
-        <div class="ally-panel-heading"><div><span class="ally-label">LIBRO MAYOR</span><h3>Comisiones</h3></div><input class="ally-admin-input" style="max-width:240px" @bind="referenciaPago" placeholder="Referencia del pago" /></div>
+        <div class="ally-panel-heading"><div><span class="ally-label">LIBRO MAYOR</span><h3>Comisiones</h3></div><div style="display:flex;gap:8px;flex-wrap:wrap"><input class="ally-admin-input" style="max-width:240px" @bind="referenciaPago" placeholder="Referencia del pago" /><input class="ally-admin-input" style="max-width:240px" @bind="motivoReversion" placeholder="Motivo de reversión" /><button class="ally-button" type="button" @onclick="LiquidarSeleccionadasAsync" disabled="@(liquidando || comisionesSeleccionadas.Count == 0)">@(liquidando ? "Liquidando..." : $"Liquidar seleccionadas ({comisionesSeleccionadas.Count})")</button></div></div>
         @if (comisiones.Count == 0)
         {
             <div class="ally-empty">No hay comisiones generadas con los pagos actuales.</div>
         }
         else
         {
-            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Aliado</th><th>Factura / cliente</th><th>Tipo</th><th>Base</th><th>Valor</th><th>Estado</th><th></th></tr></thead><tbody>
-                @foreach (var comision in comisiones)
+            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th><input type="checkbox" checked="@TodasLasComisionesSeleccionadas" @onchange="SeleccionarTodasComisiones" /></th><th>Aliado</th><th>Factura / cliente</th><th>Tipo</th><th>Base</th><th>Valor</th><th>Estado</th><th></th></tr></thead><tbody>
+                @foreach (var comision in ComisionesPaginadas)
                 {
-                    <tr @key="comision.IdComision"><td>@comision.Aliado</td><td>#@comision.IdFactura<br /><small>@comision.Cliente</small></td><td>@comision.TipoComision</td><td>$ @comision.BaseComisionable.ToString("N2")<br /><small>@comision.Porcentaje.ToString("0.##")%</small></td><td>$ @comision.Valor.ToString("N2")</td><td><span class="ally-badge @(comision.Estado == "Pagada" ? "success" : comision.Estado == "Aprobada" ? "" : "warning")">@comision.Estado</span><br /><small>@(comision.Periodo ?? "-")</small></td><td>@if (comision.Estado == "Generada") { <button type="button" class="ally-table-action" @onclick="() => AprobarAsync(comision)">Aprobar</button> } else if (comision.Estado == "Aprobada") { <button type="button" class="ally-table-action" @onclick="() => PagarAsync(comision)">Registrar pago</button> } else { <span class="ally-readonly">@(comision.ReferenciaPago ?? "Pagada")</span> }</td></tr>
+                    <tr @key="comision.IdComision"><td><input type="checkbox" checked="@comisionesSeleccionadas.Contains(comision.IdComision)" @onchange="e => ToggleSeleccionComision(comision.IdComision, e)" /></td><td>@comision.Aliado</td><td>#@comision.IdFactura<br /><small>@comision.Cliente</small></td><td>@comision.TipoComision</td><td>$ @comision.BaseComisionable.ToString("N2")<br /><small>@comision.Porcentaje.ToString("0.##")%</small></td><td>$ @comision.Valor.ToString("N2")</td><td><span class="ally-badge @(comision.Estado == "Pagada" ? "success" : comision.Estado is "Anulada" or "Revertida" ? "danger" : comision.Estado == "Aprobada" ? "" : "warning")">@comision.Estado</span><br /><small>@(comision.Periodo ?? "-")</small></td><td>@if (comision.Estado == "Generada") { <button type="button" class="ally-table-action" @onclick="() => AprobarAsync(comision)">Aprobar</button> } else if (comision.Estado == "Aprobada") { <button type="button" class="ally-table-action" @onclick="() => PagarAsync(comision)">Registrar pago</button> } @if (comision.Estado is "Generada" or "Aprobada" or "Pagada") { <button type="button" class="ally-table-action" @onclick="() => RevertirAsync(comision)">Revertir</button> } else if (comision.Estado is "Anulada" or "Revertida") { <span class="ally-readonly">@(comision.ReferenciaPago ?? comision.Estado)</span> }</td></tr>
                 }
             </tbody></table></div>
+            @if (TotalPaginasComisiones > 1)
+            {
+                <div style="display:flex;align-items:center;gap:10px;margin-top:12px"><button class="ally-table-action" type="button" @onclick="() => CambiarPaginaComisiones(-1)" disabled="@(paginaComisiones <= 1)">Anterior</button><span>Página @paginaComisiones de @TotalPaginasComisiones</span><button class="ally-table-action" type="button" @onclick="() => CambiarPaginaComisiones(1)" disabled="@(paginaComisiones >= TotalPaginasComisiones)">Siguiente</button></div>
+            }
         }
     </section>
 </div>
@@ -106,9 +110,18 @@
     private decimal porcentajeRenovacionNumerica = 15m;
     private int diasIntervencionNumerica = 15;
     private string referenciaPago = string.Empty;
+    private string motivoReversion = string.Empty;
     private bool guardandoConfiguracion;
     private bool guardandoEstado;
+    private bool liquidando;
+    private readonly HashSet<int> comisionesSeleccionadas = new();
+    private int paginaComisiones = 1;
+    private const int TamanoPaginaComisiones = 20;
     private int actorId;
+
+    private IEnumerable<AliadoAdminComisionRow> ComisionesPaginadas => comisiones.Skip((paginaComisiones - 1) * TamanoPaginaComisiones).Take(TamanoPaginaComisiones);
+    private int TotalPaginasComisiones => Math.Max(1, (int)Math.Ceiling(comisiones.Count / (double)TamanoPaginaComisiones));
+    private bool TodasLasComisionesSeleccionadas => comisiones.Count > 0 && comisiones.Where(x => x.Estado == "Aprobada").All(x => comisionesSeleccionadas.Contains(x.IdComision));
 
     protected override async Task OnInitializedAsync()
     {
@@ -121,7 +134,12 @@
     }
 
     private async Task CargarAsync() => aliados = (await AliadoService.ListarAliadosAsync()).ToList();
-    private async Task CargarComisionesAsync() => comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
+    private async Task CargarComisionesAsync()
+    {
+        comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
+        paginaComisiones = Math.Min(paginaComisiones, TotalPaginasComisiones);
+        comisionesSeleccionadas.RemoveWhere(id => comisiones.All(x => x.IdComision != id));
+    }
 
     private async Task CargarConfiguracionAsync()
     {
@@ -176,6 +194,51 @@
         if (resultado.Success)
         {
             referenciaPago = string.Empty;
+            await CargarComisionesAsync();
+        }
+    }
+
+    private void ToggleSeleccionComision(int idComision, ChangeEventArgs args)
+    {
+        if (args.Value is true or "true" or "on")
+            comisionesSeleccionadas.Add(idComision);
+        else
+            comisionesSeleccionadas.Remove(idComision);
+    }
+
+    private void SeleccionarTodasComisiones(ChangeEventArgs args)
+    {
+        if (args.Value is true or "true" or "on")
+            foreach (var comision in comisiones.Where(x => x.Estado == "Aprobada")) comisionesSeleccionadas.Add(comision.IdComision);
+        else
+            comisionesSeleccionadas.Clear();
+    }
+
+    private void CambiarPaginaComisiones(int delta) => paginaComisiones = Math.Clamp(paginaComisiones + delta, 1, TotalPaginasComisiones);
+
+    private async Task LiquidarSeleccionadasAsync()
+    {
+        if (liquidando || comisionesSeleccionadas.Count == 0) return;
+        liquidando = true;
+        var resultado = await AliadoService.LiquidarComisionesAsync(actorId, comisionesSeleccionadas.ToArray(), referenciaPago);
+        mensaje = resultado.Message;
+        if (resultado.Success)
+        {
+            referenciaPago = string.Empty;
+            comisionesSeleccionadas.Clear();
+            await CargarComisionesAsync();
+        }
+        liquidando = false;
+    }
+
+    private async Task RevertirAsync(AliadoAdminComisionRow comision)
+    {
+        var resultado = await AliadoService.RevertirComisionAsync(actorId, comision.IdComision, motivoReversion);
+        mensaje = resultado.Message;
+        if (resultado.Success)
+        {
+            motivoReversion = string.Empty;
+            comisionesSeleccionadas.Remove(comision.IdComision);
             await CargarComisionesAsync();
         }
     }

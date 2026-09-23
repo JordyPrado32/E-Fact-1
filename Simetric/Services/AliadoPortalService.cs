@@ -521,56 +521,99 @@ public sealed class AliadoPortalService
         return (true, "Comisión aprobada correctamente.");
     }
 
-    public async Task<(bool Success, string Message)> PagarComisionAsync(int actorId, int idComision, string? referenciaPago)
+    public Task<(bool Success, string Message)> PagarComisionAsync(int actorId, int idComision, string? referenciaPago)
+        => LiquidarComisionesAsync(actorId, new[] { idComision }, referenciaPago);
+
+    public async Task<(bool Success, string Message)> LiquidarComisionesAsync(int actorId, IReadOnlyCollection<int> idsComision, string? referenciaPago)
     {
         await EnsureSchemaAsync();
-        await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
-            return (false, "No tienes permisos para registrar pagos.");
-
-        var comision = await db.AliadoComisiones.FirstOrDefaultAsync(x => x.IdComision == idComision);
-        if (comision is null)
-            return (false, "La comisión no existe.");
-        if (comision.Estado != "Aprobada")
-            return (false, "Solo se pueden pagar comisiones aprobadas.");
-
+        if (idsComision.Count == 0)
+            return (false, "Selecciona al menos una comisión.");
         referenciaPago = string.IsNullOrWhiteSpace(referenciaPago) ? null : referenciaPago.Trim();
         if (referenciaPago?.Length > 100)
             return (false, "La referencia de pago no puede superar 100 caracteres.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para registrar pagos.");
+        var ids = idsComision.Distinct().ToArray();
+        var comisiones = await db.AliadoComisiones.Where(x => ids.Contains(x.IdComision)).ToListAsync();
+        if (comisiones.Count != ids.Length)
+            return (false, "Una o más comisiones seleccionadas no existen.");
+        if (comisiones.Any(x => x.Estado != "Aprobada"))
+            return (false, "Solo se pueden liquidar comisiones aprobadas.");
+
         var ahora = DateTime.Now;
         var periodo = ahora.ToString("yyyy-MM");
         await using var transaction = await db.Database.BeginTransactionAsync();
-        var liquidacion = await db.AliadoLiquidaciones
-            .Where(x => x.IdVendedor == comision.IdVendedor && x.Periodo == periodo && x.Estado == "Pendiente")
-            .OrderByDescending(x => x.IdLiquidacion)
-            .FirstOrDefaultAsync();
-        if (liquidacion is null)
+        foreach (var grupo in comisiones.GroupBy(x => x.IdVendedor))
         {
-            liquidacion = new AliadoLiquidacion
+            var liquidacion = await db.AliadoLiquidaciones
+                .Where(x => x.IdVendedor == grupo.Key && x.Periodo == periodo && x.Estado == "Pendiente")
+                .OrderByDescending(x => x.IdLiquidacion)
+                .FirstOrDefaultAsync();
+            if (liquidacion is null)
             {
-                IdVendedor = comision.IdVendedor,
-                Periodo = periodo,
-                Fecha = ahora,
-                Estado = "Pendiente",
-                Total = 0m
-            };
-            db.AliadoLiquidaciones.Add(liquidacion);
-            await db.SaveChangesAsync();
+                liquidacion = new AliadoLiquidacion { IdVendedor = grupo.Key, Periodo = periodo, Fecha = ahora, Estado = "Pendiente" };
+                db.AliadoLiquidaciones.Add(liquidacion);
+                await db.SaveChangesAsync();
+            }
+            liquidacion.Total += grupo.Sum(x => x.Valor);
+            liquidacion.Fecha = ahora;
+            liquidacion.Estado = "Pagada";
+            liquidacion.ReferenciaPago = referenciaPago;
+            foreach (var comision in grupo)
+            {
+                comision.Estado = "Pagada";
+                comision.FechaPago = ahora;
+                comision.IdLiquidacion = liquidacion.IdLiquidacion;
+                comision.IdUsuarioPago = actorId;
+            }
         }
-
-        liquidacion.Total += comision.Valor;
-        liquidacion.Fecha = ahora;
-        liquidacion.Estado = "Pagada";
-        liquidacion.ReferenciaPago = referenciaPago;
-        comision.Estado = "Pagada";
-        comision.FechaPago = ahora;
-        comision.IdLiquidacion = liquidacion.IdLiquidacion;
-        comision.IdUsuarioPago = actorId;
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "PAGAR", null, new { IdsComision = ids, ReferenciaPago = referenciaPago }, new { Modulo = "PortalAliados", Entidad = "Liquidacion" });
+        return (true, $"Se liquidaron {comisiones.Count} comisión(es) correctamente.");
+    }
 
-        await _auditService.TryRegistrarAuditoriaAsync(actorId, "PAGAR", null, new { IdComision = idComision, IdLiquidacion = liquidacion.IdLiquidacion, ReferenciaPago = referenciaPago, Valor = comision.Valor }, new { Modulo = "PortalAliados", Entidad = "Comision" });
-        return (true, "Pago registrado y liquidación actualizada.");
+    public async Task<(bool Success, string Message)> RevertirComisionAsync(int actorId, int idComision, string? motivo)
+    {
+        await EnsureSchemaAsync();
+        motivo = motivo?.Trim();
+        if (string.IsNullOrWhiteSpace(motivo) || motivo.Length > 500)
+            return (false, "Indica un motivo de reversión de hasta 500 caracteres.");
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para revertir comisiones.");
+        var original = await db.AliadoComisiones.FirstOrDefaultAsync(x => x.IdComision == idComision);
+        if (original is null)
+            return (false, "La comisión no existe.");
+        if (original.Estado is "Anulada" or "Revertida")
+            return (false, "La comisión ya fue anulada o revertida.");
+        if (original.Estado == "Pagada")
+        {
+            original.Estado = "Revertida";
+            var tipo = $"Reversion-{original.TipoComision}";
+            db.AliadoComisiones.Add(new AliadoComision
+            {
+                IdVendedor = original.IdVendedor,
+                IdFactura = original.IdFactura,
+                IdCliente = original.IdCliente,
+                TipoComision = tipo[..Math.Min(40, tipo.Length)],
+                BaseComisionable = -original.BaseComisionable,
+                Porcentaje = original.Porcentaje,
+                Valor = -original.Valor,
+                Estado = "Generada",
+                FechaGeneracion = DateTime.Now
+            });
+        }
+        else
+        {
+            original.Estado = "Anulada";
+        }
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "REVERTIR", new { IdComision = idComision }, new { Motivo = motivo, Estado = original.Estado }, new { Modulo = "PortalAliados", Entidad = "Comision" });
+        return (true, original.Estado == "Revertida" ? "Pago revertido mediante ajuste compensatorio." : "Comisión anulada correctamente.");
     }
 
     public async Task<AliadoPortalConfiguracion?> ObtenerConfiguracionPortalAsync(int actorId)
@@ -907,6 +950,80 @@ public sealed class AliadoPortalService
             .ToListAsync();
     }
 
+    public async Task SincronizarComisionesPortalAsync()
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var vendedorIds = await db.VendedoresBackOffice.AsNoTracking()
+            .Where(x => !x.EsSistema && x.Activo && db.Usuarios.Any(u =>
+                u.IdVendedor == x.IdVendedor && u.Estado == true &&
+                u.IdTipoUsuarioNavigation!.NombreTipo == RoleName))
+            .Select(x => x.IdVendedor)
+            .ToListAsync();
+
+        foreach (var idVendedor in vendedorIds)
+            await SincronizarComisionesAsync(idVendedor);
+    }
+
+    public async Task<IReadOnlyList<AliadoRenovacionNotificacionDto>> ObtenerNotificacionesRenovacionAsync()
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var aliados = await db.Usuarios.AsNoTracking()
+            .Where(x => x.Estado == true && x.IdVendedor.HasValue && x.IdTipoUsuarioNavigation!.NombreTipo == RoleName)
+            .Select(x => new { IdVendedor = x.IdVendedor!.Value, x.Email, Nombre = (x.Nombres ?? "") + " " + (x.Apellidos ?? "") })
+            .ToListAsync();
+        var hoy = DateTime.Today;
+        var limite = hoy.AddDays(7);
+        var resultado = new List<AliadoRenovacionNotificacionDto>();
+
+        foreach (var aliado in aliados)
+        {
+            var yaNotificadas = await db.AliadoRenovacionNotificaciones.AsNoTracking()
+                .Where(x => x.IdVendedor == aliado.IdVendedor)
+                .Select(x => new { x.IdFactura, x.Tipo })
+                .ToHashSetAsync();
+            var facturas = await ObtenerFacturasAsync(aliado.IdVendedor);
+            foreach (var factura in facturas.Where(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date >= hoy && x.FechaVencimiento.Value.Date <= limite && x.Autorizado))
+            {
+                var dias = (factura.FechaVencimiento!.Value.Date - hoy).Days;
+                var tipo = dias <= 1 ? "Urgente" : "Proxima";
+                if (yaNotificadas.Contains(new { factura.IdFactura, Tipo = tipo }))
+                    continue;
+                resultado.Add(new AliadoRenovacionNotificacionDto
+                {
+                    IdVendedor = aliado.IdVendedor,
+                    IdFactura = factura.IdFactura,
+                    Email = aliado.Email,
+                    NombreAliado = aliado.Nombre.Trim(),
+                    Cliente = factura.Cliente,
+                    Producto = factura.Producto,
+                    FechaVencimiento = factura.FechaVencimiento.Value,
+                    DiasRestantes = dias,
+                    Tipo = tipo
+                });
+            }
+        }
+
+        return resultado;
+    }
+
+    public async Task RegistrarNotificacionRenovacionAsync(int idVendedor, int idFactura, string tipo)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (await db.AliadoRenovacionNotificaciones.AnyAsync(x => x.IdVendedor == idVendedor && x.IdFactura == idFactura && x.Tipo == tipo))
+            return;
+        db.AliadoRenovacionNotificaciones.Add(new AliadoRenovacionNotificacion
+        {
+            IdVendedor = idVendedor,
+            IdFactura = idFactura,
+            Tipo = tipo,
+            FechaEnvio = DateTime.Now
+        });
+        await db.SaveChangesAsync();
+    }
+
     private async Task SincronizarComisionesAsync(int idVendedor)
     {
         if (idVendedor <= 0)
@@ -1198,6 +1315,19 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ALIADO_COMISION_VENDE
     CREATE UNIQUE INDEX UX_ALIADO_COMISION_VENDEDOR_FACTURA_TIPO ON dbo.ALIADO_COMISION (IdVendedor, IdFactura, TipoComision);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ALIADO_COMISION_VENDEDOR_ESTADO' AND object_id = OBJECT_ID(N'dbo.ALIADO_COMISION'))
     CREATE INDEX IX_ALIADO_COMISION_VENDEDOR_ESTADO ON dbo.ALIADO_COMISION (IdVendedor, Estado, FechaGeneracion DESC);
+IF OBJECT_ID(N'dbo.ALIADO_RENOVACION_NOTIFICACION', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ALIADO_RENOVACION_NOTIFICACION
+    (
+        IdNotificacion INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        IdVendedor INT NOT NULL,
+        IdFactura INT NOT NULL,
+        Tipo NVARCHAR(40) NOT NULL,
+        FechaEnvio DATETIME2 NOT NULL
+    );
+END
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ALIADO_RENOVACION_NOTIFICACION' AND object_id = OBJECT_ID(N'dbo.ALIADO_RENOVACION_NOTIFICACION'))
+    CREATE UNIQUE INDEX UX_ALIADO_RENOVACION_NOTIFICACION ON dbo.ALIADO_RENOVACION_NOTIFICACION (IdVendedor, IdFactura, Tipo);
 """;
     }
 }
@@ -1338,6 +1468,19 @@ public sealed class AliadoLiquidacionDto
     public DateTime Fecha { get; init; }
     public string Estado { get; init; } = string.Empty;
     public string? ReferenciaPago { get; init; }
+}
+
+public sealed class AliadoRenovacionNotificacionDto
+{
+    public int IdVendedor { get; init; }
+    public int IdFactura { get; init; }
+    public string Email { get; init; } = string.Empty;
+    public string NombreAliado { get; init; } = string.Empty;
+    public string Cliente { get; init; } = string.Empty;
+    public string Producto { get; init; } = string.Empty;
+    public DateTime FechaVencimiento { get; init; }
+    public int DiasRestantes { get; init; }
+    public string Tipo { get; init; } = string.Empty;
 }
 
 public sealed class AliadoAdminRow

@@ -3,22 +3,59 @@
 <PageTitle>Liquidaciones | Portal de Aliados</PageTitle>
 
 <div class="ally-page">
-    <div class="ally-page-intro"><div><span class="ally-eyebrow">PAGOS DE COMISIONES</span><h2>Liquidaciones</h2><p>Consulta las liquidaciones emitidas por Numérica y sus referencias de pago.</p></div><select class="ally-select" @bind="filtroEstado"><option value="">Todos los estados</option><option>Pendiente</option><option>Pagada</option></select></div>
+    <div class="ally-page-intro">
+        <div><span class="ally-eyebrow">PAGOS DE COMISIONES</span><h2>Liquidaciones</h2><p>Consulta las liquidaciones emitidas por Numérica y sus referencias de pago.</p></div>
+        <div style="display:flex;gap:8px"><select class="ally-select" @bind="filtroEstado" @bind:after="ReiniciarPagina"><option value="">Todos los estados</option><option>Pendiente</option><option>Pagada</option></select><button class="ally-button muted" type="button" @onclick="ExportarAsync" disabled="@(!LiquidacionesFiltradas.Any())">Exportar CSV</button></div>
+    </div>
     <section class="ally-panel">
-        @if (cargando) { <div class="ally-empty">Cargando liquidaciones...</div> }
-        else if (!LiquidacionesFiltradas.Any()) { <div class="ally-empty">@(liquidaciones.Count == 0 ? "Aún no tienes liquidaciones registradas." : "No hay liquidaciones para este estado.")</div> }
-        else { <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Período</th><th>Fecha</th><th>Total</th><th>Referencia</th><th>Estado</th></tr></thead><tbody>@foreach (var item in LiquidacionesFiltradas) { <tr @key="item.IdLiquidacion"><td>@item.Periodo</td><td>@item.Fecha.ToString("dd/MM/yyyy")</td><td>$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @(item.Estado == "Pagada" ? "success" : "warning")">@item.Estado</span></td></tr>}</tbody></table></div> }
+        @if (cargando)
+        {
+            <div class="ally-empty">Cargando liquidaciones...</div>
+        }
+        else if (!LiquidacionesFiltradas.Any())
+        {
+            <div class="ally-empty">@(liquidaciones.Count == 0 ? "Aún no tienes liquidaciones registradas." : "No hay liquidaciones para este estado.")</div>
+        }
+        else
+        {
+            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Período</th><th>Fecha</th><th>Total</th><th>Referencia</th><th>Estado</th></tr></thead><tbody>
+            @foreach (var item in LiquidacionesPaginadas)
+            {
+                <tr @key="item.IdLiquidacion"><td>@item.Periodo</td><td>@item.Fecha.ToString("dd/MM/yyyy")</td><td>$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @(item.Estado == "Pagada" ? "success" : "warning")">@item.Estado</span></td></tr>
+            }
+            </tbody></table></div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:12px"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
+        }
     </section>
 </div>
 
 @code {
     private List<AliadoLiquidacionDto> liquidaciones = new();
     private string filtroEstado = string.Empty;
-    private IEnumerable<AliadoLiquidacionDto> LiquidacionesFiltradas =>
-        liquidaciones.Where(x => string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado);
+    private int pagina = 1;
+    private const int TamanoPagina = 20;
+    private IReadOnlyList<AliadoLiquidacionDto> LiquidacionesFiltradas => liquidaciones.Where(x => string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado).ToList();
+    private IEnumerable<AliadoLiquidacionDto> LiquidacionesPaginadas => LiquidacionesFiltradas.Skip((pagina - 1) * TamanoPagina).Take(TamanoPagina);
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(LiquidacionesFiltradas.Count / (double)TamanoPagina));
     private bool cargando = true;
+
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
+    [Inject] private IJSRuntime JS { get; set; } = null!;
+
+    private void ReiniciarPagina() => pagina = 1;
+    private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
+    private static string Csv(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
+
+    private async Task ExportarAsync()
+    {
+        var rows = LiquidacionesFiltradas.Select(x => string.Join(",", Csv(x.Periodo), Csv(x.Fecha.ToString("yyyy-MM-dd")), Csv(x.Total.ToString("0.00")), Csv(x.ReferenciaPago), Csv(x.Estado)));
+        var csv = "Periodo,Fecha,Total,Referencia,Estado\n" + string.Join("\n", rows);
+        await using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(csv)).ToArray());
+        using var reference = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", "liquidaciones-aliado.csv", reference, "text/csv;charset=utf-8");
+    }
+
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();

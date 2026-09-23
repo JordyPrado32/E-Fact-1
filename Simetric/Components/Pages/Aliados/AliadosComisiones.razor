@@ -3,23 +3,72 @@
 <PageTitle>Comisiones | Portal de Aliados</PageTitle>
 
 <div class="ally-page">
-    <div class="ally-page-intro"><div><span class="ally-eyebrow">TRANSPARENCIA DE MOVIMIENTOS</span><h2>Comisiones</h2><p>Historial de comisiones calculadas sobre valores netos efectivamente cobrados.</p></div><select class="ally-select" @bind="filtroEstado"><option value="">Todos los estados</option><option>Generada</option><option>Aprobada</option><option>Pagada</option></select></div>
-    @if (modelo is null) { <div class="ally-empty">No se pudo cargar el historial de comisiones.</div> }
+    <div class="ally-page-intro">
+        <div><span class="ally-eyebrow">TRANSPARENCIA DE MOVIMIENTOS</span><h2>Comisiones</h2><p>Historial de comisiones calculadas sobre valores netos efectivamente cobrados.</p></div>
+        <div style="display:flex;gap:8px">
+            <select class="ally-select" @bind="filtroEstado" @bind:after="ReiniciarPagina">
+                <option value="">Todos los estados</option><option>Generada</option><option>Aprobada</option><option>Pagada</option>
+            </select>
+            <button class="ally-button muted" type="button" @onclick="ExportarAsync" disabled="@(!MovimientosFiltrados.Any())">Exportar CSV</button>
+        </div>
+    </div>
+    @if (modelo is null)
+    {
+        <div class="ally-empty">No se pudo cargar el historial de comisiones.</div>
+    }
     else
     {
         <div class="ally-kpis"><div class="ally-kpi"><span>Generadas</span><strong>$ @modelo.Generadas.ToString("N2")</strong><small>Incluye aprobadas y pagadas</small></div><div class="ally-kpi warning"><span>Pendientes de aprobación</span><strong>$ @modelo.PendientesAprobacion.ToString("N2")</strong><small>Revisión interna</small></div><div class="ally-kpi"><span>Aprobadas</span><strong>$ @modelo.Aprobadas.ToString("N2")</strong><small>Listas para pago</small></div><div class="ally-kpi"><span>Pagadas</span><strong>$ @modelo.Pagadas.ToString("N2")</strong><small>Confirmadas por Numérica</small></div></div>
-        <section class="ally-panel"><div class="ally-panel-heading"><h3>Movimientos <small class="ally-muted-count">@MovimientosFiltrados.Count()</small></h3><span class="ally-readonly">Solo consulta</span></div>@if (!MovimientosFiltrados.Any()) { <div class="ally-empty">No hay comisiones para este estado.</div> } else { <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Fecha</th><th>Cliente / producto</th><th>Tipo</th><th>Base sin IVA</th><th>Comisión</th><th>Estado</th><th>Liquidación</th></tr></thead><tbody>@foreach (var item in MovimientosFiltrados) { <tr @key="item.IdComision"><td>@item.FechaGeneracion.ToString("dd/MM/yyyy")</td><td><strong>@item.Cliente</strong><br /><small>@item.Producto</small></td><td>@item.Tipo</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.ValorComision.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="ally-badge @(item.Estado == "Pagada" ? "success" : item.Estado == "Aprobada" ? "approved" : "warning")">@item.Estado</span></td><td>@(item.PeriodoLiquidacion ?? "-")<br /><small>@(item.ReferenciaPago ?? "Sin pago")</small></td></tr>}</tbody></table></div>}</section>
+        <section class="ally-panel">
+            <div class="ally-panel-heading"><h3>Movimientos <small class="ally-muted-count">@MovimientosFiltrados.Count</small></h3><span class="ally-readonly">Solo consulta</span></div>
+            @if (MovimientosFiltrados.Count == 0)
+            {
+                <div class="ally-empty">No hay comisiones para este estado.</div>
+            }
+            else
+            {
+                <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Fecha</th><th>Cliente / producto</th><th>Tipo</th><th>Base sin IVA</th><th>Comisión</th><th>Estado</th><th>Liquidación</th></tr></thead><tbody>
+                @foreach (var item in MovimientosPaginados)
+                {
+                    <tr @key="item.IdComision"><td>@item.FechaGeneracion.ToString("dd/MM/yyyy")</td><td><strong>@item.Cliente</strong><br /><small>@item.Producto</small></td><td>@item.Tipo</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.ValorComision.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="ally-badge @(item.Estado == "Pagada" ? "success" : item.Estado == "Aprobada" ? "approved" : "warning")">@item.Estado</span></td><td>@(item.PeriodoLiquidacion ?? "-")<br /><small>@(item.ReferenciaPago ?? "Sin pago")</small></td></tr>
+                }
+                </tbody></table></div>
+                <div style="display:flex;align-items:center;gap:10px;margin-top:12px"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
+            }
+        </section>
     }
 </div>
 
 @code {
     private AliadoComisionesDto? modelo;
     private string filtroEstado = string.Empty;
-    private IEnumerable<AliadoComisionMovimientoDto> MovimientosFiltrados =>
-        modelo?.Movimientos.Where(x => string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado)
-        ?? Enumerable.Empty<AliadoComisionMovimientoDto>();
+    private int pagina = 1;
+    private const int TamanoPagina = 20;
+    private IReadOnlyList<AliadoComisionMovimientoDto> MovimientosFiltrados => modelo is null ? Array.Empty<AliadoComisionMovimientoDto>() : modelo.Movimientos.Where(x => string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado).ToList();
+    private IEnumerable<AliadoComisionMovimientoDto> MovimientosPaginados => MovimientosFiltrados.Skip((pagina - 1) * TamanoPagina).Take(TamanoPagina);
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(MovimientosFiltrados.Count / (double)TamanoPagina));
+
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
+    [Inject] private IJSRuntime JS { get; set; } = null!;
+
+    private void ReiniciarPagina() => pagina = 1;
+    private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
+
+    private async Task ExportarAsync()
+    {
+        var rows = MovimientosFiltrados.Select(x => string.Join(",", Csv(x.FechaGeneracion.ToString("yyyy-MM-dd")), Csv(x.Cliente), Csv(x.Producto), Csv(x.Tipo), Csv(x.BaseComisionable.ToString("0.00")), Csv(x.ValorComision.ToString("0.00")), Csv(x.Estado), Csv(x.PeriodoLiquidacion), Csv(x.ReferenciaPago)));
+        await DescargarCsvAsync("comisiones-aliado.csv", "Fecha,Cliente,Producto,Tipo,Base,Comision,Estado,Periodo,Referencia\n" + string.Join("\n", rows));
+    }
+
+    private async Task DescargarCsvAsync(string fileName, string csv)
+    {
+        await using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(csv)).ToArray());
+        using var reference = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", fileName, reference, "text/csv;charset=utf-8");
+    }
+
+    private static string Csv(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
 
     protected override async Task OnInitializedAsync()
     {

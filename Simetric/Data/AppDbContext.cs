@@ -79,6 +79,7 @@ namespace Simetric.Data
         public DbSet<AliadoRenovacionGestion> AliadoRenovacionGestiones { get; set; }
         public DbSet<AliadoLiquidacion> AliadoLiquidaciones { get; set; }
         public DbSet<AliadoComision> AliadoComisiones { get; set; }
+        public DbSet<AliadoRenovacionNotificacion> AliadoRenovacionNotificaciones { get; set; }
         public DbSet<AliadoPortalConfiguracion> AliadoPortalConfiguraciones { get; set; }
         public DbSet<AliadoPortalRol> AliadoPortalRoles { get; set; }
         public DbSet<AliadoPortalMenu> AliadoPortalMenus { get; set; }
@@ -966,6 +967,13 @@ namespace Simetric.Data
                 entity.Property(e => e.Porcentaje).HasColumnType("decimal(9,4)");
                 entity.Property(e => e.Valor).HasColumnType("decimal(18,2)");
                 entity.HasIndex(e => new { e.IdVendedor, e.IdFactura, e.TipoComision }).IsUnique();
+            });
+
+            modelBuilder.Entity<AliadoRenovacionNotificacion>(entity =>
+            {
+                entity.ToTable("ALIADO_RENOVACION_NOTIFICACION");
+                entity.HasKey(e => e.IdNotificacion);
+                entity.HasIndex(e => new { e.IdVendedor, e.IdFactura, e.Tipo }).IsUnique();
             });
 
             modelBuilder.Entity<AliadoPortalConfiguracion>(entity =>

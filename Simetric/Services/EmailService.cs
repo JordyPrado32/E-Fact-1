@@ -22,6 +22,7 @@ public interface IEmailService
     Task EnviarBienvenidaVendedorBackOfficeAsync(string emailDestino, string nombreVendedor, string loginUrl, string usuario, string? codigoAcceso = null, string? setupUrl = null, int? minutosExpira = null);
     Task EnviarCredencialesBackOfficeAsync(string emailDestino, string nombreUsuario, string perfil, string loginUrl, string usuario, string contrasenaTemporal);
     Task EnviarCuentaCreadaAsync(string emailDestino, string? nombreUsuario, string? claveTemporal = null);
+    Task EnviarAvisoRenovacionAliadoAsync(string emailDestino, string nombreAliado, string cliente, string producto, DateTime fechaVencimiento, int diasRestantes);
     Task EnviarFacturaAsync(
         string numeroFactura,
         IEnumerable<string> destinatarios,
@@ -347,6 +348,23 @@ public class EmailService : IEmailService
         };
 
         mensaje.Body = bodyBuilder.ToMessageBody();
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoRenovacionAliadoAsync(string emailDestino, string nombreAliado, string cliente, string producto, DateTime fechaVencimiento, int diasRestantes)
+    {
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
+        mensaje.Subject = $"Renovación próxima: {cliente}";
+        var nombre = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreAliado) ? "Aliado" : nombreAliado.Trim());
+        var clienteSeguro = WebUtility.HtmlEncode(cliente);
+        var productoSeguro = WebUtility.HtmlEncode(producto);
+        var dias = diasRestantes == 0 ? "hoy" : $"en {diasRestantes} día(s)";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {nombre}</h2><p>La renovación de <strong>{clienteSeguro}</strong> ({productoSeguro}) vence <strong>{dias}</strong>.</p><p>Fecha de vencimiento: {fechaVencimiento:dd/MM/yyyy}</p><p>Ingresa al Portal de Aliados para registrar la gestión.</p></div>"
+        }.ToMessageBody();
         await SendMessageAsync(mensaje);
     }
 
