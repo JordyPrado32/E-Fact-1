@@ -92,6 +92,7 @@ namespace Simetric.Data
         public DbSet<EsignTarjeta> EsignTarjetas { get; set; }
         public DbSet<EsignFirmaValidacionApiLog> EsignFirmaValidacionApiLogs { get; set; }
         public DbSet<NormativaLegal> NormativasLegales { get; set; }
+        public DbSet<NotificacionDescartada> NotificacionesDescartadas { get; set; }
 
         public override int SaveChanges()
         {

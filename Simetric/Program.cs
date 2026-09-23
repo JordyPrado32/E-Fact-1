@@ -276,6 +276,7 @@ builder.Services.AddScoped<SolicitudFirmaBorradorService>();
 builder.Services.AddScoped<UbicacionEcuadorCatalogService>();
 builder.Services.AddScoped<SweetAlertService>();
 builder.Services.AddScoped<ComprobanteCorreoEstadoService>();
+builder.Services.AddScoped<NotificacionDescartadaService>();
 builder.Services.AddScoped<DashboardService>();
 builder.Services.AddScoped<DemoCatalogService>();
 builder.Services.AddSingleton<PendingLoginFlowService>();
@@ -351,6 +352,9 @@ try
 
     var comprobanteCorreoEstadoService = scope.ServiceProvider.GetRequiredService<ComprobanteCorreoEstadoService>();
     await comprobanteCorreoEstadoService.EnsureSchemaAsync();
+
+    var notificacionDescartadaService = scope.ServiceProvider.GetRequiredService<NotificacionDescartadaService>();
+    await notificacionDescartadaService.EnsureSchemaAsync();
 
     var ubicacionEcuadorCatalogService = scope.ServiceProvider.GetRequiredService<UbicacionEcuadorCatalogService>();
     await ubicacionEcuadorCatalogService.EnsureCatalogoAsync();
