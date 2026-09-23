@@ -69,7 +69,7 @@ public sealed class NotificacionesController : ControllerBase
         var usuarioId = ObtenerUsuarioId(User);
         if (usuarioId <= 0) return Unauthorized();
 
-        await _notificacionDescartadaService.DescartarAsync(usuarioId, request?.Ids ?? Array.Empty<string>(), cancellationToken);
+        await _notificacionDescartadaService.DescartarAsync(usuarioId, request?.Ids ?? new List<string>(), cancellationToken);
         return NoContent();
     }
 
