@@ -42,11 +42,11 @@
             <div class="ally-panel-heading"><div><span class="ally-label">CANALES</span><h3>Aliados registrados</h3></div><span class="ally-readonly">Solo lectura</span></div>
             <div class="ally-table-wrap">
                 <table class="ally-table">
-                    <thead><tr><th>Aliado</th><th>Cuenta</th><th>Canal</th><th>Comisión</th><th>Estado</th></tr></thead>
+                    <thead><tr><th>Aliado</th><th>Cuenta</th><th>Canal</th><th>Comisión</th><th>Estado</th><th></th></tr></thead>
                     <tbody>
                         @foreach (var aliado in aliados)
                         {
-                            <tr @key="aliado.IdVendedor"><td><strong>@aliado.Nombre</strong></td><td>@(aliado.Usuario ?? "Sin cuenta")</td><td>@aliado.CodigoReferencia</td><td><input class="ally-admin-input" style="max-width:90px" type="number" min="0" max="100" step=".01" value="@aliado.PorcentajeBase" @onchange="e => ActualizarPorcentajeAsync(aliado, e)" />%</td><td><span class="ally-badge @(aliado.Activo ? "success" : "danger")">@(aliado.Activo ? "Activo" : "Inactivo")</span></td></tr>
+                            <tr @key="aliado.IdVendedor"><td><strong>@aliado.Nombre</strong></td><td>@(aliado.Usuario ?? "Sin cuenta")</td><td>@aliado.CodigoReferencia</td><td><input class="ally-admin-input" style="max-width:90px" type="number" min="0" max="100" step=".01" value="@aliado.PorcentajeBase" @onchange="e => ActualizarPorcentajeAsync(aliado, e)" />%</td><td><span class="ally-badge @(aliado.Activo && aliado.UsuarioActivo ? "success" : "danger")">@(aliado.Activo && aliado.UsuarioActivo ? "Activo" : "Inactivo")</span></td><td><button type="button" class="ally-table-action" @onclick="() => CambiarEstadoAsync(aliado)" disabled="@guardandoEstado">@(aliado.Activo && aliado.UsuarioActivo ? "Desactivar" : "Activar")</button></td></tr>
                         }
                     </tbody>
                 </table>
@@ -59,6 +59,8 @@
         <section class="ally-panel">
             <div class="ally-panel-heading"><div><span class="ally-label">REGLAS FINANCIERAS</span><h3>Intervención de Numérica</h3></div><span class="ally-readonly">Solo personal interno</span></div>
             <div class="ally-admin-grid">
+                <div><label class="ally-admin-label">Comisión de venta nueva por defecto</label><input class="ally-admin-input" type="number" min="0" max="100" step=".01" @bind="porcentajeVentaNueva" /></div>
+                <div><label class="ally-admin-label">Comisión de renovación del aliado por defecto</label><input class="ally-admin-input" type="number" min="0" max="100" step=".01" @bind="porcentajeRenovacionAliado" /></div>
                 <div><label class="ally-admin-label">Comisión de renovación por Numérica</label><input class="ally-admin-input" type="number" min="0" max="100" step=".01" @bind="porcentajeRenovacionNumerica" /></div>
                 <div><label class="ally-admin-label">Días antes del vencimiento</label><input class="ally-admin-input" type="number" min="0" max="365" @bind="diasIntervencionNumerica" /></div>
             </div>
@@ -99,10 +101,13 @@
     private bool puedeCrearAdministrador;
     private List<AliadoAdminComisionRow> comisiones = new();
     private AliadoPortalConfiguracion? configuracion;
+    private decimal porcentajeVentaNueva = 30m;
+    private decimal porcentajeRenovacionAliado = 30m;
     private decimal porcentajeRenovacionNumerica = 15m;
     private int diasIntervencionNumerica = 15;
     private string referenciaPago = string.Empty;
     private bool guardandoConfiguracion;
+    private bool guardandoEstado;
     private int actorId;
 
     protected override async Task OnInitializedAsync()
@@ -123,6 +128,8 @@
         configuracion = await AliadoService.ObtenerConfiguracionPortalAsync(actorId);
         if (configuracion is not null)
         {
+            porcentajeVentaNueva = configuracion.PorcentajeVentaNueva;
+            porcentajeRenovacionAliado = configuracion.PorcentajeRenovacionAliado;
             porcentajeRenovacionNumerica = configuracion.PorcentajeRenovacionNumerica;
             diasIntervencionNumerica = configuracion.DiasIntervencionNumerica;
         }
@@ -149,7 +156,7 @@
     {
         if (guardandoConfiguracion) return;
         guardandoConfiguracion = true;
-        var resultado = await AliadoService.ActualizarConfiguracionPortalAsync(actorId, porcentajeRenovacionNumerica, diasIntervencionNumerica);
+        var resultado = await AliadoService.ActualizarConfiguracionPortalAsync(actorId, porcentajeVentaNueva, porcentajeRenovacionAliado, porcentajeRenovacionNumerica, diasIntervencionNumerica);
         mensaje = resultado.Message;
         if (resultado.Success) await CargarConfiguracionAsync();
         guardandoConfiguracion = false;
@@ -180,5 +187,19 @@
         var resultado = await AliadoService.ActualizarPorcentajeAliadoAsync(actorId, aliado.IdVendedor, porcentaje);
         mensaje = resultado.Message;
         if (resultado.Success) await CargarAsync();
+    }
+
+    private async Task CambiarEstadoAsync(AliadoAdminRow aliado)
+    {
+        if (guardandoEstado)
+            return;
+
+        guardandoEstado = true;
+        var activo = !(aliado.Activo && aliado.UsuarioActivo);
+        var resultado = await AliadoService.ActualizarEstadoAliadoAsync(actorId, aliado.IdVendedor, activo);
+        mensaje = resultado.Message;
+        if (resultado.Success)
+            await CargarAsync();
+        guardandoEstado = false;
     }
 }

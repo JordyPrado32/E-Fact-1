@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Simetric.Components.Helpers;
 using Simetric.Data;
 using Simetric.Models;
+using System.Net.Mail;
 using System.Security.Claims;
 
 namespace Simetric.Services;
@@ -14,6 +15,10 @@ public sealed class AliadoPortalService
     public const string AdminRoute = "/aliados/admin";
 
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
+    private static readonly IReadOnlySet<string> ResultadosGestion = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "Pendiente", "Contactado", "No responde", "Interesado", "Pendiente de pago", "No renueva", "Renovado"
+    };
     private static bool _schemaEnsured;
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
@@ -154,6 +159,18 @@ public sealed class AliadoPortalService
             return false;
 
         var relative = "/" + ruta.Split('?', '#')[0].Trim('/');
+        var adminRoute = AdminRoute.TrimEnd('/');
+        var esRutaAdmin = relative.Equals(adminRoute, StringComparison.OrdinalIgnoreCase) ||
+                          relative.StartsWith($"{adminRoute}/", StringComparison.OrdinalIgnoreCase);
+        if (!contexto.EsAdministrador &&
+            esRutaAdmin)
+            return false;
+
+        if (contexto.EsAdministrador &&
+            !esRutaAdmin &&
+            !relative.Equals($"{RootRoute}/perfil", StringComparison.OrdinalIgnoreCase))
+            return false;
+
         return (await ObtenerMenusAsync(contexto.IdRolPortal)).Any(x =>
             relative.Equals(x.Ruta, StringComparison.OrdinalIgnoreCase) ||
             relative.StartsWith($"{x.Ruta.TrimEnd('/')}/", StringComparison.OrdinalIgnoreCase));
@@ -234,8 +251,14 @@ public sealed class AliadoPortalService
         var existentes = await db.AliadoPortalRolesMenus.Where(x => x.IdRol == idRol).ToListAsync();
         db.AliadoPortalRolesMenus.RemoveRange(existentes);
         var permitidos = await db.AliadoPortalMenus.Where(x => x.Activo && menuIds.Contains(x.IdMenu)).Select(x => x.IdMenu).ToListAsync();
+        var rol = await db.AliadoPortalRoles.AsNoTracking().FirstOrDefaultAsync(x => x.IdRol == idRol && x.Activo);
+        var menuAdmin = await db.AliadoPortalMenus.AsNoTracking().Where(x => x.Ruta == AdminRoute).Select(x => (int?)x.IdMenu).FirstOrDefaultAsync();
+        if (rol is null || (!string.Equals(rol.Nombre, AdminRoleName, StringComparison.OrdinalIgnoreCase) && menuAdmin.HasValue && permitidos.Contains(menuAdmin.Value)))
+            return false;
+
         db.AliadoPortalRolesMenus.AddRange(permitidos.Select(idMenu => new AliadoPortalRolMenu { IdRol = idRol, IdMenu = idMenu }));
         await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", existentes.Select(x => x.IdMenu).ToArray(), permitidos, new { Modulo = "PortalAliados", Entidad = "Permisos", IdRol = idRol });
         return true;
     }
 
@@ -247,11 +270,14 @@ public sealed class AliadoPortalService
 
         await SincronizarComisionesAsync(contexto.IdVendedor);
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
-        var inicioMes = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var hoy = DateTime.Today;
+        var inicioMes = new DateTime(hoy.Year, hoy.Month, 1);
         var ventasPeriodo = facturas.Where(x => x.Fecha >= inicioMes).ToList();
-        var renovaciones = facturas
-            .Where(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date >= DateTime.Today && x.FechaVencimiento.Value.Date <= DateTime.Today.AddDays(30))
+        var proximasRenovaciones = facturas
+            .Where(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date >= hoy && x.FechaVencimiento.Value.Date <= hoy.AddDays(30))
             .OrderBy(x => x.FechaVencimiento)
+            .ToList();
+        var renovaciones = proximasRenovaciones
             .Take(5)
             .Select(x => ToRenovacion(x, null, contexto.PorcentajeBase))
             .ToList();
@@ -266,8 +292,8 @@ public sealed class AliadoPortalService
             ComisionesPendientesAprobacion = resumenComisiones.PendientesAprobacion,
             ComisionesAprobadas = resumenComisiones.Aprobadas,
             ComisionesPagadas = resumenComisiones.Pagadas,
-            RenovacionesProximas = renovaciones.Count,
-            RenovacionesUrgentes = renovaciones.Count(x => x.DiasRestantes <= 7),
+            RenovacionesProximas = proximasRenovaciones.Count,
+            RenovacionesUrgentes = proximasRenovaciones.Count(x => x.FechaVencimiento!.Value.Date <= hoy.AddDays(7)),
             Renovaciones = renovaciones,
             LinkPersonalizado = contexto.EnlaceRegistro
         };
@@ -388,8 +414,14 @@ public sealed class AliadoPortalService
         if (contexto is null)
             return (false, "No tienes acceso al portal de aliados.");
 
-        if (idFactura <= 0 || string.IsNullOrWhiteSpace(resultado))
+        resultado = resultado?.Trim() ?? string.Empty;
+        observacion = string.IsNullOrWhiteSpace(observacion) ? null : observacion.Trim();
+        if (idFactura <= 0 || !ResultadosGestion.Contains(resultado))
             return (false, "Selecciona un resultado para registrar la gestión.");
+        if (observacion?.Length > 500)
+            return (false, "La observación no puede superar 500 caracteres.");
+        if (proximoSeguimiento?.Date < DateTime.Today)
+            return (false, "El próximo seguimiento no puede estar en el pasado.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         var pertenece = await db.Facturas.AsNoTracking().AnyAsync(x =>
@@ -402,13 +434,14 @@ public sealed class AliadoPortalService
             IdVendedor = contexto.IdVendedor,
             IdFactura = idFactura,
             FechaGestion = DateTime.Now,
-            Resultado = resultado.Trim(),
+            Resultado = resultado,
             OrigenGestion = "Aliado",
-            Observacion = string.IsNullOrWhiteSpace(observacion) ? null : observacion.Trim(),
+            Observacion = observacion,
             ProximoSeguimiento = proximoSeguimiento?.Date,
             IdUsuario = userId
         });
         await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(userId, "REGISTRAR", null, new { IdFactura = idFactura, Resultado = resultado, ProximoSeguimiento = proximoSeguimiento }, new { Modulo = "PortalAliados", Entidad = "GestionRenovacion", IdVendedor = contexto.IdVendedor });
         return (true, "Gestión de renovación registrada correctamente.");
     }
 
@@ -502,6 +535,8 @@ public sealed class AliadoPortalService
             return (false, "Solo se pueden pagar comisiones aprobadas.");
 
         referenciaPago = string.IsNullOrWhiteSpace(referenciaPago) ? null : referenciaPago.Trim();
+        if (referenciaPago?.Length > 100)
+            return (false, "La referencia de pago no puede superar 100 caracteres.");
         var ahora = DateTime.Now;
         var periodo = ahora.ToString("yyyy-MM");
         await using var transaction = await db.Database.BeginTransactionAsync();
@@ -547,10 +582,18 @@ public sealed class AliadoPortalService
             : null;
     }
 
-    public async Task<(bool Success, string Message)> ActualizarConfiguracionPortalAsync(int actorId, decimal porcentajeRenovacionNumerica, int diasIntervencionNumerica)
+    public async Task<(bool Success, string Message)> ActualizarConfiguracionPortalAsync(
+        int actorId,
+        decimal porcentajeVentaNueva,
+        decimal porcentajeRenovacionAliado,
+        decimal porcentajeRenovacionNumerica,
+        int diasIntervencionNumerica)
     {
         await EnsureSchemaAsync();
-        if (porcentajeRenovacionNumerica is < 0 or > 100 || diasIntervencionNumerica < 0)
+        if (porcentajeVentaNueva is < 0 or > 100 ||
+            porcentajeRenovacionAliado is < 0 or > 100 ||
+            porcentajeRenovacionNumerica is < 0 or > 100 ||
+            diasIntervencionNumerica is < 0 or > 365)
             return (false, "La configuración de renovación no es válida.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
@@ -558,7 +601,15 @@ public sealed class AliadoPortalService
             return (false, "No tienes permisos para modificar la configuración.");
 
         var configuracion = await db.AliadoPortalConfiguraciones.SingleAsync(x => x.IdConfiguracion == 1);
-        var anterior = new { configuracion.PorcentajeRenovacionNumerica, configuracion.DiasIntervencionNumerica };
+        var anterior = new
+        {
+            configuracion.PorcentajeVentaNueva,
+            configuracion.PorcentajeRenovacionAliado,
+            configuracion.PorcentajeRenovacionNumerica,
+            configuracion.DiasIntervencionNumerica
+        };
+        configuracion.PorcentajeVentaNueva = porcentajeVentaNueva;
+        configuracion.PorcentajeRenovacionAliado = porcentajeRenovacionAliado;
         configuracion.PorcentajeRenovacionNumerica = porcentajeRenovacionNumerica;
         configuracion.DiasIntervencionNumerica = diasIntervencionNumerica;
         await db.SaveChangesAsync();
@@ -650,7 +701,6 @@ public sealed class AliadoPortalService
             .AsNoTracking()
             .Where(x => !x.EsSistema && db.Usuarios.Any(u =>
                 u.IdVendedor == x.IdVendedor &&
-                u.Estado == true &&
                 u.IdTipoUsuarioNavigation!.NombreTipo == RoleName))
             .OrderBy(x => x.Nombre)
             .Select(x => new AliadoAdminRow
@@ -660,9 +710,32 @@ public sealed class AliadoPortalService
                 CodigoReferencia = x.CodigoReferencia,
                 Activo = x.Activo,
                 PorcentajeBase = x.PorcentajeBase,
-                Usuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor).Select(u => u.Email).FirstOrDefault()
+                IdUsuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && u.IdTipoUsuarioNavigation!.NombreTipo == RoleName).Select(u => (int?)u.IdUsuario).FirstOrDefault(),
+                Usuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && u.IdTipoUsuarioNavigation!.NombreTipo == RoleName).Select(u => u.Email).FirstOrDefault(),
+                UsuarioActivo = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && u.IdTipoUsuarioNavigation!.NombreTipo == RoleName).Select(u => u.Estado ?? false).FirstOrDefault()
             })
             .ToListAsync();
+    }
+
+    public async Task<(bool Success, string Message)> ActualizarEstadoAliadoAsync(int actorId, int idVendedor, bool activo)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para cambiar el estado del aliado.");
+
+        var aliado = await db.VendedoresBackOffice.FirstOrDefaultAsync(x => x.IdVendedor == idVendedor && !x.EsSistema);
+        var usuarios = await db.Usuarios.Where(x => x.IdVendedor == idVendedor && x.IdTipoUsuarioNavigation!.NombreTipo == RoleName).ToListAsync();
+        if (aliado is null || usuarios.Count == 0)
+            return (false, "El aliado no existe o no tiene una cuenta comercial.");
+
+        aliado.Activo = activo;
+        foreach (var usuario in usuarios)
+            usuario.Estado = activo;
+
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { IdVendedor = idVendedor }, new { Activo = activo }, new { Modulo = "PortalAliados", Entidad = "EstadoAliado" });
+        return (true, activo ? "Aliado activado correctamente." : "Aliado desactivado correctamente.");
     }
 
     public async Task<(bool Success, string Message)> CrearCuentaAliadoAsync(int actorId, string nombre, string email, string password, decimal porcentajeBase = 30m, bool esAdministradorPortal = false)
@@ -673,6 +746,8 @@ public sealed class AliadoPortalService
         password = password.Trim();
         if (string.IsNullOrWhiteSpace(nombre) || string.IsNullOrWhiteSpace(email) || password.Length < 8)
             return (false, "Nombre, correo y una clave de al menos 8 caracteres son obligatorios.");
+        if (nombre.Length > 120 || email.Length > 254 || !MailAddress.TryCreate(email, out _))
+            return (false, "El nombre o el correo no tienen un formato válido.");
         if (porcentajeBase is < 0 or > 100)
             return (false, "El porcentaje debe estar entre 0 y 100.");
 
@@ -742,6 +817,7 @@ public sealed class AliadoPortalService
         db.AliadoPortalUsuariosRoles.Add(new AliadoPortalUsuarioRol { IdUsuario = nuevoUsuario.IdUsuario, IdRol = idRolPortal });
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "CREAR", null, new { nuevoUsuario.IdUsuario, aliado?.IdVendedor, TipoCuenta = roleName }, new { Modulo = "PortalAliados", Entidad = "Cuenta" });
         return (true, esAdministradorPortal
             ? "Cuenta creada correctamente con el rol Administrador Portal de Aliados."
             : "Cuenta de aliado creada correctamente con el rol Aliado Comercial.");
@@ -858,6 +934,7 @@ public sealed class AliadoPortalService
                 Subtotal = x.Subtotal,
                 Subtotal0 = x.Subtotal0,
                 Subtotal12 = x.Subtotal12,
+                Autorizado = x.Autorizado == true,
                 EstadoPago = x.Estadopago
             })
             .ToListAsync();
@@ -874,7 +951,7 @@ public sealed class AliadoPortalService
 
         foreach (var factura in facturas)
         {
-            if (!EsPagoConfirmado(factura.EstadoPago))
+            if (!factura.Autorizado || !EsPagoConfirmado(factura.EstadoPago))
                 continue;
 
             var baseComisionable = ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12);
@@ -1266,9 +1343,11 @@ public sealed class AliadoLiquidacionDto
 public sealed class AliadoAdminRow
 {
     public int IdVendedor { get; init; }
+    public int? IdUsuario { get; init; }
     public string Nombre { get; init; } = string.Empty;
     public string CodigoReferencia { get; init; } = string.Empty;
     public bool Activo { get; init; }
+    public bool UsuarioActivo { get; init; }
     public decimal PorcentajeBase { get; init; }
     public string? Usuario { get; init; }
 }
@@ -1300,5 +1379,6 @@ internal sealed class FacturaComisionRow
     public decimal? Subtotal { get; init; }
     public decimal? Subtotal0 { get; init; }
     public decimal? Subtotal12 { get; init; }
+    public bool Autorizado { get; init; }
     public string? EstadoPago { get; init; }
 }

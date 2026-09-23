@@ -90,6 +90,99 @@ FROM dbo.MENUS m
 WHERE m.RUTAMENU = N'/aliados/admin'
   AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAdmin AND rm.IDMENU = m.IDMENU);
 
+IF OBJECT_ID(N'dbo.ALIADO_PORTAL_ROL', N'U') IS NULL
+    CREATE TABLE dbo.ALIADO_PORTAL_ROL
+    (
+        IdRol INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        Nombre NVARCHAR(80) NOT NULL UNIQUE,
+        Descripcion NVARCHAR(250) NULL,
+        Activo BIT NOT NULL CONSTRAINT DF_ALIADO_PORTAL_ROL_ACTIVO DEFAULT(1)
+    );
+
+IF OBJECT_ID(N'dbo.ALIADO_PORTAL_MENU', N'U') IS NULL
+    CREATE TABLE dbo.ALIADO_PORTAL_MENU
+    (
+        IdMenu INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        Nombre NVARCHAR(100) NOT NULL,
+        Ruta NVARCHAR(200) NOT NULL UNIQUE,
+        Icono NVARCHAR(50) NULL,
+        Orden INT NOT NULL,
+        Activo BIT NOT NULL CONSTRAINT DF_ALIADO_PORTAL_MENU_ACTIVO DEFAULT(1)
+    );
+
+IF OBJECT_ID(N'dbo.ALIADO_PORTAL_ROL_MENU', N'U') IS NULL
+    CREATE TABLE dbo.ALIADO_PORTAL_ROL_MENU
+    (
+        IdRolMenu INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        IdRol INT NOT NULL,
+        IdMenu INT NOT NULL,
+        CONSTRAINT UX_ALIADO_PORTAL_ROL_MENU UNIQUE(IdRol, IdMenu)
+    );
+
+IF OBJECT_ID(N'dbo.ALIADO_PORTAL_USUARIO_ROL', N'U') IS NULL
+    CREATE TABLE dbo.ALIADO_PORTAL_USUARIO_ROL
+    (
+        IdUsuarioRol INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        IdUsuario INT NOT NULL UNIQUE,
+        IdRol INT NOT NULL
+    );
+
+MERGE dbo.ALIADO_PORTAL_ROL AS t
+USING (VALUES
+    (N'Aliado Comercial', N'Acceso comercial externo.'),
+    (N'Administrador Portal de Aliados', N'Administración interna del portal.')
+) s(Nombre, Descripcion)
+ON t.Nombre = s.Nombre
+WHEN NOT MATCHED THEN
+    INSERT(Nombre, Descripcion, Activo) VALUES(s.Nombre, s.Descripcion, 1);
+
+MERGE dbo.ALIADO_PORTAL_MENU AS t
+USING (VALUES
+    (N'Inicio', N'/aliados', N'ri-dashboard-3-line', 1),
+    (N'Mis clientes', N'/aliados/clientes', N'ri-user-3-line', 2),
+    (N'Renovaciones', N'/aliados/renovaciones', N'ri-refresh-line', 3),
+    (N'Comisiones', N'/aliados/comisiones', N'ri-hand-coin-line', 4),
+    (N'Liquidaciones', N'/aliados/liquidaciones', N'ri-bank-card-line', 5),
+    (N'Mi perfil', N'/aliados/perfil', N'ri-user-settings-line', 6),
+    (N'Administración de aliados', N'/aliados/admin', N'ri-admin-line', 10)
+) s(Nombre, Ruta, Icono, Orden)
+ON t.Ruta = s.Ruta
+WHEN NOT MATCHED THEN
+    INSERT(Nombre, Ruta, Icono, Orden, Activo) VALUES(s.Nombre, s.Ruta, s.Icono, s.Orden, 1);
+
+INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol, IdMenu)
+SELECT r.IdRol, m.IdMenu
+FROM dbo.ALIADO_PORTAL_ROL r
+CROSS JOIN dbo.ALIADO_PORTAL_MENU m
+WHERE ((r.Nombre = N'Aliado Comercial' AND m.Ruta <> N'/aliados/admin')
+    OR (r.Nombre = N'Administrador Portal de Aliados' AND m.Ruta = N'/aliados/admin'))
+  AND NOT EXISTS (
+      SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x
+      WHERE x.IdRol = r.IdRol AND x.IdMenu = m.IdMenu
+  );
+
+INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario, IdRol)
+SELECT u.IdUsuario, r.IdRol
+FROM dbo.Usuarios u
+INNER JOIN dbo.TIPOUSUARIO tu ON tu.IdTipoUsuario = u.IdTipoUsuario
+INNER JOIN dbo.ALIADO_PORTAL_ROL r ON r.Nombre = tu.NombreTipo
+WHERE tu.NombreTipo IN (N'Aliado Comercial', N'Administrador Portal de Aliados')
+  AND NOT EXISTS (
+      SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x
+      WHERE x.IdUsuario = u.IdUsuario
+  );
+
+INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario, IdRol)
+SELECT u.IdUsuario, r.IdRol
+FROM dbo.Usuarios u
+CROSS JOIN dbo.ALIADO_PORTAL_ROL r
+WHERE u.IdTipoUsuario = 2
+  AND r.Nombre = N'Administrador Portal de Aliados'
+  AND NOT EXISTS (
+      SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x
+      WHERE x.IdUsuario = u.IdUsuario
+  );
+
 IF OBJECT_ID(N'dbo.ALIADO_RENOVACION_GESTION', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.ALIADO_RENOVACION_GESTION
