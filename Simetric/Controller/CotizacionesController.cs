@@ -166,12 +166,9 @@ public sealed class CotizacionesController : ControllerBase
         if (cotizacion is null) return NotFound();
         if (string.Equals(cotizacion.Estado, "Facturada", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { mensaje = "Una proforma facturada no puede darse de baja." });
-        if (string.Equals(cotizacion.Estado, "Baja", StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new { mensaje = "La proforma ya está dada de baja." });
-
-        cotizacion.Estado = "Baja";
+        _db.Cotizaciones.Remove(cotizacion);
         await _db.SaveChangesAsync();
-        return Ok(new { mensaje = "Proforma dada de baja correctamente." });
+        return Ok(new { mensaje = "Proforma eliminada correctamente." });
     }
 
     [HttpGet("{id:int}/pdf")]
