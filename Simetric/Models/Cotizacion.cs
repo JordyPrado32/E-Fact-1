@@ -34,6 +34,9 @@ public class Cotizacion
     [Column("FECHA_APROBACION")]
     public DateTime? FechaAprobacion { get; set; }
 
+    [Column("FECHA_VIGENCIA")]
+    public DateTime? FechaVigencia { get; set; }
+
     [Column("CODFACTURA")]
     public int? CodFactura { get; set; }
 

@@ -197,6 +197,14 @@ builder.Services.AddScoped(sp =>
     // =========================================================================
     httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("SimetricEfact/1.0 (BlazorServer; SRI-Ecuador)");
 
+    if (request is not null && httpClient.BaseAddress is not null
+        && string.Equals(request.Host.Host, httpClient.BaseAddress.Host, StringComparison.OrdinalIgnoreCase)
+        && request.Cookies.TryGetValue("Auth_Session", out var authCookie)
+        && !string.IsNullOrWhiteSpace(authCookie))
+    {
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Cookie", $"Auth_Session={authCookie}");
+    }
+
     return httpClient;
 });
 

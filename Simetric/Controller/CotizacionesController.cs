@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
@@ -8,6 +9,7 @@ using Simetric.Services;
 namespace Simetric.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/cotizaciones")]
 public sealed class CotizacionesController : ControllerBase
 {
@@ -38,6 +40,7 @@ public sealed class CotizacionesController : ControllerBase
         public int IdCliente { get; set; }
         public string? FormaPago { get; set; }
         public string? Detalle { get; set; }
+        public DateTime? FechaVigencia { get; set; }
         public List<CotizacionDetalleInputDto> Detalles { get; set; } = new();
     }
 
@@ -67,6 +70,7 @@ public sealed class CotizacionesController : ControllerBase
         public string? IdentificacionCliente { get; set; }
         public DateTime FechaCreacion { get; set; }
         public DateTime? FechaAprobacion { get; set; }
+        public DateTime? FechaVigencia { get; set; }
         public string Estado { get; set; } = "Pendiente";
         public string? FormaPago { get; set; }
         public string? Detalle { get; set; }
@@ -186,7 +190,12 @@ public sealed class CotizacionesController : ControllerBase
     [HttpPost("{id:int}/emitir")]
     public async Task<IActionResult> Emitir(int id, [FromBody] EmitirCotizacionDto input)
     {
-        var userId = ResolverUserId(input.IdUsuario);
+        if (input is null) return BadRequest(new { mensaje = "Confirma el emisor, la caja y la serie antes de emitir." });
+
+        var authenticatedUserId = ResolverUserId(input.IdUsuario);
+        if (authenticatedUserId is null) return Unauthorized();
+
+        var userId = authenticatedUserId.Value;
         var ownerId = await GetOwnerIdAsync(userId);
         if (ownerId is null) return Unauthorized();
 
@@ -273,7 +282,8 @@ public sealed class CotizacionesController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { mensaje = ex.Message });
+            _logger.LogError(ex, "No se pudo emitir la factura de la proforma {CotizacionId}.", id);
+            return StatusCode(StatusCodes.Status500InternalServerError, new { mensaje = "No se pudo emitir la factura." });
         }
     }
 
@@ -282,10 +292,16 @@ public sealed class CotizacionesController : ControllerBase
         CotizacionInputDto input,
         Cotizacion? cotizacion)
     {
+        if (input is null) return (null, null, "La información de la proforma es obligatoria.");
         if (string.IsNullOrWhiteSpace(input.Titulo)) return (null, null, "Cada proforma debe tener un título.");
         if (input.Titulo.Trim().Length > 200) return (null, null, "El título no puede superar los 200 caracteres.");
         if (input.IdCliente <= 0) return (null, null, "Selecciona un cliente.");
-        if (input.Detalles.Count == 0) return (null, null, "Agrega al menos un producto.");
+        if (string.IsNullOrWhiteSpace(input.FormaPago)) return (null, null, "Selecciona una forma de pago.");
+        if (input.FormaPago.Trim().Length > 10) return (null, null, "La forma de pago no puede superar los 10 caracteres.");
+        if (input.Detalle?.Length > 1000) return (null, null, "Las observaciones no pueden superar los 1000 caracteres.");
+        if (input.FechaVigencia?.Date < DateTime.Today) return (null, null, "La fecha de vigencia no puede estar en el pasado.");
+        if (input.Detalles is null || input.Detalles.Count == 0) return (null, null, "Agrega al menos un producto.");
+        if (input.Detalles.Any(x => x.Detalle?.Length > 500)) return (null, null, "El detalle de una línea no puede superar los 500 caracteres.");
         if (input.Detalles.Any(x => x.CodigoProducto <= 0 || x.Cantidad < 1 || x.PrecioUnitario < 0 || x.PrecioUnitario > PrecioMaximo || x.Descuento < 0 || x.Descuento > x.PrecioUnitario * x.Cantidad || x.TarifaIva is < 0 or > 100))
             return (null, null, "Revisa cantidades, precios y descuentos.");
 
@@ -305,6 +321,7 @@ public sealed class CotizacionesController : ControllerBase
         cotizacion.IdCliente = cliente.Codcliente;
         cotizacion.FormaPago = input.FormaPago?.Trim();
         cotizacion.Detalle = string.IsNullOrWhiteSpace(input.Detalle) ? null : input.Detalle.Trim();
+        cotizacion.FechaVigencia = input.FechaVigencia?.Date;
         cotizacion.Estado = "Pendiente";
         cotizacion.FechaAprobacion = null;
         cotizacion.CodFactura = null;
@@ -378,6 +395,7 @@ public sealed class CotizacionesController : ControllerBase
             {
                 Codfactura = cotizacion.Id,
                 Fechaentrega = cotizacion.FechaCreacion,
+                Fechavence = cotizacion.FechaVigencia,
                 Tipopago = cotizacion.FormaPago,
                 Subtotal = detalles.Sum(x => x.Valortproducto),
                 Subtotal12 = detalles.Where(x => x.Tarifa > 0).Sum(x => x.Valortproducto),
@@ -392,22 +410,22 @@ public sealed class CotizacionesController : ControllerBase
         };
     }
 
-    private async Task<int?> GetOwnerIdAsync(int userId)
+    private async Task<int?> GetOwnerIdAsync(int? requestedUserId)
     {
-        if (userId <= 0) return null;
-        var user = await _db.Usuarios.AsNoTracking().Where(x => x.IdUsuario == userId).Select(x => new { x.IdUsuario, x.idJefe }).FirstOrDefaultAsync();
+        var userId = ResolverUserId(requestedUserId);
+        if (userId is null) return null;
+
+        var user = await _db.Usuarios.AsNoTracking().Where(x => x.IdUsuario == userId.Value).Select(x => new { x.IdUsuario, x.idJefe }).FirstOrDefaultAsync();
         return user is null ? null : user.idJefe ?? user.IdUsuario;
     }
 
-    private int ResolverUserId(int? requested)
+    private int? ResolverUserId(int? requested)
     {
-        if (User.Identity?.IsAuthenticated == true)
-        {
-            var claim = User.FindFirst("IdUsuario")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            if (int.TryParse(claim, out var claimId) && claimId > 0) return claimId;
-        }
+        if (User.Identity?.IsAuthenticated != true) return null;
 
-        return requested.GetValueOrDefault();
+        var claim = User.FindFirst("IdUsuario")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (!int.TryParse(claim, out var claimId) || claimId <= 0) return null;
+        return requested is > 0 && requested.Value != claimId ? null : claimId;
     }
 
     private static bool EsPendiente(Cotizacion cotizacion) => string.IsNullOrWhiteSpace(cotizacion.Estado) || string.Equals(cotizacion.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase);
@@ -438,6 +456,7 @@ public sealed class CotizacionesController : ControllerBase
         IdentificacionCliente = cliente?.Numeroidentificacion,
         FechaCreacion = x.FechaCreacion,
         FechaAprobacion = x.FechaAprobacion,
+        FechaVigencia = x.FechaVigencia,
         Estado = string.IsNullOrWhiteSpace(x.Estado) ? "Pendiente" : x.Estado,
         FormaPago = x.FormaPago,
         Detalle = x.Detalle,
