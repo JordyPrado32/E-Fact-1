@@ -78,6 +78,8 @@ namespace Simetric.Data
         public DbSet<VendedorBackOffice> VendedoresBackOffice { get; set; }
         public DbSet<AliadoRenovacionGestion> AliadoRenovacionGestiones { get; set; }
         public DbSet<AliadoLiquidacion> AliadoLiquidaciones { get; set; }
+        public DbSet<AliadoComision> AliadoComisiones { get; set; }
+        public DbSet<AliadoPortalConfiguracion> AliadoPortalConfiguraciones { get; set; }
         public DbSet<AliadoPortalRol> AliadoPortalRoles { get; set; }
         public DbSet<AliadoPortalMenu> AliadoPortalMenus { get; set; }
         public DbSet<AliadoPortalRolMenu> AliadoPortalRolesMenus { get; set; }
@@ -953,6 +955,26 @@ namespace Simetric.Data
                 entity.HasOne(e => e.IdUsuarioNavigation)
                       .WithMany(u => u.LogIniciosSesions)
                       .HasForeignKey(e => e.IdUsuario);
+            });
+
+            modelBuilder.Entity<AliadoComision>(entity =>
+            {
+                entity.ToTable("ALIADO_COMISION");
+                entity.HasKey(e => e.IdComision);
+                entity.Property(e => e.BaseComisionable).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.Porcentaje).HasColumnType("decimal(9,4)");
+                entity.Property(e => e.Valor).HasColumnType("decimal(18,2)");
+                entity.HasIndex(e => new { e.IdVendedor, e.IdFactura, e.TipoComision }).IsUnique();
+            });
+
+            modelBuilder.Entity<AliadoPortalConfiguracion>(entity =>
+            {
+                entity.ToTable("ALIADO_PORTAL_CONFIG");
+                entity.HasKey(e => e.IdConfiguracion);
+                entity.Property(e => e.PorcentajeVentaNueva).HasColumnType("decimal(9,4)");
+                entity.Property(e => e.PorcentajeRenovacionAliado).HasColumnType("decimal(9,4)");
+                entity.Property(e => e.PorcentajeRenovacionNumerica).HasColumnType("decimal(9,4)");
+                entity.Property(e => e.PorcentajeVentaDirecta).HasColumnType("decimal(9,4)");
             });
 
         }

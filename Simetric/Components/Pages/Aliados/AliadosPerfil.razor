@@ -1,4 +1,5 @@
 @page "/aliados/perfil"
+@using QRCoder
 
 <PageTitle>Mi perfil | Portal de Aliados</PageTitle>
 
@@ -7,7 +8,61 @@
     @if (perfil is null) { <div class="ally-empty">No se pudo cargar el perfil.</div> }
     else
     {
-        <section class="ally-panel"><div class="ally-panel-heading"><h3>@perfil.NombreAliado</h3><span class="ally-badge success">Cuenta activa</span></div><div class="ally-detail-grid"><div><span>Nombre</span><strong>@perfil.Nombre</strong></div><div><span>Correo</span><strong>@perfil.Email</strong></div><div><span>Teléfono</span><strong>@(perfil.Celular ?? "No registrado")</strong></div><div><span>Porcentaje base</span><strong>@perfil.PorcentajeBase.ToString("0.##")%</strong></div></div><div class="ally-link-card"><div><span class="ally-label">CÓDIGO DE CANAL</span><strong>@perfil.CodigoReferencia</strong></div><a class="ally-button" href="/cambiar-clave/@perfil.IdUsuario">Cambiar contraseña</a></div></section>
+        <section class="ally-panel">
+            <div class="ally-panel-heading"><h3>@perfil.NombreAliado</h3><span class="ally-badge success">Cuenta activa</span></div>
+            <div class="ally-detail-grid"><div><span>Nombre</span><strong>@perfil.Nombre</strong></div><div><span>Correo</span><strong>@perfil.Email</strong></div><div><span>Teléfono</span><strong>@(perfil.Celular ?? "No registrado")</strong></div>
+                @if (perfil.EsAdministrador)
+                {
+                    <div><span>Perfil</span><strong>Administrador interno</strong></div>
+                }
+                else
+                {
+                    <div><span>Tasa del aliado</span><strong>@perfil.PorcentajeBase.ToString("0.##")%</strong></div>
+                }
+            </div>
+            @if (!perfil.EsAdministrador)
+            {
+                <div class="ally-profile-share">
+                    <div class="ally-profile-share-copy">
+                        <span class="ally-label">ENLACE Y QR DE TU CANAL</span>
+                        <strong>@EnlaceAbsoluto</strong>
+                        <p>Comparte este enlace o código para registrar clientes en tu canal.</p>
+                        <div class="ally-profile-actions">
+                            <button class="ally-button" type="button" @onclick="CopiarEnlace"><i class="ri-file-copy-line"></i> Copiar enlace</button>
+                            <a class="ally-button muted" href="@QrDataUri" download="qr-aliado.png"><i class="ri-download-2-line"></i> Descargar QR</a>
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(QrDataUri))
+                    {
+                        <img class="ally-qr-image" src="@QrDataUri" alt="Código QR del enlace de registro de @perfil.NombreAliado" />
+                    }
+                </div>
+                <div class="ally-link-card"><div><span class="ally-label">CÓDIGO DE CANAL</span><strong>@perfil.CodigoReferencia</strong></div><button type="button" class="ally-button" @onclick="ToggleCambiarClave"><i class="ri-key-2-line"></i> @(cambiarClave ? "Cancelar" : "Cambiar contraseña")</button></div>
+            }
+            else
+            {
+                <div class="ally-link-card"><div><span class="ally-label">SEGURIDAD</span><strong>Credenciales del administrador</strong></div><button type="button" class="ally-button" @onclick="ToggleCambiarClave"><i class="ri-key-2-line"></i> @(cambiarClave ? "Cancelar" : "Cambiar contraseña")</button></div>
+            }
+            @if (cambiarClave)
+            {
+                <div class="ally-password-card">
+                    <div><span class="ally-label">SEGURIDAD</span><h3>Actualizar contraseña</h3><p>Confirma tu contraseña actual para definir una nueva.</p></div>
+                    <div class="ally-password-grid">
+                        <label>Contraseña actual<input type="password" @bind="claveActual" autocomplete="current-password" /></label>
+                        <label>Nueva contraseña<input type="password" @bind="claveNueva" autocomplete="new-password" /></label>
+                        <label>Confirmar contraseña<input type="password" @bind="claveConfirmar" autocomplete="new-password" /></label>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(mensajeClave))
+                    {
+                        <div class="ally-feedback">@mensajeClave</div>
+                    }
+                    <div class="ally-password-actions">
+                        <button type="button" class="ally-button muted" @onclick="CancelarCambiarClave">Cancelar</button>
+                        <button type="button" class="ally-button" @onclick="GuardarClaveAsync" disabled="@guardandoClave">@(guardandoClave ? "Guardando..." : "Guardar contraseña")</button>
+                    </div>
+                </div>
+            }
+        </section>
     }
 </div>
 
@@ -15,11 +70,78 @@
     private AliadoPortalContext? perfil;
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
+    [Inject] private NavigationManager NavManager { get; set; } = null!;
+    [Inject] private IJSRuntime JS { get; set; } = null!;
+
+    private string EnlaceAbsoluto => perfil is null ? string.Empty : $"{NavManager.BaseUri.TrimEnd('/')}{perfil.EnlaceRegistro}";
+    private string? QrDataUri { get; set; }
+    private bool cambiarClave;
+    private bool guardandoClave;
+    private string? mensajeClave;
+    private string? claveActual;
+    private string? claveNueva;
+    private string? claveConfirmar;
 
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
         if (int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id))
+        {
             perfil = await AliadoService.ObtenerContextoAsync(id);
+            if (perfil is not null && !string.IsNullOrWhiteSpace(EnlaceAbsoluto))
+                QrDataUri = GenerarQr(EnlaceAbsoluto);
+        }
+    }
+
+    private async Task CopiarEnlace()
+    {
+        if (!string.IsNullOrWhiteSpace(EnlaceAbsoluto))
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", EnlaceAbsoluto);
+    }
+
+    private void ToggleCambiarClave()
+    {
+        cambiarClave = !cambiarClave;
+        if (!cambiarClave)
+            LimpiarCamposClave();
+    }
+
+    private void CancelarCambiarClave()
+    {
+        cambiarClave = false;
+        LimpiarCamposClave();
+    }
+
+    private async Task GuardarClaveAsync()
+    {
+        if (guardandoClave || perfil is null)
+            return;
+
+        guardandoClave = true;
+        mensajeClave = null;
+        var resultado = await AliadoService.ActualizarClaveAsync(perfil.IdUsuario, claveActual, claveNueva, claveConfirmar);
+        mensajeClave = resultado.Message;
+        if (resultado.Success)
+        {
+            cambiarClave = false;
+            LimpiarCamposClave();
+        }
+        guardandoClave = false;
+    }
+
+    private void LimpiarCamposClave()
+    {
+        claveActual = null;
+        claveNueva = null;
+        claveConfirmar = null;
+        mensajeClave = null;
+    }
+
+    private static string GenerarQr(string enlace)
+    {
+        using var generator = new QRCodeGenerator();
+        using var data = generator.CreateQrCode(enlace, QRCodeGenerator.ECCLevel.Q);
+        var bytes = new PngByteQRCode(data).GetGraphic(8);
+        return $"data:image/png;base64,{Convert.ToBase64String(bytes)}";
     }
 }

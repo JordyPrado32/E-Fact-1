@@ -17,6 +17,9 @@ public sealed class AliadoRenovacionGestion
     [Required, MaxLength(50)]
     public string Resultado { get; set; } = string.Empty;
 
+    [MaxLength(20)]
+    public string OrigenGestion { get; set; } = "Aliado";
+
     [MaxLength(500)]
     public string? Observacion { get; set; }
 

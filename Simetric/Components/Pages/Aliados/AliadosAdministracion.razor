@@ -5,7 +5,7 @@
 <div class="ally-page">
     <section class="ally-hero">
         <div><span class="ally-eyebrow">ADMINISTRACIÓN INTERNA</span><h2>Portal de Aliados</h2><p>Administra cuentas, canales y porcentajes de comisión.</p></div>
-        <a class="ally-button light" href="/aliados/admin/permisos"><i class="ri-shield-user-line"></i> Roles y permisos</a>
+        <NavLink class="ally-button light" href="/aliados/admin/permisos"><i class="ri-shield-user-line"></i> Roles y permisos</NavLink>
     </section>
 
     @if (!string.IsNullOrWhiteSpace(mensaje))
@@ -46,13 +46,42 @@
                     <tbody>
                         @foreach (var aliado in aliados)
                         {
-                            <tr @key="aliado.IdVendedor"><td><strong>@aliado.Nombre</strong></td><td>@(aliado.Usuario ?? "Sin cuenta")</td><td>@aliado.CodigoReferencia</td><td>@aliado.PorcentajeBase.ToString("0.##")%</td><td><span class="ally-badge @(aliado.Activo ? "success" : "danger")">@(aliado.Activo ? "Activo" : "Inactivo")</span></td></tr>
+                            <tr @key="aliado.IdVendedor"><td><strong>@aliado.Nombre</strong></td><td>@(aliado.Usuario ?? "Sin cuenta")</td><td>@aliado.CodigoReferencia</td><td><input class="ally-admin-input" style="max-width:90px" type="number" min="0" max="100" step=".01" value="@aliado.PorcentajeBase" @onchange="e => ActualizarPorcentajeAsync(aliado, e)" />%</td><td><span class="ally-badge @(aliado.Activo ? "success" : "danger")">@(aliado.Activo ? "Activo" : "Inactivo")</span></td></tr>
                         }
                     </tbody>
                 </table>
             </div>
         </section>
     </div>
+
+    @if (configuracion is not null)
+    {
+        <section class="ally-panel">
+            <div class="ally-panel-heading"><div><span class="ally-label">REGLAS FINANCIERAS</span><h3>Intervención de Numérica</h3></div><span class="ally-readonly">Solo personal interno</span></div>
+            <div class="ally-admin-grid">
+                <div><label class="ally-admin-label">Comisión de renovación por Numérica</label><input class="ally-admin-input" type="number" min="0" max="100" step=".01" @bind="porcentajeRenovacionNumerica" /></div>
+                <div><label class="ally-admin-label">Días antes del vencimiento</label><input class="ally-admin-input" type="number" min="0" max="365" @bind="diasIntervencionNumerica" /></div>
+            </div>
+            <button class="ally-button" type="button" @onclick="GuardarConfiguracionAsync" disabled="@guardandoConfiguracion">@(guardandoConfiguracion ? "Guardando..." : "Guardar regla")</button>
+        </section>
+    }
+
+    <section class="ally-panel">
+        <div class="ally-panel-heading"><div><span class="ally-label">LIBRO MAYOR</span><h3>Comisiones</h3></div><input class="ally-admin-input" style="max-width:240px" @bind="referenciaPago" placeholder="Referencia del pago" /></div>
+        @if (comisiones.Count == 0)
+        {
+            <div class="ally-empty">No hay comisiones generadas con los pagos actuales.</div>
+        }
+        else
+        {
+            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Aliado</th><th>Factura / cliente</th><th>Tipo</th><th>Base</th><th>Valor</th><th>Estado</th><th></th></tr></thead><tbody>
+                @foreach (var comision in comisiones)
+                {
+                    <tr @key="comision.IdComision"><td>@comision.Aliado</td><td>#@comision.IdFactura<br /><small>@comision.Cliente</small></td><td>@comision.TipoComision</td><td>$ @comision.BaseComisionable.ToString("N2")<br /><small>@comision.Porcentaje.ToString("0.##")%</small></td><td>$ @comision.Valor.ToString("N2")</td><td><span class="ally-badge @(comision.Estado == "Pagada" ? "success" : comision.Estado == "Aprobada" ? "" : "warning")">@comision.Estado</span><br /><small>@(comision.Periodo ?? "-")</small></td><td>@if (comision.Estado == "Generada") { <button type="button" class="ally-table-action" @onclick="() => AprobarAsync(comision)">Aprobar</button> } else if (comision.Estado == "Aprobada") { <button type="button" class="ally-table-action" @onclick="() => PagarAsync(comision)">Registrar pago</button> } else { <span class="ally-readonly">@(comision.ReferenciaPago ?? "Pagada")</span> }</td></tr>
+                }
+            </tbody></table></div>
+        }
+    </section>
 </div>
 
 @code {
@@ -68,15 +97,36 @@
     private string? mensaje;
     private bool guardando;
     private bool puedeCrearAdministrador;
+    private List<AliadoAdminComisionRow> comisiones = new();
+    private AliadoPortalConfiguracion? configuracion;
+    private decimal porcentajeRenovacionNumerica = 15m;
+    private int diasIntervencionNumerica = 15;
+    private string referenciaPago = string.Empty;
+    private bool guardandoConfiguracion;
+    private int actorId;
 
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out actorId);
         puedeCrearAdministrador = auth.User.IsInRole(BackOfficePermissionHelper.SuperAdministradorRoleId.ToString());
         await CargarAsync();
+        await CargarComisionesAsync();
+        await CargarConfiguracionAsync();
     }
 
     private async Task CargarAsync() => aliados = (await AliadoService.ListarAliadosAsync()).ToList();
+    private async Task CargarComisionesAsync() => comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
+
+    private async Task CargarConfiguracionAsync()
+    {
+        configuracion = await AliadoService.ObtenerConfiguracionPortalAsync(actorId);
+        if (configuracion is not null)
+        {
+            porcentajeRenovacionNumerica = configuracion.PorcentajeRenovacionNumerica;
+            diasIntervencionNumerica = configuracion.DiasIntervencionNumerica;
+        }
+    }
 
     private async Task CrearAsync()
     {
@@ -93,5 +143,42 @@
             await CargarAsync();
         }
         guardando = false;
+    }
+
+    private async Task GuardarConfiguracionAsync()
+    {
+        if (guardandoConfiguracion) return;
+        guardandoConfiguracion = true;
+        var resultado = await AliadoService.ActualizarConfiguracionPortalAsync(actorId, porcentajeRenovacionNumerica, diasIntervencionNumerica);
+        mensaje = resultado.Message;
+        if (resultado.Success) await CargarConfiguracionAsync();
+        guardandoConfiguracion = false;
+    }
+
+    private async Task AprobarAsync(AliadoAdminComisionRow comision)
+    {
+        var resultado = await AliadoService.AprobarComisionAsync(actorId, comision.IdComision);
+        mensaje = resultado.Message;
+        if (resultado.Success) await CargarComisionesAsync();
+    }
+
+    private async Task PagarAsync(AliadoAdminComisionRow comision)
+    {
+        var resultado = await AliadoService.PagarComisionAsync(actorId, comision.IdComision, referenciaPago);
+        mensaje = resultado.Message;
+        if (resultado.Success)
+        {
+            referenciaPago = string.Empty;
+            await CargarComisionesAsync();
+        }
+    }
+
+    private async Task ActualizarPorcentajeAsync(AliadoAdminRow aliado, object? valor)
+    {
+        if (valor is not ChangeEventArgs change || !decimal.TryParse(change.Value?.ToString(), out var porcentaje))
+            return;
+        var resultado = await AliadoService.ActualizarPorcentajeAliadoAsync(actorId, aliado.IdVendedor, porcentaje);
+        mensaje = resultado.Message;
+        if (resultado.Success) await CargarAsync();
     }
 }

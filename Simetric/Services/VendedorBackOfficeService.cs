@@ -55,6 +55,9 @@ public sealed class VendedorBackOfficeService
         await using var context = await _dbFactory.CreateDbContextAsync();
         return await context.VendedoresBackOffice
             .AsNoTracking()
+            .Where(x => x.EsSistema || !context.Usuarios.Any(u =>
+                u.IdVendedor == x.IdVendedor &&
+                u.IdTipoUsuarioNavigation!.NombreTipo == AliadoPortalService.RoleName))
             .OrderByDescending(x => x.EsSistema)
             .ThenBy(x => x.Nombre)
             .ToListAsync();
