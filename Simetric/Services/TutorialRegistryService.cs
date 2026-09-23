@@ -9,7 +9,7 @@ public sealed class TutorialRegistryService
 
     public TutorialRegistryService()
     {
-        var definitions = new[]
+        var definitions = new List<TutorialDefinition>
         {
             BuildDashboardTutorial(),
             BuildNuevaFacturaTutorial(),
@@ -47,6 +47,8 @@ public sealed class TutorialRegistryService
             BuildTiposClienteTutorial(),
             BuildRolesPermisosTutorial()
         };
+
+        definitions.AddRange(ERubricaTutorialDefinitions.Create());
 
         _definitions = definitions.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
         _definitionsByRoute = definitions

@@ -1,0 +1,136 @@
+@page "/e-rubrica/tutoriales"
+@rendermode InteractiveServer
+@using Simetric.Services
+@using Simetric.Tutorials
+@inject TutorialRegistryService TutorialRegistry
+@inject TutorialStateService TutorialStateService
+@inject NavigationManager NavManager
+
+<PageTitle>Tutoriales | E-Rúbrica</PageTitle>
+
+@{
+    var tutoriales = TutorialesFiltrados.ToList();
+    var todosLosTutoriales = TutorialesERubrica.ToList();
+    var completados = todosLosTutoriales.Count(t => Progreso(t.Id).Completed);
+    var pendientes = Math.Max(todosLosTutoriales.Count - completados, 0);
+    var destacado = todosLosTutoriales
+        .Where(t => !Progreso(t.Id).Completed)
+        .OrderByDescending(t => Progreso(t.Id).LastOpenedAt ?? DateTimeOffset.MinValue)
+        .ThenBy(t => t.Title)
+        .FirstOrDefault() ?? todosLosTutoriales.FirstOrDefault();
+}
+
+<div class="erubrica-tutorials-page">
+    <div class="erubrica-tutorials-layout">
+        <main>
+            <header class="erubrica-tutorials-hero">
+                <div>
+                    <span class="erubrica-tutorials-kicker">Centro de aprendizaje</span>
+                    <h1>Tutoriales y guías</h1>
+                    <p>Aprende a usar E‑Rúbrica con guías paso a paso para firmar, validar y administrar tus documentos electrónicos.</p>
+                </div>
+                <img src="/images/tutoriales-hero.png" alt="Ilustración de aprendizaje" />
+            </header>
+
+            <section class="erubrica-tutorials-filters">
+                <label><i class="bi bi-search"></i><input type="search" placeholder="Buscar guías, temas o funciones..." @bind="filtro" @bind:event="oninput" /></label>
+                <span><i class="bi bi-shield-check"></i> E‑Rúbrica</span>
+            </section>
+
+            <section class="erubrica-tutorials-stats" aria-label="Resumen de tutoriales">
+                <article class="is-total"><i class="bi bi-collection-play"></i><div><span>Totales</span><strong>@todosLosTutoriales.Count</strong><small>Guías disponibles</small></div></article>
+                <article class="is-completed"><i class="bi bi-check-circle"></i><div><span>Completados</span><strong>@completados</strong><small>Guías completadas</small></div></article>
+                <article class="is-pending"><i class="bi bi-circle"></i><div><span>Pendientes</span><strong>@pendientes</strong><small>Guías por completar</small></div></article>
+            </section>
+
+            @if (destacado is not null)
+            {
+                var progresoDestacado = Progreso(destacado.Id);
+                var pasosVistos = progresoDestacado.Completed ? destacado.Steps.Count : progresoDestacado.LastStepIndex.GetValueOrDefault(-1) + 1;
+                var porcentajeDestacado = destacado.Steps.Count == 0 ? 0 : (int)Math.Round(pasosVistos * 100m / destacado.Steps.Count);
+                <section class="erubrica-tutorials-continue">
+                    <div class="continue-icon"><i class="@Icono(destacado.Route)"></i></div>
+                    <div class="continue-copy"><span>Continúa donde lo dejaste</span><h2>@destacado.Title</h2><p>@destacado.Description</p><div><i style="width:@porcentajeDestacado%"></i></div><small>@(progresoDestacado.Completed ? "Guía completada" : $"{pasosVistos} de {destacado.Steps.Count} pasos disponibles")</small></div>
+                    <button type="button" @onclick="() => AbrirTutorialAsync(destacado)">@(progresoDestacado.Completed ? "Ver guía" : "Continuar guía") <i class="bi bi-arrow-right"></i></button>
+                </section>
+            }
+
+            <div class="erubrica-tutorials-section-heading"><h2>Explora por módulo</h2><span>@tutoriales.Count @(tutoriales.Count == 1 ? "guía visible" : "guías visibles")</span></div>
+            @if (_cargando)
+            {
+                <div class="erubrica-tutorials-state"><span class="spinner-border"></span><p>Cargando tus tutoriales...</p></div>
+            }
+            else if (!tutoriales.Any())
+            {
+                <div class="erubrica-tutorials-state"><i class="bi bi-search"></i><p>No encontramos tutoriales con ese criterio.</p></div>
+            }
+            else
+            {
+                <section class="erubrica-tutorials-grid" aria-label="Tutoriales disponibles">
+                    @foreach (var tutorial in tutoriales)
+                    {
+                        var progreso = Progreso(tutorial.Id);
+                        <article class="erubrica-tutorial-card">
+                            <div class="erubrica-tutorial-card-icon"><i class="@Icono(tutorial.Route)"></i></div>
+                            <span class="erubrica-tutorial-category">@tutorial.Category</span><h3>@tutorial.Title</h3><p>@tutorial.Description</p>
+                            <small><i class="bi bi-list-check"></i> @tutorial.Steps.Count pasos</small>
+                            <footer><span class="@(progreso.Completed ? "is-completed" : string.Empty)">@(progreso.Completed ? "Completado" : "Disponible")</span><button type="button" @onclick="() => AbrirTutorialAsync(tutorial)">Ver guía <i class="bi bi-arrow-right"></i></button></footer>
+                        </article>
+                    }
+                </section>
+            }
+        </main>
+
+        <aside class="erubrica-tutorials-sidebar">
+            <section><h2>Centro de ayuda</h2><a href="/e-rubrica/tutoriales"><i class="bi bi-book"></i><span>Cómo empezar<small>Primeros pasos en E‑Rúbrica</small></span></a><a href="/e-rubrica/soporte"><i class="bi bi-chat-square-text"></i><span>Preguntas frecuentes<small>Resuelve tus dudas rápidas</small></span></a><a href="/e-rubrica/soporte"><i class="bi bi-headset"></i><span>Contacto con soporte<small>Estamos para ayudarte</small></span></a><a class="all-help" href="/e-rubrica/soporte">Ver todas las opciones <i class="bi bi-arrow-right"></i></a></section>
+            <section class="erubrica-tutorials-progress"><h2>Tu progreso general</h2><div class="progress-ring" style="--progress:@(todosLosTutoriales.Count == 0 ? 0 : (int)Math.Round(completados * 100m / todosLosTutoriales.Count))"><strong>@(todosLosTutoriales.Count == 0 ? 0 : (int)Math.Round(completados * 100m / todosLosTutoriales.Count))%</strong></div><div><span><strong>@completados</strong>Completadas</span><span><strong>@pendientes</strong>Pendientes</span></div></section>
+        </aside>
+    </div>
+</div>
+
+@code {
+    private bool _cargando = true;
+    private string filtro = string.Empty;
+    private Dictionary<string, TutorialProgress> _progresos = new(StringComparer.OrdinalIgnoreCase);
+
+    private IEnumerable<TutorialDefinition> TutorialesERubrica =>
+        TutorialRegistry.GetAll().Where(t => string.Equals(t.Category, "E-Rúbrica", StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<TutorialDefinition> TutorialesFiltrados
+    {
+        get
+        {
+            var termino = filtro.Trim();
+            return TutorialesERubrica
+                .Where(t => string.IsNullOrWhiteSpace(termino) ||
+                            t.Title.Contains(termino, StringComparison.OrdinalIgnoreCase) ||
+                            t.Description.Contains(termino, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var tutoriales = TutorialesERubrica;
+        _progresos = await TutorialStateService.GetProgressMapAsync(tutoriales.Select(t => t.Id));
+        _cargando = false;
+    }
+
+    private TutorialProgress Progreso(string tutorialId) =>
+        _progresos.TryGetValue(tutorialId, out var progreso) ? progreso : new TutorialProgress();
+
+    private async Task AbrirTutorialAsync(TutorialDefinition tutorial)
+    {
+        await TutorialStateService.MarkOpenedAsync(tutorial.Id);
+        NavManager.NavigateTo($"{tutorial.Route}?tutorial={Uri.EscapeDataString(tutorial.Id)}&forceTutorial=true");
+    }
+
+    private static string Icono(string route) => route switch
+    {
+        "/e-rubrica" => "bi bi-house-check",
+        var value when value.Contains("validar", StringComparison.OrdinalIgnoreCase) => "bi bi-shield-check",
+        var value when value.Contains("estampar", StringComparison.OrdinalIgnoreCase) => "bi bi-pen",
+        var value when value.Contains("documentos", StringComparison.OrdinalIgnoreCase) => "bi bi-file-earmark-pdf",
+        var value when value.Contains("firma", StringComparison.OrdinalIgnoreCase) => "bi bi-key",
+        _ => "bi bi-play-circle"
+    };
+}
