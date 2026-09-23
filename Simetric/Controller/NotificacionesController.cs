@@ -19,20 +19,23 @@ public sealed class NotificacionesController : ControllerBase
     private readonly DashboardService _dashboardService;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly SolicitudService _solicitudService;
+    private readonly NotificacionDescartadaService _notificacionDescartadaService;
 
     public NotificacionesController(
         SolicitudService solicitudService,
         DashboardService dashboardService,
-        IDbContextFactory<AppDbContext> dbFactory)
+        IDbContextFactory<AppDbContext> dbFactory,
+        NotificacionDescartadaService notificacionDescartadaService)
     {
         _solicitudService = solicitudService;
         _dashboardService = dashboardService;
         _dbFactory = dbFactory;
+        _notificacionDescartadaService = notificacionDescartadaService;
     }
 
     [HttpGet]
     [HttpGet("mobile")]
-    public async Task<IActionResult> Get([FromQuery] int top = 20)
+    public async Task<IActionResult> Get([FromQuery] int top = 20, CancellationToken cancellationToken = default)
     {
         var usuarioId = ObtenerUsuarioId(User);
         if (usuarioId <= 0) return Unauthorized();
@@ -52,10 +55,22 @@ public sealed class NotificacionesController : ControllerBase
             items.AddRange((await ObtenerSolicitudesDocumentosBackOfficeAsync()).Select(ToSolicitudDocumentosNotification));
         }
 
+        var descartadas = await _notificacionDescartadaService.ObtenerIdsAsync(usuarioId, cancellationToken);
         return Ok(items
+            .Where(item => !descartadas.Contains(item.Id))
             .OrderByDescending(item => item.Fecha ?? DateTime.MinValue)
             .Take(take)
             .ToList());
+    }
+
+    [HttpPost("descartar")]
+    public async Task<IActionResult> Descartar([FromBody] DescartarNotificacionesRequest? request, CancellationToken cancellationToken = default)
+    {
+        var usuarioId = ObtenerUsuarioId(User);
+        if (usuarioId <= 0) return Unauthorized();
+
+        await _notificacionDescartadaService.DescartarAsync(usuarioId, request?.Ids ?? new List<string>(), cancellationToken);
+        return NoContent();
     }
 
     private static int ObtenerUsuarioId(ClaimsPrincipal user)
@@ -236,5 +251,10 @@ public sealed class NotificacionesController : ControllerBase
         public bool Leido { get; init; }
         public string? Tipo { get; init; }
         public string? Ruta { get; init; }
+    }
+
+    public sealed class DescartarNotificacionesRequest
+    {
+        public List<string> Ids { get; init; } = new();
     }
 }
