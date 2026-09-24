@@ -9,7 +9,6 @@ public sealed class ToolDispatcher
     private static readonly HashSet<string> ProtectedTools = new(StringComparer.OrdinalIgnoreCase)
     {
         ToolDefinitions.CrearCliente,
-        ToolDefinitions.CrearProducto,
         ToolDefinitions.RegistrarAbonoGeneral,
         ToolDefinitions.EmitirFactura,
         ToolDefinitions.EmitirNotaCreditoDesdeFactura,
@@ -18,6 +17,16 @@ public sealed class ToolDispatcher
         ToolDefinitions.EmitirLiquidacionCompra,
         ToolDefinitions.EmitirRetencion,
         ToolDefinitions.SincronizarESignSolicitud
+    };
+
+    private static readonly HashSet<string> EmissionTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ToolDefinitions.EmitirFactura,
+        ToolDefinitions.EmitirNotaCreditoDesdeFactura,
+        ToolDefinitions.EmitirNotaDebitoDesdeFactura,
+        ToolDefinitions.EmitirGuiaDesdeFactura,
+        ToolDefinitions.EmitirLiquidacionCompra,
+        ToolDefinitions.EmitirRetencion
     };
 
     private readonly FacturacionTools _tools;
@@ -50,6 +59,13 @@ public sealed class ToolDispatcher
         using (document)
         {
             var root = document.RootElement;
+            if (EmissionTools.Contains(toolName))
+            {
+                var configurationWarning = await _tools.ObtenerAdvertenciaConfiguracionEmisionAsync(state.UserId);
+                if (configurationWarning is not null)
+                    return new ToolResultDto { ToolName = toolName, Success = false, Message = configurationWarning, CodigoError = "emission_configuration_required" };
+            }
+
             if (!allowSideEffects && RequiresConfirmation(toolName, state))
                 return RequestConfirmation(toolName, argumentsJson, state);
 

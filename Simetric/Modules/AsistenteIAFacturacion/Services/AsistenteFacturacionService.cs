@@ -111,6 +111,8 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             Emitida = state.Emitida,
             AccionDetectada = result.AccionDetectada ?? state.UltimaIntencion,
             RutaSugerida = result.RutaSugerida,
+            CodigoError = result.CodigoError,
+            RutasSugeridas = result.RutasSugeridas,
             SeleccionPendienteTipo = state.SeleccionPendiente?.Tipo,
             SeleccionPendienteMensaje = state.SeleccionPendiente?.Mensaje,
             OpcionesSeleccion = state.SeleccionPendiente?.Opciones ?? new List<SelectionOptionDto>(),
@@ -129,6 +131,7 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         {
             state.OperacionPendiente = null;
             state.RequiereConfirmacion = false;
+            state.Estado = FacturaConversationStates.ConfirmacionExpirada;
             return BuildStateResponse(state, "La confirmación expiró. Repite la operación para generar una nueva confirmación.", "confirmacion_expirada");
         }
 
@@ -137,6 +140,7 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         {
             state.OperacionPendiente = null;
             state.RequiereConfirmacion = false;
+            state.Estado = FacturaConversationStates.Cancelado;
             return BuildStateResponse(state, "Cancelé la operación pendiente.", "cancelar");
         }
 
@@ -175,7 +179,16 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
     }
 
     private static ChatFacturaResponse BuildToolResponse(FacturaConversationState state, ToolResultDto result, string action)
-        => BuildStateResponse(state, result.Message, action, result.RequiereConfirmacion);
+    {
+        var response = BuildStateResponse(state, result.Message, action, result.RequiereConfirmacion);
+        response.CodigoError = result.CodigoError;
+        if (result.CodigoError == "emission_configuration_required")
+        {
+            response.RutasSugeridas = new List<string> { "/emisor", "/firma" };
+        }
+
+        return response;
+    }
 
     private static ChatFacturaResponse BuildStateResponse(FacturaConversationState state, string message, string action, bool requiresConfirmation = false)
         => new()
@@ -193,8 +206,23 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         };
 
     private static bool IsExplicitConfirmation(string mensaje)
-        => new[] { "si", "sí", "confirmar", "confirmo", "acepto", "dale", "correcto", "emitir", "emite" }
-            .Contains(NormalizeConfirmationText(mensaje), StringComparer.OrdinalIgnoreCase);
+    {
+        var normalized = NormalizeConfirmationText(mensaje);
+        if (new[] { "si", "sí", "confirmar", "confirmo", "acepto", "dale", "correcto", "emitir", "emite" }
+            .Contains(normalized, StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        if (normalized.StartsWith("no ", StringComparison.OrdinalIgnoreCase) || normalized == "no")
+            return false;
+
+        var firstToken = normalized.Split(new[] { ' ', ',', ';', ':' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return (firstToken == "si" || firstToken == "sí")
+            && (normalized.Contains("confirm", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("proced", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("emit", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("adelante", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("acept", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static string NormalizeConfirmationText(string value)
         => value.Trim().Trim('.', '!', '?', ',').ToLowerInvariant();

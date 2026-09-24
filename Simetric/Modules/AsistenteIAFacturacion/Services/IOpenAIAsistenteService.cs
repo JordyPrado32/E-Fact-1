@@ -15,4 +15,6 @@ public sealed class OpenAIAsistenteResult
     public string Respuesta { get; set; } = string.Empty;
     public string? AccionDetectada { get; set; }
     public string? RutaSugerida { get; set; }
+    public string? CodigoError { get; set; }
+    public List<string> RutasSugeridas { get; set; } = new();
 }

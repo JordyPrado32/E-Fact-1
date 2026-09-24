@@ -1483,7 +1483,11 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         => new()
         {
             Respuesta = result.Message,
-            AccionDetectada = action
+            AccionDetectada = action,
+            CodigoError = result.CodigoError,
+            RutasSugeridas = result.CodigoError == "emission_configuration_required"
+                ? new List<string> { "/emisor", "/firma" }
+                : new List<string>()
         };
 
     private static OpenAIAsistenteResult BuildClarificationResult(string message)

@@ -5,16 +5,20 @@
 <div class="ally-page">
     <div class="ally-page-intro">
         <div><span class="ally-eyebrow">TRANSPARENCIA DE MOVIMIENTOS</span><h2>Comisiones</h2><p>Historial de comisiones calculadas sobre valores netos efectivamente cobrados.</p></div>
-        <div style="display:flex;gap:8px">
+        <div class="ally-page-tools">
             <select class="ally-select" @bind="filtroEstado" @bind:after="ReiniciarPagina">
                 <option value="">Todos los estados</option><option>Generada</option><option>Aprobada</option><option>Pagada</option>
             </select>
             <button class="ally-button muted" type="button" @onclick="ExportarAsync" disabled="@(!MovimientosFiltrados.Any())">Exportar CSV</button>
         </div>
     </div>
-    @if (modelo is null)
+    @if (cargando)
     {
-        <div class="ally-empty">No se pudo cargar el historial de comisiones.</div>
+        <div class="ally-empty"><span class="spinner-border spinner-border-sm"></span> Cargando comisiones...</div>
+    }
+    else if (modelo is null)
+    {
+        <div class="ally-empty">No se pudo cargar el historial de comisiones.<br /><button type="button" class="ally-button" @onclick="CargarAsync">Reintentar</button></div>
     }
     else
     {
@@ -33,7 +37,7 @@
                     <tr @key="item.IdComision"><td>@item.FechaGeneracion.ToString("dd/MM/yyyy")</td><td><strong>@item.Cliente</strong><br /><small>@item.Producto</small></td><td>@item.Tipo</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.ValorComision.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="ally-badge @(item.Estado == "Pagada" ? "success" : item.Estado == "Aprobada" ? "approved" : "warning")">@item.Estado</span></td><td>@(item.PeriodoLiquidacion ?? "-")<br /><small>@(item.ReferenciaPago ?? "Sin pago")</small></td></tr>
                 }
                 </tbody></table></div>
-                <div style="display:flex;align-items:center;gap:10px;margin-top:12px"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
+                <div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
             }
         </section>
     }
@@ -41,6 +45,7 @@
 
 @code {
     private AliadoComisionesDto? modelo;
+    private bool cargando = true;
     private string filtroEstado = string.Empty;
     private int pagina = 1;
     private const int TamanoPagina = 20;
@@ -51,6 +56,7 @@
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
     [Inject] private IJSRuntime JS { get; set; } = null!;
+    [Inject] private SweetAlertService AlertService { get; set; } = null!;
 
     private void ReiniciarPagina() => pagina = 1;
     private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
@@ -59,6 +65,7 @@
     {
         var rows = MovimientosFiltrados.Select(x => string.Join(",", Csv(x.FechaGeneracion.ToString("yyyy-MM-dd")), Csv(x.Cliente), Csv(x.Producto), Csv(x.Tipo), Csv(x.BaseComisionable.ToString("0.00")), Csv(x.ValorComision.ToString("0.00")), Csv(x.Estado), Csv(x.PeriodoLiquidacion), Csv(x.ReferenciaPago)));
         await DescargarCsvAsync("comisiones-aliado.csv", "Fecha,Cliente,Producto,Tipo,Base,Comision,Estado,Periodo,Referencia\n" + string.Join("\n", rows));
+        await AlertService.ShowSuccessAsync("El archivo CSV se descargó correctamente.", "Exportación lista");
     }
 
     private async Task DescargarCsvAsync(string fileName, string csv)
@@ -70,10 +77,25 @@
 
     private static string Csv(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync() => CargarAsync();
+
+    private async Task CargarAsync()
     {
-        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-        if (int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id))
-            modelo = await AliadoService.ObtenerComisionesAsync(id);
+        cargando = true;
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            modelo = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id)
+                ? await AliadoService.ObtenerComisionesAsync(id)
+                : null;
+        }
+        catch
+        {
+            modelo = null;
+        }
+        finally
+        {
+            cargando = false;
+        }
     }
 }

@@ -2890,6 +2890,7 @@ IF @resultado < 0
                         Serie = f.Serie,
                         Guiaremision = f.Guiaremision,
                         Notas = f.Notas,
+                         Mensaje = f.Mensaje,
                         Autorizado = f.Autorizado,
                         Estadoenviosri = f.Estadoenviosri,
                     },
@@ -3757,6 +3758,9 @@ IF @resultado < 0
         private static string ResolverTipoIdentificacionCompradorXml(string? tipoIdentificacionActual, string? identificacionComprador)
         {
             var digitos = new string((identificacionComprador ?? string.Empty).Where(char.IsDigit).ToArray());
+            if (digitos == "9999999999999")
+                return "07";
+
             if (digitos.Length == 10)
                 return "05";
 

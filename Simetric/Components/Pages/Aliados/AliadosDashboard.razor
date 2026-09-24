@@ -3,9 +3,13 @@
 
 <PageTitle>Inicio | Portal de Aliados</PageTitle>
 
-@if (modelo is null)
+@if (cargando)
 {
-    <div class="ally-empty">No se pudo cargar la información del aliado.</div>
+    <div class="ally-empty"><span class="spinner-border spinner-border-sm"></span> Cargando resumen...</div>
+}
+else if (modelo is null)
+{
+    <div class="ally-empty">No se pudo cargar la información del aliado.<br /><button type="button" class="ally-button" @onclick="CargarAsync">Reintentar</button></div>
 }
 else
 {
@@ -97,6 +101,7 @@ else
 
 @code {
     private AliadoDashboardDto? modelo;
+    private bool cargando = true;
     private string EnlaceAbsoluto => modelo is null ? string.Empty : $"{NavManager.BaseUri.TrimEnd('/')}{modelo.LinkPersonalizado}";
     private string PrimerNombre => modelo?.Contexto.Nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Aliado";
 
@@ -104,18 +109,37 @@ else
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
     [Inject] private NavigationManager NavManager { get; set; } = null!;
     [Inject] private IJSRuntime JS { get; set; } = null!;
+    [Inject] private SweetAlertService AlertService { get; set; } = null!;
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync() => CargarAsync();
+
+    private async Task CargarAsync()
     {
-        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-        if (int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id))
-            modelo = await AliadoService.ObtenerDashboardAsync(id);
+        cargando = true;
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            modelo = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id)
+                ? await AliadoService.ObtenerDashboardAsync(id)
+                : null;
+        }
+        catch
+        {
+            modelo = null;
+        }
+        finally
+        {
+            cargando = false;
+        }
     }
 
     private async Task CopiarEnlace()
     {
         if (!string.IsNullOrWhiteSpace(EnlaceAbsoluto))
+        {
             await JS.InvokeVoidAsync("navigator.clipboard.writeText", EnlaceAbsoluto);
+            await AlertService.ShowSuccessAsync("El enlace quedó copiado en el portapapeles.", "Enlace copiado");
+        }
     }
 
     private static string Dinero(decimal valor) => $"$ {valor:N2}";

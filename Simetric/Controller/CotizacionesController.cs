@@ -92,7 +92,7 @@ public sealed class CotizacionesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<CotizacionDto>>> Listar([FromQuery] int userId)
+    public async Task<ActionResult<List<CotizacionDto>>> Listar([FromQuery] int? userId = null)
     {
         var ownerId = await GetOwnerIdAsync(userId);
         if (ownerId is null) return Unauthorized();
@@ -113,7 +113,7 @@ public sealed class CotizacionesController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<CotizacionDto>> Crear([FromQuery] int userId, [FromBody] CotizacionInputDto input)
+    public async Task<ActionResult<CotizacionDto>> Crear([FromQuery] int? userId, [FromBody] CotizacionInputDto input)
     {
         var ownerId = await GetOwnerIdAsync(userId);
         if (ownerId is null) return Unauthorized();
@@ -123,7 +123,7 @@ public sealed class CotizacionesController : ControllerBase
     }
 
     [HttpPut("{id:int}")]
-    public async Task<ActionResult<CotizacionDto>> Editar(int id, [FromQuery] int userId, [FromBody] CotizacionInputDto input)
+    public async Task<ActionResult<CotizacionDto>> Editar(int id, [FromQuery] int? userId, [FromBody] CotizacionInputDto input)
     {
         var ownerId = await GetOwnerIdAsync(userId);
         if (ownerId is null) return Unauthorized();
@@ -139,7 +139,7 @@ public sealed class CotizacionesController : ControllerBase
     }
 
     [HttpPost("{id:int}/aprobar")]
-    public async Task<IActionResult> Aprobar(int id, [FromQuery] int userId)
+    public async Task<IActionResult> Aprobar(int id, [FromQuery] int? userId = null)
     {
         var ownerId = await GetOwnerIdAsync(userId);
         if (ownerId is null) return Unauthorized();
@@ -156,7 +156,7 @@ public sealed class CotizacionesController : ControllerBase
     }
 
     [HttpPost("{id:int}/dar-baja")]
-    public async Task<IActionResult> DarDeBaja(int id, [FromQuery] int userId)
+    public async Task<IActionResult> DarDeBaja(int id, [FromQuery] int? userId = null)
     {
         var ownerId = await GetOwnerIdAsync(userId);
         if (ownerId is null) return Unauthorized();
@@ -172,7 +172,7 @@ public sealed class CotizacionesController : ControllerBase
     }
 
     [HttpGet("{id:int}/pdf")]
-    public async Task<IActionResult> Pdf(int id, [FromQuery] int userId)
+    public async Task<IActionResult> Pdf(int id, [FromQuery] int? userId = null)
     {
         var ownerId = await GetOwnerIdAsync(userId);
         if (ownerId is null) return Unauthorized();
@@ -275,7 +275,34 @@ public sealed class CotizacionesController : ControllerBase
             cotizacion.CodFactura = factura.Codfactura;
             await _db.SaveChangesAsync();
 
-            return Ok(new { mensaje = "Factura emitida correctamente.", codfactura = factura.Codfactura, sri });
+            var facturaEmitida = await _facturacion.GetFacturaCompletaUsuarioAsync(factura.Codfactura, userId);
+            var facturaEmitidaData = facturaEmitida?.Factura;
+            var autorizada = facturaEmitidaData is not null &&
+                DocumentoAutorizacionHelper.EstaAutorizado(facturaEmitidaData.Autorizado, facturaEmitidaData.Estadoenviosri);
+            string? xmlUrl = null;
+            try
+            {
+                xmlUrl = await _facturacion.AsegurarXmlFacturaUsuarioAsync(factura.Codfactura, userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "La factura {FacturaId} quedó guardada sin URL de XML.", factura.Codfactura);
+            }
+
+            return Ok(new
+            {
+                mensaje = autorizada
+                    ? "Factura emitida y autorizada correctamente."
+                    : "Factura emitida. La autorización SRI quedó pendiente o requiere corrección.",
+                codfactura = factura.Codfactura,
+                numeroComprobante = facturaEmitidaData?.Numfactura ?? factura.Numfactura,
+                autorizada,
+                estadoSri = facturaEmitidaData?.Estadoenviosri,
+                mensajeSri = facturaEmitidaData?.Mensaje,
+                claveAcceso = facturaEmitidaData?.Codclave,
+                xmlUrl,
+                sri
+            });
         }
         catch (Exception ex)
         {
@@ -306,6 +333,11 @@ public sealed class CotizacionesController : ControllerBase
         var cliente = await _db.Clientes.AsNoTracking().FirstOrDefaultAsync(x => x.Codcliente == input.IdCliente && x.Usuario == ownerId && (x.Estado == null || x.Estado == true));
         if (cliente is null) return (null, null, "El cliente seleccionado no está disponible.");
 
+        var formaPago = input.FormaPago.Trim();
+        var formaPagoValida = await _db.FormasPago.AsNoTracking()
+            .AnyAsync(x => x.Codigo == formaPago && x.Estado == true && x.TipoVenta == true);
+        if (!formaPagoValida) return (null, null, "La forma de pago seleccionada no está disponible.");
+
         var codigos = input.Detalles.Select(x => x.CodigoProducto).Distinct().ToList();
         var productos = await _db.Productos.AsNoTracking()
             .Where(x => x.Idusuario == ownerId && (x.Estado == null || x.Estado == true) && codigos.Contains(x.Codigo))
@@ -328,8 +360,10 @@ public sealed class CotizacionesController : ControllerBase
         {
             var producto = productos[item.CodigoProducto];
             var tarifa = item.TarifaIva.HasValue
-                ? Math.Clamp(item.TarifaIva.Value, 0, 100)
+                ? NormalizarTarifaIva(item.TarifaIva.Value)
                 : ObtenerTarifaIva(producto.Porcentajeimpuesto);
+            if (!EsTarifaIvaSri(tarifa))
+                return (null, null, "La tarifa de IVA seleccionada no es válida para una factura electrónica SRI.");
             var precio = decimal.Round(item.PrecioUnitario, 2, MidpointRounding.AwayFromZero);
             var descuento = decimal.Round(item.Descuento, 2, MidpointRounding.AwayFromZero);
             var baseImponible = Math.Max(0m, precio * item.Cantidad - descuento);
@@ -432,10 +466,12 @@ public sealed class CotizacionesController : ControllerBase
         var porcentaje = TaxRateHelper.ParsePercentOrZero(valor);
         return (int)Math.Round(porcentaje, 0, MidpointRounding.AwayFromZero) switch
         {
+            0 => 0,
+            5 => 5,
+            8 => 8,
             2 => 12,
             3 => 14,
             4 => 15,
-            5 => 5,
             10 => 13,
             13 => 13,
             14 => 14,
@@ -443,6 +479,17 @@ public sealed class CotizacionesController : ControllerBase
             _ => (int)Math.Round(porcentaje, 0, MidpointRounding.AwayFromZero)
         };
     }
+
+    private static int NormalizarTarifaIva(int tarifa) => tarifa switch
+    {
+        2 => 12,
+        3 => 14,
+        4 => 15,
+        10 => 13,
+        _ => Math.Clamp(tarifa, 0, 100)
+    };
+
+    private static bool EsTarifaIvaSri(int tarifa) => tarifa is 0 or 5 or 8 or 12 or 13 or 14 or 15;
 
     private static CotizacionDto Mapear(Cotizacion x, Cliente? cliente) => new()
     {

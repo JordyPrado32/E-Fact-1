@@ -55,22 +55,22 @@ public sealed class LoginDestinationService
             }
         }
 
+        if (await EsAliadoAdministradorAsync(effectiveRoleId))
+        {
+            return AliadoPortalService.AdminRoute;
+        }
+
+        if (await EsAliadoAsync(userId, effectiveRoleId))
+        {
+            return AliadoPortalService.RootRoute;
+        }
+
         if (string.Equals(
                 effectiveRoleId?.ToString(),
                 "7",
                 StringComparison.OrdinalIgnoreCase))
         {
             return "/backoffice";
-        }
-
-        if (await EsAliadoAdministradorAsync(effectiveRoleId))
-        {
-            return AliadoPortalService.AdminRoute;
-        }
-
-        if (await EsAliadoAsync(effectiveRoleId))
-        {
-            return AliadoPortalService.RootRoute;
         }
 
         if (string.Equals(
@@ -95,17 +95,21 @@ public sealed class LoginDestinationService
         return "/dashboard";
     }
 
-    private async Task<bool> EsAliadoAsync(int? roleId)
+    private async Task<bool> EsAliadoAsync(int userId, int? roleId)
     {
-        if (roleId is not > 0)
-            return false;
-
         await using var context = await _dbFactory.CreateDbContextAsync();
-        return await context.TipoUsuario
+        if (roleId is > 0 && await context.TipoUsuario
+                .AsNoTracking()
+                .AnyAsync(x => x.IdTipoUsuario == roleId.Value &&
+                              x.Estado == true &&
+                              x.NombreTipo == AliadoPortalService.RoleName))
+            return true;
+
+        return await context.AliadoPortalUsuariosRoles
             .AsNoTracking()
-            .AnyAsync(x => x.IdTipoUsuario == roleId.Value &&
-                          x.Estado == true &&
-                          x.NombreTipo == AliadoPortalService.RoleName);
+            .Where(x => x.IdUsuario == userId)
+            .Join(context.AliadoPortalRoles.AsNoTracking().Where(x => x.Activo), x => x.IdRol, x => x.IdRol, (_, role) => role)
+            .AnyAsync(x => x.Nombre == AliadoPortalService.RoleName);
     }
 
     private async Task<bool> EsAliadoAdministradorAsync(int? roleId)

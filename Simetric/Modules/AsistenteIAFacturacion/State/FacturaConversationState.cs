@@ -37,6 +37,7 @@ public static class FacturaConversationStates
     public const string EsperandoConfirmacion = "EsperandoConfirmacion";
     public const string FacturaEmitida = "FacturaEmitida";
     public const string Cancelado = "Cancelado";
+    public const string ConfirmacionExpirada = "ConfirmacionExpirada";
 }
 
 public sealed class PendingSelectionState

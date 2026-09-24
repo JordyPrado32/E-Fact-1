@@ -69,7 +69,7 @@
     }
 
     <section class="ally-panel">
-        <div class="ally-panel-heading"><div><span class="ally-label">LIBRO MAYOR</span><h3>Comisiones</h3></div><div style="display:flex;gap:8px;flex-wrap:wrap"><input class="ally-admin-input" style="max-width:240px" @bind="referenciaPago" placeholder="Referencia del pago" /><input class="ally-admin-input" style="max-width:240px" @bind="motivoReversion" placeholder="Motivo de reversión" /><button class="ally-button" type="button" @onclick="LiquidarSeleccionadasAsync" disabled="@(liquidando || comisionesSeleccionadas.Count == 0)">@(liquidando ? "Liquidando..." : $"Liquidar seleccionadas ({comisionesSeleccionadas.Count})")</button></div></div>
+        <div class="ally-panel-heading"><div><span class="ally-label">LIBRO MAYOR</span><h3>Comisiones</h3></div><div class="ally-admin-tools"><input class="ally-admin-input" style="max-width:240px" @bind="referenciaPago" placeholder="Referencia del pago" /><input class="ally-admin-input" style="max-width:240px" @bind="motivoReversion" placeholder="Motivo de reversión" /><button class="ally-button" type="button" @onclick="LiquidarSeleccionadasAsync" disabled="@(liquidando || comisionesSeleccionadas.Count == 0)">@(liquidando ? "Liquidando..." : $"Liquidar seleccionadas ({comisionesSeleccionadas.Count})")</button></div></div>
         @if (comisiones.Count == 0)
         {
             <div class="ally-empty">No hay comisiones generadas con los pagos actuales.</div>
@@ -84,7 +84,7 @@
             </tbody></table></div>
             @if (TotalPaginasComisiones > 1)
             {
-                <div style="display:flex;align-items:center;gap:10px;margin-top:12px"><button class="ally-table-action" type="button" @onclick="() => CambiarPaginaComisiones(-1)" disabled="@(paginaComisiones <= 1)">Anterior</button><span>Página @paginaComisiones de @TotalPaginasComisiones</span><button class="ally-table-action" type="button" @onclick="() => CambiarPaginaComisiones(1)" disabled="@(paginaComisiones >= TotalPaginasComisiones)">Siguiente</button></div>
+                <div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPaginaComisiones(-1)" disabled="@(paginaComisiones <= 1)">Anterior</button><span>Página @paginaComisiones de @TotalPaginasComisiones</span><button class="ally-table-action" type="button" @onclick="() => CambiarPaginaComisiones(1)" disabled="@(paginaComisiones >= TotalPaginasComisiones)">Siguiente</button></div>
             }
         }
     </section>
@@ -93,6 +93,7 @@
 @code {
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
+    [Inject] private SweetAlertService AlertService { get; set; } = null!;
 
     private List<AliadoAdminRow> aliados = new();
     private string tipoCuenta = "aliado";
@@ -157,40 +158,62 @@
     {
         if (guardando) return;
         guardando = true;
-        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-        int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var actorId);
-        var resultado = await AliadoService.CrearCuentaAliadoAsync(actorId, nombre, email, password, porcentaje, tipoCuenta == "administrador");
-        mensaje = resultado.Message;
-        if (resultado.Success)
+        try
         {
-            nombre = email = password = string.Empty;
-            porcentaje = 30m;
-            await CargarAsync();
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var actorId);
+            var resultado = await AliadoService.CrearCuentaAliadoAsync(actorId, nombre, email, password, porcentaje, tipoCuenta == "administrador");
+            await MostrarResultadoAsync(resultado, "Cuenta creada");
+            if (resultado.Success)
+            {
+                nombre = email = password = string.Empty;
+                porcentaje = 30m;
+                await CargarAsync();
+            }
         }
-        guardando = false;
+        catch
+        {
+            await AlertService.ShowErrorAsync("No fue posible crear la cuenta. Inténtalo nuevamente.", "No se pudo crear");
+        }
+        finally
+        {
+            guardando = false;
+        }
     }
 
     private async Task GuardarConfiguracionAsync()
     {
         if (guardandoConfiguracion) return;
         guardandoConfiguracion = true;
-        var resultado = await AliadoService.ActualizarConfiguracionPortalAsync(actorId, porcentajeVentaNueva, porcentajeRenovacionAliado, porcentajeRenovacionNumerica, diasIntervencionNumerica);
-        mensaje = resultado.Message;
-        if (resultado.Success) await CargarConfiguracionAsync();
-        guardandoConfiguracion = false;
+        try
+        {
+            var resultado = await AliadoService.ActualizarConfiguracionPortalAsync(actorId, porcentajeVentaNueva, porcentajeRenovacionAliado, porcentajeRenovacionNumerica, diasIntervencionNumerica);
+            await MostrarResultadoAsync(resultado, "Regla guardada");
+            if (resultado.Success) await CargarConfiguracionAsync();
+        }
+        catch
+        {
+            await AlertService.ShowErrorAsync("No fue posible guardar la regla. Inténtalo nuevamente.", "No se pudo guardar");
+        }
+        finally
+        {
+            guardandoConfiguracion = false;
+        }
     }
 
     private async Task AprobarAsync(AliadoAdminComisionRow comision)
     {
+        if (!await AlertService.ConfirmAsync($"¿Aprobar la comisión de {comision.Aliado} por $ {comision.Valor:N2}?", "Aprobar comisión", "Sí, aprobar")) return;
         var resultado = await AliadoService.AprobarComisionAsync(actorId, comision.IdComision);
-        mensaje = resultado.Message;
+        await MostrarResultadoAsync(resultado, "Comisión aprobada");
         if (resultado.Success) await CargarComisionesAsync();
     }
 
     private async Task PagarAsync(AliadoAdminComisionRow comision)
     {
+        if (!await AlertService.ConfirmAsync($"¿Registrar como pagada la comisión de {comision.Aliado} por $ {comision.Valor:N2}?", "Registrar pago", "Sí, registrar pago")) return;
         var resultado = await AliadoService.PagarComisionAsync(actorId, comision.IdComision, referenciaPago);
-        mensaje = resultado.Message;
+        await MostrarResultadoAsync(resultado, "Pago registrado");
         if (resultado.Success)
         {
             referenciaPago = string.Empty;
@@ -219,22 +242,39 @@
     private async Task LiquidarSeleccionadasAsync()
     {
         if (liquidando || comisionesSeleccionadas.Count == 0) return;
+        if (!await AlertService.ConfirmAsync($"Se marcarán {comisionesSeleccionadas.Count} comisión(es) como pagadas. ¿Deseas continuar?", "Liquidar comisiones", "Sí, liquidar")) return;
         liquidando = true;
-        var resultado = await AliadoService.LiquidarComisionesAsync(actorId, comisionesSeleccionadas.ToArray(), referenciaPago);
-        mensaje = resultado.Message;
-        if (resultado.Success)
+        try
         {
-            referenciaPago = string.Empty;
-            comisionesSeleccionadas.Clear();
-            await CargarComisionesAsync();
+            var resultado = await AliadoService.LiquidarComisionesAsync(actorId, comisionesSeleccionadas.ToArray(), referenciaPago);
+            await MostrarResultadoAsync(resultado, "Comisiones liquidadas");
+            if (resultado.Success)
+            {
+                referenciaPago = string.Empty;
+                comisionesSeleccionadas.Clear();
+                await CargarComisionesAsync();
+            }
         }
-        liquidando = false;
+        catch
+        {
+            await AlertService.ShowErrorAsync("No fue posible liquidar las comisiones. Inténtalo nuevamente.", "No se pudo liquidar");
+        }
+        finally
+        {
+            liquidando = false;
+        }
     }
 
     private async Task RevertirAsync(AliadoAdminComisionRow comision)
     {
+        if (string.IsNullOrWhiteSpace(motivoReversion))
+        {
+            await AlertService.ShowWarningAsync("Escribe el motivo de reversión antes de continuar.", "Motivo requerido");
+            return;
+        }
+        if (!await AlertService.ConfirmAsync($"La comisión de {comision.Aliado} por $ {comision.Valor:N2} será revertida. Esta acción quedará registrada. ¿Continuar?", "Revertir comisión", "Sí, revertir")) return;
         var resultado = await AliadoService.RevertirComisionAsync(actorId, comision.IdComision, motivoReversion);
-        mensaje = resultado.Message;
+        await MostrarResultadoAsync(resultado, "Comisión revertida");
         if (resultado.Success)
         {
             motivoReversion = string.Empty;
@@ -248,7 +288,7 @@
         if (valor is not ChangeEventArgs change || !decimal.TryParse(change.Value?.ToString(), out var porcentaje))
             return;
         var resultado = await AliadoService.ActualizarPorcentajeAliadoAsync(actorId, aliado.IdVendedor, porcentaje);
-        mensaje = resultado.Message;
+        await MostrarResultadoAsync(resultado, "Porcentaje actualizado");
         if (resultado.Success) await CargarAsync();
     }
 
@@ -257,12 +297,33 @@
         if (guardandoEstado)
             return;
 
-        guardandoEstado = true;
         var activo = !(aliado.Activo && aliado.UsuarioActivo);
-        var resultado = await AliadoService.ActualizarEstadoAliadoAsync(actorId, aliado.IdVendedor, activo);
+        var accion = activo ? "activar" : "desactivar";
+        if (!await AlertService.ConfirmAsync($"¿Deseas {accion} el canal de {aliado.Nombre}?", $"Confirmar {accion}", $"Sí, {accion}")) return;
+
+        guardandoEstado = true;
+        try
+        {
+            var resultado = await AliadoService.ActualizarEstadoAliadoAsync(actorId, aliado.IdVendedor, activo);
+            await MostrarResultadoAsync(resultado, activo ? "Canal activado" : "Canal desactivado");
+            if (resultado.Success) await CargarAsync();
+        }
+        catch
+        {
+            await AlertService.ShowErrorAsync("No fue posible cambiar el estado del canal. Inténtalo nuevamente.", "No se pudo actualizar");
+        }
+        finally
+        {
+            guardandoEstado = false;
+        }
+    }
+
+    private async Task MostrarResultadoAsync((bool Success, string Message) resultado, string tituloExito)
+    {
         mensaje = resultado.Message;
         if (resultado.Success)
-            await CargarAsync();
-        guardandoEstado = false;
+            await AlertService.ShowSuccessAsync(resultado.Message, tituloExito);
+        else
+            await AlertService.ShowErrorAsync(resultado.Message, "No se pudo completar");
     }
 }

@@ -15,7 +15,7 @@
     </div>
     @if (!string.IsNullOrWhiteSpace(mensaje)) { <div class="alert @(exito ? "alert-success" : "alert-danger")">@mensaje</div> }
     <div class="row g-4">
-        <div class="col-lg-4"><section class="card border-0 shadow-sm"><div class="card-body"><h5>Nuevo aliado</h5><p class="text-muted small">La cuenta iniciará con cambio de contraseña obligatorio.</p><label class="form-label">Nombre comercial</label><input class="form-control mb-3" @bind="nombre" placeholder="Ej. Distribuidor Costa" /><label class="form-label">Correo de acceso</label><input type="email" class="form-control mb-3" @bind="email" /><label class="form-label">Clave inicial</label><input type="password" class="form-control mb-3" @bind="password" /><label class="form-label">Porcentaje base</label><div class="input-group mb-3"><input type="number" class="form-control" min="0" max="100" step=".01" @bind="porcentaje" /><span class="input-group-text">%</span></div><button class="btn btn-primary w-100" @onclick="Crear" disabled="@guardando">@(guardando ? "Creando..." : "Crear cuenta de aliado")</button></div></section></div>
+        <div class="col-lg-4"><section class="card border-0 shadow-sm"><div class="card-body"><h5>Nuevo aliado</h5><p class="text-muted small">La cuenta iniciará con cambio de contraseña obligatorio.</p><label class="form-label">Nombre comercial</label><input class="form-control mb-3" @bind="nombre" placeholder="Ej. Distribuidor Costa" /><label class="form-label">Correo de acceso</label><input type="email" class="form-control mb-3" @bind="email" /><label class="form-label">Clave inicial</label><input type="password" class="form-control mb-3" @bind="password" /><label class="form-label">Porcentaje base</label><div class="input-group mb-3"><input type="number" class="form-control" min="0" max="100" step=".01" @bind="porcentaje" /><span class="input-group-text">%</span></div><button class="btn btn-primary w-100" @onclick="Crear" disabled="@guardando">@(guardando ? "Creando..." : "Crear cuenta de aliado")</button><hr class="my-4" /><h6>Añadir vendedor existente</h6><p class="text-muted small">Conserva su tipo de vendedor y habilita su acceso al Portal de Aliados.</p><select class="form-select mb-3" @bind="idVendedorSeleccionado"><option value="0">Selecciona un vendedor</option>@foreach (var vendedor in vendedoresDisponibles) { <option value="@vendedor.IdVendedor">@vendedor.Nombre (@vendedor.Email)</option> }</select><button class="btn btn-outline-primary w-100" @onclick="AgregarVendedorComoAliado" disabled="@(guardando || idVendedorSeleccionado <= 0)">Añadir como aliado</button></div></section></div>
         <div class="col-lg-8"><section class="card border-0 shadow-sm"><div class="card-body"><h5 class="mb-3">Aliados registrados</h5><div class="table-responsive"><table class="table align-middle"><thead><tr><th>Aliado</th><th>Correo</th><th>Canal</th><th>Comisión</th><th>Estado</th></tr></thead><tbody>@if (aliados.Count == 0) { <tr><td colspan="5" class="text-center text-muted py-4">No hay aliados registrados.</td></tr> } else { @foreach (var aliado in aliados) { <tr @key="aliado.IdVendedor"><td><strong>@aliado.Nombre</strong></td><td>@(aliado.Usuario ?? "Sin cuenta")</td><td><code>@aliado.CodigoReferencia</code></td><td>@aliado.PorcentajeBase.ToString("0.##")%</td><td><span class="badge @(aliado.Activo ? "text-bg-success" : "text-bg-secondary")">@(aliado.Activo ? "Activo" : "Inactivo")</span></td></tr> } }</tbody></table></div></div></section></div>
     </div>
 </div>
@@ -26,13 +26,38 @@
     private string email = string.Empty;
     private string password = string.Empty;
     private decimal porcentaje = 30m;
+    private int idVendedorSeleccionado;
+    private List<AliadoVendedorDisponible> vendedoresDisponibles = new();
     private string? mensaje;
     private bool exito;
     private bool guardando;
 
     protected override async Task OnInitializedAsync() => await CargarAsync();
 
-    private async Task CargarAsync() => aliados = (await AliadoService.ListarAliadosAsync()).ToList();
+    private async Task CargarAsync()
+    {
+        aliados = (await AliadoService.ListarAliadosAsync()).ToList();
+        vendedoresDisponibles = (await AliadoService.ListarVendedoresDisponiblesComoAliadosAsync()).ToList();
+    }
+
+    private async Task AgregarVendedorComoAliado()
+    {
+        if (guardando || idVendedorSeleccionado <= 0)
+            return;
+
+        guardando = true;
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var actorId);
+        var resultado = await AliadoService.AsociarVendedorComoAliadoAsync(actorId, idVendedorSeleccionado);
+        exito = resultado.Success;
+        mensaje = resultado.Message;
+        if (resultado.Success)
+        {
+            idVendedorSeleccionado = 0;
+            await CargarAsync();
+        }
+        guardando = false;
+    }
 
     private async Task Crear()
     {

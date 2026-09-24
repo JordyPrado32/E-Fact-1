@@ -460,7 +460,8 @@ public sealed class AliadoPortalService
             .Where(x => !x.EsSistema && db.Usuarios.Any(u =>
                 u.IdVendedor == x.IdVendedor &&
                 u.Estado == true &&
-                u.IdTipoUsuarioNavigation!.NombreTipo == RoleName))
+                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
+                    db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName))))
             .Select(x => x.IdVendedor)
             .ToListAsync();
         foreach (var idVendedor in vendedorIds)
@@ -471,7 +472,8 @@ public sealed class AliadoPortalService
             .Where(x => db.Usuarios.Any(u =>
                 u.IdVendedor == x.IdVendedor &&
                 u.Estado == true &&
-                u.IdTipoUsuarioNavigation!.NombreTipo == RoleName))
+                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
+                    db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName))))
             .Join(db.VendedoresBackOffice.AsNoTracking(), x => x.IdVendedor, x => x.IdVendedor, (comision, aliado) => new { comision, aliado })
             .OrderByDescending(x => x.comision.FechaGeneracion)
             .Select(x => new AliadoAdminComisionRow
@@ -743,11 +745,18 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var idRolAliado = await db.AliadoPortalRoles
+            .Where(x => x.Nombre == RoleName && x.Activo)
+            .Select(x => (int?)x.IdRol)
+            .FirstOrDefaultAsync();
+        if (!idRolAliado.HasValue)
+            return Array.Empty<AliadoAdminRow>();
+
         return await db.VendedoresBackOffice
             .AsNoTracking()
             .Where(x => !x.EsSistema && db.Usuarios.Any(u =>
                 u.IdVendedor == x.IdVendedor &&
-                u.IdTipoUsuarioNavigation!.NombreTipo == RoleName))
+                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)))
             .OrderBy(x => x.Nombre)
             .Select(x => new AliadoAdminRow
             {
@@ -756,11 +765,97 @@ public sealed class AliadoPortalService
                 CodigoReferencia = x.CodigoReferencia,
                 Activo = x.Activo,
                 PorcentajeBase = x.PorcentajeBase,
-                IdUsuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && u.IdTipoUsuarioNavigation!.NombreTipo == RoleName).Select(u => (int?)u.IdUsuario).FirstOrDefault(),
-                Usuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && u.IdTipoUsuarioNavigation!.NombreTipo == RoleName).Select(u => u.Email).FirstOrDefault(),
-                UsuarioActivo = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && u.IdTipoUsuarioNavigation!.NombreTipo == RoleName).Select(u => u.Estado ?? false).FirstOrDefault()
+                IdUsuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)).Select(u => (int?)u.IdUsuario).FirstOrDefault(),
+                Usuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)).Select(u => u.Email).FirstOrDefault(),
+                UsuarioActivo = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)).Select(u => u.Estado ?? false).FirstOrDefault()
             })
             .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<AliadoVendedorDisponible>> ListarVendedoresDisponiblesComoAliadosAsync()
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var idRolAliado = await db.AliadoPortalRoles
+            .Where(x => x.Nombre == RoleName && x.Activo)
+            .Select(x => (int?)x.IdRol)
+            .FirstOrDefaultAsync();
+        if (!idRolAliado.HasValue)
+            return Array.Empty<AliadoVendedorDisponible>();
+
+        var vendedores = await db.VendedoresBackOffice
+            .AsNoTracking()
+            .Where(x => !x.EsSistema && x.Activo)
+            .ToListAsync();
+        var usuarios = await db.Usuarios
+            .AsNoTracking()
+            .Where(x => x.Estado == true && x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId &&
+                (x.TipoCliente == 1 || x.TipoCliente == 2 || x.TipoCliente == 3) &&
+                !db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario && ur.IdRol == idRolAliado.Value))
+            .Select(x => new { x.IdUsuario, x.IdVendedor, x.Nombres, x.Apellidos, x.Email })
+            .ToListAsync();
+
+        return usuarios
+            .Select(usuario =>
+            {
+                var vendedor = vendedores.FirstOrDefault(x => x.IdVendedor == usuario.IdVendedor) ??
+                               vendedores.FirstOrDefault(x => x.CodigoReferencia == $"usr_{usuario.IdUsuario}");
+                return vendedor is null
+                    ? null
+                    : new AliadoVendedorDisponible
+                    {
+                        IdVendedor = vendedor.IdVendedor,
+                        IdUsuario = usuario.IdUsuario,
+                        Nombre = vendedor.Nombre,
+                        Email = usuario.Email
+                    };
+            })
+            .Where(x => x is not null)
+            .Cast<AliadoVendedorDisponible>()
+            .OrderBy(x => x.Nombre)
+            .ToList();
+    }
+
+    public async Task<(bool Success, string Message)> AsociarVendedorComoAliadoAsync(int actorId, int idVendedor)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para asociar vendedores como aliados.");
+
+        var vendedor = await db.VendedoresBackOffice.FirstOrDefaultAsync(x => x.IdVendedor == idVendedor && !x.EsSistema && x.Activo);
+        if (vendedor is null)
+            return (false, "El vendedor no existe o está inactivo.");
+
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(x =>
+            x.Estado == true &&
+            x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId &&
+            (x.TipoCliente == 1 || x.TipoCliente == 2 || x.TipoCliente == 3) &&
+            (x.IdVendedor == idVendedor || vendedor.CodigoReferencia == $"usr_{x.IdUsuario}"));
+        if (usuario is null)
+            return (false, "El vendedor no tiene una cuenta activa asociable.");
+
+        var idRolAliado = await db.AliadoPortalRoles
+            .Where(x => x.Nombre == RoleName && x.Activo)
+            .Select(x => (int?)x.IdRol)
+            .FirstOrDefaultAsync();
+        if (!idRolAliado.HasValue)
+            return (false, "No se encontró el rol del Portal de Aliados.");
+
+        if (await db.AliadoPortalUsuariosRoles.AnyAsync(x => x.IdUsuario == usuario.IdUsuario))
+            return (false, "El vendedor ya tiene una asociación en el Portal de Aliados.");
+
+        usuario.IdVendedor = vendedor.IdVendedor;
+        db.AliadoPortalUsuariosRoles.Add(new AliadoPortalUsuarioRol
+        {
+            IdUsuario = usuario.IdUsuario,
+            IdRol = idRolAliado.Value
+        });
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "ASOCIAR", null,
+            new { usuario.IdUsuario, vendedor.IdVendedor },
+            new { Modulo = "PortalAliados", Entidad = "AsociacionVendedorAliado" });
+        return (true, $"{vendedor.Nombre} fue añadido como aliado sin cambiar su tipo de vendedor.");
     }
 
     public async Task<(bool Success, string Message)> ActualizarEstadoAliadoAsync(int actorId, int idVendedor, bool activo)
@@ -771,13 +866,40 @@ public sealed class AliadoPortalService
             return (false, "No tienes permisos para cambiar el estado del aliado.");
 
         var aliado = await db.VendedoresBackOffice.FirstOrDefaultAsync(x => x.IdVendedor == idVendedor && !x.EsSistema);
-        var usuarios = await db.Usuarios.Where(x => x.IdVendedor == idVendedor && x.IdTipoUsuarioNavigation!.NombreTipo == RoleName).ToListAsync();
+        var idRolAliado = await db.AliadoPortalRoles
+            .Where(x => x.Nombre == RoleName && x.Activo)
+            .Select(x => (int?)x.IdRol)
+            .FirstOrDefaultAsync();
+        var idTipoAliado = await db.TipoUsuario
+            .Where(x => x.NombreTipo == RoleName && x.Estado == true)
+            .Select(x => (int?)x.IdTipoUsuario)
+            .FirstOrDefaultAsync();
+        var usuarios = idRolAliado.HasValue
+            ? await db.Usuarios.Where(x => x.IdVendedor == idVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario && ur.IdRol == idRolAliado.Value)).ToListAsync()
+            : new List<Usuario>();
         if (aliado is null || usuarios.Count == 0)
             return (false, "El aliado no existe o no tiene una cuenta comercial.");
 
-        aliado.Activo = activo;
         foreach (var usuario in usuarios)
-            usuario.Estado = activo;
+        {
+            if (usuario.IdTipoUsuario == idTipoAliado)
+            {
+                aliado.Activo = activo;
+                usuario.Estado = activo;
+                continue;
+            }
+
+            var asociacion = await db.AliadoPortalUsuariosRoles
+                .FirstOrDefaultAsync(x => x.IdUsuario == usuario.IdUsuario && x.IdRol == idRolAliado!.Value);
+            if (activo && asociacion is null)
+            {
+                db.AliadoPortalUsuariosRoles.Add(new AliadoPortalUsuarioRol { IdUsuario = usuario.IdUsuario, IdRol = idRolAliado.Value });
+            }
+            else if (!activo && asociacion is not null)
+            {
+                db.AliadoPortalUsuariosRoles.Remove(asociacion);
+            }
+        }
 
         await db.SaveChangesAsync();
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { IdVendedor = idVendedor }, new { Activo = activo }, new { Modulo = "PortalAliados", Entidad = "EstadoAliado" });
@@ -960,7 +1082,8 @@ public sealed class AliadoPortalService
         var vendedorIds = await db.VendedoresBackOffice.AsNoTracking()
             .Where(x => !x.EsSistema && x.Activo && db.Usuarios.Any(u =>
                 u.IdVendedor == x.IdVendedor && u.Estado == true &&
-                u.IdTipoUsuarioNavigation!.NombreTipo == RoleName))
+                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
+                    db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName))))
             .Select(x => x.IdVendedor)
             .ToListAsync();
 
@@ -973,7 +1096,9 @@ public sealed class AliadoPortalService
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
         var aliados = await db.Usuarios.AsNoTracking()
-            .Where(x => x.Estado == true && x.IdVendedor.HasValue && x.IdTipoUsuarioNavigation!.NombreTipo == RoleName)
+            .Where(x => x.Estado == true && x.IdVendedor.HasValue &&
+                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario &&
+                    db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName)))
             .Select(x => new { IdVendedor = x.IdVendedor!.Value, x.Email, Nombre = (x.Nombres ?? "") + " " + (x.Apellidos ?? "") })
             .ToListAsync();
         var hoy = DateTime.Today;
@@ -1496,6 +1621,14 @@ public sealed class AliadoAdminRow
     public bool UsuarioActivo { get; init; }
     public decimal PorcentajeBase { get; init; }
     public string? Usuario { get; init; }
+}
+
+public sealed class AliadoVendedorDisponible
+{
+    public int IdVendedor { get; init; }
+    public int IdUsuario { get; init; }
+    public string Nombre { get; init; } = string.Empty;
+    public string Email { get; init; } = string.Empty;
 }
 
 internal sealed class FacturaPortalRow

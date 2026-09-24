@@ -17,17 +17,35 @@ public sealed class FacturacionTools
     private readonly IProductoService _productoService;
     private readonly IFacturacionService _facturacionService;
     private readonly AbonoService _abonoService;
+    private readonly EmisionControlService _emisionControlService;
 
     public FacturacionTools(
         IClienteService clienteService,
         IProductoService productoService,
         IFacturacionService facturacionService,
-        AbonoService abonoService)
+        AbonoService abonoService,
+        EmisionControlService emisionControlService)
     {
         _clienteService = clienteService;
         _productoService = productoService;
         _facturacionService = facturacionService;
         _abonoService = abonoService;
+        _emisionControlService = emisionControlService;
+    }
+
+    public async Task<string?> ObtenerAdvertenciaConfiguracionEmisionAsync(int userId)
+    {
+        var estado = await _emisionControlService.ObtenerEstadoAsync(userId);
+        if (!estado.TieneEmisorActivo && !estado.TieneFirmaElectronica)
+            return "Antes de emitir, configura un emisor activo y una firma electrónica válida. No se puede solicitar confirmación hasta completar ambas configuraciones.";
+
+        if (!estado.TieneEmisorActivo)
+            return "No hay un emisor activo configurado. Configura el emisor antes de continuar con la emisión.";
+
+        if (!estado.TieneFirmaElectronica)
+            return "No hay una firma electrónica válida configurada. Carga o configura tu firma antes de continuar con la emisión.";
+
+        return null;
     }
 
     public async Task<ToolResultDto> BuscarClienteAsync(FacturaConversationState state, string query, CancellationToken cancellationToken)
@@ -568,19 +586,26 @@ public sealed class FacturacionTools
         return Task.FromResult(Ok(ToolDefinitions.CalcularTotales, $"Total recalculado: {state.Draft.Total:C2}.", state.Draft));
     }
 
-    public Task<ToolResultDto> ValidarFacturaAsync(FacturaConversationState state)
+    public async Task<ToolResultDto> ValidarFacturaAsync(FacturaConversationState state)
     {
         Recalculate(state.Draft);
         var errores = ValidateDraft(state.Draft);
         if (errores.Count > 0)
         {
             state.RequiereConfirmacion = false;
-            return Task.FromResult(Fail(ToolDefinitions.ValidarFactura, string.Join(" ", errores), errores));
+            return Fail(ToolDefinitions.ValidarFactura, string.Join(" ", errores), errores);
+        }
+
+        var configuracionAdvertencia = await ObtenerAdvertenciaConfiguracionEmisionAsync(state.UserId);
+        if (configuracionAdvertencia is not null)
+        {
+            state.RequiereConfirmacion = false;
+            return Fail(ToolDefinitions.ValidarFactura, configuracionAdvertencia, null, "emission_configuration_required");
         }
 
         state.Estado = FacturaConversationStates.EsperandoConfirmacion;
         state.RequiereConfirmacion = true;
-        return Task.FromResult(Ok(ToolDefinitions.ValidarFactura, "La factura está lista para confirmación final.", state.Draft));
+        return Ok(ToolDefinitions.ValidarFactura, "La factura está lista para confirmación final.", state.Draft);
     }
 
     public Task<ToolResultDto> ObtenerResumenFacturaAsync(FacturaConversationState state)
@@ -599,6 +624,10 @@ public sealed class FacturacionTools
 
         if (state.Estado != FacturaConversationStates.EsperandoConfirmacion)
             return Fail(ToolDefinitions.EmitirFactura, "La factura aún no está en estado de confirmación final.");
+
+        var configuracionAdvertencia = await ObtenerAdvertenciaConfiguracionEmisionAsync(state.UserId);
+        if (configuracionAdvertencia is not null)
+            return Fail(ToolDefinitions.EmitirFactura, configuracionAdvertencia, null, "emission_configuration_required");
 
         var result = await _facturacionService.EmitirAsync(state.UserId, state.Draft, BuildEmissionRequestId(state), cancellationToken);
         if (!result.Success)
@@ -1186,11 +1215,12 @@ public sealed class FacturacionTools
         Data = data
     };
 
-    private static ToolResultDto Fail(string toolName, string message, object? data = null) => new()
+    private static ToolResultDto Fail(string toolName, string message, object? data = null, string? codigoError = null) => new()
     {
         ToolName = toolName,
         Success = false,
         Message = message,
-        Data = data
+        Data = data,
+        CodigoError = codigoError
     };
 }

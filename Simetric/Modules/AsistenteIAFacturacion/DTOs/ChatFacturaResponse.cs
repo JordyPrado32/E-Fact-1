@@ -28,11 +28,17 @@ public sealed class ChatFacturaResponse
     [JsonPropertyName("emitida")]
     public bool Emitida { get; set; }
 
+    [JsonPropertyName("codigoError")]
+    public string? CodigoError { get; set; }
+
     [JsonPropertyName("accionDetectada")]
     public string? AccionDetectada { get; set; }
 
     [JsonPropertyName("rutaSugerida")]
     public string? RutaSugerida { get; set; }
+
+    [JsonPropertyName("rutasSugeridas")]
+    public List<string> RutasSugeridas { get; set; } = new();
 
     [JsonPropertyName("seleccionPendienteTipo")]
     public string? SeleccionPendienteTipo { get; set; }
