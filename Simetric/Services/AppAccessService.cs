@@ -229,9 +229,11 @@ public sealed class AppAccessService
     public static string ResolveRoute(AppServicio service) =>
         string.Equals(service.Clave, FreeServiceKey, StringComparison.OrdinalIgnoreCase)
             ? "/dashboard"
-            : string.IsNullOrWhiteSpace(service.RutaAcceso)
-                ? $"/servicios/{service.Clave}"
-                : service.RutaAcceso;
+            : string.Equals(service.Clave, AllyPortalServiceKey, StringComparison.OrdinalIgnoreCase)
+                ? AliadoPortalService.HomeRoute
+                : string.IsNullOrWhiteSpace(service.RutaAcceso)
+                    ? $"/servicios/{service.Clave}"
+                    : service.RutaAcceso;
 
     private async Task<AppServiceAccessDecision> EvaluateAccessAsync(
         AppDbContext context,
@@ -611,7 +613,7 @@ USING (VALUES
     (N'e-people',   N'E-PEOPLE',   N'Gestion de talento humano y colaboradores bajo suscripcion.',                  N'/servicios/e-people',CAST(1 AS bit), CAST(1 AS bit), 5, N'ri-team-line',        N'#6f42c1'),
     (N'e-sign',     N'E-Rúbrica',   N'E-Rúbrica para firma electronica y certificado digital de documentos en linea.', N'/e-rubrica',            CAST(0 AS bit), CAST(1 AS bit), 2, N'ri-key-2-line',        N'#2E7D32'),
     (N'backoffice', N'BACKOFFICE', N'Acceso exclusivo para administradores y personal de backoffice.',               N'/backoffice',        CAST(0 AS bit), CAST(1 AS bit), 6, N'ri-shield-user-line', N'#0a1c3e'),
-    (N'portal-aliados', N'PORTAL DE ALIADOS', N'Gestion comercial de clientes, renovaciones y comisiones para aliados.', N'/aliados', CAST(0 AS bit), CAST(1 AS bit), 7, N'ri-team-line', N'#7B1E3A')
+    (N'portal-aliados', N'PORTAL DE ALIADOS', N'Gestion comercial de clientes, renovaciones y comisiones para aliados.', N'/aliados/inicio', CAST(0 AS bit), CAST(1 AS bit), 7, N'ri-team-line', N'#7B1E3A')
 ) AS source ([Clave], [Nombre], [Descripcion], [RutaAcceso], [RequiereSuscripcion], [Estado], [OrdenVisual], [Icono], [ColorHex])
 ON target.[Clave] = source.[Clave]
 WHEN MATCHED THEN
