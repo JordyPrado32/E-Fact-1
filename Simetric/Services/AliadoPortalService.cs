@@ -172,6 +172,7 @@ public sealed class AliadoPortalService
 
         if (contexto.EsAdministrador &&
             !esRutaAdmin &&
+            !relative.Equals(HomeRoute, StringComparison.OrdinalIgnoreCase) &&
             !relative.Equals($"{RootRoute}/perfil", StringComparison.OrdinalIgnoreCase))
             return false;
 

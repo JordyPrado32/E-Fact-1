@@ -50,7 +50,7 @@ public sealed class LoginDestinationService
 
         if (await EsAliadoAdministradorAsync(effectiveRoleId))
         {
-            return AliadoPortalService.AdminRoute;
+            return AliadoPortalService.HomeRoute;
         }
 
         if (await EsAliadoAsync(userId, effectiveRoleId))
