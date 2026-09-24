@@ -90,16 +90,19 @@ public sealed class AliadoPortalService
             .Select(x => x.NombreTipo)
             .FirstOrDefaultAsync();
 
-        var esAdministrador = string.Equals(tipo, AdminRoleName, StringComparison.OrdinalIgnoreCase) ||
-                              usuario.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId;
-        if (!esAdministrador && !string.Equals(tipo, RoleName, StringComparison.OrdinalIgnoreCase))
-            return null;
-
         var rolPortal = await context.AliadoPortalUsuariosRoles.AsNoTracking()
             .Where(x => x.IdUsuario == userId)
             .Join(context.AliadoPortalRoles.AsNoTracking(), x => x.IdRol, x => x.IdRol, (_, rol) => rol)
             .FirstOrDefaultAsync();
         if (rolPortal is null || !rolPortal.Activo)
+            return null;
+
+        var esAdministrador = string.Equals(tipo, AdminRoleName, StringComparison.OrdinalIgnoreCase) ||
+                              usuario.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId;
+        var esAliadoPorTipo = string.Equals(tipo, RoleName, StringComparison.OrdinalIgnoreCase);
+        if (!esAdministrador && !esAliadoPorTipo &&
+            !string.Equals(rolPortal.Nombre, RoleName, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(rolPortal.Nombre, AdminRoleName, StringComparison.OrdinalIgnoreCase))
             return null;
 
         esAdministrador = string.Equals(rolPortal.Nombre, AdminRoleName, StringComparison.OrdinalIgnoreCase);

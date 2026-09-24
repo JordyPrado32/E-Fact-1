@@ -273,8 +273,13 @@ public sealed class AppAccessService
                               t.Estado == true &&
                               (t.NombreTipo == AliadoPortalService.RoleName ||
                                t.NombreTipo == AliadoPortalService.AdminRoleName));
+            var tieneRolPortalAsignado = await context.AliadoPortalUsuariosRoles
+                .AsNoTracking()
+                .Where(x => x.IdUsuario == userId)
+                .Join(context.AliadoPortalRoles.AsNoTracking().Where(x => x.Activo), x => x.IdRol, x => x.IdRol, (_, _) => true)
+                .AnyAsync();
 
-            if (isSuperAdmin || esAliado)
+            if (isSuperAdmin || esAliado || tieneRolPortalAsignado)
             {
                 return new AppServiceAccessDecision
                 {

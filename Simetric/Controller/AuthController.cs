@@ -481,6 +481,46 @@ namespace Simetric.Controllers
             return Ok(new { success = true });
         }
 
+        [HttpPost("accept-privacy-policy")]
+        public async Task<IActionResult> AcceptPrivacyPolicy([FromBody] AcceptPrivacyPolicyRequest request)
+        {
+            if (request is null || request.IdUsuario <= 0 ||
+                string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
+            {
+                return BadRequest("No fue posible validar la aceptación.");
+            }
+
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            var normalizedUsername = request.Username.Trim().ToLowerInvariant();
+            var usuario = await db.Usuarios.FirstOrDefaultAsync(u =>
+                u.IdUsuario == request.IdUsuario &&
+                ((!string.IsNullOrWhiteSpace(u.Email) && u.Email.ToLower() == normalizedUsername) ||
+                 (!string.IsNullOrWhiteSpace(u.Nombres) && u.Nombres.ToLower() == normalizedUsername)));
+
+            if (usuario is null || !HelperSecurity.VerifyPassword(request.Password.Trim(), usuario.PasswordHash))
+            {
+                return Unauthorized("Las credenciales ya no son válidas. Inicia sesión nuevamente.");
+            }
+
+            const string action = "Aceptación de Políticas de Privacidad";
+            var accepted = await db.Auditorias.AnyAsync(a => a.IdUsuario == usuario.IdUsuario && a.Accion == action);
+            if (!accepted)
+            {
+                db.Auditorias.Add(new Auditoria
+                {
+                    IdUsuario = usuario.IdUsuario,
+                    Fecha = DateTime.Now,
+                    Accion = action,
+                    ValoresPrevios = "{\"EstadoPrevio\":\"Pendiente de lectura\"}",
+                    ValorNuevo = "{\"EstadoNuevo\":\"Aceptado y Firmado\"}",
+                    Detalles = "{\"Modulo\":\"Seguridad/App móvil\",\"Mensaje\":\"El usuario confirmó la política de privacidad desde la aplicación móvil.\"}"
+                });
+                await db.SaveChangesAsync();
+            }
+
+            return Ok(new { success = true, message = "Política de privacidad aceptada." });
+        }
+
         private void StoreUserSession(Usuario userInDb, bool recordarme)
         {
             HttpContext.Session.SetInt32("Session.IdUsuario", userInDb.IdUsuario);
@@ -544,5 +584,12 @@ namespace Simetric.Controllers
         public string ClaveActual { get; set; } = "";
         public string NuevaClave { get; set; } = "";
         public string ConfirmarClave { get; set; } = "";
+    }
+
+    public class AcceptPrivacyPolicyRequest
+    {
+        public int IdUsuario { get; set; }
+        public string Username { get; set; } = "";
+        public string Password { get; set; } = "";
     }
 }
