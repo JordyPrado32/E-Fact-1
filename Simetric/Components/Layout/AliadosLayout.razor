@@ -66,9 +66,9 @@ else if (contexto is not null)
     private AliadoPortalContext? contexto;
     private List<AliadoPortalMenu> menus = new();
     private bool cargando = true;
-    private bool redireccionando;
     private bool mostrarMenuPerfil;
     private string? avatarUrl;
+    private readonly SemaphoreSlim validacionRutaLock = new(1, 1);
 
     protected override async Task OnInitializedAsync()
     {
@@ -102,38 +102,42 @@ else if (contexto is not null)
 
     private async Task ValidarRutaAsync()
     {
-        if (contexto is null || redireccionando)
+        if (contexto is null || cargando)
             return;
 
-        var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].TrimEnd('/');
-        var rutaPerfil = $"{AliadoPortalService.RootRoute.Trim('/')}/perfil";
-        if (contexto.EsAdministrador &&
-            !ruta.StartsWith(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase) &&
-            !ruta.Equals(rutaPerfil, StringComparison.OrdinalIgnoreCase))
+        await validacionRutaLock.WaitAsync();
+        try
         {
-            redireccionando = true;
-            NavManager.NavigateTo(AliadoPortalService.AdminRoute);
-            return;
-        }
-        var rutaAdmin = AliadoPortalService.AdminRoute.Trim('/');
-        if (!contexto.EsAdministrador &&
-            (ruta.Equals(rutaAdmin, StringComparison.OrdinalIgnoreCase) ||
-             ruta.StartsWith($"{rutaAdmin}/", StringComparison.OrdinalIgnoreCase)))
-        {
-            redireccionando = true;
-            NavManager.NavigateTo(AliadoPortalService.RootRoute);
-            return;
-        }
-        if (ruta.Equals("aliados", StringComparison.OrdinalIgnoreCase))
-            return;
+            var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].TrimEnd('/');
+            var rutaPerfil = $"{AliadoPortalService.RootRoute.Trim('/')}/perfil";
+            if (contexto.EsAdministrador &&
+                !ruta.StartsWith(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase) &&
+                !ruta.Equals(rutaPerfil, StringComparison.OrdinalIgnoreCase))
+            {
+                NavManager.NavigateTo(AliadoPortalService.AdminRoute, replace: true);
+                return;
+            }
+            var rutaAdmin = AliadoPortalService.AdminRoute.Trim('/');
+            if (!contexto.EsAdministrador &&
+                (ruta.Equals(rutaAdmin, StringComparison.OrdinalIgnoreCase) ||
+                 ruta.StartsWith($"{rutaAdmin}/", StringComparison.OrdinalIgnoreCase)))
+            {
+                NavManager.NavigateTo(AliadoPortalService.RootRoute, replace: true);
+                return;
+            }
+            if (ruta.Equals("aliados", StringComparison.OrdinalIgnoreCase))
+                return;
 
-        var rutaPermitida = menus.Any(x => ruta.Equals(x.Ruta.Trim('/'), StringComparison.OrdinalIgnoreCase) || ruta.StartsWith($"{x.Ruta.Trim('/')}/", StringComparison.OrdinalIgnoreCase));
-        if (!rutaPermitida)
-        {
-            redireccionando = true;
-            NavManager.NavigateTo(AliadoPortalService.RootRoute);
+            var rutaPermitida = menus.Any(x => ruta.Equals(x.Ruta.Trim('/'), StringComparison.OrdinalIgnoreCase) || ruta.StartsWith($"{x.Ruta.Trim('/')}/", StringComparison.OrdinalIgnoreCase));
+            if (!rutaPermitida)
+            {
+                NavManager.NavigateTo(AliadoPortalService.RootRoute, replace: true);
+            }
         }
-        await Task.CompletedTask;
+        finally
+        {
+            validacionRutaLock.Release();
+        }
     }
 
     private string ObtenerTitulo()
@@ -192,5 +196,8 @@ else if (contexto is not null)
         });
     }
 
-    public void Dispose() => NavManager.LocationChanged -= OnLocationChanged;
+    public void Dispose()
+    {
+        NavManager.LocationChanged -= OnLocationChanged;
+    }
 }

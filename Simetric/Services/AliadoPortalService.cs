@@ -13,6 +13,7 @@ public sealed class AliadoPortalService
     public const string AdminRoleName = "Administrador Portal de Aliados";
     public const string RootRoute = "/aliados";
     public const string AdminRoute = "/aliados/admin";
+    private const string BackOfficeInvoiceMarker = "[COMPRA_DOCS:";
 
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static readonly IReadOnlySet<string> ResultadosGestion = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -248,7 +249,7 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return false;
 
         var existentes = await db.AliadoPortalRolesMenus.Where(x => x.IdRol == idRol).ToListAsync();
@@ -452,16 +453,17 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return Array.Empty<AliadoAdminComisionRow>();
 
         var vendedorIds = await db.VendedoresBackOffice
             .AsNoTracking()
-            .Where(x => !x.EsSistema && db.Usuarios.Any(u =>
-                u.IdVendedor == x.IdVendedor &&
-                u.Estado == true &&
-                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
-                    db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName))))
+            .Where(x => !x.EsSistema &&
+                (db.Usuarios.Any(u =>
+                    u.IdVendedor == x.IdVendedor &&
+                    db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
+                        db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName))) ||
+                 db.AliadoComisiones.Any(c => c.IdVendedor == x.IdVendedor)))
             .Select(x => x.IdVendedor)
             .ToListAsync();
         foreach (var idVendedor in vendedorIds)
@@ -469,11 +471,7 @@ public sealed class AliadoPortalService
 
         return await db.AliadoComisiones
             .AsNoTracking()
-            .Where(x => db.Usuarios.Any(u =>
-                u.IdVendedor == x.IdVendedor &&
-                u.Estado == true &&
-                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
-                    db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName))))
+            .Where(x => db.VendedoresBackOffice.Any(v => v.IdVendedor == x.IdVendedor && !v.EsSistema))
             .Join(db.VendedoresBackOffice.AsNoTracking(), x => x.IdVendedor, x => x.IdVendedor, (comision, aliado) => new { comision, aliado })
             .OrderByDescending(x => x.comision.FechaGeneracion)
             .Select(x => new AliadoAdminComisionRow
@@ -508,7 +506,7 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para aprobar comisiones.");
 
         var comision = await db.AliadoComisiones.FirstOrDefaultAsync(x => x.IdComision == idComision);
@@ -539,7 +537,7 @@ public sealed class AliadoPortalService
             return (false, "La referencia de pago no puede superar 100 caracteres.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para registrar pagos.");
         var ids = idsComision.Distinct().ToArray();
         var comisiones = await db.AliadoComisiones.Where(x => ids.Contains(x.IdComision)).ToListAsync();
@@ -588,7 +586,7 @@ public sealed class AliadoPortalService
         if (string.IsNullOrWhiteSpace(motivo) || motivo.Length > 500)
             return (false, "Indica un motivo de reversión de hasta 500 caracteres.");
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para revertir comisiones.");
         var original = await db.AliadoComisiones.FirstOrDefaultAsync(x => x.IdComision == idComision);
         if (original is null)
@@ -625,7 +623,7 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
-        return await EsAdministradorInternoAsync(db, actorId)
+        return await EsAdministradorPortalAsync(db, actorId)
             ? await db.AliadoPortalConfiguraciones.AsNoTracking().SingleAsync(x => x.IdConfiguracion == 1)
             : null;
     }
@@ -638,14 +636,14 @@ public sealed class AliadoPortalService
         int diasIntervencionNumerica)
     {
         await EnsureSchemaAsync();
-        if (porcentajeVentaNueva is < 0 or > 100 ||
-            porcentajeRenovacionAliado is < 0 or > 100 ||
-            porcentajeRenovacionNumerica is < 0 or > 100 ||
+        if (!TryNormalizarPorcentaje(porcentajeVentaNueva, out porcentajeVentaNueva) ||
+            !TryNormalizarPorcentaje(porcentajeRenovacionAliado, out porcentajeRenovacionAliado) ||
+            !TryNormalizarPorcentaje(porcentajeRenovacionNumerica, out porcentajeRenovacionNumerica) ||
             diasIntervencionNumerica is < 0 or > 365)
             return (false, "La configuración de renovación no es válida.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para modificar la configuración.");
 
         var configuracion = await db.AliadoPortalConfiguraciones.SingleAsync(x => x.IdConfiguracion == 1);
@@ -668,11 +666,11 @@ public sealed class AliadoPortalService
     public async Task<(bool Success, string Message)> ActualizarPorcentajeAliadoAsync(int actorId, int idVendedor, decimal porcentajeBase)
     {
         await EnsureSchemaAsync();
-        if (porcentajeBase is < 0 or > 100)
+        if (!TryNormalizarPorcentaje(porcentajeBase, out porcentajeBase))
             return (false, "El porcentaje debe estar entre 0 y 100.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para modificar porcentajes.");
 
         var aliado = await db.VendedoresBackOffice.FirstOrDefaultAsync(x => x.IdVendedor == idVendedor && !x.EsSistema);
@@ -862,7 +860,7 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
-        if (!await EsAdministradorInternoAsync(db, actorId))
+        if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para cambiar el estado del aliado.");
 
         var aliado = await db.VendedoresBackOffice.FirstOrDefaultAsync(x => x.IdVendedor == idVendedor && !x.EsSistema);
@@ -874,30 +872,28 @@ public sealed class AliadoPortalService
             .Where(x => x.NombreTipo == RoleName && x.Estado == true)
             .Select(x => (int?)x.IdTipoUsuario)
             .FirstOrDefaultAsync();
-        var usuarios = idRolAliado.HasValue
-            ? await db.Usuarios.Where(x => x.IdVendedor == idVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario && ur.IdRol == idRolAliado.Value)).ToListAsync()
-            : new List<Usuario>();
+        var usuarios = await db.Usuarios
+            .Where(x => x.IdVendedor == idVendedor &&
+                (x.IdTipoUsuario == idTipoAliado ||
+                 x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId ||
+                 (idRolAliado.HasValue && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario && ur.IdRol == idRolAliado.Value))))
+            .ToListAsync();
         if (aliado is null || usuarios.Count == 0)
             return (false, "El aliado no existe o no tiene una cuenta comercial.");
 
+        aliado.Activo = activo;
         foreach (var usuario in usuarios)
         {
             if (usuario.IdTipoUsuario == idTipoAliado)
             {
-                aliado.Activo = activo;
                 usuario.Estado = activo;
                 continue;
             }
 
-            var asociacion = await db.AliadoPortalUsuariosRoles
-                .FirstOrDefaultAsync(x => x.IdUsuario == usuario.IdUsuario && x.IdRol == idRolAliado!.Value);
-            if (activo && asociacion is null)
+            if (activo && idRolAliado.HasValue && !await db.AliadoPortalUsuariosRoles
+                    .AnyAsync(x => x.IdUsuario == usuario.IdUsuario && x.IdRol == idRolAliado.Value))
             {
                 db.AliadoPortalUsuariosRoles.Add(new AliadoPortalUsuarioRol { IdUsuario = usuario.IdUsuario, IdRol = idRolAliado.Value });
-            }
-            else if (!activo && asociacion is not null)
-            {
-                db.AliadoPortalUsuariosRoles.Remove(asociacion);
             }
         }
 
@@ -916,7 +912,7 @@ public sealed class AliadoPortalService
             return (false, "Nombre, correo y una clave de al menos 8 caracteres son obligatorios.");
         if (nombre.Length > 120 || email.Length > 254 || !MailAddress.TryCreate(email, out _))
             return (false, "El nombre o el correo no tienen un formato válido.");
-        if (porcentajeBase is < 0 or > 100)
+        if (!TryNormalizarPorcentaje(porcentajeBase, out porcentajeBase))
             return (false, "El porcentaje debe estar entre 0 y 100.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
@@ -926,9 +922,8 @@ public sealed class AliadoPortalService
             .Select(x => new { x.IdTipoUsuario, Tipo = x.IdTipoUsuarioNavigation!.NombreTipo })
             .FirstOrDefaultAsync();
         var actorEsSuperAdministrador = actor?.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId;
-        var actorEsBackOffice = actor?.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId;
-        var actorEsAdministradorPortal = string.Equals(actor?.Tipo, AdminRoleName, StringComparison.OrdinalIgnoreCase);
-        if ((!actorEsSuperAdministrador && !actorEsBackOffice && !actorEsAdministradorPortal) ||
+        var actorEsAdministradorPortal = await EsAdministradorInternoAsync(db, actorId);
+        if (!actorEsAdministradorPortal ||
             (esAdministradorPortal && !actorEsSuperAdministrador))
             return (false, "No tienes permisos para crear este tipo de cuenta.");
 
@@ -1170,7 +1165,9 @@ public sealed class AliadoPortalService
             .SingleOrDefaultAsync(x => x.IdConfiguracion == 1)
             ?? new AliadoPortalConfiguracion();
         var facturas = await db.Facturas.AsNoTracking()
-            .Where(x => x.Idvendedor == idVendedor && (x.Estado == true || x.Estado == null))
+            .Where(x => x.Idvendedor == idVendedor &&
+                        (x.Estado == true || x.Estado == null) &&
+                        x.Notas != null && x.Notas.Contains(BackOfficeInvoiceMarker))
             .Select(x => new FacturaComisionRow
             {
                 IdFactura = x.Codfactura,
@@ -1273,11 +1270,41 @@ public sealed class AliadoPortalService
             .Select(x => new { x.IdTipoUsuario, Tipo = x.IdTipoUsuarioNavigation!.NombreTipo })
             .FirstOrDefaultAsync();
         return actor?.IdTipoUsuario is BackOfficePermissionHelper.SuperAdministradorRoleId or BackOfficePermissionHelper.BackOfficeRoleId ||
-               string.Equals(actor?.Tipo, AdminRoleName, StringComparison.OrdinalIgnoreCase);
+               await db.AliadoPortalUsuariosRoles.AnyAsync(ur =>
+            ur.IdUsuario == actorId &&
+            db.AliadoPortalRoles.Any(r =>
+                r.IdRol == ur.IdRol && r.Activo && r.Nombre == AdminRoleName));
+    }
+
+    private static async Task<bool> EsAdministradorPortalAsync(AppDbContext db, int actorId)
+    {
+        var actor = await db.Usuarios.AsNoTracking()
+            .Where(x => x.IdUsuario == actorId && x.Estado == true)
+            .Select(x => new { x.IdTipoUsuario })
+            .FirstOrDefaultAsync();
+        if (actor?.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId)
+            return true;
+
+        return await db.AliadoPortalUsuariosRoles.AnyAsync(ur =>
+            ur.IdUsuario == actorId &&
+            db.AliadoPortalRoles.Any(r =>
+                r.IdRol == ur.IdRol && r.Activo && r.Nombre == AdminRoleName));
     }
 
     private static bool EsPagoConfirmado(FacturaPortalRow factura)
         => EsPagoConfirmado(factura.EstadoPago);
+
+    private static bool TryNormalizarPorcentaje(decimal valor, out decimal normalizado)
+    {
+        if (valor is < 0 or > 100)
+        {
+            normalizado = valor;
+            return false;
+        }
+
+        normalizado = decimal.Round(valor, 2, MidpointRounding.AwayFromZero);
+        return true;
+    }
 
     private static bool EsPagoConfirmado(string? estadoPago)
         => estadoPago?.Trim().ToUpperInvariant() is "PAGADA" or "PAGADO" or "CANCELADA" or "CANCELADO" or "COBRADA" or "COBRADO";

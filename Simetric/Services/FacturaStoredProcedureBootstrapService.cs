@@ -91,6 +91,7 @@ public sealed class FacturaStoredProcedureBootstrapService
             @Notas NVARCHAR(MAX) = NULL,
             @Estado BIT = 1,
             @Idusuario INT,
+            @Idvendedor INT = NULL,
             @Detalles dbo.FacturaDetalleType READONLY,
             @PlanIlimitadoActivo BIT = 0,
             @Tipopago NVARCHAR(20) = NULL,
@@ -192,7 +193,8 @@ public sealed class FacturaStoredProcedureBootstrapService
                 DescuentoGlobalValor,
                 Tipopago,
                 Tiempocredito,
-                Ambiente
+                Ambiente,
+                Idvendedor
             )
             OUTPUT INSERTED.CODFACTURA INTO @FacturaInsertada(Codfactura)
             VALUES
@@ -220,7 +222,8 @@ public sealed class FacturaStoredProcedureBootstrapService
                 @DescuentoGlobalValor,
                 @Tipopago,
                 @Tiempocredito,
-                @Ambiente
+                @Ambiente,
+                @Idvendedor
             );
 
             DECLARE @Codfactura INT = (SELECT TOP (1) Codfactura FROM @FacturaInsertada);

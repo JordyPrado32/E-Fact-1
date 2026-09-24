@@ -2399,6 +2399,7 @@ IF @resultado < 0
             AddFacturaProcedureParameter(command, "@Notas", SqlDbType.NVarChar, factura.Notas, -1);
             AddFacturaProcedureParameter(command, "@Estado", SqlDbType.Bit, factura.Estado ?? true);
             AddFacturaProcedureParameter(command, "@Idusuario", SqlDbType.Int, factura.Idusuario);
+            AddFacturaProcedureParameter(command, "@Idvendedor", SqlDbType.Int, factura.Idvendedor);
             AddFacturaProcedureParameter(command, "@Tipopago", SqlDbType.NVarChar, factura.Tipopago, 20);
             AddFacturaProcedureParameter(command, "@Tiempocredito", SqlDbType.Int, factura.Tiempocredito);
             AddFacturaProcedureParameter(command, "@Ambiente", SqlDbType.Int, factura.Ambiente);
