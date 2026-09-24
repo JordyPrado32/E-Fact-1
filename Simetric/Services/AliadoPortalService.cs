@@ -12,6 +12,7 @@ public sealed class AliadoPortalService
     public const string RoleName = "Aliado Comercial";
     public const string AdminRoleName = "Administrador Portal de Aliados";
     public const string RootRoute = "/aliados";
+    public const string HomeRoute = "/aliados/inicio";
     public const string AdminRoute = "/aliados/admin";
     private const string BackOfficeInvoiceMarker = "[COMPRA_DOCS:";
 
@@ -172,6 +173,7 @@ public sealed class AliadoPortalService
 
         if (contexto.EsAdministrador &&
             !esRutaAdmin &&
+            !relative.Equals(HomeRoute, StringComparison.OrdinalIgnoreCase) &&
             !relative.Equals($"{RootRoute}/perfil", StringComparison.OrdinalIgnoreCase))
             return false;
 

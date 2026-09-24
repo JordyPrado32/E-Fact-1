@@ -4,10 +4,13 @@
 @using System.Security.Claims
 @using Simetric.Models
 @using Simetric.Services
+@using Simetric.Extensions
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
 @inject AliadoPortalService AliadoService
 @inject IJSRuntime JS
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject AppAccessService AppAccessService
 @implements IDisposable
 
 @if (cargando)
@@ -18,19 +21,39 @@ else if (contexto is not null)
 {
     <div class="ally-shell">
         <aside class="ally-sidebar">
-            <div class="ally-sidebar-brand">
-                <span class="ally-brand-mark">e</span>
-                <span class="ally-brand-copy"><strong>e-fact</strong><small>Portal de aliados</small></span>
-            </div>
-            <span class="ally-nav-heading">Menú principal</span>
             <AliadosNavMenu Menus="menus" Contexto="contexto" />
         </aside>
         <main class="ally-main">
             <header class="ally-topbar">
-                <div class="ally-page-context">
-                    <span>PORTAL DE ALIADOS</span>
-                    <strong>@ObtenerTitulo()</strong>
-                    <small>Gestiona tu operación comercial con Numerica</small>
+                <div class="ally-service-card">
+                    <span class="ally-service-mark">N</span>
+                    @if (puedeCambiarServicio)
+                    {
+                        <div class="ally-service-switcher">
+                            <button type="button" class="ally-service-switcher-trigger" aria-haspopup="menu" aria-expanded="@mostrarMenuServicios" @onclick="ToggleMenuServicios">
+                                <span>PORTAL DE ALIADOS</span>
+                                <i class="ri-arrow-down-s-line" aria-hidden="true"></i>
+                            </button>
+                            @if (mostrarMenuServicios)
+                            {
+                                <div class="ally-service-switcher-dropdown" role="menu">
+                                    @foreach (var servicio in serviciosDisponibles)
+                                    {
+                                        var activo = string.Equals(servicio.Clave, AppAccessService.AllyPortalServiceKey, StringComparison.OrdinalIgnoreCase);
+                                        <button type="button" role="menuitem" class="@(activo ? "is-active" : string.Empty)" @onclick="() => CambiarServicioAsync(servicio)">
+                                            <img src="@ObtenerIconoServicio(servicio.Clave)" alt="" aria-hidden="true" />
+                                            <span>@ObtenerNombreServicio(servicio)</span>
+                                            @if (activo) { <i class="ri-check-line"></i> }
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ally-service-name">PORTAL DE ALIADOS <i class="ri-arrow-down-s-line" aria-hidden="true"></i></div>
+                    }
                 </div>
                 <div class="ally-session-card">
                     <div class="ally-profile-menu">
@@ -67,7 +90,11 @@ else if (contexto is not null)
     private List<AliadoPortalMenu> menus = new();
     private bool cargando = true;
     private bool mostrarMenuPerfil;
+    private bool mostrarMenuServicios;
+    private bool puedeCambiarServicio;
     private string? avatarUrl;
+    private int userId;
+    private readonly List<AppServiceCatalogItem> serviciosDisponibles = new();
     private readonly SemaphoreSlim validacionRutaLock = new(1, 1);
 
     protected override async Task OnInitializedAsync()
@@ -80,7 +107,7 @@ else if (contexto is not null)
     {
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
         if (auth.User.Identity?.IsAuthenticated != true ||
-            !int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var userId))
+            !int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out userId))
         {
             NavManager.NavigateTo("/login");
             return;
@@ -96,6 +123,7 @@ else if (contexto is not null)
         avatarUrl = NormalizarAvatar(auth.User.FindFirst("AvatarUrl")?.Value);
 
         menus = (await AliadoService.ObtenerMenusAsync(contexto.IdRolPortal)).ToList();
+        await CargarServiciosDisponiblesAsync(auth.User);
         cargando = false;
         await ValidarRutaAsync();
     }
@@ -105,28 +133,27 @@ else if (contexto is not null)
         if (contexto is null || cargando)
             return;
 
-        await validacionRutaLock.WaitAsync();
-        try
+        var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].TrimEnd('/');
+        var rutaPerfil = $"{AliadoPortalService.RootRoute.Trim('/')}/perfil";
+        if (contexto.EsAdministrador &&
+            !ruta.StartsWith(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase) &&
+            !ruta.Equals(rutaPerfil, StringComparison.OrdinalIgnoreCase))
         {
-            var ruta = NavManager.ToBaseRelativePath(NavManager.Uri).Split('?', '#')[0].TrimEnd('/');
-            var rutaPerfil = $"{AliadoPortalService.RootRoute.Trim('/')}/perfil";
-            if (contexto.EsAdministrador &&
-                !ruta.StartsWith(AliadoPortalService.AdminRoute.Trim('/'), StringComparison.OrdinalIgnoreCase) &&
-                !ruta.Equals(rutaPerfil, StringComparison.OrdinalIgnoreCase))
-            {
-                NavManager.NavigateTo(AliadoPortalService.AdminRoute, replace: true);
-                return;
-            }
-            var rutaAdmin = AliadoPortalService.AdminRoute.Trim('/');
-            if (!contexto.EsAdministrador &&
-                (ruta.Equals(rutaAdmin, StringComparison.OrdinalIgnoreCase) ||
-                 ruta.StartsWith($"{rutaAdmin}/", StringComparison.OrdinalIgnoreCase)))
-            {
-                NavManager.NavigateTo(AliadoPortalService.RootRoute, replace: true);
-                return;
-            }
-            if (ruta.Equals("aliados", StringComparison.OrdinalIgnoreCase))
-                return;
+            redireccionando = true;
+            NavManager.NavigateTo(AliadoPortalService.AdminRoute);
+            return;
+        }
+        var rutaAdmin = AliadoPortalService.AdminRoute.Trim('/');
+        if (!contexto.EsAdministrador &&
+            (ruta.Equals(rutaAdmin, StringComparison.OrdinalIgnoreCase) ||
+             ruta.StartsWith($"{rutaAdmin}/", StringComparison.OrdinalIgnoreCase)))
+        {
+            redireccionando = true;
+            NavManager.NavigateTo(AliadoPortalService.RootRoute);
+            return;
+        }
+        if (ruta.Equals("aliados", StringComparison.OrdinalIgnoreCase))
+            return;
 
             var rutaPermitida = menus.Any(x => ruta.Equals(x.Ruta.Trim('/'), StringComparison.OrdinalIgnoreCase) || ruta.StartsWith($"{x.Ruta.Trim('/')}/", StringComparison.OrdinalIgnoreCase));
             if (!rutaPermitida)
@@ -181,6 +208,59 @@ else if (contexto is not null)
 
     private void ToggleMenuPerfil() => mostrarMenuPerfil = !mostrarMenuPerfil;
 
+    private void ToggleMenuServicios()
+    {
+        mostrarMenuServicios = !mostrarMenuServicios;
+        if (mostrarMenuServicios)
+            mostrarMenuPerfil = false;
+    }
+
+    private async Task CargarServiciosDisponiblesAsync(ClaimsPrincipal user)
+    {
+        var esSuperAdmin = string.Equals(user.FindFirst("IdTipoUsuario")?.Value, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase);
+        var esBackOffice = string.Equals(user.FindFirst("IdTipoUsuario")?.Value, BackOfficePermissionHelper.BackOfficeRoleId.ToString(), StringComparison.OrdinalIgnoreCase);
+        puedeCambiarServicio = esSuperAdmin || esBackOffice;
+        if (!puedeCambiarServicio)
+            return;
+
+        var catalogo = await AppAccessService.GetCatalogForUserAsync(userId, esSuperAdmin);
+        serviciosDisponibles.Clear();
+        serviciosDisponibles.AddRange(catalogo.Where(x => x.TieneAcceso));
+    }
+
+    private async Task CambiarServicioAsync(AppServiceCatalogItem servicio)
+    {
+        mostrarMenuServicios = false;
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(servicio.Clave, userId);
+        var destino = string.Equals(servicio.Clave, AppAccessService.AllyPortalServiceKey, StringComparison.OrdinalIgnoreCase)
+            ? AliadoPortalService.HomeRoute
+            : servicio.RutaAcceso;
+        NavManager.NavigateToIfNeeded(string.IsNullOrWhiteSpace(destino) ? "/portal-servicios" : destino, forceLoad: true);
+    }
+
+    private static string ObtenerIconoServicio(string? clave) => clave?.Trim().ToLowerInvariant() switch
+    {
+        "e-conta" or "e-contax" or "econtax" => "/images/services/n-econtax.png",
+        "e-declara" or "edeclara" => "/images/services/n-edeclara.png",
+        "e-people" or "epeople" => "/images/services/n-epeople.png",
+        "e-sign" or "esign" => "/images/services/n-erubrica.png",
+        "backoffice" => "/images/services/n-backoffice.png",
+        "portal-aliados" => "/images/LogoNumerica.svg",
+        _ => "/images/LogoNumerica.svg"
+    };
+
+    private static string ObtenerNombreServicio(AppServiceCatalogItem servicio) => servicio.Clave?.Trim().ToLowerInvariant() switch
+    {
+        "e-fact" => "E-FACT",
+        "e-conta" or "e-contax" or "econtax" => "E-CONTAX",
+        "e-declara" or "edeclara" => "E-DECLARA",
+        "e-people" or "epeople" => "E-PEOPLE",
+        "e-sign" or "esign" => "E-RÚBRICA",
+        "backoffice" => "BACKOFFICE",
+        "portal-aliados" => "PORTAL DE ALIADOS",
+        _ => servicio.Nombre.ToUpperInvariant()
+    };
+
     private async Task CerrarSesion()
     {
         await JS.InvokeVoidAsync("numericaLogoutAndRedirect", "/login");
@@ -191,6 +271,7 @@ else if (contexto is not null)
         _ = InvokeAsync(async () =>
         {
             mostrarMenuPerfil = false;
+            mostrarMenuServicios = false;
             await ValidarRutaAsync();
             StateHasChanged();
         });
