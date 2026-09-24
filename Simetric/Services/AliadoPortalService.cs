@@ -12,6 +12,7 @@ public sealed class AliadoPortalService
     public const string RoleName = "Aliado Comercial";
     public const string AdminRoleName = "Administrador Portal de Aliados";
     public const string RootRoute = "/aliados";
+    public const string HomeRoute = "/aliados/inicio";
     public const string AdminRoute = "/aliados/admin";
 
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);

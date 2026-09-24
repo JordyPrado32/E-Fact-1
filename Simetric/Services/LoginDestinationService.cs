@@ -29,13 +29,6 @@ public sealed class LoginDestinationService
             return "/login";
         }
 
-        if (!string.IsNullOrWhiteSpace(returnUrl) && IsLocalUrl(returnUrl))
-        {
-            return returnUrl;
-        }
-
-        await _emisorOnboardingService.RefreshRequirementAsync(userId);
-
         var effectiveRoleId = roleId;
         if (!effectiveRoleId.HasValue)
         {
@@ -72,6 +65,8 @@ public sealed class LoginDestinationService
         {
             return "/backoffice";
         }
+
+        await _emisorOnboardingService.RefreshRequirementAsync(userId);
 
         if (string.Equals(
                 effectiveRoleId?.ToString(),
