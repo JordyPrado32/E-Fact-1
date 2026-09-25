@@ -48,6 +48,14 @@ public sealed class LoginDestinationService
             }
         }
 
+        if (string.Equals(
+                effectiveRoleId?.ToString(),
+                BackOfficePermissionHelper.BackOfficeRoleId.ToString(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "/portal-servicios";
+        }
+
         if (await EsAliadoAdministradorAsync(effectiveRoleId))
         {
             return AliadoPortalService.HomeRoute;
@@ -56,14 +64,6 @@ public sealed class LoginDestinationService
         if (await EsAliadoAsync(userId, effectiveRoleId))
         {
             return AliadoPortalService.RootRoute;
-        }
-
-        if (string.Equals(
-                effectiveRoleId?.ToString(),
-                "7",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return "/backoffice";
         }
 
         await _emisorOnboardingService.RefreshRequirementAsync(userId);
