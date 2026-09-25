@@ -90,7 +90,7 @@ public sealed class FirmaStampApiService
             return FirmaStampApiResult.Error(certificateValidationError);
 
         using var form = new MultipartFormDataContent();
-        using var pdfContent = CreateFileContent(pdfStream, string.IsNullOrWhiteSpace(pdfContentType) ? "application/pdf" : pdfContentType);
+        using var pdfContent = CreateFileContent(pdfStream, "application/pdf");
         using var certificadoContent = CreateFileContent(certificado.Content, "application/x-pkcs12");
         var certificadoFileName = NormalizeCertificateFileName(certificado.FileName);
 

@@ -348,7 +348,7 @@ export async function init(options, dotNetRef) {
             pdfDocument = null;
             canvas.hidden = true;
             placeholder.hidden = false;
-            setStatus("No fue posible abrir el PDF.", true);
+            setStatus("No fue posible leer este PDF. Puede estar protegido, dañado o usar una variante no compatible.", true);
             updateNavigation();
             clearThumbnails();
         }
@@ -571,7 +571,7 @@ export async function init(options, dotNetRef) {
                 pdfDocument = null;
                 canvas.hidden = true;
                 placeholder.hidden = false;
-                setStatus("No fue posible abrir el PDF guardado.", true);
+                setStatus("No fue posible leer el PDF guardado. Puede estar protegido, dañado o usar una variante no compatible.", true);
                 updateNavigation();
                 clearThumbnails();
             }
