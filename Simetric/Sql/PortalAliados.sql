@@ -70,7 +70,8 @@ FROM (VALUES
     (N'Comisiones', N'/aliados/comisiones', N'ri-hand-coin-line', 4),
     (N'Liquidaciones', N'/aliados/liquidaciones', N'ri-bank-card-line', 5),
     (N'Mi perfil', N'/aliados/perfil', N'ri-user-settings-line', 6),
-    (N'Administración de aliados', N'/aliados/admin', N'ri-admin-line', 10)
+    (N'Administración de aliados', N'/aliados/admin', N'ri-admin-line', 10),
+    (N'Usuarios', N'/aliados/admin/usuarios', N'ri-group-line', 11)
 ) v(Nombre, Ruta, Icono, Orden)
 WHERE NOT EXISTS (SELECT 1 FROM dbo.MENUS m WHERE m.RUTAMENU = v.Ruta);
 
@@ -154,8 +155,8 @@ INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol, IdMenu)
 SELECT r.IdRol, m.IdMenu
 FROM dbo.ALIADO_PORTAL_ROL r
 CROSS JOIN dbo.ALIADO_PORTAL_MENU m
-WHERE ((r.Nombre = N'Aliado Comercial' AND m.Ruta <> N'/aliados/admin')
-    OR (r.Nombre = N'Administrador Portal de Aliados' AND m.Ruta = N'/aliados/admin'))
+WHERE ((r.Nombre = N'Aliado Comercial' AND m.Ruta NOT IN (N'/aliados/admin', N'/aliados/admin/usuarios'))
+    OR (r.Nombre = N'Administrador Portal de Aliados' AND m.Ruta IN (N'/aliados/admin', N'/aliados/admin/usuarios')))
   AND NOT EXISTS (
       SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x
       WHERE x.IdRol = r.IdRol AND x.IdMenu = m.IdMenu

@@ -775,6 +775,65 @@ public sealed class AliadoPortalService
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<AliadoUsuarioAdminRow>> ListarUsuariosAliadosAsync(int actorId)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return Array.Empty<AliadoUsuarioAdminRow>();
+
+        return await db.Usuarios.AsNoTracking()
+            .Where(u => db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario))
+            .OrderBy(u => u.Nombres).ThenBy(u => u.Apellidos)
+            .Select(u => new AliadoUsuarioAdminRow
+            {
+                IdUsuario = u.IdUsuario,
+                Nombre = ((u.Nombres ?? string.Empty) + " " + (u.Apellidos ?? string.Empty)).Trim(),
+                Email = u.Email,
+                AvatarUrl = u.AvatarUrl,
+                Activo = u.Estado ?? false,
+                Bloqueado = u.CuentaBloqueada ?? false,
+                FechaCreacion = u.FechaCreacion,
+                Rol = db.AliadoPortalRoles.Where(r => db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == r.IdRol)).Select(r => r.Nombre).FirstOrDefault() ?? "Sin rol",
+                Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == u.IdVendedor).Select(v => v.Nombre).FirstOrDefault(),
+                CodigoReferencia = db.VendedoresBackOffice.Where(v => v.IdVendedor == u.IdVendedor).Select(v => v.CodigoReferencia).FirstOrDefault()
+            })
+            .ToListAsync();
+    }
+
+    public async Task<(bool Success, string Message)> ActualizarEstadoUsuarioAliadoAsync(int actorId, int idUsuario, bool activo)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId)) return (false, "No tienes permisos para modificar esta cuenta.");
+        if (actorId == idUsuario && !activo) return (false, "No puedes desactivar tu propia cuenta.");
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == idUsuario && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario));
+        if (usuario is null) return (false, "La cuenta de aliado no existe.");
+        usuario.Estado = activo;
+        if (activo) usuario.CuentaBloqueada = false;
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { idUsuario }, new { Activo = activo }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
+        return (true, activo ? "Usuario activado correctamente." : "Usuario desactivado correctamente.");
+    }
+
+    public async Task<(bool Success, string Message)> ActualizarUsuarioAliadoAsync(int actorId, int idUsuario, string nombre, string email)
+    {
+        await EnsureSchemaAsync();
+        nombre = nombre.Trim(); email = email.Trim();
+        if (string.IsNullOrWhiteSpace(nombre) || !MailAddress.TryCreate(email, out _)) return (false, "Ingresa un nombre y correo válidos.");
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId)) return (false, "No tienes permisos para modificar esta cuenta.");
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(u => u.IdUsuario == idUsuario && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario));
+        if (usuario is null) return (false, "La cuenta de aliado no existe.");
+        if (await db.Usuarios.AnyAsync(u => u.IdUsuario != idUsuario && u.Email.ToLower() == email.ToLower())) return (false, "Ya existe una cuenta con ese correo.");
+        usuario.Nombres = nombre; usuario.Apellidos = string.Empty; usuario.Email = email;
+        var aliado = usuario.IdVendedor.HasValue ? await db.VendedoresBackOffice.FirstOrDefaultAsync(v => v.IdVendedor == usuario.IdVendedor) : null;
+        if (aliado is not null) aliado.Nombre = nombre;
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { idUsuario }, new { Nombre = nombre, Email = email }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
+        return (true, "Usuario actualizado correctamente.");
+    }
+
     public async Task<IReadOnlyList<AliadoVendedorDisponible>> ListarVendedoresDisponiblesComoAliadosAsync()
     {
         await EnsureSchemaAsync();
@@ -1348,8 +1407,8 @@ IF OBJECT_ID(N'dbo.ALIADO_PORTAL_MENU', N'U') IS NULL CREATE TABLE dbo.ALIADO_PO
 IF OBJECT_ID(N'dbo.ALIADO_PORTAL_ROL_MENU', N'U') IS NULL CREATE TABLE dbo.ALIADO_PORTAL_ROL_MENU (IdRolMenu INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdRol INT NOT NULL, IdMenu INT NOT NULL, CONSTRAINT UX_ALIADO_PORTAL_ROL_MENU UNIQUE(IdRol, IdMenu));
 IF OBJECT_ID(N'dbo.ALIADO_PORTAL_USUARIO_ROL', N'U') IS NULL CREATE TABLE dbo.ALIADO_PORTAL_USUARIO_ROL (IdUsuarioRol INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdUsuario INT NOT NULL UNIQUE, IdRol INT NOT NULL);
 MERGE dbo.ALIADO_PORTAL_ROL AS t USING (VALUES (N'{RoleName}', N'Acceso comercial externo.'), (N'{AdminRoleName}', N'Administración interna del portal.')) s(Nombre,Descripcion) ON t.Nombre=s.Nombre WHEN NOT MATCHED THEN INSERT(Nombre,Descripcion,Activo) VALUES(s.Nombre,s.Descripcion,1);
-MERGE dbo.ALIADO_PORTAL_MENU AS t USING (VALUES (N'Inicio',N'{RootRoute}',N'ri-dashboard-3-line',1),(N'Mis clientes',N'{RootRoute}/clientes',N'ri-user-3-line',2),(N'Renovaciones',N'{RootRoute}/renovaciones',N'ri-refresh-line',3),(N'Comisiones',N'{RootRoute}/comisiones',N'ri-hand-coin-line',4),(N'Liquidaciones',N'{RootRoute}/liquidaciones',N'ri-bank-card-line',5),(N'Mi perfil',N'{RootRoute}/perfil',N'ri-user-settings-line',6),(N'Administración de aliados',N'{AdminRoute}',N'ri-admin-line',10)) s(Nombre,Ruta,Icono,Orden) ON t.Ruta=s.Ruta WHEN NOT MATCHED THEN INSERT(Nombre,Ruta,Icono,Orden,Activo) VALUES(s.Nombre,s.Ruta,s.Icono,s.Orden,1);
-INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol,IdMenu) SELECT r.IdRol,m.IdMenu FROM dbo.ALIADO_PORTAL_ROL r CROSS JOIN dbo.ALIADO_PORTAL_MENU m WHERE ((r.Nombre=N'{RoleName}' AND m.Ruta<>N'{AdminRoute}') OR (r.Nombre=N'{AdminRoleName}' AND m.Ruta=N'{AdminRoute}')) AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x WHERE x.IdRol=r.IdRol AND x.IdMenu=m.IdMenu);
+MERGE dbo.ALIADO_PORTAL_MENU AS t USING (VALUES (N'Inicio',N'{RootRoute}',N'ri-dashboard-3-line',1),(N'Mis clientes',N'{RootRoute}/clientes',N'ri-user-3-line',2),(N'Renovaciones',N'{RootRoute}/renovaciones',N'ri-refresh-line',3),(N'Comisiones',N'{RootRoute}/comisiones',N'ri-hand-coin-line',4),(N'Liquidaciones',N'{RootRoute}/liquidaciones',N'ri-bank-card-line',5),(N'Mi perfil',N'{RootRoute}/perfil',N'ri-user-settings-line',6),(N'Administración de aliados',N'{AdminRoute}',N'ri-admin-line',10),(N'Usuarios',N'{AdminRoute}/usuarios',N'ri-group-line',11)) s(Nombre,Ruta,Icono,Orden) ON t.Ruta=s.Ruta WHEN NOT MATCHED THEN INSERT(Nombre,Ruta,Icono,Orden,Activo) VALUES(s.Nombre,s.Ruta,s.Icono,s.Orden,1);
+INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol,IdMenu) SELECT r.IdRol,m.IdMenu FROM dbo.ALIADO_PORTAL_ROL r CROSS JOIN dbo.ALIADO_PORTAL_MENU m WHERE ((r.Nombre=N'{RoleName}' AND m.Ruta NOT IN(N'{AdminRoute}',N'{AdminRoute}/usuarios')) OR (r.Nombre=N'{AdminRoleName}' AND m.Ruta IN(N'{AdminRoute}',N'{AdminRoute}/usuarios'))) AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x WHERE x.IdRol=r.IdRol AND x.IdMenu=m.IdMenu);
 INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario,IdRol) SELECT u.IdUsuario,r.IdRol FROM dbo.Usuarios u INNER JOIN dbo.TIPOUSUARIO tu ON tu.IdTipoUsuario=u.IdTipoUsuario INNER JOIN dbo.ALIADO_PORTAL_ROL r ON r.Nombre=tu.NombreTipo WHERE tu.NombreTipo IN(N'{RoleName}',N'{AdminRoleName}') AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x WHERE x.IdUsuario=u.IdUsuario);
 INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario,IdRol) SELECT u.IdUsuario,r.IdRol FROM dbo.Usuarios u CROSS JOIN dbo.ALIADO_PORTAL_ROL r WHERE u.IdTipoUsuario={BackOfficePermissionHelper.SuperAdministradorRoleId} AND r.Nombre=N'{AdminRoleName}' AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x WHERE x.IdUsuario=u.IdUsuario);
 """;
@@ -1666,6 +1725,20 @@ public sealed class AliadoAdminRow
     public bool UsuarioActivo { get; init; }
     public decimal PorcentajeBase { get; init; }
     public string? Usuario { get; init; }
+}
+
+public sealed class AliadoUsuarioAdminRow
+{
+    public int IdUsuario { get; init; }
+    public string Nombre { get; init; } = string.Empty;
+    public string Email { get; init; } = string.Empty;
+    public string? AvatarUrl { get; init; }
+    public string Rol { get; init; } = string.Empty;
+    public string? Aliado { get; init; }
+    public string? CodigoReferencia { get; init; }
+    public bool Activo { get; init; }
+    public bool Bloqueado { get; init; }
+    public DateTime? FechaCreacion { get; init; }
 }
 
 public sealed class AliadoVendedorDisponible
