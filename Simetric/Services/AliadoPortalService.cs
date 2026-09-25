@@ -79,7 +79,8 @@ public sealed class AliadoPortalService
                 x.Nombres,
                 x.Apellidos,
                 x.Email,
-                x.Celular
+                x.Celular,
+                x.AvatarUrl
             })
             .FirstOrDefaultAsync();
 
@@ -118,6 +119,7 @@ public sealed class AliadoPortalService
                 Nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim(),
                 Email = usuario.Email,
                 Celular = usuario.Celular,
+                AvatarUrl = usuario.AvatarUrl,
                 NombreAliado = "Administración del Portal",
                 EsAdministrador = true
             };
@@ -143,6 +145,7 @@ public sealed class AliadoPortalService
                 Nombre = $"{usuario.Nombres} {usuario.Apellidos}".Trim(),
                 Email = usuario.Email,
                 Celular = usuario.Celular,
+                AvatarUrl = usuario.AvatarUrl,
                 NombreAliado = aliado.Nombre,
                 CodigoReferencia = aliado.CodigoReferencia,
                 PorcentajeBase = aliado.PorcentajeBase <= 0 ? 30m : aliado.PorcentajeBase,
@@ -1510,6 +1513,7 @@ public sealed class AliadoPortalContext
     public string Nombre { get; init; } = string.Empty;
     public string Email { get; init; } = string.Empty;
     public string? Celular { get; init; }
+    public string? AvatarUrl { get; init; }
     public string NombreAliado { get; init; } = string.Empty;
     public string CodigoReferencia { get; init; } = string.Empty;
     public decimal PorcentajeBase { get; init; }
