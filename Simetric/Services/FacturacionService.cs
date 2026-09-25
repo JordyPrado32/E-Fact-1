@@ -1613,6 +1613,7 @@ namespace Simetric.Services
                     !string.IsNullOrWhiteSpace(f.Mensaje) &&
                     DebeReintentarseEnvioSri(f.Mensaje) &&
                     !DocumentoAutorizacionHelper.EsNoAutorizado(f.Estadoenviosri) &&
+                    !DocumentoAutorizacionHelper.EstaAutorizado(false, f.Estadoenviosri) &&
                     NormalizarControlReintentoSri(LeerFacturaCorreoMetadata(f.Detalleextra), ahora).SriIntentosDia < 3)
                 .OrderBy(f => f.Fchautorizacion)
                 .Select(f => f.Codfactura)
@@ -1649,7 +1650,8 @@ namespace Simetric.Services
                 .Where(f =>
                     !string.IsNullOrWhiteSpace(f.Mensaje) &&
                     DebeReintentarseEnvioSri(f.Mensaje) &&
-                    !DocumentoAutorizacionHelper.EsNoAutorizado(f.Estadoenviosri))
+                    !DocumentoAutorizacionHelper.EsNoAutorizado(f.Estadoenviosri) &&
+                    !DocumentoAutorizacionHelper.EstaAutorizado(false, f.Estadoenviosri))
                 .OrderBy(f => f.Fchautorizacion)
                 .Select(f => f.Codfactura)
                 .Take(maxRegistros)
@@ -1672,7 +1674,7 @@ namespace Simetric.Services
                 };
             }
 
-            if (factura.Autorizado == true)
+            if (DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.Estadoenviosri))
             {
                 var metadataAutorizada = NormalizarControlReintentoSri(LeerFacturaCorreoMetadata(factura.Detalleextra), DateTime.Now);
                 metadataAutorizada.SriMostrarAlertaPendiente = false;

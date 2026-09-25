@@ -16,6 +16,7 @@
 @inject IJSRuntime JS
 @inject NavigationManager NavManager
 @inject VendedorBackOfficeService VendedorBackOfficeService
+@inject AliadoPortalService AliadoPortalService
 @inject IDbContextFactory<Simetric.Data.AppDbContext> DbFactory
 @inject IWebHostEnvironment WebHostEnvironment
 @inject IEmailService EmailService
@@ -828,6 +829,20 @@
                                             <i class="bi bi-pencil-square"></i>
                                             <span>Editar</span>
                                         </button>
+                                        @if (aliadoVendedorIds.Contains(vendor.IdVendedor))
+                                        {
+                                            <button type="button" class="vc-admin-action success" @onclick='() => NavManager.NavigateTo("/backoffice/aliados")' title="Gestionar aliado">
+                                                <i class="bi bi-person-check-fill"></i>
+                                                <span>Gestionar aliado</span>
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="vc-admin-action success" @onclick="() => AbrirAliado(vendor)" title="Habilitar Portal de Aliados">
+                                                <i class="bi bi-person-plus-fill"></i>
+                                                <span>Habilitar aliado</span>
+                                            </button>
+                                        }
                                         @if (isBlocked)
                                         {
                                             <button type="button" class="vc-admin-action success" @onclick="() => AbrirBloqueo(vendor)" title="Activar vendedor">
@@ -1137,8 +1152,51 @@
     </div>
 }
 
+<!-- ═══ Modal: Habilitar Portal de Aliados ═══ -->
+@if (showAliadoModal && vendorAliado != null)
+{
+    <div class="vp-backdrop"></div>
+    <div class="vp-modal" role="dialog" aria-modal="true">
+        <div class="vp-modal-content vp-modal-sm">
+            <div class="vp-modal-header blue">
+                <div>
+                    <span class="vp-modal-kicker">Portal de Aliados</span>
+                    <h3>Habilitar como aliado</h3>
+                </div>
+                <button type="button" class="vp-modal-close" @onclick="CerrarAliado" aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="vp-modal-body">
+                @if (!string.IsNullOrWhiteSpace(errorModal))
+                {
+                    <div class="alert alert-danger rounded-3 border-0 shadow-sm mb-3">@errorModal</div>
+                }
+                <div class="vp-confirm-box">
+                    <div class="vp-confirm-icon unlock">
+                        <i class="bi bi-person-check-fill"></i>
+                    </div>
+                    <div class="vp-confirm-text">
+                        <span>¿Desea habilitar a <span class="vp-confirm-name">@vendorAliado.Nombre</span> como aliado?</span>
+                        <br />
+                        <span>Conservará su cuenta, QR, clientes e historial y podrá consultar sus comisiones y liquidaciones.</span>
+                    </div>
+                </div>
+            </div>
+            <div class="vp-modal-footer">
+                <button type="button" class="vp-btn-quiet" @onclick="CerrarAliado">Cancelar</button>
+                <button type="button" class="vp-btn-success" disabled="@saving" @onclick="ConfirmarAliadoAsync">
+                    <i class="bi bi-person-check-fill"></i>
+                    <span>@(saving ? "Procesando..." : "Sí, habilitar")</span>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private List<VendedorBackOffice> vendors = new();
+    private HashSet<int> aliadoVendedorIds = new();
 
     // crear
     private bool showModal;
@@ -1169,6 +1227,10 @@
     // bloquear
     private bool showBloqueoModal;
     private VendedorBackOffice? vendorBloqueo;
+
+    // aliado
+    private bool showAliadoModal;
+    private VendedorBackOffice? vendorAliado;
 
     // qr modal
     private bool showQrModal;
@@ -1419,6 +1481,56 @@
     private void AbrirBloqueo(VendedorBackOffice v) { vendorBloqueo = v; showBloqueoModal = true; }
     private void CerrarBloqueo() { showBloqueoModal = false; vendorBloqueo = null; }
 
+    private void AbrirAliado(VendedorBackOffice v)
+    {
+        vendorAliado = v;
+        errorModal = null;
+        message = null;
+        success = false;
+        showAliadoModal = true;
+    }
+    private void CerrarAliado() { if (!saving) { showAliadoModal = false; vendorAliado = null; } }
+
+    private async Task ConfirmarAliadoAsync()
+    {
+        if (vendorAliado == null || saving)
+            return;
+
+        saving = true;
+        errorModal = null;
+        message = null;
+        success = false;
+        await InvokeAsync(StateHasChanged);
+        await Task.Yield();
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            int.TryParse(authState.User.FindFirst("IdUsuario")?.Value, out var actorId);
+            var resultado = await AliadoPortalService.AsociarVendedorComoAliadoAsync(actorId, vendorAliado.IdVendedor);
+            success = resultado.Success;
+            message = resultado.Success ? resultado.Message : null;
+            errorModal = resultado.Success ? null : resultado.Message;
+
+            if (resultado.Success)
+            {
+                aliadoVendedorIds.Add(vendorAliado.IdVendedor);
+                showAliadoModal = false;
+                vendorAliado = null;
+                await CargarAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            success = false;
+            message = null;
+            errorModal = $"Error al habilitar el aliado: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
     private async Task ConfirmarBloqueo()
     {
         if (vendorBloqueo == null) return;
@@ -1487,6 +1599,9 @@
         tienePerfilVendedor = idUsuario > 0 && await VendedorBackOfficeService.TienePerfilUsuarioAsync(idUsuario);
 
         var allVendors = await VendedorBackOfficeService.ListarAsync();
+        aliadoVendedorIds = esAdministradorBackOffice
+            ? (await AliadoPortalService.ListarAliadosAsync()).Select(x => x.IdVendedor).ToHashSet()
+            : new HashSet<int>();
         if (esAdministradorBackOffice && idUsuario > 0)
         {
             var perfilPropio = await VendedorBackOfficeService.ObtenerPerfilUsuarioAsync(idUsuario, nombreCompleto);

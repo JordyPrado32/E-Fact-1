@@ -293,11 +293,11 @@ public sealed class FacturaPdfService : IFacturaPdfService
                     column.Item()
                         .AlignCenter()
                         .PaddingBottom(4)
-                        .Text("NO TIENE LOGO")
+                        .Text("NUMERICA E-FACT")
                         .FontFamily("Arial")
                         .Bold()
-                        .FontSize(28f)
-                        .FontColor(Colors.Red.Medium);
+                        .FontSize(16f)
+                        .FontColor(Colors.Blue.Darken3);
                 }
 
                 column.Item()
@@ -371,6 +371,8 @@ public sealed class FacturaPdfService : IFacturaPdfService
                     if (esProforma)
                     {
                         column.Item().Element(item => ComponerLineaEncabezado(item, "Fecha de emisión:", ObtenerFechaEmisionFactura(factura).ToString("dd/MM/yyyy")));
+                        if (factura.Fechavence.HasValue)
+                            column.Item().Element(item => ComponerLineaEncabezado(item, "Vigente hasta:", factura.Fechavence.Value.ToString("dd/MM/yyyy")));
                     }
                     else
                     {
@@ -425,12 +427,12 @@ public sealed class FacturaPdfService : IFacturaPdfService
 
             column.Item().Element(card => ComponerBloqueCliente(card, cliente));
 
-            column.Item().Element(table => ComponerDetalle(table, lineas));
+            column.Item().Element(table => ComponerDetalle(table, lineas, esProforma));
 
             column.Item().ShowEntire().Row(row =>
             {
                 row.Spacing(8);
-                row.RelativeItem(0.95f).Element(card => ComponerBloquePago(card, facturaView));
+                row.RelativeItem(0.95f).Element(card => ComponerBloquePago(card, facturaView, esProforma));
 
                 row.RelativeItem(1.25f).Element(card => ComponerBloqueResumen(
                     card,
@@ -484,7 +486,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
             });
     }
 
-    private static void ComponerBloquePago(IContainer container, FacturaViewDto facturaView)
+    private static void ComponerBloquePago(IContainer container, FacturaViewDto facturaView, bool esProforma = false)
     {
         var factura = facturaView.Factura;
         var notas = ObtenerNotasAdicionales(facturaView);
@@ -496,7 +498,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
             .Column(column =>
             {
                 column.Spacing(SpacingBloquePdf);
-                column.Item().Text("Forma de pago")
+                column.Item().Text(esProforma ? "Condiciones comerciales" : "Forma de pago")
                     .FontSize(FuenteTituloSeccionPdf)
                     .SemiBold()
                     .FontColor(Colors.Blue.Darken3);
@@ -729,14 +731,14 @@ public sealed class FacturaPdfService : IFacturaPdfService
                 .Background(Colors.White);
     }
 
-    private static void ComponerDetalle(IContainer container, IReadOnlyCollection<FacturaPdfLinea> lineas)
+    private static void ComponerDetalle(IContainer container, IReadOnlyCollection<FacturaPdfLinea> lineas, bool esProforma = false)
     {
         container.Border(1)
             .BorderColor(Colors.Blue.Lighten4)
             .Padding(PaddingBloquePdf)
             .Column(column =>
             {
-                column.Item().Text("Detalle de la factura")
+                column.Item().Text(esProforma ? "Detalle de la cotización" : "Detalle de la factura")
                     .FontSize(FuenteTituloSeccionPdf)
                     .SemiBold()
                     .FontColor(Colors.Blue.Darken3);
@@ -770,7 +772,7 @@ public sealed class FacturaPdfService : IFacturaPdfService
                     if (!lineas.Any())
                     {
                         table.Cell().ColumnSpan(8).Element(CellBody).AlignCenter().PaddingVertical(8)
-                            .Text("No hay detalles registrados para esta factura.");
+                            .Text(esProforma ? "No hay productos registrados para esta cotización." : "No hay detalles registrados para esta factura.");
                     }
                     else
                     {

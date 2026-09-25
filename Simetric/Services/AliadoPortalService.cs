@@ -314,7 +314,7 @@ public sealed class AliadoPortalService
         await using var db = await _dbFactory.CreateDbContextAsync();
         var clientes = await db.Clientes
             .AsNoTracking()
-            .Where(x => x.Idvendedor == contexto.IdVendedor && x.Estado != false)
+            .Where(x => x.Idvendedor == contexto.IdVendedor && x.Estado != false && x.Usuario != userId)
             .Select(x => new AliadoClienteDto
             {
                 IdCliente = x.Codcliente,
@@ -355,7 +355,7 @@ public sealed class AliadoPortalService
         await using var db = await _dbFactory.CreateDbContextAsync();
         var cliente = await db.Clientes
             .AsNoTracking()
-            .Where(x => x.Codcliente == idCliente && x.Idvendedor == contexto.IdVendedor)
+            .Where(x => x.Codcliente == idCliente && x.Idvendedor == contexto.IdVendedor && x.Usuario != userId)
             .Select(x => new AliadoClienteDetalleDto
             {
                 IdCliente = x.Codcliente,
@@ -831,7 +831,19 @@ public sealed class AliadoPortalService
             x.Estado == true &&
             x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId &&
             (x.TipoCliente == 1 || x.TipoCliente == 2 || x.TipoCliente == 3) &&
-            (x.IdVendedor == idVendedor || vendedor.CodigoReferencia == $"usr_{x.IdUsuario}"));
+            x.IdVendedor == idVendedor);
+
+        if (usuario is null &&
+            vendedor.CodigoReferencia.StartsWith("usr_", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(vendedor.CodigoReferencia[4..], out var idUsuarioPorCodigo))
+        {
+            usuario = await db.Usuarios.FirstOrDefaultAsync(x =>
+                x.Estado == true &&
+                x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId &&
+                (x.TipoCliente == 1 || x.TipoCliente == 2 || x.TipoCliente == 3) &&
+                x.IdUsuario == idUsuarioPorCodigo);
+        }
+
         if (usuario is null)
             return (false, "El vendedor no tiene una cuenta activa asociable.");
 

@@ -127,6 +127,15 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         if (pending is null)
             return null;
 
+        if (IsNewInvoiceRequest(mensaje))
+        {
+            state.OperacionPendiente = null;
+            state.RequiereConfirmacion = false;
+            state.SeleccionPendiente = null;
+            state.Emitida = false;
+            return null;
+        }
+
         if (pending.ExpiraEn <= DateTimeOffset.UtcNow)
         {
             state.OperacionPendiente = null;
@@ -224,6 +233,16 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 || normalized.Contains("acept", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsNewInvoiceRequest(string mensaje)
+    {
+        var normalized = NormalizeConfirmationText(mensaje);
+        return normalized is "crear una" or "crear factura" or "nueva factura"
+            || normalized.Contains("crear una factura", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("quiero crear", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("empezar una factura", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("nueva factura", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string NormalizeConfirmationText(string value)
         => value.Trim().Trim('.', '!', '?', ',').ToLowerInvariant();
 
@@ -256,8 +275,8 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             {
                 Step("cliente", "Buscando cliente", state.Draft.Cliente is null ? "Falta seleccionar un cliente." : $"Cliente encontrado: {state.Draft.Cliente.Nombre}.", state.Draft.Cliente is null ? "warning" : "completed"),
                 Step("items", "Revisando productos", state.Draft.Items.Count == 0 ? "Falta agregar al menos un producto o servicio." : $"{state.Draft.Items.Count} producto(s) listos para revisar.", state.Draft.Items.Count == 0 ? "warning" : "completed"),
-                Step("totales", "Calculando factura", $"Total actual: ${state.Draft.Total:0.00}.", "completed"),
-                Step("confirmacion", "Esperando confirmación", "No se emitirá nada sin tu autorización explícita.", state.RequiereConfirmacion ? "pending" : "completed")
+                Step("totales", "Calculando factura", $"Total actual: ${state.Draft.Total:0.00}.", state.Draft.Cliente is null || state.Draft.Items.Count == 0 ? "warning" : "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá nada sin tu autorización explícita.", state.RequiereConfirmacion ? "pending" : state.Draft.Cliente is null || state.Draft.Items.Count == 0 ? "warning" : "completed")
             },
             "consultar_facturas" => new List<BotProgressStepDto>
             {
