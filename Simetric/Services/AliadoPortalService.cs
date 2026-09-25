@@ -26,15 +26,18 @@ public sealed class AliadoPortalService
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly VendedorBackOfficeService _vendedorService;
     private readonly AuditService _auditService;
+    private readonly IEmailService _emailService;
 
     public AliadoPortalService(
         IDbContextFactory<AppDbContext> dbFactory,
         VendedorBackOfficeService vendedorService,
-        AuditService auditService)
+        AuditService auditService,
+        IEmailService emailService)
     {
         _dbFactory = dbFactory;
         _vendedorService = vendedorService;
         _auditService = auditService;
+        _emailService = emailService;
     }
 
     public async Task EnsureSchemaAsync()
@@ -788,11 +791,16 @@ public sealed class AliadoPortalService
             .Select(u => new AliadoUsuarioAdminRow
             {
                 IdUsuario = u.IdUsuario,
+                Nombres = u.Nombres,
+                Apellidos = u.Apellidos,
                 Nombre = ((u.Nombres ?? string.Empty) + " " + (u.Apellidos ?? string.Empty)).Trim(),
                 Email = u.Email,
                 AvatarUrl = u.AvatarUrl,
                 Activo = u.Estado ?? false,
                 Bloqueado = u.CuentaBloqueada ?? false,
+                ClaveTemporal = u.ClaveTemporal ?? false,
+                Identificacion = u.Identificacion,
+                FechaNacimiento = u.FechaNacimiento,
                 FechaCreacion = u.FechaCreacion,
                 Rol = db.AliadoPortalRoles.Where(r => db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == r.IdRol)).Select(r => r.Nombre).FirstOrDefault() ?? "Sin rol",
                 Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == u.IdVendedor).Select(v => v.Nombre).FirstOrDefault(),
@@ -832,6 +840,118 @@ public sealed class AliadoPortalService
         await db.SaveChangesAsync();
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { idUsuario }, new { Nombre = nombre, Email = email }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
         return (true, "Usuario actualizado correctamente.");
+    }
+
+    public async Task<(bool Success, string Message)> ActualizarPerfilUsuarioAliadoAsync(
+        int actorId, int idUsuario, string nombres, string apellidos, string email,
+        string? identificacion, DateTime? fechaNacimiento, string? avatarUrl)
+    {
+        await EnsureSchemaAsync();
+        nombres = nombres.Trim();
+        apellidos = apellidos.Trim();
+        email = email.Trim();
+        identificacion = identificacion?.Trim();
+        if (nombres.Length < 2 || apellidos.Length < 2 || !MailAddress.TryCreate(email, out _))
+            return (false, "Ingresa nombres, apellidos y correo válidos.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para modificar esta cuenta.");
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(u =>
+            u.IdUsuario == idUsuario && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario));
+        if (usuario is null)
+            return (false, "La cuenta del Portal de Aliados no existe.");
+        if (await db.Usuarios.AnyAsync(u => u.IdUsuario != idUsuario && u.Email.ToLower() == email.ToLower()))
+            return (false, "Ya existe una cuenta con ese correo.");
+
+        usuario.Nombres = nombres;
+        usuario.Apellidos = apellidos;
+        usuario.Email = email;
+        usuario.Identificacion = identificacion;
+        usuario.FechaNacimiento = fechaNacimiento;
+        usuario.AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl;
+        var aliado = usuario.IdVendedor.HasValue
+            ? await db.VendedoresBackOffice.FirstOrDefaultAsync(v => v.IdVendedor == usuario.IdVendedor)
+            : null;
+        if (aliado is not null)
+            aliado.Nombre = $"{nombres} {apellidos}".Trim();
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { idUsuario }, new { nombres, apellidos, email }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
+        return (true, "Usuario actualizado correctamente.");
+    }
+
+    public async Task<(bool Success, string Message)> DesbloquearUsuarioAliadoAsync(int actorId, int idUsuario)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para desbloquear esta cuenta.");
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(u =>
+            u.IdUsuario == idUsuario && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario));
+        if (usuario is null)
+            return (false, "La cuenta del Portal de Aliados no existe.");
+        usuario.CuentaBloqueada = false;
+        usuario.IntentosFallidos = 0;
+        usuario.FechaDesbloqueo = null;
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "DESBLOQUEAR", new { idUsuario }, new { Bloqueado = false }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
+        return (true, "Usuario desbloqueado correctamente.");
+    }
+
+    public async Task<(bool Success, string Message)> ResetearClaveUsuarioAliadoAsync(int actorId, int idUsuario)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para resetear esta cuenta.");
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(u =>
+            u.IdUsuario == idUsuario && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario));
+        if (usuario is null)
+            return (false, "La cuenta del Portal de Aliados no existe.");
+
+        const string claveInicial = "00000000";
+        const int minutosExpira = RecoveryCodeHelper.MinutosExpiracionPorDefecto;
+        var codigoAcceso = RecoveryCodeHelper.GenerarCodigoNumerico();
+        usuario.PasswordHash = SecurityHelper.HashPassword(claveInicial);
+        usuario.ClaveTemporal = true;
+        usuario.CuentaBloqueada = false;
+        usuario.IntentosFallidos = 0;
+        usuario.FechaDesbloqueo = null;
+        usuario.FechaExpiracionToken = DateTime.Now.AddMinutes(minutosExpira);
+        usuario.TokenRecuperacion = SecurityHelper.HashPassword(codigoAcceso);
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "RESETEAR_CLAVE", new { idUsuario }, new { ClaveTemporal = true }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
+        try
+        {
+            await _emailService.EnviarClaveTemporal(usuario.Email, codigoAcceso, minutosExpira, "Reseteo de contraseña del Portal de Aliados");
+            return (true, "Contraseña restablecida. El usuario debe ingresar con '00000000' y usar el código enviado a su correo.");
+        }
+        catch
+        {
+            return (true, $"La contraseña fue restablecida, pero el correo no pudo enviarse. Código de acceso manual: {codigoAcceso}.");
+        }
+    }
+
+    public async Task<(bool Success, string Message)> LimpiarAvatarUsuariosAliadosAsync(int actorId, string avatarUrl)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para modificar avatares.");
+        var avatarSinBarra = avatarUrl.TrimStart('/');
+        var usadoFueraDelPortal = await db.Usuarios.AnyAsync(u =>
+            (u.AvatarUrl == avatarUrl || u.AvatarUrl == avatarSinBarra) &&
+            !db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario));
+        if (usadoFueraDelPortal)
+            return (false, "El avatar está siendo utilizado por una cuenta de otro módulo y no puede eliminarse desde el Portal de Aliados.");
+        var usuarios = await db.Usuarios
+            .Where(u => (u.AvatarUrl == avatarUrl || u.AvatarUrl == avatarSinBarra) &&
+                        db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario))
+            .ToListAsync();
+        foreach (var usuario in usuarios)
+            usuario.AvatarUrl = null;
+        await db.SaveChangesAsync();
+        return (true, "Avatar eliminado correctamente.");
     }
 
     public async Task<IReadOnlyList<AliadoVendedorDisponible>> ListarVendedoresDisponiblesComoAliadosAsync()
@@ -978,10 +1098,14 @@ public sealed class AliadoPortalService
         return (true, activo ? "Aliado activado correctamente." : "Aliado desactivado correctamente.");
     }
 
-    public async Task<(bool Success, string Message)> CrearCuentaAliadoAsync(int actorId, string nombre, string email, string password, decimal porcentajeBase = 30m, bool esAdministradorPortal = false)
+    public async Task<(bool Success, string Message)> CrearCuentaAliadoAsync(
+        int actorId, string nombre, string email, string password, decimal porcentajeBase = 30m,
+        bool esAdministradorPortal = false, string? apellidos = null, string? identificacion = null,
+        DateTime? fechaNacimiento = null, string? avatarUrl = null)
     {
         await EnsureSchemaAsync();
         nombre = nombre.Trim();
+        apellidos = apellidos?.Trim();
         email = email.Trim();
         password = password.Trim();
         if (string.IsNullOrWhiteSpace(nombre) || string.IsNullOrWhiteSpace(email) || password.Length < 8)
@@ -1021,7 +1145,7 @@ public sealed class AliadoPortalService
             var codigo = await GenerarCodigoAsync(db, nombre);
             aliado = new VendedorBackOffice
             {
-                Nombre = nombre,
+                Nombre = $"{nombre} {apellidos}".Trim(),
                 CodigoReferencia = codigo,
                 Activo = true,
                 EsSistema = false,
@@ -1036,7 +1160,7 @@ public sealed class AliadoPortalService
         var nuevoUsuario = new Usuario
         {
             Nombres = nombre,
-            Apellidos = string.Empty,
+            Apellidos = apellidos ?? string.Empty,
             Email = email,
             PasswordHash = SecurityHelper.HashPassword(password),
             IdTipoUsuario = roleId,
@@ -1044,6 +1168,9 @@ public sealed class AliadoPortalService
             Estado = true,
             ClaveTemporal = true,
             CuentaBloqueada = false,
+            AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl,
+            Identificacion = identificacion?.Trim(),
+            FechaNacimiento = fechaNacimiento,
             FechaCreacion = DateTime.Now,
             estadoAsociado = true
         };
@@ -1057,9 +1184,18 @@ public sealed class AliadoPortalService
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "CREAR", null, new { nuevoUsuario.IdUsuario, aliado?.IdVendedor, TipoCuenta = roleName }, new { Modulo = "PortalAliados", Entidad = "Cuenta" });
-        return (true, esAdministradorPortal
+        var mensaje = esAdministradorPortal
             ? "Cuenta creada correctamente con el rol Administrador Portal de Aliados."
-            : "Cuenta de aliado creada correctamente con el rol Aliado Comercial.");
+            : "Cuenta de aliado creada correctamente con el rol Aliado Comercial.";
+        try
+        {
+            await _emailService.EnviarCuentaCreadaAsync(email, $"{nombre} {apellidos}".Trim(), password);
+        }
+        catch
+        {
+            mensaje += " No se pudo enviar el correo de bienvenida.";
+        }
+        return (true, mensaje);
     }
 
     private async Task<List<FacturaPortalRow>> ObtenerFacturasAsync(int idVendedor, int? idCliente = null)
@@ -1730,6 +1866,8 @@ public sealed class AliadoAdminRow
 public sealed class AliadoUsuarioAdminRow
 {
     public int IdUsuario { get; init; }
+    public string Nombres { get; init; } = string.Empty;
+    public string Apellidos { get; init; } = string.Empty;
     public string Nombre { get; init; } = string.Empty;
     public string Email { get; init; } = string.Empty;
     public string? AvatarUrl { get; init; }
@@ -1738,6 +1876,9 @@ public sealed class AliadoUsuarioAdminRow
     public string? CodigoReferencia { get; init; }
     public bool Activo { get; init; }
     public bool Bloqueado { get; init; }
+    public bool ClaveTemporal { get; init; }
+    public string? Identificacion { get; init; }
+    public DateTime? FechaNacimiento { get; init; }
     public DateTime? FechaCreacion { get; init; }
 }
 
