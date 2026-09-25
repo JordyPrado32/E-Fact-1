@@ -114,7 +114,6 @@ else if (contexto is not null)
     private string? avatarUrl;
     private int userId;
     private readonly List<AppServiceCatalogItem> serviciosDisponibles = new();
-    private readonly SemaphoreSlim validacionRutaLock = new(1, 1);
 
     protected override async Task OnInitializedAsync()
     {
@@ -149,7 +148,7 @@ else if (contexto is not null)
 
     private async Task ValidarRutaAsync()
     {
-        if (contexto is null || cargando)
+        if (contexto is null)
             return;
 
         await validacionRutaLock.WaitAsync();
@@ -175,16 +174,15 @@ else if (contexto is not null)
             if (ruta.Equals("aliados", StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var rutaPermitida = menus.Any(x => ruta.Equals(x.Ruta.Trim('/'), StringComparison.OrdinalIgnoreCase) || ruta.StartsWith($"{x.Ruta.Trim('/')}/", StringComparison.OrdinalIgnoreCase));
-            if (!rutaPermitida)
-            {
-                NavManager.NavigateTo(AliadoPortalService.RootRoute, replace: true);
-            }
-        }
-        finally
+        var rutaPermitida = menus.Any(x =>
+            ruta.Equals(x.Ruta.Trim('/'), StringComparison.OrdinalIgnoreCase) ||
+            ruta.StartsWith($"{x.Ruta.Trim('/')}/", StringComparison.OrdinalIgnoreCase));
+        if (!rutaPermitida)
         {
-            validacionRutaLock.Release();
+            NavManager.NavigateTo(AliadoPortalService.RootRoute, replace: true);
         }
+
+        await Task.CompletedTask;
     }
 
     private string ObtenerTitulo()
@@ -254,7 +252,11 @@ else if (contexto is not null)
 
         var catalogo = await AppAccessService.GetCatalogForUserAsync(userId, esSuperAdmin);
         serviciosDisponibles.Clear();
-        serviciosDisponibles.AddRange(catalogo.Where(x => x.TieneAcceso));
+        serviciosDisponibles.AddRange(catalogo.Where(x =>
+            x.TieneAcceso &&
+            (esSuperAdmin ||
+             string.Equals(x.Clave, BackOfficeRoutes.ServiceKey, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(x.Clave, AppAccessService.AllyPortalServiceKey, StringComparison.OrdinalIgnoreCase))));
     }
 
     private async Task CambiarServicioAsync(AppServiceCatalogItem servicio)
@@ -297,12 +299,11 @@ else if (contexto is not null)
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
-        _ = InvokeAsync(async () =>
+        _ = InvokeAsync(() =>
         {
             menuMovilAbierto = false;
             mostrarMenuPerfil = false;
             mostrarMenuServicios = false;
-            await ValidarRutaAsync();
             StateHasChanged();
         });
     }
