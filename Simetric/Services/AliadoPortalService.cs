@@ -336,7 +336,7 @@ public sealed class AliadoPortalService
             RenovacionesUrgentes = proximasRenovaciones.Count(x => x.FechaVencimiento!.Value.Date <= hoy.AddDays(7)),
             Renovaciones = renovaciones,
             LinkPersonalizado = contexto.EnlaceRegistro,
-            EnlacesRegistro = enlacesRegistro
+            EnlacesRegistro = enlacesRegistro,
             
             PeriodoDesde = desde,
             PeriodoHasta = hasta.AddDays(-1)
@@ -1868,6 +1868,16 @@ public sealed class AliadoDashboardDto
     public int RenovacionesUrgentes { get; init; }
     public IReadOnlyList<AliadoRenovacionDto> Renovaciones { get; init; } = Array.Empty<AliadoRenovacionDto>();
     public string LinkPersonalizado { get; init; } = string.Empty;
+    public IReadOnlyList<AliadoEnlaceRegistroDto> EnlacesRegistro { get; init; } = Array.Empty<AliadoEnlaceRegistroDto>();
+    public DateTime PeriodoDesde { get; init; }
+    public DateTime PeriodoHasta { get; init; }
+}
+
+public sealed class AliadoEnlaceRegistroDto
+{
+    public string NombreAliado { get; init; } = string.Empty;
+    public string CodigoReferencia { get; init; } = string.Empty;
+    public string RutaRegistro { get; init; } = string.Empty;
 }
 
 public class AliadoClienteDto
