@@ -48,6 +48,22 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
 
         var state = await _conversationStore.GetOrCreateAsync(userId, request.SessionId, cancellationToken);
         var requestId = request.RequestId?.Trim();
+        var requestedScope = string.Equals(request.Scope?.Trim(), "erubrica", StringComparison.OrdinalIgnoreCase)
+            ? "erubrica"
+            : "efact";
+        if (string.IsNullOrWhiteSpace(state.Scope))
+            state.Scope = requestedScope;
+        else if (!string.Equals(state.Scope, requestedScope, StringComparison.OrdinalIgnoreCase))
+        {
+            return new ChatFacturaResponse
+            {
+                RequestId = requestId,
+                SessionId = request.SessionId,
+                Respuesta = "Esta sesión pertenece a otro espacio del asistente. Inicia una nueva conversación para continuar.",
+                CodigoError = "scope_mismatch",
+                AccionDetectada = "scope_mismatch"
+            };
+        }
         if (!string.IsNullOrWhiteSpace(requestId) && state.RespuestasIdempotentes.TryGetValue(requestId, out var previousResponse))
             return previousResponse;
 
@@ -110,6 +126,7 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             RequiereConfirmacion = state.RequiereConfirmacion || state.OperacionPendiente is not null,
             Emitida = state.Emitida,
             AccionDetectada = result.AccionDetectada ?? "consulta",
+            AccionUi = result.AccionUi ?? ResolveUiAction(result.RutaSugerida),
             RutaSugerida = result.RutaSugerida,
             CodigoError = result.CodigoError,
             RutasSugeridas = result.RutasSugeridas,
@@ -165,6 +182,7 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
     {
         response.RequestId = requestId;
         response.SessionId = state.SessionId;
+        response.AccionUi ??= ResolveUiAction(response.RutaSugerida);
         response.Estado = state.Estado;
         response.EstadoVersion = state.EstadoVersion;
         response.OperacionPendiente = state.OperacionPendiente is null
@@ -191,6 +209,20 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
 
     private static bool IsConfirmationAction(string? action)
         => action is "preparar_emision" or "validar_factura" or "factura_lista" or "confirmar_emision";
+
+    private static string? ResolveUiAction(string? route)
+        => route?.Trim().ToLowerInvariant() switch
+        {
+            "/solicitud/nueva" => "abrir_solicitud",
+            "/solicitud/pagos" => "abrir_pagos",
+            "/e-rubrica/configuracion/firma" => "abrir_configuracion_firma",
+            "/e-rubrica/configuracion/plan" or "/e-rubrica/plan-disponible" => "abrir_plan",
+            "/e-rubrica/documentos/firmar" => "abrir_firma_pdf",
+            "/e-rubrica/documentos/validar-firma" => "abrir_validar_firma",
+            "/e-rubrica/documentos" or "/e-rubrica/documentos-por-firmar" => "abrir_documentos",
+            "/e-rubrica/mis-firmas" => "abrir_mis_firmas",
+            _ => null
+        };
 
     private static ChatFacturaResponse BuildToolResponse(FacturaConversationState state, ToolResultDto result, string action)
     {

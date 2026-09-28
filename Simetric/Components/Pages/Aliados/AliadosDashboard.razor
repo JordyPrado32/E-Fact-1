@@ -18,9 +18,9 @@ else
             <div class="ally-dashboard-hero-copy">
                 <span>CICLO COMERCIAL</span>
                 <h1>¡Bienvenida, @PrimerNombre!</h1>
-                <p>Aquí puedes consultar tus clientes, renovaciones y comisiones.</p>
+                <p>Aquí puedes consultar tus clientes, renovaciones y comisiones.</p><small class="ally-dashboard-period">Resumen: @PeriodoLabel</small>
             </div>
-            <NavLink class="ally-dashboard-button is-light" href="/aliados/clientes">Ver mis clientes <i class="ri-arrow-right-line"></i></NavLink>
+            <div class="ally-dashboard-hero-actions"><select class="ally-select ally-dashboard-period-select" @bind="periodo" @bind:after="CargarAsync"><option value="mes">Este mes</option><option value="trimestre">Últimos 3 meses</option><option value="ano">Este año</option></select><NavLink class="ally-dashboard-button is-light" href="/aliados/clientes">Ver mis clientes <i class="ri-arrow-right-line"></i></NavLink></div>
         </section>
 
         <section class="ally-sales-link">
@@ -102,8 +102,12 @@ else
 @code {
     private AliadoDashboardDto? modelo;
     private bool cargando = true;
+    private string periodo = "mes";
     private string EnlaceAbsoluto => modelo is null ? string.Empty : $"{NavManager.BaseUri.TrimEnd('/')}{modelo.LinkPersonalizado}";
     private string PrimerNombre => modelo?.Contexto.Nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Aliado";
+    private string PeriodoLabel => modelo is null ? "período actual" : modelo.PeriodoDesde.Date == modelo.PeriodoHasta.Date
+        ? modelo.PeriodoDesde.ToString("dd/MM/yyyy")
+        : $"{modelo.PeriodoDesde:dd/MM/yyyy} – {modelo.PeriodoHasta:dd/MM/yyyy}";
 
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
@@ -119,9 +123,20 @@ else
         try
         {
             var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-            modelo = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id)
-                ? await AliadoService.ObtenerDashboardAsync(id)
-                : null;
+            if (!int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id))
+            {
+                modelo = null;
+                return;
+            }
+
+            var hoy = DateTime.Today;
+            var inicio = periodo switch
+            {
+                "trimestre" => new DateTime(hoy.Year, hoy.Month, 1).AddMonths(-2),
+                "ano" => new DateTime(hoy.Year, 1, 1),
+                _ => new DateTime(hoy.Year, hoy.Month, 1)
+            };
+            modelo = await AliadoService.ObtenerDashboardAsync(id, inicio, hoy);
         }
         catch
         {

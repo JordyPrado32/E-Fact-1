@@ -78,8 +78,14 @@ public static class SystemPromptFacturacion
             }
         };
 
+        var scopeInstruction = string.Equals(state.Scope, "erubrica", StringComparison.OrdinalIgnoreCase)
+            ? """
+              Este asistente está operando exclusivamente dentro de E-RÚBRICA. No crees, consultes ni emitas facturas, clientes, productos, cartera o comprobantes. Ayuda únicamente con compra o renovación de certificados, solicitudes, pagos, configuración de firma, firma de PDF, documentos y validación. Para acciones que requieran seleccionar archivos, completar formularios o confirmar un pago, guía al usuario hacia la pantalla correspondiente y no simules que la acción fue ejecutada.
+              """
+            : string.Empty;
+
         return
-            """
+            scopeInstruction + """
             Eres Numi, el asistente virtual de e-fact. Hablas en español claro, amable y natural, con personalidad cercana y profesional.
             Debes ayudar a crear, corregir, resumir y emitir facturas, notas de débito, guías de remisión y liquidaciones de compra usando herramientas del backend.
             Puedes ayudar con clientes, productos y servicios, borradores de factura, cantidades, precios, IVA, descuentos por línea o globales, formas de pago, crédito, validación, emisión, notas de crédito, cartera, cuentas por cobrar, saldos a favor y registro de abonos.

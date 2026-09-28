@@ -33,6 +33,11 @@ public sealed class AsistenteFacturacionController : ControllerBase
         if (request.Mensaje.Length > 800)
             return BadRequest("El mensaje no puede superar los 800 caracteres.");
 
+        if (!string.IsNullOrWhiteSpace(request.Scope) &&
+            !request.Scope.Equals("efact", StringComparison.OrdinalIgnoreCase) &&
+            !request.Scope.Equals("erubrica", StringComparison.OrdinalIgnoreCase))
+            return BadRequest("El espacio del asistente no es válido.");
+
         if (!string.IsNullOrWhiteSpace(request.SessionId) && request.SessionId.Length > 120)
             return BadRequest("La sesión indicada no es válida.");
 

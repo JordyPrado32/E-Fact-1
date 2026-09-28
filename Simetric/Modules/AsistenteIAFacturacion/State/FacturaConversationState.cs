@@ -5,6 +5,7 @@ namespace Simetric.Modules.AsistenteIAFacturacion.State;
 public sealed class FacturaConversationState
 {
     public string SessionId { get; set; } = string.Empty;
+    public string Scope { get; set; } = string.Empty;
     public int UserId { get; set; }
     public string FacturaDraftId { get; set; } = Guid.NewGuid().ToString("N");
     public string Estado { get; set; } = FacturaConversationStates.SinFactura;

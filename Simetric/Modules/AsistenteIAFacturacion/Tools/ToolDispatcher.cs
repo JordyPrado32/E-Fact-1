@@ -29,6 +29,15 @@ public sealed class ToolDispatcher
         ToolDefinitions.EmitirRetencion
     };
 
+    private static readonly HashSet<string> ERubricaTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ToolDefinitions.ConsultarESignEstado,
+        ToolDefinitions.ConsultarESignSolicitudes,
+        ToolDefinitions.ConsultarESignDocumentos,
+        ToolDefinitions.SincronizarESignSolicitud,
+        ToolDefinitions.ConsultarESignPlanes
+    };
+
     private readonly FacturacionTools _tools;
 
     public ToolDispatcher(FacturacionTools tools)
@@ -59,6 +68,16 @@ public sealed class ToolDispatcher
         using (document)
         {
             var root = document.RootElement;
+            if (string.Equals(state.Scope, "erubrica", StringComparison.OrdinalIgnoreCase) && !ERubricaTools.Contains(toolName))
+            {
+                return new ToolResultDto
+                {
+                    ToolName = toolName,
+                    Success = false,
+                    CodigoError = "tool_not_allowed_in_scope",
+                    Message = "Esta operación no está disponible dentro del asistente de E-RÚBRICA."
+                };
+            }
             if (EmissionTools.Contains(toolName))
             {
                 var configurationWarning = await _tools.ObtenerAdvertenciaConfiguracionEmisionAsync(state.UserId);

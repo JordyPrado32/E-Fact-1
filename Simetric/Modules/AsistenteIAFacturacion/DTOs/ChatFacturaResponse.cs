@@ -34,6 +34,9 @@ public sealed class ChatFacturaResponse
     [JsonPropertyName("accionDetectada")]
     public string? AccionDetectada { get; set; }
 
+    [JsonPropertyName("accionUi")]
+    public string? AccionUi { get; set; }
+
     [JsonPropertyName("rutaSugerida")]
     public string? RutaSugerida { get; set; }
 

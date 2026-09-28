@@ -1596,8 +1596,8 @@ namespace Simetric.Services
                     f.Coddocumento == 1 &&
                     f.Estado == true &&
                     f.Autorizado != true &&
-                    f.Fchautorizacion.HasValue &&
-                    f.Fchautorizacion >= limite)
+                    (f.Fchautorizacion >= limite ||
+                     (!f.Fchautorizacion.HasValue && f.Fechaentrega >= limite)))
                 .Select(f => new
                 {
                     f.Codfactura,
@@ -1610,8 +1610,8 @@ namespace Simetric.Services
 
             return candidatas
                 .Where(f =>
-                    !string.IsNullOrWhiteSpace(f.Mensaje) &&
-                    DebeReintentarseEnvioSri(f.Mensaje) &&
+                    (string.IsNullOrWhiteSpace(f.Mensaje) && string.IsNullOrWhiteSpace(f.Estadoenviosri) ||
+                     (!string.IsNullOrWhiteSpace(f.Mensaje) && DebeReintentarseEnvioSri(f.Mensaje))) &&
                     !DocumentoAutorizacionHelper.EsNoAutorizado(f.Estadoenviosri) &&
                     !DocumentoAutorizacionHelper.EstaAutorizado(false, f.Estadoenviosri) &&
                     NormalizarControlReintentoSri(LeerFacturaCorreoMetadata(f.Detalleextra), ahora).SriIntentosDia < 3)

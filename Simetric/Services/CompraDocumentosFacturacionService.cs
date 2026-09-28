@@ -161,6 +161,14 @@ public sealed class CompraDocumentosFacturacionService
         try
         {
             resultadoSri = await _facturacionService.ReintentarEnvioSriFacturaAsync(facturaExistente.Codfactura);
+
+            if (string.Equals(resultadoSri.estado, "ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                await _facturacionService.MarcarFacturaSriRechazadaAsync(
+                    facturaExistente.Codfactura,
+                    DocumentoAutorizacionHelper.EstadoPendiente,
+                    resultadoSri.mensaje ?? "No se pudo completar el intento de envío al SRI.");
+            }
         }
         catch (Exception ex)
         {
@@ -169,9 +177,13 @@ public sealed class CompraDocumentosFacturacionService
                 "La factura {CodFactura} de la compra {CompraId} quedo guardada, pero fallo el envio inmediato al SRI.",
                 facturaExistente.Codfactura,
                 compra.Id);
+            await _facturacionService.MarcarFacturaSriRechazadaAsync(
+                facturaExistente.Codfactura,
+                DocumentoAutorizacionHelper.EstadoPendiente,
+                $"No se pudo completar el intento de envío al SRI: {ex.Message}");
             resultadoSri = new mensajeSRI
             {
-                estado = facturaExistente.Estadoenviosri ?? "PENDIENTE",
+                estado = DocumentoAutorizacionHelper.EstadoPendiente,
                 mensaje = "La factura quedo guardada y pendiente de reintento al SRI."
             };
         }

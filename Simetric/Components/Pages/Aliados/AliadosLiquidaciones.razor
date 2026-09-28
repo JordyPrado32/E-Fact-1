@@ -18,10 +18,10 @@
         }
         else
         {
-            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Período</th><th>Fecha</th><th>Movimientos</th><th>Total</th><th>Referencia</th><th>Estado</th></tr></thead><tbody>
+            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Período</th><th>Fecha</th><th>Movimientos</th><th>Total</th><th>Referencia</th><th>Estado</th><th></th></tr></thead><tbody>
             @foreach (var item in LiquidacionesPaginadas)
             {
-                <tr @key="item.IdLiquidacion"><td>@item.Periodo</td><td>@item.Fecha.ToString("dd/MM/yyyy")</td><td>@item.CantidadComisiones comisión(es)</td><td>$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @(item.Estado == "Pagada" ? "success" : "warning")">@item.Estado</span></td></tr>
+                <tr @key="item.IdLiquidacion"><td>@item.Periodo</td><td>@item.Fecha.ToString("dd/MM/yyyy")</td><td>@item.CantidadComisiones comisión(es)</td><td>$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @(item.Estado == "Pagada" ? "success" : "warning")">@item.Estado</span></td><td><button type="button" class="ally-table-action" @onclick="() => VerDetalleAsync(item)">Ver detalle</button></td></tr>
             }
             </tbody></table></div>
             <div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
@@ -29,8 +29,33 @@
     </section>
 </div>
 
+@if (liquidacionSeleccionada is not null)
+{
+    <div class="ally-modal-backdrop" @onclick="CerrarDetalle">
+        <div class="ally-modal ally-modal-wide" role="dialog" aria-modal="true" aria-labelledby="detalle-liquidacion-title" @onclick:stopPropagation="true">
+            <div class="ally-modal-heading"><h3 id="detalle-liquidacion-title">Liquidación @liquidacionSeleccionada.Periodo</h3><button type="button" aria-label="Cerrar detalle" @onclick="CerrarDetalle">×</button></div>
+            <div class="ally-detail-grid"><div><span>Fecha</span><strong>@liquidacionSeleccionada.Fecha.ToString("dd/MM/yyyy")</strong></div><div><span>Movimientos</span><strong>@movimientosDetalle.Count</strong></div><div><span>Total</span><strong>$ @liquidacionSeleccionada.Total.ToString("N2")</strong></div><div><span>Referencia</span><strong>@(liquidacionSeleccionada.ReferenciaPago ?? "Sin referencia")</strong></div></div>
+            @if (cargandoDetalle)
+            {
+                <div class="ally-empty">Cargando movimientos...</div>
+            }
+            else if (movimientosDetalle.Count == 0)
+            {
+                <div class="ally-empty">No hay movimientos asociados a esta liquidación.</div>
+            }
+            else
+            {
+                <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Cliente / producto</th><th>Tipo</th><th>Base</th><th>Comisión</th><th>Estado</th></tr></thead><tbody>@foreach (var movimiento in movimientosDetalle) { <tr @key="movimiento.IdComision"><td><strong>@movimiento.Cliente</strong><br /><small>@movimiento.Producto</small></td><td>@movimiento.Tipo</td><td>$ @movimiento.BaseComisionable.ToString("N2")</td><td>$ @movimiento.ValorComision.ToString("N2")<br /><small>@movimiento.Porcentaje.ToString("0.##")%</small></td><td><span class="ally-badge success">@movimiento.Estado</span></td></tr>}</tbody></table></div>
+            }
+            <div class="ally-modal-actions"><button type="button" class="ally-button muted" @onclick="CerrarDetalle">Cerrar</button></div>
+        </div>
+    </div>
+}
+
 @code {
     private List<AliadoLiquidacionDto> liquidaciones = new();
+    private AliadoLiquidacionDto? liquidacionSeleccionada;
+    private List<AliadoComisionMovimientoDto> movimientosDetalle = new();
     private string filtroEstado = string.Empty;
     private int pagina = 1;
     private const int TamanoPagina = 20;
@@ -38,6 +63,7 @@
     private IEnumerable<AliadoLiquidacionDto> LiquidacionesPaginadas => LiquidacionesFiltradas.Skip((pagina - 1) * TamanoPagina).Take(TamanoPagina);
     private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(LiquidacionesFiltradas.Count / (double)TamanoPagina));
     private bool cargando = true;
+    private bool cargandoDetalle;
 
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
@@ -46,6 +72,24 @@
 
     private void ReiniciarPagina() => pagina = 1;
     private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
+    private void CerrarDetalle() => liquidacionSeleccionada = null;
+
+    private async Task VerDetalleAsync(AliadoLiquidacionDto liquidacion)
+    {
+        liquidacionSeleccionada = liquidacion;
+        movimientosDetalle = new();
+        cargandoDetalle = true;
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            if (int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id))
+                movimientosDetalle = (await AliadoService.ObtenerDetalleLiquidacionAsync(id, liquidacion.IdLiquidacion)).ToList();
+        }
+        finally
+        {
+            cargandoDetalle = false;
+        }
+    }
     private static string Csv(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
 
     private async Task ExportarAsync()

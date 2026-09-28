@@ -232,6 +232,9 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         if (restrictedResult is not null)
             return restrictedResult;
 
+        if (string.Equals(state.Scope, "erubrica", StringComparison.OrdinalIgnoreCase))
+            return await ProcesarFallbackERubricaAsync(state, normalized, cancellationToken);
+
         if (ContainsAny(normalized, "cancela", "cancelar", "me equivoque") ||
             Regex.IsMatch(normalized, @"(?:^|\s)no(?:\s+(?:quiero|deseo|seguir|continuar|hacerlo))?\s*$", RegexOptions.IgnoreCase))
         {
@@ -573,11 +576,45 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         {
             return await ProcesarConFallbackAsync(state, mensaje, cancellationToken);
         }
+
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Fast path local del asistente no pudo resolver el mensaje. Se continuara con OpenAI.");
             return null;
         }
+    }
+
+    private async Task<OpenAIAsistenteResult> ProcesarFallbackERubricaAsync(
+        FacturaConversationState state,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        var syncResult = await TryHandleESignSyncCommandAsync(state, normalized, cancellationToken);
+        if (syncResult is not null)
+            return syncResult;
+
+        var plansResult = await TryHandleESignPlansCommandAsync(state, normalized, cancellationToken);
+        if (plansResult is not null)
+            return plansResult;
+
+        var queryResult = await TryHandleESignQueryCommandAsync(state, normalized, cancellationToken);
+        if (queryResult is not null)
+            return queryResult;
+
+        var navigationResult = TryHandleNavigationCommand(normalized);
+        if (navigationResult is not null)
+            return navigationResult;
+
+        var helpResult = TryHandleHelpCommand(normalized);
+        if (helpResult is not null)
+            return helpResult;
+
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = "Puedo ayudarte a comprar o renovar una firma, revisar tu solicitud o pago, configurar el certificado, firmar un PDF y validar documentos.",
+            AccionDetectada = "ayuda_erubrica",
+            RutaSugerida = "/e-rubrica"
+        };
     }
 
     private static bool ShouldUseLocalFastPath(FacturaConversationState state, string normalized)
@@ -1438,9 +1475,11 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         if (ContainsAny(normalized,
              "e-rubrica", "erubrica", "e rúbrica", "firma electrónica", "firma electronica", "certificado digital",
              "llenar solicitud", "nueva solicitud", "solicitud de firma", "solicitar firma", "firmar documento", "firmar documentos",
-             "firmar pdf", "validar firma", "validar firmas", "validar pdf", "cargar documentos de solicitud", "subir documentos de solicitud", "documento firmado", "documentos firmados", "mis firmas", "historial solicitudes", "mis solicitudes", "mis pagos", "pagar certificado", "pago certificado", "configurar firma"))
+             "firmar pdf", "validar firma", "validar firmas", "validar pdf", "cargar documentos de solicitud", "subir documentos de solicitud", "documento firmado", "documentos firmados", "mis firmas", "historial solicitudes", "mis solicitudes", "mis pagos", "pagar certificado", "pago certificado", "configurar firma", "comprar firma", "renovar firma", "adquirir firma"))
         {
-            var ruta = ContainsAny(normalized, "pagar certificado", "pago certificado", "pagar la solicitud", "pagar solicitud", "realizar pago", "mis pagos")
+            var ruta = ContainsAny(normalized, "comprar", "renovar", "adquirir", "nueva firma")
+                ? "/e-rubrica/plan-disponible"
+                : ContainsAny(normalized, "pagar certificado", "pago certificado", "pagar la solicitud", "pagar solicitud", "realizar pago", "mis pagos")
                 ? "/solicitud/pagos"
                 : ContainsAny(normalized, "configurar firma", "configuración de firma", "configuracion de firma")
                     ? "/e-rubrica/configuracion/firma"

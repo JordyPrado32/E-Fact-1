@@ -274,7 +274,7 @@ public sealed class AliadoPortalService
         return true;
     }
 
-    public async Task<AliadoDashboardDto?> ObtenerDashboardAsync(int userId)
+    public async Task<AliadoDashboardDto?> ObtenerDashboardAsync(int userId, DateTime? inicioPeriodo = null, DateTime? finPeriodo = null)
     {
         var contexto = await ObtenerContextoAsync(userId);
         if (contexto is null)
@@ -283,8 +283,11 @@ public sealed class AliadoPortalService
         await SincronizarComisionesAsync(contexto.IdVendedor);
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
         var hoy = DateTime.Today;
-        var inicioMes = new DateTime(hoy.Year, hoy.Month, 1);
-        var ventasPeriodo = facturas.Where(x => x.Fecha >= inicioMes).ToList();
+        var desde = (inicioPeriodo ?? new DateTime(hoy.Year, hoy.Month, 1)).Date;
+        var hasta = (finPeriodo ?? hoy).Date.AddDays(1);
+        if (hasta <= desde)
+            hasta = desde.AddDays(1);
+        var ventasPeriodo = facturas.Where(x => x.Fecha >= desde && x.Fecha < hasta).ToList();
         var proximasRenovaciones = facturas
             .Where(x => EsRenovacionVisible(x, hoy, 0, 30))
             .OrderBy(x => x.FechaVencimiento)
@@ -307,7 +310,9 @@ public sealed class AliadoPortalService
             RenovacionesProximas = proximasRenovaciones.Count,
             RenovacionesUrgentes = proximasRenovaciones.Count(x => x.FechaVencimiento!.Value.Date <= hoy.AddDays(7)),
             Renovaciones = renovaciones,
-            LinkPersonalizado = contexto.EnlaceRegistro
+            LinkPersonalizado = contexto.EnlaceRegistro,
+            PeriodoDesde = desde,
+            PeriodoHasta = hasta.AddDays(-1)
         };
     }
 
@@ -1291,6 +1296,45 @@ public sealed class AliadoPortalService
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<AliadoComisionMovimientoDto>> ObtenerDetalleLiquidacionAsync(int userId, int idLiquidacion)
+    {
+        var contexto = await ObtenerContextoAsync(userId);
+        if (contexto is null || contexto.EsAdministrador || idLiquidacion <= 0)
+            return Array.Empty<AliadoComisionMovimientoDto>();
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var pertenece = await db.AliadoLiquidaciones.AsNoTracking()
+            .AnyAsync(x => x.IdLiquidacion == idLiquidacion && x.IdVendedor == contexto.IdVendedor);
+        if (!pertenece)
+            return Array.Empty<AliadoComisionMovimientoDto>();
+
+        return await db.AliadoComisiones.AsNoTracking()
+            .Where(x => x.IdLiquidacion == idLiquidacion && x.IdVendedor == contexto.IdVendedor)
+            .OrderByDescending(x => x.FechaGeneracion)
+            .Select(x => new AliadoComisionMovimientoDto
+            {
+                IdComision = x.IdComision,
+                IdFactura = x.IdFactura,
+                Cliente = db.Clientes
+                    .Where(c => c.Codcliente == x.IdCliente)
+                    .Select(c => c.Nombrerazonsocial ?? c.Nombrecomercial ?? ((c.Nombres ?? "") + " " + (c.Apellidos ?? "")))
+                    .FirstOrDefault() ?? "Cliente",
+                Producto = db.Detallefacturas
+                    .Where(d => d.Codfactura == x.IdFactura)
+                    .OrderBy(d => d.Codlinea)
+                    .Select(d => d.Descripproducto)
+                    .FirstOrDefault() ?? "Servicio Numerica",
+                Tipo = x.TipoComision,
+                BaseComisionable = x.BaseComisionable,
+                Porcentaje = x.Porcentaje,
+                ValorComision = x.Valor,
+                FechaGeneracion = x.FechaGeneracion,
+                Estado = x.Estado,
+                IdLiquidacion = x.IdLiquidacion
+            })
+            .ToListAsync();
+    }
+
     public async Task SincronizarComisionesPortalAsync()
     {
         await EnsureSchemaAsync();
@@ -1738,6 +1782,8 @@ public sealed class AliadoDashboardDto
     public int RenovacionesUrgentes { get; init; }
     public IReadOnlyList<AliadoRenovacionDto> Renovaciones { get; init; } = Array.Empty<AliadoRenovacionDto>();
     public string LinkPersonalizado { get; init; } = string.Empty;
+    public DateTime PeriodoDesde { get; init; }
+    public DateTime PeriodoHasta { get; init; }
 }
 
 public class AliadoClienteDto

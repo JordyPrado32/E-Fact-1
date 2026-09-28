@@ -10,6 +10,9 @@ public sealed class ChatFacturaRequest
     [JsonPropertyName("sessionId")]
     public string SessionId { get; set; } = string.Empty;
 
+    [JsonPropertyName("scope")]
+    public string Scope { get; set; } = "efact";
+
     [JsonPropertyName("mensaje")]
     public string Mensaje { get; set; } = string.Empty;
 
