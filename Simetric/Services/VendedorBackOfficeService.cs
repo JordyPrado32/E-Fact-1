@@ -105,10 +105,17 @@ public sealed class VendedorBackOfficeService
         if (vendedor is not null)
             return vendedor;
 
-        var codigo = NormalizarCodigo(codigoReferencia);
-        return await context.VendedoresBackOffice
+        var codigo = codigoReferencia.Trim();
+        var vendedorPorCodigo = await context.VendedoresBackOffice
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Activo && x.CodigoReferencia == codigo);
+        if (vendedorPorCodigo is not null)
+            return vendedorPorCodigo;
+
+        var codigoNormalizado = NormalizarCodigo(codigoReferencia);
+        return await context.VendedoresBackOffice
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Activo && x.CodigoReferencia == codigoNormalizado);
     }
 
     public async Task<(bool Success, string Message, VendedorBackOffice? Vendedor)> CrearAsync(int idUsuario, string? nombre)
