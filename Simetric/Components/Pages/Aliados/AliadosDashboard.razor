@@ -26,12 +26,48 @@ else
         <section class="ally-sales-link">
             <div class="ally-sales-link-title">
                 <span class="ally-dashboard-icon"><i class="ri-links-line"></i></span>
-                <div><strong>Mi enlace de ventas</strong><small>Comparte este enlace con tus clientes para que puedan adquirir nuestros productos.</small></div>
+                @if (modelo.Contexto.EsAdministrador)
+                {
+                    <div><strong>Enlaces de ventas</strong><small>Copia el enlace del aliado correspondiente.</small></div>
+                }
+                else
+                {
+                    <div><strong>Mi enlace de ventas</strong><small>Comparte este enlace con tus clientes para que puedan adquirir nuestros productos.</small></div>
+                }
             </div>
-            <div class="ally-sales-link-actions">
-                <div class="ally-sales-link-value"><span>@EnlaceAbsoluto</span><button type="button" title="Copiar enlace" aria-label="Copiar enlace" @onclick="CopiarEnlace"><i class="ri-file-copy-line"></i></button></div>
-                <button type="button" class="ally-dashboard-button" @onclick="CopiarEnlace"><i class="ri-file-copy-line"></i> Copiar enlace</button>
-            </div>
+            @if (modelo.Contexto.EsAdministrador)
+            {
+                <div class="ally-sales-link-list">
+                    <div class="ally-sales-link-admin-row is-own-link">
+                        <strong>Mi enlace administrativo</strong>
+                        <span title="@EnlaceAbsoluto">@EnlaceAbsoluto</span>
+                        <button type="button" title="Copiar mi enlace administrativo" aria-label="Copiar mi enlace administrativo" @onclick="CopiarEnlace"><i class="ri-file-copy-line"></i></button>
+                    </div>
+                    @if (modelo.EnlacesRegistro.Count == 0)
+                    {
+                        <span class="ally-readonly">No hay otros aliados comerciales activos.</span>
+                    }
+                    else
+                    {
+                        @foreach (var enlace in modelo.EnlacesRegistro)
+                        {
+                            var enlaceAbsoluto = ConstruirEnlaceAbsoluto(enlace.RutaRegistro);
+                            <div class="ally-sales-link-admin-row" @key="enlace.CodigoReferencia">
+                                <strong>@enlace.NombreAliado</strong>
+                                <span title="@enlaceAbsoluto">@enlaceAbsoluto</span>
+                                <button type="button" title="Copiar enlace de @enlace.NombreAliado" aria-label="Copiar enlace de @enlace.NombreAliado" @onclick="() => CopiarEnlace(enlaceAbsoluto)"><i class="ri-file-copy-line"></i></button>
+                            </div>
+                        }
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="ally-sales-link-actions">
+                    <div class="ally-sales-link-value"><span>@EnlaceAbsoluto</span><button type="button" title="Copiar enlace" aria-label="Copiar enlace" @onclick="CopiarEnlace"><i class="ri-file-copy-line"></i></button></div>
+                    <button type="button" class="ally-dashboard-button" @onclick="CopiarEnlace"><i class="ri-file-copy-line"></i> Copiar enlace</button>
+                </div>
+            }
         </section>
 
         <section class="ally-dashboard-kpis">
@@ -102,7 +138,24 @@ else
 @code {
     private AliadoDashboardDto? modelo;
     private bool cargando = true;
-    private string EnlaceAbsoluto => modelo is null ? string.Empty : $"{NavManager.BaseUri.TrimEnd('/')}{modelo.LinkPersonalizado}";
+    private string EnlaceAbsoluto
+    {
+        get
+        {
+            if (modelo is null)
+                return string.Empty;
+
+            var rutaRegistro = modelo.LinkPersonalizado;
+            if (string.IsNullOrWhiteSpace(rutaRegistro) && !string.IsNullOrWhiteSpace(modelo.Contexto.CodigoReferencia))
+                rutaRegistro = $"/register?vendedor={Uri.EscapeDataString(modelo.Contexto.CodigoReferencia)}";
+
+            return string.IsNullOrWhiteSpace(rutaRegistro)
+                ? string.Empty
+                : $"{NavManager.BaseUri.TrimEnd('/')}{rutaRegistro}";
+        }
+    }
+    private string ConstruirEnlaceAbsoluto(string rutaRegistro) =>
+        string.IsNullOrWhiteSpace(rutaRegistro) ? string.Empty : $"{NavManager.BaseUri.TrimEnd('/')}{rutaRegistro}";
     private string PrimerNombre => modelo?.Contexto.Nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Aliado";
 
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
@@ -133,12 +186,17 @@ else
         }
     }
 
-    private async Task CopiarEnlace()
+    private Task CopiarEnlace() => CopiarEnlace(EnlaceAbsoluto);
+
+    private async Task CopiarEnlace(string enlace)
     {
-        if (!string.IsNullOrWhiteSpace(EnlaceAbsoluto))
+        if (!string.IsNullOrWhiteSpace(enlace))
         {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", EnlaceAbsoluto);
-            await AlertService.ShowSuccessAsync("El enlace quedó copiado en el portapapeles.", "Enlace copiado");
+            var copiado = await JS.InvokeAsync<bool>("numericaClipboard.copy", enlace);
+            if (copiado)
+                await AlertService.ShowSuccessAsync("El enlace quedó copiado en el portapapeles.", "Enlace copiado");
+            else
+                await AlertService.ShowErrorAsync("No fue posible copiar el enlace. Selecciónalo y cópialo manualmente.", "No se pudo copiar");
         }
     }
 

@@ -114,6 +114,10 @@ public sealed class AliadoPortalService
         esAdministrador = string.Equals(rolPortal.Nombre, AdminRoleName, StringComparison.OrdinalIgnoreCase);
         if (esAdministrador)
         {
+            var vendedorAdministrador = await _vendedorService.ObtenerPerfilUsuarioAsync(
+                usuario.IdUsuario,
+                $"{usuario.Nombres} {usuario.Apellidos}".Trim());
+
             return new AliadoPortalContext
             {
                 IdUsuario = usuario.IdUsuario,
@@ -123,7 +127,12 @@ public sealed class AliadoPortalService
                 Email = usuario.Email,
                 Celular = usuario.Celular,
                 AvatarUrl = usuario.AvatarUrl,
-                NombreAliado = "Administración del Portal",
+                IdVendedor = vendedorAdministrador?.IdVendedor ?? 0,
+                NombreAliado = vendedorAdministrador?.Nombre ?? "Administración del Portal",
+                CodigoReferencia = vendedorAdministrador?.CodigoReferencia ?? string.Empty,
+                EnlaceRegistro = vendedorAdministrador is null
+                    ? string.Empty
+                    : _vendedorService.ConstruirRutaRegistro(vendedorAdministrador),
                 EsAdministrador = true
             };
         }
@@ -280,6 +289,22 @@ public sealed class AliadoPortalService
         if (contexto is null)
             return null;
 
+        var enlacesRegistro = contexto.EsAdministrador
+            ? (await ListarAliadosAsync())
+                .Where(x => x.Activo && x.UsuarioActivo)
+                .Select(x => new AliadoEnlaceRegistroDto
+                {
+                    NombreAliado = x.Nombre,
+                    CodigoReferencia = x.CodigoReferencia,
+                    RutaRegistro = _vendedorService.ConstruirRutaRegistro(new VendedorBackOffice
+                    {
+                        IdVendedor = x.IdVendedor,
+                        CodigoReferencia = x.CodigoReferencia
+                    })
+                })
+                .ToList()
+            : new List<AliadoEnlaceRegistroDto>();
+
         await SincronizarComisionesAsync(contexto.IdVendedor);
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
         var hoy = DateTime.Today;
@@ -307,7 +332,8 @@ public sealed class AliadoPortalService
             RenovacionesProximas = proximasRenovaciones.Count,
             RenovacionesUrgentes = proximasRenovaciones.Count(x => x.FechaVencimiento!.Value.Date <= hoy.AddDays(7)),
             Renovaciones = renovaciones,
-            LinkPersonalizado = contexto.EnlaceRegistro
+            LinkPersonalizado = contexto.EnlaceRegistro,
+            EnlacesRegistro = enlacesRegistro
         };
     }
 
@@ -324,10 +350,11 @@ public sealed class AliadoPortalService
             .Select(x => new AliadoClienteDto
             {
                 IdCliente = x.Codcliente,
-                Identificacion = x.Numeroidentificacion,
-                Nombre = x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
-                Email = x.Correo,
-                Telefono = x.Celular ?? x.Telefonoconvencional
+                Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
+                Nombre = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.TipoCliente == 2 ? (u.NombreEmpresa ?? u.Nombres) : (u.Nombres + " " + u.Apellidos)).FirstOrDefault()
+                    ?? x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
+                Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo,
+                Telefono = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Celular).FirstOrDefault() ?? x.Celular ?? x.Telefonoconvencional
             })
             .OrderBy(x => x.Nombre)
             .ToListAsync();
@@ -365,11 +392,12 @@ public sealed class AliadoPortalService
             .Select(x => new AliadoClienteDetalleDto
             {
                 IdCliente = x.Codcliente,
-                Identificacion = x.Numeroidentificacion,
-                Nombre = x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
-                Email = x.Correo,
-                Telefono = x.Celular ?? x.Telefonoconvencional,
-                Direccion = x.Direccion
+                Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
+                Nombre = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.TipoCliente == 2 ? (u.NombreEmpresa ?? u.Nombres) : (u.Nombres + " " + u.Apellidos)).FirstOrDefault()
+                    ?? x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
+                Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo,
+                Telefono = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Celular).FirstOrDefault() ?? x.Celular ?? x.Telefonoconvencional,
+                Direccion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.DireccionEmpresa).FirstOrDefault() ?? x.Direccion
             })
             .FirstOrDefaultAsync();
 
@@ -804,7 +832,8 @@ public sealed class AliadoPortalService
                 FechaCreacion = u.FechaCreacion,
                 Rol = db.AliadoPortalRoles.Where(r => db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == r.IdRol)).Select(r => r.Nombre).FirstOrDefault() ?? "Sin rol",
                 Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == u.IdVendedor).Select(v => v.Nombre).FirstOrDefault(),
-                CodigoReferencia = db.VendedoresBackOffice.Where(v => v.IdVendedor == u.IdVendedor).Select(v => v.CodigoReferencia).FirstOrDefault()
+                CodigoReferencia = db.VendedoresBackOffice.Where(v => v.IdVendedor == u.IdVendedor).Select(v => v.CodigoReferencia).FirstOrDefault(),
+                PorcentajeComision = db.VendedoresBackOffice.Where(v => v.IdVendedor == u.IdVendedor || v.IdUsuarioCreacion == u.IdUsuario).Select(v => (decimal?)v.PorcentajeBase).FirstOrDefault()
             })
             .ToListAsync();
     }
@@ -844,7 +873,8 @@ public sealed class AliadoPortalService
 
     public async Task<(bool Success, string Message)> ActualizarPerfilUsuarioAliadoAsync(
         int actorId, int idUsuario, string nombres, string apellidos, string email,
-        string? identificacion, DateTime? fechaNacimiento, string? avatarUrl)
+        string? identificacion, DateTime? fechaNacimiento, string? avatarUrl, decimal porcentajeComision,
+        bool esAdministradorPortal)
     {
         await EnsureSchemaAsync();
         nombres = nombres.Trim();
@@ -853,6 +883,8 @@ public sealed class AliadoPortalService
         identificacion = identificacion?.Trim();
         if (nombres.Length < 2 || apellidos.Length < 2 || !MailAddress.TryCreate(email, out _))
             return (false, "Ingresa nombres, apellidos y correo válidos.");
+        if (!TryNormalizarPorcentaje(porcentajeComision, out porcentajeComision))
+            return (false, "La comisión debe estar entre 0 y 100.");
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         if (!await EsAdministradorInternoAsync(db, actorId))
@@ -864,6 +896,56 @@ public sealed class AliadoPortalService
         if (await db.Usuarios.AnyAsync(u => u.IdUsuario != idUsuario && u.Email.ToLower() == email.ToLower()))
             return (false, "Ya existe una cuenta con ese correo.");
 
+        var rolActual = await db.AliadoPortalUsuariosRoles
+            .Where(x => x.IdUsuario == idUsuario)
+            .Join(db.AliadoPortalRoles, x => x.IdRol, x => x.IdRol, (_, rol) => rol.Nombre)
+            .FirstOrDefaultAsync();
+        var esAdministradorActual = string.Equals(rolActual, AdminRoleName, StringComparison.OrdinalIgnoreCase);
+        if (esAdministradorPortal != esAdministradorActual)
+        {
+            var actorEsSuperAdministrador = await db.Usuarios
+                .Where(x => x.IdUsuario == actorId)
+                .Select(x => x.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId)
+                .FirstOrDefaultAsync();
+            if (!actorEsSuperAdministrador)
+                return (false, "Solo un superadministrador puede cambiar el rol de una cuenta.");
+            if (actorId == idUsuario)
+                return (false, "No puedes cambiar tu propio rol administrativo.");
+
+            var nuevoRol = esAdministradorPortal ? AdminRoleName : RoleName;
+            var idTipoNuevo = await db.TipoUsuario
+                .Where(x => x.NombreTipo == nuevoRol && x.Estado == true)
+                .Select(x => (int?)x.IdTipoUsuario)
+                .FirstOrDefaultAsync();
+            var idRolNuevo = await db.AliadoPortalRoles
+                .Where(x => x.Nombre == nuevoRol && x.Activo)
+                .Select(x => (int?)x.IdRol)
+                .FirstOrDefaultAsync();
+            if (!idTipoNuevo.HasValue || !idRolNuevo.HasValue)
+                return (false, "No se encontró la configuración del rol seleccionado.");
+
+            usuario.IdTipoUsuario = idTipoNuevo.Value;
+            var asignacionRol = await db.AliadoPortalUsuariosRoles.FirstAsync(x => x.IdUsuario == idUsuario);
+            asignacionRol.IdRol = idRolNuevo.Value;
+
+            if (!esAdministradorPortal && !usuario.IdVendedor.HasValue)
+            {
+                var aliadoNuevo = new VendedorBackOffice
+                {
+                    Nombre = $"{nombres} {apellidos}".Trim(),
+                    CodigoReferencia = await GenerarCodigoAsync(db, nombres),
+                    Activo = true,
+                    EsSistema = false,
+                    PorcentajeBase = porcentajeComision,
+                    IdUsuarioCreacion = actorId,
+                    FechaCreacion = DateTime.Now
+                };
+                db.VendedoresBackOffice.Add(aliadoNuevo);
+                await db.SaveChangesAsync();
+                usuario.IdVendedor = aliadoNuevo.IdVendedor;
+            }
+        }
+
         usuario.Nombres = nombres;
         usuario.Apellidos = apellidos;
         usuario.Email = email;
@@ -872,11 +954,14 @@ public sealed class AliadoPortalService
         usuario.AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl;
         var aliado = usuario.IdVendedor.HasValue
             ? await db.VendedoresBackOffice.FirstOrDefaultAsync(v => v.IdVendedor == usuario.IdVendedor)
-            : null;
+            : await db.VendedoresBackOffice.FirstOrDefaultAsync(v => v.IdUsuarioCreacion == usuario.IdUsuario && !v.EsSistema);
         if (aliado is not null)
+        {
             aliado.Nombre = $"{nombres} {apellidos}".Trim();
+            aliado.PorcentajeBase = porcentajeComision;
+        }
         await db.SaveChangesAsync();
-        await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { idUsuario }, new { nombres, apellidos, email }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "MODIFICAR", new { idUsuario }, new { nombres, apellidos, email, esAdministradorPortal, porcentajeComision }, new { Modulo = "PortalAliados", Entidad = "Usuario" });
         return (true, "Usuario actualizado correctamente.");
     }
 
@@ -1738,6 +1823,14 @@ public sealed class AliadoDashboardDto
     public int RenovacionesUrgentes { get; init; }
     public IReadOnlyList<AliadoRenovacionDto> Renovaciones { get; init; } = Array.Empty<AliadoRenovacionDto>();
     public string LinkPersonalizado { get; init; } = string.Empty;
+    public IReadOnlyList<AliadoEnlaceRegistroDto> EnlacesRegistro { get; init; } = Array.Empty<AliadoEnlaceRegistroDto>();
+}
+
+public sealed class AliadoEnlaceRegistroDto
+{
+    public string NombreAliado { get; init; } = string.Empty;
+    public string CodigoReferencia { get; init; } = string.Empty;
+    public string RutaRegistro { get; init; } = string.Empty;
 }
 
 public class AliadoClienteDto
@@ -1891,6 +1984,7 @@ public sealed class AliadoUsuarioAdminRow
     public string? Identificacion { get; init; }
     public DateTime? FechaNacimiento { get; init; }
     public DateTime? FechaCreacion { get; init; }
+    public decimal? PorcentajeComision { get; init; }
 }
 
 public sealed class AliadoVendedorDisponible
