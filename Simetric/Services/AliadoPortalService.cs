@@ -286,7 +286,7 @@ public sealed class AliadoPortalService
         var inicioMes = new DateTime(hoy.Year, hoy.Month, 1);
         var ventasPeriodo = facturas.Where(x => x.Fecha >= inicioMes).ToList();
         var proximasRenovaciones = facturas
-            .Where(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date >= hoy && x.FechaVencimiento.Value.Date <= hoy.AddDays(30))
+            .Where(x => EsRenovacionVisible(x, hoy, 0, 30))
             .OrderBy(x => x.FechaVencimiento)
             .ToList();
         var renovaciones = proximasRenovaciones
@@ -409,7 +409,7 @@ public sealed class AliadoPortalService
             .ToDictionaryAsync(x => x.IdFactura);
 
         var resultado = facturas
-            .Where(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date <= DateTime.Today.AddDays(90))
+            .Where(x => EsRenovacionVisible(x, DateTime.Today, -30, 90))
             .OrderBy(x => x.FechaVencimiento)
             .Select(x => ToRenovacion(x, gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null, contexto.PorcentajeBase))
             .ToList();
@@ -1237,8 +1237,16 @@ public sealed class AliadoPortalService
         ComisionPotencial = decimal.Round(ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12) * porcentajeBase / 100m, 2, MidpointRounding.AwayFromZero),
         EstadoGestion = gestion?.Resultado ?? "Pendiente",
         UltimaGestion = gestion?.FechaGestion,
-        Observacion = gestion?.Observacion
+        Observacion = gestion?.Observacion,
+        ProximoSeguimiento = gestion?.ProximoSeguimiento
     };
+
+    private static bool EsRenovacionVisible(FacturaPortalRow factura, DateTime hoy, int diasDesde, int diasHasta)
+        => factura.FechaVencimiento.HasValue &&
+           factura.FechaVencimiento.Value.Date >= hoy.AddDays(diasDesde) &&
+           factura.FechaVencimiento.Value.Date <= hoy.AddDays(diasHasta) &&
+           factura.Autorizado &&
+           EsPagoConfirmado(factura.EstadoPago);
 
     private static AliadoComisionMovimientoDto CalcularComision(FacturaPortalRow factura, decimal porcentajeBase)
     {
@@ -1277,7 +1285,8 @@ public sealed class AliadoPortalService
                 Total = x.Total,
                 Fecha = x.Fecha,
                 Estado = x.Estado,
-                ReferenciaPago = x.ReferenciaPago
+                ReferenciaPago = x.ReferenciaPago,
+                CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.IdLiquidacion)
             })
             .ToListAsync();
     }
@@ -1773,6 +1782,7 @@ public sealed class AliadoRenovacionDto
     public string EstadoGestion { get; init; } = "Pendiente";
     public DateTime? UltimaGestion { get; init; }
     public string? Observacion { get; init; }
+    public DateTime? ProximoSeguimiento { get; init; }
 }
 
 public sealed class AliadoComisionesDto
@@ -1836,6 +1846,7 @@ public sealed class AliadoLiquidacionDto
     public DateTime Fecha { get; init; }
     public string Estado { get; init; } = string.Empty;
     public string? ReferenciaPago { get; init; }
+    public int CantidadComisiones { get; init; }
 }
 
 public sealed class AliadoRenovacionNotificacionDto
@@ -1906,7 +1917,11 @@ internal sealed class FacturaPortalRow
     public decimal? Comision { get; init; }
     public bool Autorizado { get; init; }
     public string? EstadoPago { get; init; }
-    public string Estado => Autorizado ? "Activo" : "Pendiente";
+    public string Estado => !Autorizado
+        ? "Pendiente"
+        : FechaVencimiento?.Date < DateTime.Today
+            ? "Vencido"
+            : "Activo";
 }
 
 internal sealed class FacturaComisionRow

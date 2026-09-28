@@ -40,6 +40,10 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
     public async Task<OpenAIAsistenteResult> ProcesarAsync(FacturaConversationState state, string mensaje, CancellationToken cancellationToken = default)
     {
+        var restrictedResult = TryHandleRestrictedAdminQuery(NormalizarMensaje(mensaje));
+        if (restrictedResult is not null)
+            return restrictedResult;
+
         var diagnostics = GetDiagnostics();
         var apiKey = ResolveApiKey();
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -138,6 +142,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             ["content"] = ClipForModel(mensaje)
         });
 
+        var toolExecuted = false;
         for (var attempt = 0; attempt < 8; attempt++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions");
@@ -150,7 +155,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                     tools = ToolDefinitions.BuildTools(),
                     tool_choice = "auto",
                     temperature = 0.05,
-                    max_tokens = 800
+                    max_tokens = 400
                 }),
                 Encoding.UTF8,
                 "application/json");
@@ -178,7 +183,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                     Respuesta = string.IsNullOrWhiteSpace(content)
                         ? "Tengo el borrador listo. Deseas que continue con la factura?"
                         : content,
-                    AccionDetectada = state.UltimaIntencion
+                    AccionDetectada = toolExecuted ? state.UltimaIntencion : "consulta"
                 };
             }
 
@@ -200,6 +205,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
             foreach (var toolCall in toolCalls)
             {
+                toolExecuted = true;
                 var toolResult = await _toolDispatcher.DispatchAsync(toolCall.Name, toolCall.Arguments, state, cancellationToken);
                 messages.Add(new Dictionary<string, object?>
                 {
@@ -1230,14 +1236,54 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
     }
 
     private static bool IsRestrictedAdminQuery(string normalized)
-        => ContainsAny(
+    {
+        if (ContainsAny(
             normalized,
             "uanacreditos",
             "uanacredito",
             "uana credits",
             "saldo uana",
             "creditos uana",
-            "créditos uana");
+            "créditos uana"))
+            return true;
+
+        var mentionsAdminArea = ContainsAny(
+            normalized,
+            "administracion",
+            "administración",
+            "administrador",
+            "administradores",
+            "backoffice",
+            "admin");
+
+        return mentionsAdminArea && ContainsAny(
+            normalized,
+            "menu",
+            "menú",
+            "ruta",
+            "rutas",
+            "url",
+            "endpoint",
+            "api",
+            "modulo",
+            "módulo",
+            "pantalla",
+            "panel",
+            "permisos",
+            "roles",
+            "acceso",
+            "entrar",
+            "ingresar",
+            "abrir",
+            "listar",
+            "lista",
+            "mostrar",
+            "muestra",
+            "dime",
+            "que hay",
+            "qué hay",
+            "funciones");
+    }
 
     private async Task<OpenAIAsistenteResult?> TryHandleESignPlansCommandAsync(
         FacturaConversationState state,

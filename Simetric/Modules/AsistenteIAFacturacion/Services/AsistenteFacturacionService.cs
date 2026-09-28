@@ -109,7 +109,7 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             FacturaDraft = state.Draft,
             RequiereConfirmacion = state.RequiereConfirmacion || state.OperacionPendiente is not null,
             Emitida = state.Emitida,
-            AccionDetectada = result.AccionDetectada ?? state.UltimaIntencion,
+            AccionDetectada = result.AccionDetectada ?? "consulta",
             RutaSugerida = result.RutaSugerida,
             CodigoError = result.CodigoError,
             RutasSugeridas = result.RutasSugeridas,
@@ -175,6 +175,8 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 Resumen = state.OperacionPendiente.Resumen,
                 ExpiraEn = state.OperacionPendiente.ExpiraEn
             };
+        response.RequiereConfirmacion = response.RequiereConfirmacion
+            && (state.OperacionPendiente is not null || IsConfirmationAction(response.AccionDetectada));
 
         if (!string.IsNullOrWhiteSpace(requestId))
         {
@@ -186,6 +188,9 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         await _conversationStore.SaveAsync(state, cancellationToken);
         return response;
     }
+
+    private static bool IsConfirmationAction(string? action)
+        => action is "preparar_emision" or "validar_factura" or "factura_lista" or "confirmar_emision";
 
     private static ChatFacturaResponse BuildToolResponse(FacturaConversationState state, ToolResultDto result, string action)
     {

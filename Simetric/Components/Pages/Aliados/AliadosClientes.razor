@@ -21,15 +21,22 @@ else if (detalle is not null)
         <section class="ally-panel">
             <div class="ally-panel-heading"><div><span class="ally-label">DETALLE DE CLIENTE</span><h2>@detalle.Nombre</h2></div><span class="ally-badge">@detalle.Identificacion</span></div>
             <div class="ally-detail-grid"><div><span>Correo</span><strong>@(detalle.Email ?? "No registrado")</strong></div><div><span>Teléfono</span><strong>@(detalle.Telefono ?? "No registrado")</strong></div><div><span>Dirección</span><strong>@(detalle.Direccion ?? "No registrada")</strong></div></div>
+            @if (!string.IsNullOrWhiteSpace(detalle.Email) || !string.IsNullOrWhiteSpace(detalle.Telefono))
+            {
+                <div class="ally-contact-actions">
+                    @if (!string.IsNullOrWhiteSpace(detalle.Email)) { <a class="ally-button muted" href="mailto:@detalle.Email"><i class="ri-mail-line"></i> Enviar correo</a> }
+                    @if (!string.IsNullOrWhiteSpace(detalle.Telefono)) { <a class="ally-button light" href="tel:@detalle.Telefono"><i class="ri-phone-line"></i> Llamar cliente</a> }
+                </div>
+            }
             <h3 class="ally-section-title">Productos contratados</h3>
-            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Producto / plan</th><th>Compra</th><th>Vencimiento</th><th>Estado</th><th>Valor</th></tr></thead><tbody>@foreach (var p in detalle.Productos) { <tr @key="p"><td>@p.Producto<br /><small>@p.Plan</small></td><td>@p.FechaCompra.ToString("dd/MM/yyyy")</td><td>@(p.FechaVencimiento?.ToString("dd/MM/yyyy") ?? "Sin fecha")</td><td><span class="ally-badge success">@(p.Estado ?? "Activo")</span></td><td>$ @p.Valor.ToString("N2")</td></tr>}</tbody></table></div>
+            <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Producto / plan</th><th>Compra</th><th>Vencimiento</th><th>Estado</th><th>Valor</th></tr></thead><tbody>@foreach (var p in detalle.Productos) { <tr @key="p"><td>@p.Producto<br /><small>@p.Plan</small></td><td>@p.FechaCompra.ToString("dd/MM/yyyy")</td><td>@(p.FechaVencimiento?.ToString("dd/MM/yyyy") ?? "Sin fecha")</td><td><span class="ally-badge @EstadoCss(p.Estado)">@(p.Estado ?? "Activo")</span></td><td>$ @p.Valor.ToString("N2")</td></tr>}</tbody></table></div>
         </section>
     </div>
 }
 else
 {
     <div class="ally-page">
-        <div class="ally-page-intro"><div><span class="ally-eyebrow">CLIENTES ATRIBUIDOS A TU CANAL</span><h2>Mis clientes</h2><p>Consulta la información básica y los productos vigentes. La atribución solo puede modificarla Numérica.</p></div><div class="ally-page-tools"><div class="ally-search"><i class="ri-search-line"></i><input @bind="busqueda" @bind:event="oninput" @bind:after="ReiniciarPagina" placeholder="Buscar por nombre, RUC o correo" /></div><button class="ally-button muted" type="button" @onclick="ExportarAsync" disabled="@(!clientesFiltrados.Any())">Exportar CSV</button></div></div>
+        <div class="ally-page-intro"><div><span class="ally-eyebrow">CLIENTES ATRIBUIDOS A TU CANAL</span><h2>Mis clientes</h2><p>Consulta la información básica y los productos vigentes. La atribución solo puede modificarla Numérica.</p></div><div class="ally-page-tools"><div class="ally-search"><i class="ri-search-line"></i><input @bind="busqueda" @bind:event="oninput" @bind:after="ReiniciarPagina" placeholder="Buscar por nombre, RUC o correo" /></div><select class="ally-select" @bind="filtroEstado" @bind:after="ReiniciarPagina"><option value="">Todos los estados</option><option value="Activo">Activos</option><option value="Vencido">Vencidos</option><option value="Pendiente">Pendientes</option></select><button class="ally-button muted" type="button" @onclick="ExportarAsync" disabled="@(!clientesFiltrados.Any())">Exportar CSV</button></div></div>
         <section class="ally-panel"><div class="ally-panel-heading"><h3>@clientesFiltrados.Count cliente(s)</h3><span class="ally-readonly">Solo lectura</span></div>
             @if (clientesFiltrados.Count == 0) { <div class="ally-empty">No hay clientes atribuidos a tu canal.</div> }
             else { <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Cliente / identificación</th><th>Producto</th><th>Compra</th><th>Vencimiento</th><th></th></tr></thead><tbody>@foreach (var cliente in ClientesPaginados) { <tr @key="cliente.IdCliente"><td><strong>@cliente.Nombre</strong><br /><small>@(cliente.Identificacion ?? "Sin identificación") · @(cliente.Email ?? "Sin correo")</small></td><td>@(cliente.Producto ?? "Sin compras")</td><td>@(cliente.FechaCompra?.ToString("dd/MM/yyyy") ?? "-")</td><td>@(cliente.FechaVencimiento?.ToString("dd/MM/yyyy") ?? "-")</td><td><NavLink class="ally-table-action" href="@($"/aliados/clientes/{cliente.IdCliente}")">Ver detalle</NavLink></td></tr>}</tbody></table></div><div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div> }
@@ -40,10 +47,13 @@ else
 @code {
     [Parameter] public int? Id { get; set; }
     private string busqueda = string.Empty;
+    private string filtroEstado = string.Empty;
     private List<AliadoClienteDto> clientes = new();
     private AliadoClienteDetalleDto? detalle;
     private bool cargando = true;
-    private List<AliadoClienteDto> clientesFiltrados => clientes.Where(x => string.IsNullOrWhiteSpace(busqueda) || $"{x.Nombre} {x.Identificacion} {x.Email}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)).ToList();
+    private List<AliadoClienteDto> clientesFiltrados => clientes.Where(x =>
+        (string.IsNullOrWhiteSpace(busqueda) || $"{x.Nombre} {x.Identificacion} {x.Email}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrWhiteSpace(filtroEstado) || string.Equals(x.Estado ?? "Activo", filtroEstado, StringComparison.OrdinalIgnoreCase))).ToList();
     private IEnumerable<AliadoClienteDto> ClientesPaginados => clientesFiltrados.Skip((pagina - 1) * TamanoPagina).Take(TamanoPagina);
     private int pagina = 1;
     private const int TamanoPagina = 20;
@@ -66,6 +76,13 @@ else
         await AlertService.ShowSuccessAsync("El archivo CSV se descargó correctamente.", "Exportación lista");
     }
     private static string Csv(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
+
+    private static string EstadoCss(string? estado) => estado?.Trim().ToLowerInvariant() switch
+    {
+        "vencido" or "vencida" or "cancelado" or "cancelada" => "danger",
+        "pendiente" or "por vencer" => "warning",
+        _ => "success"
+    };
 
     protected override async Task OnParametersSetAsync()
     {
