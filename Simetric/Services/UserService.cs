@@ -177,7 +177,11 @@ namespace Simetric.Services
                     usuario.Estado = true;
                     usuario.IntentosFallidos = 0;
                     usuario.CuentaBloqueada = false;
-                    usuario.SaldoDocumentos = usuario.SaldoDocumentos > 0 ? usuario.SaldoDocumentos : 5;
+                    // El bono inicial de las cuentas BackOffice es fijo. No heredamos
+                    // valores por defecto del formulario o de la base de datos.
+                    usuario.SaldoDocumentos = usuario.IdTipoUsuario == 7
+                        ? 5
+                        : usuario.SaldoDocumentos > 0 ? usuario.SaldoDocumentos : 5;
 
                     // Nota: La ClaveTemporal y PasswordHash ya deben venir asignados desde la UI/Controlador
                     context.Usuarios.Add(usuario);
