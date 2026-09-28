@@ -2177,6 +2177,7 @@
     private bool showPassword;
     private bool _disposed;
     private int? vendedorRegistroId;
+    private bool enlaceAliadoInvalido;
     private List<string> availableAvatars = new();
     private List<ServiceOption> serviceOptions = new();
     private RegisterStep pasoActual = RegisterStep.Formulario;
@@ -2217,7 +2218,7 @@
     protected override async Task OnInitializedAsync()
     {
         await AppAccessService.EnsureSchemaAsync();
-        vendedorRegistroId = (await ResolverVendedorRegistroAsync()).IdVendedor;
+        await ResolverVendedorRegistroAsync();
 
         await using var db = await DbFactory.CreateDbContextAsync();
         serviceOptions = await db.AppServicios
@@ -2543,6 +2544,12 @@
 
     private async Task CrearCuentaYRedirigirLoginAsync()
     {
+        if (enlaceAliadoInvalido)
+        {
+            await MostrarAlertaAsync("Enlace de aliado no válido", "El enlace ya no es válido o el aliado está inactivo. Solicita un enlace nuevo antes de registrarte.", "error");
+            return;
+        }
+
         var existe = await EmailYaRegistradoAsync();
         if (existe)
         {
@@ -2724,12 +2731,19 @@
         return usuarioId;
     }
 
-    private async Task<VendedorBackOffice> ResolverVendedorRegistroAsync()
+    private async Task ResolverVendedorRegistroAsync()
     {
         var uri = Nav.ToAbsoluteUri(Nav.Uri);
         var query = QueryHelpers.ParseQuery(uri.Query);
-        query.TryGetValue("vendedor", out var vendedorCodigo);
-        return await VendedorBackOfficeService.ResolverParaRegistroAsync(vendedorCodigo.ToString());
+        if (!query.TryGetValue("vendedor", out var vendedorCodigo) || string.IsNullOrWhiteSpace(vendedorCodigo))
+        {
+            vendedorRegistroId = (await VendedorBackOfficeService.ResolverParaRegistroAsync(null)).IdVendedor;
+            return;
+        }
+
+        var vendedor = await VendedorBackOfficeService.ResolverEnlaceRegistroAsync(vendedorCodigo.ToString());
+        vendedorRegistroId = vendedor?.IdVendedor;
+        enlaceAliadoInvalido = vendedor is null;
     }
 
     private async Task<bool> EmailYaRegistradoAsync()

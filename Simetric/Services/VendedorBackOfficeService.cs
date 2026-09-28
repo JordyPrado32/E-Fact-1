@@ -90,22 +90,25 @@ public sealed class VendedorBackOfficeService
 
     public async Task<VendedorBackOffice> ResolverParaRegistroAsync(string? codigoReferencia)
     {
+        return await ResolverEnlaceRegistroAsync(codigoReferencia) ?? await ObtenerSistemaAsync();
+    }
+
+    public async Task<VendedorBackOffice?> ResolverEnlaceRegistroAsync(string? codigoReferencia)
+    {
         await EnsureSchemaAsync();
 
         if (string.IsNullOrWhiteSpace(codigoReferencia))
-            return await ObtenerSistemaAsync();
+            return null;
 
         await using var context = await _dbFactory.CreateDbContextAsync();
         var vendedor = await ResolverPorCodigoSecretoAsync(context, codigoReferencia);
-        if (vendedor is null)
-        {
-            var codigo = NormalizarCodigo(codigoReferencia);
-            vendedor = await context.VendedoresBackOffice
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.Activo && x.CodigoReferencia == codigo);
-        }
+        if (vendedor is not null)
+            return vendedor;
 
-        return vendedor ?? await ObtenerSistemaAsync();
+        var codigo = NormalizarCodigo(codigoReferencia);
+        return await context.VendedoresBackOffice
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Activo && x.CodigoReferencia == codigo);
     }
 
     public async Task<(bool Success, string Message, VendedorBackOffice? Vendedor)> CrearAsync(int idUsuario, string? nombre)
@@ -276,7 +279,7 @@ public sealed class VendedorBackOfficeService
     }
 
     public string ConstruirRutaRegistro(VendedorBackOffice vendedor) =>
-        $"/register?vendedor={Uri.EscapeDataString(ObtenerCodigoSecreto(vendedor))}";
+        $"/register?vendedor={Uri.EscapeDataString(vendedor.CodigoReferencia)}";
 
     private static string GenerarCodigoBase(string nombre)
     {
