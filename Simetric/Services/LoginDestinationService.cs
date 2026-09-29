@@ -53,7 +53,16 @@ public sealed class LoginDestinationService
                 BackOfficePermissionHelper.BackOfficeRoleId.ToString(),
                 StringComparison.OrdinalIgnoreCase))
         {
-            return "/portal-servicios";
+            await using var context = await _dbFactory.CreateDbContextAsync();
+            var email = await context.Usuarios
+                .AsNoTracking()
+                .Where(usuario => usuario.IdUsuario == userId)
+                .Select(usuario => usuario.Email)
+                .FirstOrDefaultAsync();
+
+            return BackOfficePermissionHelper.PuedeCambiarServicioBackOffice(email)
+                ? "/portal-servicios"
+                : BackOfficeRoutes.Dashboard;
         }
 
         if (await EsAliadoAdministradorAsync(effectiveRoleId))
