@@ -1,17 +1,22 @@
 @page "/aliados/comisiones"
+@using MiniExcelLibs
+@implements IAsyncDisposable
 
 <PageTitle>Comisiones | Portal de Aliados</PageTitle>
 
-<div class="ally-page">
-    <div class="ally-page-intro">
-        <div><span class="ally-eyebrow">TRANSPARENCIA DE MOVIMIENTOS</span><h2>Comisiones</h2><p>Historial de comisiones calculadas sobre valores netos efectivamente cobrados.</p></div>
-        <div class="ally-page-tools">
-            <select class="ally-select" @bind="filtroEstado" @bind:after="ReiniciarPagina">
-                <option value="">Todos los estados</option><option>Generada</option><option>Aprobada</option><option>Pagada</option><option>Revertida</option><option>Anulada</option>
-            </select>
-            <button class="ally-button muted" type="button" @onclick="ExportarAsync" disabled="@(!MovimientosFiltrados.Any())">Exportar CSV</button>
+<div class="ally-page commissions-page">
+    <section class="commissions-hero">
+        <div class="commissions-hero-copy">
+            <span class="ally-eyebrow">CENTRO DE COMISIONES</span>
+            <h2>Tus comisiones, <strong>en un solo lugar</strong></h2>
+            <p>Consulta el historial, analiza tus resultados y revisa tus pagos de forma simple y rápida.</p>
         </div>
-    </div>
+        <div class="commissions-hero-actions">
+            <label class="commissions-date-range"><i class="ri-calendar-line"></i><input type="date" @bind="fechaDesde" @bind:format="yyyy-MM-dd" @bind:after="AplicarFiltrosAsync" aria-label="Fecha inicial" /><span>-</span><input type="date" @bind="fechaHasta" @bind:format="yyyy-MM-dd" @bind:after="AplicarFiltrosAsync" aria-label="Fecha final" /></label>
+            <button class="commissions-export" type="button" @onclick="ExportarExcelAsync" disabled="@(!MovimientosFiltrados.Any())"><i class="ri-download-2-line"></i> Exportar Excel</button>
+        </div>
+    </section>
+
     @if (cargando)
     {
         <div class="ally-empty"><span class="spinner-border spinner-border-sm"></span> Cargando comisiones...</div>
@@ -22,20 +27,34 @@
     }
     else
     {
-        <div class="ally-kpis"><div class="ally-kpi"><span>Generadas</span><strong>$ @modelo.Generadas.ToString("N2")</strong><small>Incluye aprobadas y pagadas</small></div><div class="ally-kpi warning"><span>Pendientes de aprobación</span><strong>$ @modelo.PendientesAprobacion.ToString("N2")</strong><small>Revisión interna</small></div><div class="ally-kpi"><span>Aprobadas</span><strong>$ @modelo.Aprobadas.ToString("N2")</strong><small>Listas para pago</small></div><div class="ally-kpi"><span>Pagadas</span><strong>$ @modelo.Pagadas.ToString("N2")</strong><small>Confirmadas por Numérica</small></div></div>
-        <section class="ally-panel">
-            <div class="ally-panel-heading"><h3>Movimientos <small class="ally-muted-count">@MovimientosFiltrados.Count</small></h3><span class="ally-readonly">Solo consulta</span></div>
+        <section class="commissions-kpis">
+            <article class="commissions-kpi sales"><span class="commissions-kpi-icon"><i class="ri-bar-chart-box-line"></i></span><div><small>Ventas generadas</small><strong>$ @BaseGenerada.ToString("N2")</strong><p>@MovimientosFiltrados.Count movimiento(s) en el período</p></div></article>
+            <article class="commissions-kpi generated"><span class="commissions-kpi-icon"><i class="ri-coins-line"></i></span><div><small>Comisiones generadas</small><strong>$ @TotalGenerado.ToString("N2")</strong><p>Sobre valores cobrados sin IVA</p></div></article>
+            <article class="commissions-kpi pending"><span class="commissions-kpi-icon"><i class="ri-time-line"></i></span><div><small>Pendientes de aprobación</small><strong>$ @TotalPendiente.ToString("N2")</strong><p>En proceso de validación interna</p></div></article>
+            <article class="commissions-kpi paid"><span class="commissions-kpi-icon"><i class="ri-checkbox-circle-line"></i></span><div><small>Comisiones pagadas</small><strong>$ @TotalPagado.ToString("N2")</strong><p>Confirmadas por Numérica</p></div></article>
+        </section>
+
+        <section class="commissions-charts">
+            <article class="commissions-chart-card evolution"><header><div><span class="commissions-section-icon"><i class="ri-bar-chart-grouped-line"></i></span><div><h3>Evolución de comisiones</h3><p>Compara el total generado y pagado por mes.</p></div></div></header><div class="commissions-chart-canvas"><canvas id="ally-commissions-evolution"></canvas></div></article>
+            <article class="commissions-chart-card distribution"><header><div><span class="commissions-section-icon"><i class="ri-pie-chart-2-line"></i></span><div><h3>Comisiones por tipo</h3><p>Distribución del total generado.</p></div></div></header><div class="commissions-chart-canvas"><canvas id="ally-commissions-distribution"></canvas></div></article>
+        </section>
+
+        <section class="commissions-movements">
+            <header class="commissions-movements-header">
+                <div class="commissions-title"><span class="commissions-section-icon"><i class="ri-file-list-3-line"></i></span><div><h3>Movimientos de comisiones</h3><p>Historial calculado sobre valores netos efectivamente cobrados.</p></div></div>
+                <div class="commissions-tools"><label class="commissions-search"><i class="ri-search-line"></i><input @bind="busqueda" @bind:event="oninput" @bind:after="AplicarFiltrosAsync" placeholder="Buscar por cliente o producto" /></label><select @bind="filtroEstado" @bind:after="AplicarFiltrosAsync" aria-label="Filtrar por estado"><option value="">Todos los estados</option><option>Generada</option><option>Aprobada</option><option>Pagada</option><option>Revertida</option><option>Anulada</option></select></div>
+            </header>
             @if (MovimientosFiltrados.Count == 0)
             {
-                <div class="ally-empty">No hay comisiones para este estado.</div>
+                <div class="ally-empty">No hay comisiones para los filtros seleccionados.</div>
             }
             else
             {
-                <div class="ally-table-wrap"><table class="ally-table"><thead><tr><th>Fecha</th><th>Cliente / producto</th><th>Tipo</th><th>Base sin IVA</th><th>Comisión</th><th>Estado</th><th>Liquidación</th></tr></thead><tbody>
-                @foreach (var item in MovimientosPaginados)
-                {
-                    <tr @key="item.IdComision"><td>@item.FechaGeneracion.ToString("dd/MM/yyyy")</td><td><strong>@item.Cliente</strong><br /><small>@item.Producto</small></td><td>@item.Tipo</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.ValorComision.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="ally-badge @EstadoCss(item.Estado)">@item.Estado</span></td><td>@(item.PeriodoLiquidacion ?? "-")<br /><small>@(item.ReferenciaPago ?? "Sin pago")</small></td></tr>
-                }
+                <div class="ally-table-wrap"><table class="ally-table commissions-table"><thead><tr><th>Fecha</th><th>Cliente / producto</th><th>Tipo</th><th>Base sin IVA</th><th>Comisión</th><th>Porcentaje</th><th>Estado</th><th>Liquidación</th></tr></thead><tbody>
+                    @foreach (var item in MovimientosPaginados)
+                    {
+                        <tr @key="item.IdComision"><td><strong>@item.FechaGeneracion.ToString("dd/MM/yyyy")</strong><small>@item.FechaGeneracion.ToString("HH:mm")</small></td><td><strong>@item.Cliente</strong><small>@item.Producto</small></td><td><span class="commission-type @TipoCss(item.Tipo)">@TipoTexto(item.Tipo)</span></td><td>$ @item.BaseComisionable.ToString("N2")</td><td class="commission-value">$ @item.ValorComision.ToString("N2")</td><td>@item.Porcentaje.ToString("0.##")%</td><td><span class="ally-badge @EstadoCss(item.Estado)">@item.Estado</span></td><td>@(item.PeriodoLiquidacion ?? "-")<small>@(item.ReferenciaPago ?? "Sin pago")</small></td></tr>
+                    }
                 </tbody></table></div>
                 <div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
             }
@@ -46,64 +65,62 @@
 @code {
     private AliadoComisionesDto? modelo;
     private bool cargando = true;
+    private bool graficosPendientes;
     private string filtroEstado = string.Empty;
+    private string busqueda = string.Empty;
+    private DateTime fechaDesde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5);
+    private DateTime fechaHasta = DateTime.Today;
     private int pagina = 1;
     private const int TamanoPagina = 20;
-    private IReadOnlyList<AliadoComisionMovimientoDto> MovimientosFiltrados => modelo is null ? Array.Empty<AliadoComisionMovimientoDto>() : modelo.Movimientos.Where(x => string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado).ToList();
+    private IReadOnlyList<AliadoComisionMovimientoDto> MovimientosFiltrados => modelo is null ? Array.Empty<AliadoComisionMovimientoDto>() : modelo.Movimientos.Where(x => x.FechaGeneracion.Date >= fechaDesde.Date && x.FechaGeneracion.Date <= fechaHasta.Date && (string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado) && (string.IsNullOrWhiteSpace(busqueda) || $"{x.Cliente} {x.Producto} {x.Tipo} {x.ReferenciaPago}".Contains(busqueda, StringComparison.OrdinalIgnoreCase))).ToList();
     private IEnumerable<AliadoComisionMovimientoDto> MovimientosPaginados => MovimientosFiltrados.Skip((pagina - 1) * TamanoPagina).Take(TamanoPagina);
     private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(MovimientosFiltrados.Count / (double)TamanoPagina));
+    private decimal BaseGenerada => MovimientosFiltrados.Sum(x => x.BaseComisionable);
+    private decimal TotalGenerado => MovimientosFiltrados.Where(x => x.Estado is not "Revertida" and not "Anulada").Sum(x => x.ValorComision);
+    private decimal TotalPendiente => MovimientosFiltrados.Where(x => x.Estado == "Generada").Sum(x => x.ValorComision);
+    private decimal TotalPagado => MovimientosFiltrados.Where(x => x.Estado == "Pagada").Sum(x => x.ValorComision);
 
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
     [Inject] private IJSRuntime JS { get; set; } = null!;
     [Inject] private SweetAlertService AlertService { get; set; } = null!;
 
-    private void ReiniciarPagina() => pagina = 1;
+    private Task AplicarFiltrosAsync() { pagina = 1; graficosPendientes = true; return Task.CompletedTask; }
     private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
 
-    private async Task ExportarAsync()
+    private async Task ExportarExcelAsync()
     {
-        var rows = MovimientosFiltrados.Select(x => string.Join(",", Csv(x.FechaGeneracion.ToString("yyyy-MM-dd")), Csv(x.Cliente), Csv(x.Producto), Csv(x.Tipo), Csv(x.BaseComisionable.ToString("0.00")), Csv(x.ValorComision.ToString("0.00")), Csv(x.Estado), Csv(x.PeriodoLiquidacion), Csv(x.ReferenciaPago)));
-        await DescargarCsvAsync("comisiones-aliado.csv", "Fecha,Cliente,Producto,Tipo,Base,Comision,Estado,Periodo,Referencia\n" + string.Join("\n", rows));
-        await AlertService.ShowSuccessAsync("El archivo CSV se descargó correctamente.", "Exportación lista");
-    }
-
-    private async Task DescargarCsvAsync(string fileName, string csv)
-    {
-        await using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(csv)).ToArray());
+        var data = MovimientosFiltrados.Select(x => new { Fecha = x.FechaGeneracion, x.Cliente, x.Producto, Tipo = TipoTexto(x.Tipo), BaseSinIva = x.BaseComisionable, Comision = x.ValorComision, Porcentaje = x.Porcentaje / 100m, x.Estado, PeriodoLiquidacion = x.PeriodoLiquidacion ?? string.Empty, ReferenciaPago = x.ReferenciaPago ?? string.Empty }).ToList();
+        using var stream = new MemoryStream();
+        stream.SaveAs(data);
+        stream.Position = 0;
         using var reference = new DotNetStreamReference(stream);
-        await JS.InvokeVoidAsync("downloadFileFromStream", fileName, reference, "text/csv;charset=utf-8");
+        await JS.InvokeVoidAsync("downloadFileFromStream", $"Comisiones_Aliados_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx", reference, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        await AlertService.ShowSuccessAsync("El archivo Excel se descargó correctamente.", "Exportación lista");
     }
 
-    private static string Csv(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
-
-    private static string EstadoCss(string estado) => estado switch
-    {
-        "Pagada" => "success",
-        "Aprobada" => "approved",
-        "Revertida" or "Anulada" => "danger",
-        _ => "warning"
-    };
-
+    private static string EstadoCss(string estado) => estado switch { "Pagada" => "success", "Aprobada" => "approved", "Revertida" or "Anulada" => "danger", _ => "warning" };
+    private static string TipoCss(string tipo) => tipo.ToLowerInvariant() switch { var x when x.Contains("renov") => "renewal", var x when x.Contains("recarga") => "recharge", _ => "sale" };
+    private static string TipoTexto(string tipo) => string.IsNullOrWhiteSpace(tipo) ? "Venta nueva" : tipo.Replace("VentaNueva", "Venta nueva").Replace("RenovacionAliado", "Renovación").Replace("RenovacionNumerica", "Renovación");
     protected override Task OnInitializedAsync() => CargarAsync();
 
     private async Task CargarAsync()
     {
         cargando = true;
-        try
-        {
-            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-            modelo = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id)
-                ? await AliadoService.ObtenerComisionesAsync(id)
-                : null;
-        }
-        catch
-        {
-            modelo = null;
-        }
-        finally
-        {
-            cargando = false;
-        }
+        try { var auth = await AuthStateProvider.GetAuthenticationStateAsync(); modelo = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id) ? await AliadoService.ObtenerComisionesAsync(id) : null; graficosPendientes = modelo is not null; }
+        catch { modelo = null; }
+        finally { cargando = false; }
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!graficosPendientes || modelo is null) return;
+        graficosPendientes = false;
+        var movimientos = MovimientosFiltrados.Where(x => x.Estado is not "Revertida" and not "Anulada").ToList();
+        var meses = Enumerable.Range(0, 6).Select(offset => new DateTime(fechaHasta.Year, fechaHasta.Month, 1).AddMonths(offset - 5)).ToList();
+        var tipos = movimientos.GroupBy(x => TipoTexto(x.Tipo)).OrderByDescending(x => x.Sum(y => y.ValorComision)).ToList();
+        await JS.InvokeVoidAsync("aliadosComisionesCharts.render", new { evolution = new { labels = meses.Select(x => x.ToString("MMM yyyy", new System.Globalization.CultureInfo("es-EC"))), generated = meses.Select(m => movimientos.Where(x => x.FechaGeneracion.Year == m.Year && x.FechaGeneracion.Month == m.Month).Sum(x => x.ValorComision)), paid = meses.Select(m => movimientos.Where(x => x.Estado == "Pagada" && x.FechaGeneracion.Year == m.Year && x.FechaGeneracion.Month == m.Month).Sum(x => x.ValorComision)) }, distribution = new { labels = tipos.Select(x => x.Key), values = tipos.Select(x => x.Sum(y => y.ValorComision)) } });
+    }
+
+    public async ValueTask DisposeAsync() { try { await JS.InvokeVoidAsync("aliadosComisionesCharts.destroy"); } catch { } }
 }
