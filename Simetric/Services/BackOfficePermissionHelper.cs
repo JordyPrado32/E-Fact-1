@@ -8,6 +8,7 @@ public static class BackOfficePermissionHelper
 {
     private const string UsuarioERubricaEmail = "servicioalcliente@numerosasesores.com";
     private const string AdministradorUanacreditosEmail = "jordypm180806@gmail.com";
+    public const string UsuarioBackOfficeMultiServicioEmail = "backoffice@numericasoftware.com";
 
     public const int SuperAdministradorRoleId = 2;
     public const int BackOfficeRoleId = 7;
@@ -28,6 +29,9 @@ public static class BackOfficePermissionHelper
 
     public static bool PuedeGestionarUanacreditos(string? email) =>
         string.Equals(email?.Trim(), AdministradorUanacreditosEmail, StringComparison.OrdinalIgnoreCase);
+
+    public static bool PuedeCambiarServicioBackOffice(string? email) =>
+        string.Equals(email?.Trim(), UsuarioBackOfficeMultiServicioEmail, StringComparison.OrdinalIgnoreCase);
 
     public static bool PuedeAccederERubrica(int? idTipoUsuario, int? tipoCliente, string? email) =>
         PuedeVerERubrica(email) ||
