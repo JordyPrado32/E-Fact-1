@@ -166,6 +166,10 @@ public sealed class FacturacionTools
 
     public async Task<ToolResultDto> CrearBorradorFacturaAsync(FacturaConversationState state, int? clienteId, string? clienteNombre, CancellationToken cancellationToken)
     {
+        var configuracionAdvertencia = await ObtenerAdvertenciaConfiguracionEmisionAsync(state.UserId);
+        if (configuracionAdvertencia is not null)
+            return Fail(ToolDefinitions.CrearBorradorFactura, $"No puedo iniciar el borrador. {configuracionAdvertencia}", null, "emission_configuration_required");
+
         state.FacturaDraftId = Guid.NewGuid().ToString("N");
         state.Draft = new FacturaDraftDto();
         state.Emitida = false;

@@ -212,13 +212,15 @@ public sealed class EmisorSistemaService
         if (top > 0)
             query = query.Take(top);
 
-        return await query
+        var facturas = await query
             .Select(f => new FacturaListDto
             {
                 Codfactura = f.Codfactura,
                 Numfactura = f.Numfactura,
                 Serie = f.Serie,
                 FechaEmision = f.Fechaentrega,
+                FechaEmisionSri = f.Autorizado == true ? f.Fchautorizacion : null,
+                FechaSolicitud = f.Fechaentrega,
                 EstadoSri = f.Estadoenviosri,
                 Autorizado = f.Autorizado,
                 NumeroAutorizacion = f.Numautorizacion,
@@ -247,7 +249,56 @@ public sealed class EmisorSistemaService
                      .Select(d => d.Descripproducto)
                      .FirstOrDefault()
              })
+             .ToListAsync();
+
+        var facturaIds = facturas.Select(f => f.Codfactura).ToList();
+        if (facturaIds.Count == 0)
+            return facturas;
+
+        var notasFacturas = await context.Facturas
+            .AsNoTracking()
+            .Where(f => facturaIds.Contains(f.Codfactura))
+            .Select(f => new { f.Codfactura, f.Notas })
             .ToListAsync();
+
+        var solicitudIds = notasFacturas
+            .Select(f => ExtraerSolicitudFirmaId(f.Notas))
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToList();
+
+        if (solicitudIds.Count > 0)
+        {
+            var fechasSolicitud = await context.UsuSolicitudFirma
+                .AsNoTracking()
+                .Where(s => solicitudIds.Contains(s.SolId))
+                .ToDictionaryAsync(s => s.SolId, s => s.SolFechaSolicitud);
+
+            foreach (var factura in facturas)
+            {
+                var notas = notasFacturas.FirstOrDefault(f => f.Codfactura == factura.Codfactura)?.Notas;
+                var solicitudId = ExtraerSolicitudFirmaId(notas);
+                if (solicitudId.HasValue && fechasSolicitud.TryGetValue(solicitudId.Value, out var fechaSolicitud))
+                    factura.FechaSolicitud = fechaSolicitud;
+            }
+        }
+
+        return facturas;
+    }
+
+    private static int? ExtraerSolicitudFirmaId(string? notas)
+    {
+        const string marcador = "[COMPRA_DOCS:ESIGN-";
+        var inicio = notas?.IndexOf(marcador, StringComparison.OrdinalIgnoreCase) ?? -1;
+        if (inicio < 0)
+            return null;
+
+        inicio += marcador.Length;
+        var fin = notas!.IndexOf(']', inicio);
+        return fin > inicio && int.TryParse(notas[inicio..fin], out var solicitudId)
+            ? solicitudId
+            : null;
     }
 
     public async Task<List<FacturaListDto>> ListarMisFacturasRecargasSistemaAsync(int ownerUserId, int top = 200)

@@ -1,5 +1,6 @@
 @page "/facturacion/nueva"
 @page "/demo/facturas/nueva"
+@page "/backoffice/facturar"
 @using Simetric.DTOs
 @using Simetric.Models
 @using Simetric.Models.EDeclara
@@ -28,19 +29,29 @@
 @inject IJSRuntime JS
 @inject HttpClient Http
 @inject EmisionControlService EmisionControlService
+@inject EmisorSistemaService EmisorSistemaService
 @inject NavigationManager NavigationManager
 @inject DemoCatalogService DemoCatalogService
 @inject ComisionesService ComisionesService
 @attribute [AllowAnonymous]
 
-<PageTitle>Nueva Factura | Numerica e-fact</PageTitle>
+<PageTitle>@(EsContextoBackOffice ? "Nueva Factura BackOffice | Numerica" : "Nueva Factura | Numerica e-fact")</PageTitle>
 
-<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern docs-unified-page" data-tour="invoice.page">
+<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern docs-unified-page @(EsContextoBackOffice ? "backoffice-invoice-page" : string.Empty)" data-tour="invoice.page">
     <DocumentoEmisionToast Message="@mensajeRapidoEmision"
                            IsError="@mensajeRapidoEsError"
                            PdfUrl="@documentoGeneradoPdfUrl"
                            OnOpenPdf="AbrirDocumentoGeneradoAsync" />
 
+    @if (backofficeSinAcceso)
+    {
+        <div class="alert alert-danger border-0 rounded-3 mb-3">
+            <strong>No puedes facturar desde BackOffice.</strong>
+            @backofficeMensaje
+        </div>
+    }
+    else
+    {
     <EditForm Model="@factura" OnValidSubmit="ProcesarGuardado">
         <DataAnnotationsValidator />
         <ValidationSummary class="text-danger mb-3" />
@@ -1164,7 +1175,8 @@
                 </div>
 </div>
 </div>
-</EditForm>
+    </EditForm>
+    }
 </div>
 
 @if (mostrarVistaPreviaPdfTemporal)
@@ -1931,6 +1943,11 @@
     private string formaPagoSeleccionada = "";
     private bool facturaEsCredito;
     private int currentUserId;
+    private bool backofficeSinAcceso;
+    private string backofficeMensaje = "";
+    private bool EsContextoBackOffice =>
+        NavigationManager.ToBaseRelativePath(NavigationManager.Uri)
+            .StartsWith("backoffice/facturar", StringComparison.OrdinalIgnoreCase);
     private bool EsContextoEDeclara => EDeclaraRoutes.IsEDeclaraPath(NavigationManager, NavigationManager.Uri);
     private bool cargandoInvolucradosFactura;
     private List<ComisionInvolucrado> involucradosFactura = new();
@@ -2364,6 +2381,26 @@
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
         currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+        Simetric.Models.Emisor? emisorSistema = null;
+        if (EsContextoBackOffice)
+        {
+            if (!await EmisorSistemaService.TieneAccesoBackOfficeAsync(currentUserId))
+            {
+                backofficeSinAcceso = true;
+                backofficeMensaje = "Tu usuario no tiene permisos para emitir con el emisor maestro.";
+                return;
+            }
+
+            emisorSistema = await EmisorSistemaService.GetEmisorSistemaAsync();
+            if (emisorSistema is null || emisorSistema.IdUsuario is not > 0)
+            {
+                backofficeSinAcceso = true;
+                backofficeMensaje = "Primero configura el emisor maestro y su caja principal en Facturación.";
+                return;
+            }
+
+            currentUserId = emisorSistema.IdUsuario.Value;
+        }
         if (EsContextoEDeclara)
         {
             cargandoInvolucradosFactura = true;
@@ -2375,7 +2412,9 @@
 
         var lookupsTask = Http.GetFromJsonAsync<LookupsResponse>($"api/productos/lookups?userId={currentUserId}");
         var formasPagoTask = FacturacionService.ObtenerFormasPagoAsync();
-        var emisoresTask = FacturacionService.GetEmisoresActivosAsync(currentUserId);
+        var emisoresTask = emisorSistema is null
+            ? FacturacionService.GetEmisoresActivosAsync(currentUserId)
+            : Task.FromResult(new List<Simetric.Models.Emisor> { emisorSistema });
         var tiposClienteTask = FacturacionService.GetTiposClienteAsync();
         var paisesTask = FacturacionService.GetPaisesAsync();
         var identificacionesTask = IdentificacionService.GetAllActiveAsync();

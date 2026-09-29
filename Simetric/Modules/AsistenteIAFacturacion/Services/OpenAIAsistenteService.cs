@@ -352,7 +352,9 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
         if (ContainsAny(normalized, "crea", "crear", "haz", "genera", "factura", "emite"))
         {
-            await _toolDispatcher.DispatchAsync(ToolDefinitions.CrearBorradorFactura, "{}", state, cancellationToken);
+            var draftResult = await _toolDispatcher.DispatchAsync(ToolDefinitions.CrearBorradorFactura, "{}", state, cancellationToken);
+            if (!draftResult.Success)
+                return BuildResult(draftResult, "configuracion_emision");
 
             var clientMatch = Regex.Match(
                 mensaje,

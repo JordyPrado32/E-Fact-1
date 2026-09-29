@@ -6,6 +6,8 @@ public class FacturaListDto
     public string? Numfactura { get; set; }
     public string? Serie { get; set; }
     public DateTime? FechaEmision { get; set; }
+    public DateTime? FechaEmisionSri { get; set; }
+    public DateTime? FechaSolicitud { get; set; }
     public string? EstadoSri { get; set; }
     public bool? Autorizado { get; set; }
     public string? NumeroAutorizacion { get; set; }

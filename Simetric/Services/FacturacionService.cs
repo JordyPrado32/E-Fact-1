@@ -586,7 +586,7 @@ namespace Simetric.Services
             if (serie.Length < 6)
                 return null;
 
-            var usuarios = await ObtenerUsuariosSincronizadosPorEmisorRucAsync(context, idUsuario, codEmisor);
+            var usuarios = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
             var query = context.Facturas
                 .AsNoTracking()
                 .Where(f =>
@@ -745,17 +745,17 @@ namespace Simetric.Services
             string serieRaw,
             int? codEmisor = null)
         {
-            var usuariosSincronizados = await ObtenerUsuariosSincronizadosPorEmisorRucAsync(context, idUsuario, codEmisor);
-            if (usuariosSincronizados.Count == 0)
+            var usuariosCuenta = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
+            if (usuariosCuenta.Count == 0)
             {
-                usuariosSincronizados.Add(idUsuario);
+                usuariosCuenta.Add(idUsuario);
             }
 
             var query = context.Facturas
                 .AsNoTracking()
                 .Where(f =>
                     f.Idusuario.HasValue &&
-                    usuariosSincronizados.Contains(f.Idusuario.Value) &&
+                    usuariosCuenta.Contains(f.Idusuario.Value) &&
                     f.Serie == serieRaw);
 
             if (codEmisor is > 0)
@@ -779,7 +779,7 @@ namespace Simetric.Services
                 .AsNoTracking()
                 .Where(f =>
                     f.Idusuario.HasValue &&
-                    usuariosSincronizados.Contains(f.Idusuario.Value) &&
+                    usuariosCuenta.Contains(f.Idusuario.Value) &&
                     (f.Serie ?? string.Empty).Replace("-", string.Empty) == serieRaw);
 
             if (codEmisor.HasValue)
@@ -982,6 +982,7 @@ namespace Simetric.Services
                 from nc in context.NotaCreditos.AsNoTracking()
                 join dnc in context.DetallesNotaCredito.AsNoTracking() on nc.Sec equals dnc.CodNotaCredito
                 where nc.Estado == true &&
+                      nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado &&
                       nc.IdDocModificado.HasValue &&
                       facturaIds.Contains(nc.IdDocModificado.Value)
                 select new
@@ -996,7 +997,9 @@ namespace Simetric.Services
             var facturasAnuladasPorTotal = await (
                 from f in context.Facturas.AsNoTracking()
                 join nc in context.NotaCreditos.AsNoTracking() on f.Codfactura equals nc.IdDocModificado
-                where facturaIds.Contains(f.Codfactura) && nc.Estado == true
+                where facturaIds.Contains(f.Codfactura) &&
+                      nc.Estado == true &&
+                      nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado
                 group nc by new { f.Codfactura, TotalFactura = f.Valortotal ?? 0m } into grupo
                 where grupo.Key.TotalFactura > 0m && grupo.Sum(nc => nc.ValorTotal ?? 0m) >= grupo.Key.TotalFactura
                 select grupo.Key.Codfactura
@@ -2163,60 +2166,6 @@ namespace Simetric.Services
                 .Where(u => u.IdUsuario == titularId || (u.idJefe == titularId && u.estadoAsociado == true))
                 .Select(u => u.IdUsuario)
                 .ToListAsync();
-        }
-
-        private static async Task<List<int>> ObtenerUsuariosSincronizadosPorEmisorRucAsync(AppDbContext context, int idUsuario, int? codEmisor = null)
-        {
-            var usuarios = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
-            if (!usuarios.Contains(idUsuario))
-            {
-                usuarios.Add(idUsuario);
-            }
-
-            IQueryable<Emisor> query = context.Emisores
-                .AsNoTracking()
-                .Where(e =>
-                    e.Estado &&
-                    !e.EsEmisorSistema &&
-                    e.IdUsuario.HasValue &&
-                    e.Ruc != null &&
-                    e.Ruc != string.Empty);
-
-            if (codEmisor is > 0)
-            {
-                query = query.Where(e => e.Codigo == codEmisor.Value || usuarios.Contains(e.IdUsuario.Value));
-            }
-            else
-            {
-                query = query.Where(e => usuarios.Contains(e.IdUsuario.Value));
-            }
-
-            var rucs = await query
-                .Select(e => e.Ruc!.Trim())
-                .Distinct()
-                .ToListAsync();
-
-            if (rucs.Count == 0)
-            {
-                return usuarios.Distinct().ToList();
-            }
-
-            var usuariosPorRuc = await context.Emisores
-                .AsNoTracking()
-                .Where(e =>
-                    e.Estado &&
-                    !e.EsEmisorSistema &&
-                    e.IdUsuario.HasValue &&
-                    e.Ruc != null &&
-                    rucs.Contains(e.Ruc.Trim()))
-                .Select(e => e.IdUsuario!.Value)
-                .Distinct()
-                .ToListAsync();
-
-            return usuarios
-                .Concat(usuariosPorRuc)
-                .Distinct()
-                .ToList();
         }
 
         private FacturaUsuarioContexto GetFacturaUsuarioContextoDesdeSesion(int idUsuario)

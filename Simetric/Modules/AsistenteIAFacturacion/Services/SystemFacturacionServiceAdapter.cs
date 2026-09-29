@@ -133,6 +133,26 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         if (emisor is null)
             return Fail("No hay un emisor activo configurado para esta cuenta.");
 
+        var productIds = draft.Items
+            .Where(item => item.ProductoId is > 0)
+            .Select(item => item.ProductoId!.Value)
+            .Distinct()
+            .ToList();
+        if (productIds.Count > 0)
+        {
+            var ownedProductIds = await context.Productos
+                .AsNoTracking()
+                .Where(producto => productIds.Contains(producto.Codigo) &&
+                    producto.Idusuario == ownerId &&
+                    (producto.Estado == null || producto.Estado == true))
+                .Select(producto => producto.Codigo)
+                .ToListAsync(cancellationToken);
+
+            var foreignProductIds = productIds.Where(productId => !ownedProductIds.Contains(productId)).ToList();
+            if (foreignProductIds.Count > 0)
+                return Fail("Uno o más productos seleccionados no pertenecen a tu cuenta.");
+        }
+
         var formasPago = await _facturacionService.ObtenerFormasPagoAsync();
         var formaPago = ResolveFormaPago(formasPago, draft.FormaPago);
         if (formaPago is null)

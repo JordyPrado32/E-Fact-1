@@ -201,14 +201,14 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
         if (preferredSeries.Length >= 6)
         {
             preferredSeries = preferredSeries[..6];
-            var usuariosCuenta = await GetUsuariosSincronizadosPorEmisorRucAsync(context, idUsuario);
-            if (usuariosCuenta.Count > 0)
+            var usuariosCuentaParaSeriePreferida = await GetUsuariosCuentaIdsAsync(context, idUsuario);
+            if (usuariosCuentaParaSeriePreferida.Count > 0)
             {
                 var cajasCandidatas = await query
                     .Where(c =>
                         c.Estado == true &&
                         c.IdUsuario.HasValue &&
-                        usuariosCuenta.Contains(c.IdUsuario.Value))
+                        usuariosCuentaParaSeriePreferida.Contains(c.IdUsuario.Value))
                     .OrderBy(c => c.NumCaja)
                     .ThenBy(c => c.Sec)
                     .ToListAsync();
@@ -222,39 +222,17 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
                 }
             }
 
-            var cajasSistemaQuery = query
-                .Where(c => c.Estado == true && c.EsCajaSistema == true);
-
-            cajasSistemaQuery = documento switch
-            {
-                CajaSerieDocumento.Compra => cajasSistemaQuery.Where(c => c.SerieCompras != null),
-                CajaSerieDocumento.NotaCredito => cajasSistemaQuery.Where(c => c.SerieNotasCred != null),
-                CajaSerieDocumento.NotaDebito => cajasSistemaQuery.Where(c => c.SerieDebitos != null),
-                _ => cajasSistemaQuery.Where(c => c.SerieFactura != null)
-            };
-
-            var cajasSistemaPreferidas = await cajasSistemaQuery
-                    .OrderBy(c => c.NumCaja)
-                    .ThenBy(c => c.Sec)
-                    .ToListAsync();
-
-            var cajaSistemaPreferida = cajasSistemaPreferidas
-                .FirstOrDefault(c => SoloDigitos(ObtenerSerieDocumento(c, documento)) == preferredSeries);
-
-            if (cajaSistemaPreferida != null)
-            {
-                return cajaSistemaPreferida;
-            }
+            // Una serie preferida que no pertenece a la cuenta actual no es válida.
         }
 
-        var usuariosSincronizados = await GetUsuariosSincronizadosPorEmisorRucAsync(context, idUsuario);
-        if (usuariosSincronizados.Count > 0)
+        var usuariosCuenta = await GetUsuariosCuentaIdsAsync(context, idUsuario);
+        if (usuariosCuenta.Count > 0)
         {
             var cajaSincronizada = await query
                 .Where(c =>
                     c.Estado == true &&
                     c.IdUsuario.HasValue &&
-                    usuariosSincronizados.Contains(c.IdUsuario.Value))
+                    usuariosCuenta.Contains(c.IdUsuario.Value))
                 .OrderBy(c => c.NumCaja)
                 .ThenBy(c => c.Sec)
                 .FirstOrDefaultAsync();
@@ -263,17 +241,6 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
             {
                 return cajaSincronizada;
             }
-        }
-
-        var cajaSistema = await query
-            .Where(c => c.Estado == true && c.EsCajaSistema == true)
-            .OrderBy(c => c.NumCaja)
-            .ThenBy(c => c.Sec)
-            .FirstOrDefaultAsync();
-
-        if (cajaSistema != null)
-        {
-            return cajaSistema;
         }
 
         return await query
@@ -384,47 +351,4 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
             .ToListAsync();
     }
 
-    private static async Task<List<int>> GetUsuariosSincronizadosPorEmisorRucAsync(AppDbContext context, int idUsuario)
-    {
-        var usuarios = await GetUsuariosCuentaIdsAsync(context, idUsuario);
-        if (!usuarios.Contains(idUsuario))
-        {
-            usuarios.Add(idUsuario);
-        }
-
-        var rucs = await context.Emisores
-            .AsNoTracking()
-            .Where(e =>
-                e.Estado &&
-                !e.EsEmisorSistema &&
-                e.IdUsuario.HasValue &&
-                usuarios.Contains(e.IdUsuario.Value) &&
-                e.Ruc != null &&
-                e.Ruc != string.Empty)
-            .Select(e => e.Ruc!.Trim())
-            .Distinct()
-            .ToListAsync();
-
-        if (rucs.Count == 0)
-        {
-            return usuarios.Distinct().ToList();
-        }
-
-        var usuariosPorRuc = await context.Emisores
-            .AsNoTracking()
-            .Where(e =>
-                e.Estado &&
-                !e.EsEmisorSistema &&
-                e.IdUsuario.HasValue &&
-                e.Ruc != null &&
-                rucs.Contains(e.Ruc.Trim()))
-            .Select(e => e.IdUsuario!.Value)
-            .Distinct()
-            .ToListAsync();
-
-        return usuarios
-            .Concat(usuariosPorRuc)
-            .Distinct()
-            .ToList();
-    }
 }

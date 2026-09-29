@@ -239,6 +239,7 @@ public class NotaCreditoService
             from nc in db.NotaCreditos.AsNoTracking()
             join dnc in db.DetallesNotaCredito.AsNoTracking() on nc.Sec equals dnc.CodNotaCredito
             where nc.Estado == true &&
+                  nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado &&
                   nc.IdDocModificado.HasValue &&
                   facturaIds.Contains(nc.IdDocModificado.Value)
             select new
@@ -253,7 +254,9 @@ public class NotaCreditoService
         var facturasAnuladasPorTotal = await (
             from f in db.Facturas.AsNoTracking()
             join nc in db.NotaCreditos.AsNoTracking() on f.Codfactura equals nc.IdDocModificado
-            where facturaIds.Contains(f.Codfactura) && nc.Estado == true
+            where facturaIds.Contains(f.Codfactura) &&
+                  nc.Estado == true &&
+                  nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado
             group nc by new { f.Codfactura, TotalFactura = f.Valortotal ?? 0m } into grupo
             where grupo.Key.TotalFactura > 0m && grupo.Sum(nc => nc.ValorTotal ?? 0m) >= grupo.Key.TotalFactura
             select grupo.Key.Codfactura
@@ -644,7 +647,9 @@ public class NotaCreditoService
         var yaAnulados = await (
             from nc in db.NotaCreditos
             join dnc in db.DetallesNotaCredito on nc.Sec equals dnc.CodNotaCredito
-            where nc.IdDocModificado == codFactura && nc.Estado == true
+            where nc.IdDocModificado == codFactura &&
+                  nc.Estado == true &&
+                  nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado
             select dnc
         ).ToListAsync();
 
@@ -2307,7 +2312,9 @@ public class NotaCreditoService
         var anulados = await (
             from nc in db.NotaCreditos.AsNoTracking()
             join dnc in db.DetallesNotaCredito.AsNoTracking() on nc.Sec equals dnc.CodNotaCredito
-            where nc.IdDocModificado == codFactura && nc.Estado == true
+            where nc.IdDocModificado == codFactura &&
+                  nc.Estado == true &&
+                  nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado
             select dnc
         ).ToListAsync();
 
