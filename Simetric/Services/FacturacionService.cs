@@ -3997,20 +3997,18 @@ IF @resultado < 0
             var destinatarios = ComprobanteCorreoDestinatariosHelper.NormalizarCorreos(
                 metadata.Destinatarios
                     .Concat(ParseCorreosFactura(factura.Correoad))
-                    .Concat(destinatariosBase));
-
-            var correoUsuario = await context.Usuarios
-                .AsNoTracking()
-                .Where(u => u.IdUsuario == factura.Idusuario)
-                .Select(u => u.Email)
-                .FirstOrDefaultAsync();
-
-            if (!string.IsNullOrWhiteSpace(correoUsuario))
-            {
-                destinatarios = destinatarios
-                    .Where(correo => !string.Equals(correo, correoUsuario.Trim(), StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-            }
+                    .Concat(destinatariosBase)
+                    .Append(factura.CodemisorNavigation?.Email));
+            var destinatariosObligatorios = ComprobanteCorreoDestinatariosHelper.NormalizarCorreos(
+                new[]
+                {
+                    factura.CodemisorNavigation?.Email,
+                    factura.CodclientesNavigation?.Correo
+                });
+            var destinatariosRegistrados = ComprobanteCorreoDestinatariosHelper.NormalizarCorreos(
+                metadata.Destinatarios.Concat(ParseCorreosFactura(factura.Correoad)));
+            var faltanDestinatariosObligatorios = destinatariosObligatorios.Any(
+                correo => !destinatariosRegistrados.Contains(correo, StringComparer.OrdinalIgnoreCase));
 
             Debug.WriteLine($"[FACTURA-CORREO] Factura: {idFactura} | ForzarReenvio: {forzarReenvio}");
             Debug.WriteLine($"[FACTURA-CORREO] Cliente correo principal: {factura.CodclientesNavigation?.Correo}");
@@ -4024,7 +4022,9 @@ IF @resultado < 0
                 factura.CodclientesNavigation?.Correo ?? "(sin correo principal)",
                 string.Join(", ", destinatarios));
 
-            if (!forzarReenvio && (seguimiento?.CorreoEnviado == true || metadata.CorreoEnviado))
+            if (!forzarReenvio &&
+                (seguimiento?.CorreoEnviado == true || metadata.CorreoEnviado) &&
+                !faltanDestinatariosObligatorios)
             {
                 return new FacturaCorreoEnvioResultadoDto
                 {
@@ -4041,7 +4041,7 @@ IF @resultado < 0
                 return new FacturaCorreoEnvioResultadoDto
                 {
                     SinDestinatarios = true,
-                    Mensaje = "La factura no tiene correos configurados para el cliente."
+                    Mensaje = "La factura no tiene correos configurados para el emisor o el cliente."
                 };
             }
 

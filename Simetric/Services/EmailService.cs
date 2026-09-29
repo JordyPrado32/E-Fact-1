@@ -29,7 +29,7 @@ public interface IEmailService
         string? nombreCliente,
         decimal? totalFactura,
         string rutaXmlAdjunto,
-        string? rutaPdfAdjunto,
+        string rutaPdfAdjunto,
         IEnumerable<string>? copiasOcultas = null);
     Task EnviarAvisoFacturaAnuladaBackOfficeAsync(
         string numeroFactura,
@@ -198,12 +198,16 @@ public class EmailService : IEmailService
             "EmailComprobantes:Smtp:Puerto",
             "EmailComprobantes:Puerto",
             "Smtp:Puerto") ?? 8889;
-        _usuario = "soporte@numericasoftware.com";
+        _usuario = GetConfigValue(
+            configuration,
+            "EmailComprobantes:Smtp:Usuario",
+            "EmailComprobantes:Usuario",
+            "Smtp:Usuario") ?? string.Empty;
         _pass = GetConfigValue(
             configuration,
             "EmailComprobantes:Smtp:Password",
             "EmailComprobantes:Password",
-            "Smtp:Password") ?? "Soporte2026$";
+            "Smtp:Password") ?? string.Empty;
         _nombreRemitente = GetConfigValue(
             configuration,
             "EmailComprobantes:Smtp:NombreRemitente",
@@ -722,7 +726,7 @@ public class EmailService : IEmailService
         string? nombreCliente,
         decimal? totalFactura,
         string rutaXmlAdjunto,
-        string? rutaPdfAdjunto,
+        string rutaPdfAdjunto,
         IEnumerable<string>? copiasOcultas = null)
     {
         var destinatariosNormalizados = destinatarios
@@ -746,7 +750,7 @@ public class EmailService : IEmailService
             numeroFactura,
             string.Join(", ", destinatariosNormalizados),
             rutaXmlAdjunto,
-            rutaPdfAdjunto ?? "(sin pdf)");
+            rutaPdfAdjunto);
 
         if (!destinatariosNormalizados.Any())
             throw new InvalidOperationException("La factura no tiene destinatarios válidos para el envío.");
@@ -754,7 +758,7 @@ public class EmailService : IEmailService
         if (string.IsNullOrWhiteSpace(rutaXmlAdjunto) || !File.Exists(rutaXmlAdjunto))
             throw new FileNotFoundException("No se encontró el XML de la factura para adjuntarlo al correo.", rutaXmlAdjunto);
 
-        if (!string.IsNullOrWhiteSpace(rutaPdfAdjunto) && !File.Exists(rutaPdfAdjunto))
+        if (!File.Exists(rutaPdfAdjunto))
             throw new FileNotFoundException("No se encontró el PDF de la factura para adjuntarlo al correo.", rutaPdfAdjunto);
 
         var asunto = $"Factura electrónica {numeroFactura}";
@@ -764,9 +768,7 @@ public class EmailService : IEmailService
             : System.Net.WebUtility.HtmlEncode(nombreCliente.Trim());
 
         var totalTexto = (totalFactura ?? 0m).ToString("N2", new CultureInfo("es-EC"));
-        var archivosAdjuntos = !string.IsNullOrWhiteSpace(rutaPdfAdjunto)
-            ? "PDF y XML electrónicos"
-            : "XML electrónico";
+        var archivosAdjuntos = "PDF y XML electrónicos";
 
         var mensaje = new MimeMessage();
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
@@ -798,8 +800,7 @@ public class EmailService : IEmailService
         };
 
         bodyBuilder.Attachments.Add(rutaXmlAdjunto);
-        if (!string.IsNullOrWhiteSpace(rutaPdfAdjunto))
-            bodyBuilder.Attachments.Add(rutaPdfAdjunto);
+        bodyBuilder.Attachments.Add(rutaPdfAdjunto);
 
         mensaje.Body = bodyBuilder.ToMessageBody();
 

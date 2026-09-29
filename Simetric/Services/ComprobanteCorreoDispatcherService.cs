@@ -98,11 +98,18 @@ public sealed class ComprobanteCorreoDispatcherService : BackgroundService
         {
             stoppingToken.ThrowIfCancellationRequested();
 
-            var resultado = await facturacionService.IntentarEnviarFacturaPorCorreoAsync(idFactura);
-            if (resultado.Enviado)
-                _logger.LogInformation("Factura {IdFactura} enviada automaticamente por correo.", idFactura);
-            else if (resultado.Error)
-                _logger.LogWarning("No se pudo enviar automaticamente la factura {IdFactura}: {Mensaje}", idFactura, resultado.Mensaje);
+            try
+            {
+                var resultado = await facturacionService.IntentarEnviarFacturaPorCorreoAsync(idFactura);
+                if (resultado.Enviado)
+                    _logger.LogInformation("Factura {IdFactura} enviada automaticamente por correo.", idFactura);
+                else if (resultado.Error)
+                    _logger.LogWarning("No se pudo enviar automaticamente la factura {IdFactura}: {Mensaje}", idFactura, resultado.Mensaje);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error no controlado al procesar automaticamente la factura {IdFactura}. Se continuara con las siguientes.", idFactura);
+            }
         }
 
         var notasPendientes = await notaCreditoService.GetNotasCreditoAutorizadasPendientesCorreoAsync(10);

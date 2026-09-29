@@ -6,19 +6,6 @@ namespace Simetric.Modules.AsistenteIAFacturacion.Tools;
 
 public sealed class ToolDispatcher
 {
-    private static readonly HashSet<string> ProtectedTools = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ToolDefinitions.CrearCliente,
-        ToolDefinitions.RegistrarAbonoGeneral,
-        ToolDefinitions.EmitirFactura,
-        ToolDefinitions.EmitirNotaCreditoDesdeFactura,
-        ToolDefinitions.EmitirNotaDebitoDesdeFactura,
-        ToolDefinitions.EmitirGuiaDesdeFactura,
-        ToolDefinitions.EmitirLiquidacionCompra,
-        ToolDefinitions.EmitirRetencion,
-        ToolDefinitions.SincronizarESignSolicitud
-    };
-
     private static readonly HashSet<string> EmissionTools = new(StringComparer.OrdinalIgnoreCase)
     {
         ToolDefinitions.EmitirFactura,
@@ -85,7 +72,7 @@ public sealed class ToolDispatcher
                     return new ToolResultDto { ToolName = toolName, Success = false, Message = configurationWarning, CodigoError = "emission_configuration_required" };
             }
 
-            if (!allowSideEffects && RequiresConfirmation(toolName, state))
+            if (!allowSideEffects && RequiresConfirmation(toolName))
                 return RequestConfirmation(toolName, argumentsJson, state);
 
             return toolName switch
@@ -199,9 +186,8 @@ public sealed class ToolDispatcher
         }
     }
 
-    private static bool RequiresConfirmation(string toolName, FacturaConversationState state)
-        => ProtectedTools.Contains(toolName)
-            && (toolName != ToolDefinitions.EmitirFactura || state.Estado == FacturaConversationStates.EsperandoConfirmacion);
+    private static bool RequiresConfirmation(string toolName)
+        => EmissionTools.Contains(toolName);
 
     private static ToolResultDto RequestConfirmation(string toolName, string? argumentsJson, FacturaConversationState state)
     {

@@ -1161,10 +1161,12 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         var user = await context.Usuarios
             .AsNoTracking()
             .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
+            .Select(u => new { u.IdUsuario, u.idJefe, u.estadoAsociado })
             .FirstOrDefaultAsync(cancellationToken);
 
-        var ownerId = user?.idJefe ?? user?.IdUsuario ?? 0;
+        var ownerId = user?.estadoAsociado == true && user.idJefe is > 0
+            ? user.idJefe.Value
+            : user?.IdUsuario ?? 0;
         OwnerCache[userId] = new CachedValue<int>(ownerId, DateTimeOffset.UtcNow.Add(OwnerCacheLifetime));
         return ownerId;
     }
