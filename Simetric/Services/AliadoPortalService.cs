@@ -370,10 +370,16 @@ public sealed class AliadoPortalService
             .Where(x => x.IdCliente.HasValue)
             .GroupBy(x => x.IdCliente!.Value)
             .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.Fecha).First());
+        var ultimaPorIdentificacion = facturas
+            .Where(x => !string.IsNullOrWhiteSpace(x.IdentificacionCliente))
+            .GroupBy(x => NormalizarIdentificacionCliente(x.IdentificacionCliente), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.Fecha).First(), StringComparer.OrdinalIgnoreCase);
 
         foreach (var cliente in clientes)
         {
-            if (!ultimaPorCliente.TryGetValue(cliente.IdCliente, out var factura))
+            if (!ultimaPorCliente.TryGetValue(cliente.IdCliente, out var factura) &&
+                (string.IsNullOrWhiteSpace(cliente.Identificacion) ||
+                 !ultimaPorIdentificacion.TryGetValue(NormalizarIdentificacionCliente(cliente.Identificacion), out factura)))
                 continue;
 
             cliente.Producto = factura.Producto;
@@ -410,7 +416,12 @@ public sealed class AliadoPortalService
         if (cliente is null)
             return null;
 
-        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, idCliente);
+        var identificacionCliente = NormalizarIdentificacionCliente(cliente.Identificacion);
+        var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor))
+            .Where(x => x.IdCliente == idCliente ||
+                        (!string.IsNullOrWhiteSpace(identificacionCliente) &&
+                         string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacionCliente, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
         cliente.Productos = facturas
             .OrderByDescending(x => x.Fecha)
             .Select(x => new AliadoProductoDto
@@ -1300,6 +1311,7 @@ public sealed class AliadoPortalService
             {
                 IdFactura = x.Codfactura,
                 IdCliente = x.Codclientes,
+                IdentificacionCliente = x.CodclientesNavigation == null ? null : x.CodclientesNavigation.Numeroidentificacion,
                 Cliente = x.CodclientesNavigation == null ? "Cliente" : (x.CodclientesNavigation.Nombrerazonsocial ?? x.CodclientesNavigation.Nombrecomercial ?? ((x.CodclientesNavigation.Nombres ?? "") + " " + (x.CodclientesNavigation.Apellidos ?? ""))),
                 Producto = x.Detallefacturas.OrderBy(d => d.Codlinea).Select(d => d.Descripproducto).FirstOrDefault() ?? "Servicio Numerica",
                 Plan = x.Detallefacturas.OrderBy(d => d.Codlinea).Select(d => d.Descripproducto).FirstOrDefault() ?? "Servicio",
@@ -1544,7 +1556,9 @@ public sealed class AliadoPortalService
 
         foreach (var factura in facturas)
         {
-            if (!factura.Autorizado || !EsPagoConfirmado(factura.EstadoPago))
+            // Las facturas con este marcador solo se crean tras aprobar una compra en BackOffice.
+            // Algunas conservan EstadoPago nulo, por lo que la autorización es la evidencia válida.
+            if (!factura.Autorizado)
                 continue;
 
             var baseComisionable = ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12);
@@ -1659,6 +1673,11 @@ public sealed class AliadoPortalService
 
     private static bool EsPagoConfirmado(string? estadoPago)
         => estadoPago?.Trim().ToUpperInvariant() is "PAGADA" or "PAGADO" or "CANCELADA" or "CANCELADO" or "COBRADA" or "COBRADO";
+
+    private static string NormalizarIdentificacionCliente(string? identificacion)
+        => string.IsNullOrWhiteSpace(identificacion)
+            ? string.Empty
+            : new string(identificacion.Where(char.IsLetterOrDigit).ToArray());
 
     private static decimal ObtenerBaseNeta(decimal? subtotal, decimal? subtotal0, decimal? subtotal12)
         => subtotal ?? ((subtotal0 ?? 0m) + (subtotal12 ?? 0m));
@@ -2046,6 +2065,7 @@ internal sealed class FacturaPortalRow
 {
     public int IdFactura { get; init; }
     public int? IdCliente { get; init; }
+    public string? IdentificacionCliente { get; init; }
     public string Cliente { get; init; } = string.Empty;
     public string Producto { get; init; } = string.Empty;
     public string Plan { get; init; } = string.Empty;

@@ -297,9 +297,18 @@ public sealed class CompraDocumentosFacturacionService
         var numeroIdentificacion = NormalizarIdentificacion(usuario.Identificacion, usuario.IdTipoIdentificacion);
         var tipoIdentificacion = await ResolverCodigoIdentificacionAsync(context, usuario.IdTipoIdentificacion, numeroIdentificacion);
         var tipoCliente = usuario.TipoCliente ?? await ResolverTipoClienteNaturalAsync(context);
+        var clienteAsociadoId = await context.Clientes
+            .AsNoTracking()
+            .Where(c => c.Usuario == usuario.IdUsuario &&
+                        c.Idvendedor == usuario.IdVendedor &&
+                        c.Estado != false)
+            .OrderByDescending(c => c.Codcliente)
+            .Select(c => (int?)c.Codcliente)
+            .FirstOrDefaultAsync();
 
         return new Cliente
         {
+            Codcliente = clienteAsociadoId ?? 0,
             Nombres = Limpiar(usuario.Nombres),
             Apellidos = Limpiar(usuario.Apellidos),
             Nombrerazonsocial = tipoIdentificacion == "04" ? Limpiar(usuario.NombreEmpresa) ?? Limpiar(usuario.NombreCompleto) : null,
@@ -311,7 +320,8 @@ public sealed class CompraDocumentosFacturacionService
             Direccion = Limpiar(usuario.DireccionEmpresa),
             TipoCliente = tipoCliente,
             Idvendedor = usuario.IdVendedor,
-            Usuario = ownerId,
+            // Conserva el cliente creado al registrarse con el enlace del aliado.
+            Usuario = usuario.IdUsuario,
             Oblgconta = esTransferenciaBackOffice ? "NO" : null,
             Estado = true
         };

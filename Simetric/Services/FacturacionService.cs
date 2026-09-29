@@ -1181,7 +1181,11 @@ namespace Simetric.Services
                         var clienteDb = clienteData.Codcliente > 0
                             ? await context.Clientes.FirstOrDefaultAsync(c =>
                                 c.Codcliente == clienteData.Codcliente &&
-                                c.Usuario == idUsuarioEmisor)
+                                (c.Usuario == idUsuarioEmisor ||
+                                 (clienteData.Usuario.HasValue &&
+                                  c.Usuario == clienteData.Usuario &&
+                                  factura.Idvendedor.HasValue &&
+                                  c.Idvendedor == factura.Idvendedor)))
                             : null;
 
                         clienteDb ??= await context.Clientes
@@ -1214,7 +1218,7 @@ namespace Simetric.Services
                             clienteDb.Provincia = clienteData.Provincia;
                             clienteDb.Ciudad = clienteData.Ciudad;
                             clienteDb.Oblgconta = clienteData.Oblgconta;
-                            clienteDb.Usuario = idUsuarioEmisor;
+                            clienteDb.Usuario ??= idUsuarioEmisor;
                             clienteDb.Estado = true;
                         }
                         else
