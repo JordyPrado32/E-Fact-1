@@ -1079,7 +1079,7 @@ public class NotaCreditoService
             " ",
             (valor ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
-    public async Task<List<NotaCreditoListDto>> ListarNotasCreditoUsuarioAsync(int idUsuario)
+    public async Task<List<NotaCreditoListDto>> ListarNotasCreditoUsuarioAsync(int idUsuario, int? codEmisor = null)
     {
         using var db = await _dbFactory.CreateDbContextAsync();
 
@@ -1101,7 +1101,9 @@ public class NotaCreditoService
             from ti in tipoJoin.DefaultIfEmpty()
 
             where nc.Usuario == idUsuario &&
-                  (e == null || e.EsEmisorSistema != true)
+                  (codEmisor.HasValue
+                      ? nc.CodEmisor == codEmisor.Value
+                      : (e == null || e.EsEmisorSistema != true))
             orderby nc.Sec descending
             select new
             {

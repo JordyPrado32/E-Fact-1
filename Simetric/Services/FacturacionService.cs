@@ -2676,7 +2676,13 @@ IF @resultado < 0
                 .ToListAsync();
         }
 
-        public async Task<List<FacturaListDto>> ListarFacturasUsuarioAsync(int idUsuario, int top = 200)
+        public Task<List<FacturaListDto>> ListarFacturasUsuarioAsync(int idUsuario, int top = 200)
+            => ListarFacturasUsuarioPorEmisorAsync(idUsuario, top, null);
+
+        public Task<List<FacturaListDto>> ListarFacturasUsuarioAsync(int idUsuario, int top, CancellationToken cancellationToken)
+            => ListarFacturasUsuarioPorEmisorAsync(idUsuario, top, null);
+
+        public async Task<List<FacturaListDto>> ListarFacturasUsuarioPorEmisorAsync(int idUsuario, int top = 200, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
             var usuariosCuentaIds = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
@@ -2685,7 +2691,9 @@ IF @resultado < 0
                 .AsNoTracking()
                 .Where(f =>
                     f.Idusuario.HasValue && usuariosCuentaIds.Contains(f.Idusuario.Value) &&
-                    (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true) &&
+                    (codEmisor.HasValue
+                        ? f.Codemisor == codEmisor.Value
+                        : (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true)) &&
                     (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)))
                 .OrderByDescending(f => f.Codfactura);
 

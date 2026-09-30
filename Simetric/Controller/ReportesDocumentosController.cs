@@ -9,41 +9,58 @@ namespace Simetric.Controllers;
 public class ReportesDocumentosController : UsuarioApiControllerBase
 {
     private readonly ReporteComprobantesService _reporteService;
+    private readonly EmisorSistemaService _emisorSistemaService;
 
-    public ReportesDocumentosController(ReporteComprobantesService reporteService)
+    public ReportesDocumentosController(ReporteComprobantesService reporteService, EmisorSistemaService emisorSistemaService)
     {
         _reporteService = reporteService;
+        _emisorSistemaService = emisorSistemaService;
+    }
+
+    private async Task<(int IdUsuario, int? CodEmisor)> ResolverContextoAsync(int idUsuario, bool backOffice)
+    {
+        var usuario = ResolverIdUsuario(idUsuario);
+        if (usuario <= 0)
+            return (0, null);
+        if (!backOffice)
+            return (usuario, null);
+        if (!await _emisorSistemaService.TieneAccesoBackOfficeAsync(usuario))
+            return (0, null);
+        var emisor = await _emisorSistemaService.GetEmisorSistemaAsync();
+        return emisor?.IdUsuario is > 0
+            ? (emisor.IdUsuario.Value, EmisorSistemaService.CodigoEmisorBackOffice)
+            : (0, null);
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetDocumentos([FromQuery] int idUsuario, [FromQuery] string? search = null)
+    public async Task<IActionResult> GetDocumentos([FromQuery] int idUsuario, [FromQuery] string? search = null, [FromQuery] bool backOffice = false)
     {
-        idUsuario = ResolverIdUsuario(idUsuario);
-        if (idUsuario <= 0) return Unauthorized();
+        var contexto = await ResolverContextoAsync(idUsuario, backOffice);
+        if (contexto.IdUsuario <= 0) return Unauthorized();
 
-        var reporte = await _reporteService.ObtenerReporteUsuarioAsync(idUsuario);
+        var reporte = await _reporteService.ObtenerReporteUsuarioAsync(contexto.IdUsuario, contexto.CodEmisor);
         reporte.Items = Filtrar(reporte.Items, search).ToList();
 
         return Ok(reporte);
     }
 
     [HttpGet("emitidos")]
-    public async Task<IActionResult> GetEmitidos([FromQuery] int idUsuario, [FromQuery] string? search = null)
+    public async Task<IActionResult> GetEmitidos([FromQuery] int idUsuario, [FromQuery] string? search = null, [FromQuery] bool backOffice = false)
     {
-        idUsuario = ResolverIdUsuario(idUsuario);
-        if (idUsuario <= 0) return Unauthorized();
+        var contexto = await ResolverContextoAsync(idUsuario, backOffice);
+        if (contexto.IdUsuario <= 0) return Unauthorized();
 
-        var reporte = await _reporteService.ObtenerReporteUsuarioAsync(idUsuario);
+        var reporte = await _reporteService.ObtenerReporteUsuarioAsync(contexto.IdUsuario, contexto.CodEmisor);
         return Ok(Filtrar(reporte.Items, search));
     }
 
     [HttpGet("recibidos")]
-    public async Task<IActionResult> GetRecibidos([FromQuery] int idUsuario, [FromQuery] string? search = null)
+    public async Task<IActionResult> GetRecibidos([FromQuery] int idUsuario, [FromQuery] string? search = null, [FromQuery] bool backOffice = false)
     {
-        idUsuario = ResolverIdUsuario(idUsuario);
-        if (idUsuario <= 0) return Unauthorized();
+        var contexto = await ResolverContextoAsync(idUsuario, backOffice);
+        if (contexto.IdUsuario <= 0) return Unauthorized();
 
-        var reporte = await _reporteService.ObtenerReporteUsuarioAsync(idUsuario);
+        var reporte = await _reporteService.ObtenerReporteUsuarioAsync(contexto.IdUsuario, contexto.CodEmisor);
         return Ok(Filtrar(reporte.Items.Where(x =>
             string.Equals(x.TerceroRol, "Proveedor", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(x.TipoDocumentoCodigo, ReporteComprobantesTipos.LiquidacionCompra, StringComparison.OrdinalIgnoreCase)), search));

@@ -45,8 +45,8 @@ public sealed class ReporteComprobantesService
             return new ReporteComprobantesCargaDto();
         }
 
-        var facturasTask = _facturacionService.ListarFacturasUsuarioAsync(idUsuario, 0);
-        var notasCreditoTask = _notaCreditoService.ListarNotasCreditoUsuarioAsync(idUsuario);
+        var facturasTask = _facturacionService.ListarFacturasUsuarioPorEmisorAsync(idUsuario, 0, codEmisor);
+        var notasCreditoTask = _notaCreditoService.ListarNotasCreditoUsuarioAsync(idUsuario, codEmisor);
         var notasDebitoTask = _notaDebitoService.ListarNotasDebitoUsuarioAsync(idUsuario);
         var guiasTask = _guiaRemisionService.ListarGuiasRemisionUsuarioAsync(idUsuario);
         var retencionesTask = _retencionGeneradaService.ListarRetencionesUsuarioAsync(idUsuario);

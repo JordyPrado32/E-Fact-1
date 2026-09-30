@@ -887,11 +887,14 @@ public class LiquidacionCompraService
             join proveedor in context.Clientes.AsNoTracking()
                 on compra.CodClientes equals proveedor.Codcliente into proveedorJoin
             from proveedor in proveedorJoin.DefaultIfEmpty()
+            join emisor in context.Emisores.AsNoTracking()
+                on compra.CodEmisor equals emisor.Codigo into emisorJoin
+            from emisor in emisorJoin.DefaultIfEmpty()
 
             where compra.Estado == true &&
                   compra.CodDocumento == "03" &&
                   compra.Usuario == idUsuario &&
-                  (!codEmisor.HasValue || compra.CodEmisor == codEmisor.Value)
+                  (!codEmisor.HasValue || (compra.CodEmisor == codEmisor.Value && emisor != null && emisor.EsEmisorSistema))
             orderby compra.CodFactura descending
             select new
             {

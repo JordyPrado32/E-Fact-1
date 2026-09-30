@@ -100,8 +100,42 @@
                 <i class="ri-search-line"></i>
                 <span>Buscar</span>
             </button>
+            <button type="button" class="ghost-btn ghost-btn-sm" @onclick="() => mostrarPagoMasivo = !mostrarPagoMasivo">
+                <i class="ri-bank-card-line"></i>
+                <span>Pagos masivos</span>
+            </button>
         </div>
         </div>
+        @if (mostrarPagoMasivo)
+        {
+            <div class="cartera-filter-panel cartera-filter-panel-full">
+                <div class="cartera-filter-head">
+                    <div>
+                        <span class="cartera-filter-label">Pago masivo</span>
+                        <h4>Registrar el mismo abono para varios clientes</h4>
+                    </div>
+                    <span class="cliente-badge">@clientesPagoMasivo.Count clientes seleccionados</span>
+                </div>
+                <div class="cartera-filter-grid">
+                    <label class="cartera-filter-field">
+                        <span>Valor por cliente</span>
+                        <input type="number" min="0.01" step="0.01" @bind="montoPagoMasivo" />
+                    </label>
+                    <label class="cartera-filter-field">
+                        <span>Observación</span>
+                        <input @bind="observacionPagoMasivo" maxlength="250" />
+                    </label>
+                    <div class="cartera-toolbar-actions">
+                        <button type="button" class="confirm-btn confirm-btn-sm" disabled="@(clientesPagoMasivo.Count == 0 || montoPagoMasivo <= 0 || procesandoPagoMasivo)" @onclick="RegistrarPagosMasivosAsync">
+                            <i class="ri-check-double-line"></i>
+                            <span>@(procesandoPagoMasivo ? "Registrando..." : "Registrar pagos")</span>
+                        </button>
+                        <button type="button" class="ghost-btn ghost-btn-sm" @onclick="LimpiarSeleccionPagoMasivo">Limpiar selección</button>
+                    </div>
+                </div>
+                <small>Selecciona los clientes desde la primera columna de la cartera. El valor indicado se aplica a cada cliente y se distribuye entre sus facturas pendientes.</small>
+            </div>
+        }
         <div class="cartera-filter-panel cartera-filter-panel-full" data-tour="abonos.filters">
             <div class="cartera-filter-head">
                 <div>
@@ -190,6 +224,7 @@
                     <table class="cartera-table">
                         <thead>
                             <tr>
+                                <th>Masivo</th>
                                 <th>Factura</th>
                                 <th>Cliente</th>
                                 <th>Emisión</th>
@@ -205,6 +240,12 @@
                             {
                                 <tr class="@(FacturaCarteraSeleccionada?.IdFactura == facturaPendiente.IdFactura ? "is-selected" : null)"
                                     @onclick="() => SeleccionarFacturaCartera(facturaPendiente)">
+                                    <td>
+                                        <input type="checkbox"
+                                               checked="@clientesPagoMasivo.Contains(facturaPendiente.IdCliente)"
+                                               @onclick:stopPropagation="true"
+                                               @onchange="() => AlternarClientePagoMasivo(facturaPendiente.IdCliente)" />
+                                    </td>
                                     <td><strong>@facturaPendiente.NumFactura</strong></td>
                                     <td>
                                         <strong>@facturaPendiente.NombreCliente</strong>
@@ -3238,6 +3279,11 @@
     private bool mostrarHistorial = false;
     private bool mostrarDetalleSaldo = false;
     private bool usarSaldoAFavor = false;
+    private bool mostrarPagoMasivo;
+    private bool procesandoPagoMasivo;
+    private decimal montoPagoMasivo;
+    private string observacionPagoMasivo = "Pago masivo de cartera";
+    private HashSet<int> clientesPagoMasivo = new();
     private int pasoActual = 1;
     private bool mostrarConfirmacionFinal = false;
     private bool confirmacionFinalAceptada = false;
@@ -3885,6 +3931,68 @@
     {
         facturaCarteraSeleccionada = factura;
         await RegistrarAbonoDesdeCartera();
+    }
+
+    private void AlternarClientePagoMasivo(int idCliente)
+    {
+        if (idCliente <= 0)
+            return;
+
+        if (!clientesPagoMasivo.Add(idCliente))
+            clientesPagoMasivo.Remove(idCliente);
+    }
+
+    private void LimpiarSeleccionPagoMasivo()
+    {
+        clientesPagoMasivo.Clear();
+    }
+
+    private async Task RegistrarPagosMasivosAsync()
+    {
+        if (procesandoPagoMasivo || montoPagoMasivo <= 0 || clientesPagoMasivo.Count == 0)
+            return;
+
+        procesandoPagoMasivo = true;
+        mensajeError = null;
+        mensajeExito = null;
+        var totalClientes = clientesPagoMasivo.Count;
+        var registrados = 0;
+        var fallidos = new HashSet<int>();
+
+        try
+        {
+            var codEmisor = EsContextoBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : (int?)null;
+            foreach (var idCliente in clientesPagoMasivo.ToList())
+            {
+                if (await AbonoService.RegistrarPagoGeneral(
+                        currentUserId,
+                        idCliente,
+                        montoPagoMasivo,
+                        observacionPagoMasivo,
+                        codEmisor))
+                {
+                    registrados++;
+                }
+                else
+                {
+                    fallidos.Add(idCliente);
+                }
+            }
+
+            if (registrados > 0)
+            {
+                mensajeExito = $"Se registraron pagos para {registrados} cliente(s).";
+                clientesPagoMasivo = fallidos;
+                carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId, codEmisor: codEmisor);
+            }
+
+            if (registrados < totalClientes)
+                mensajeError = "Algunos pagos no pudieron registrarse; revisa los clientes pendientes.";
+        }
+        finally
+        {
+            procesandoPagoMasivo = false;
+        }
     }
 
     private async Task RegistrarAbonoDesdeCartera()
