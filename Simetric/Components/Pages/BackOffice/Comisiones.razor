@@ -1,0 +1,117 @@
+@page "/backoffice/comisiones"
+@attribute [Authorize(Roles = "7,2")]
+@layout Simetric.Components.Layout.BackOfficeLayout
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Simetric.Services
+@inject AliadoPortalService AliadoService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment Env
+
+<PageTitle>Comisiones | BackOffice</PageTitle>
+
+<div class="container-fluid py-3">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+        <div><span class="text-primary fw-bold small">ALIADOS</span><h2 class="mb-1">Comisiones por pagar</h2><p class="text-muted mb-0">Elige un aliado o revisa todas las comisiones del período.</p></div>
+        <a class="btn btn-outline-primary" href="/backoffice/liquidaciones-comisiones">Liquidaciones pagadas</a>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(mensaje)) { <div class="alert @(exito ? "alert-success" : "alert-danger")">@mensaje</div> }
+
+    <section class="card border-0 shadow-sm mb-3"><div class="card-body row g-3 align-items-end">
+        <div class="col-md-4"><label class="form-label">Aliado</label><select class="form-select" @bind="filtroAliado"><option value="">Todos los aliados</option>@foreach (var aliado in aliados) { <option value="@aliado.IdVendedor">@aliado.Nombre</option> }</select></div>
+        <div class="col-md-3"><label class="form-label">Período a parametrizar</label><input class="form-control" type="month" value="@periodo" @onchange="CambiarPeriodo" /></div>
+        <div class="col-md-3"><label class="form-label">Porcentaje personalizado</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajePeriodo" /></div>
+        <div class="col-md-2"><button class="btn btn-primary w-100" @onclick="GuardarParametroAsync" disabled="@(filtroAliado == 0)">Guardar período</button></div>
+    </div></section>
+
+    <section class="card border-0 shadow-sm"><div class="card-body">
+        <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+            <div><label class="form-label">Observación del pago</label><input class="form-control" @bind="observacionPago" /></div>
+            <div><label class="form-label">Comprobante</label><InputFile class="form-control" accept=".pdf,.png,.jpg,.jpeg" OnChange="SeleccionarComprobante" /></div>
+            <button class="btn btn-primary" @onclick="PagarSeleccionadasAsync" disabled="@(!Seleccionadas.Any())">Aprobar pago (@Seleccionadas.Count)</button>
+        </div>
+        <div class="table-responsive"><table class="table align-middle"><thead><tr><th></th><th>Aliado</th><th>Factura / cliente</th><th>Período</th><th>Base</th><th>Comisión</th><th>Estado</th><th>Ajuste</th></tr></thead><tbody>
+        @foreach (var item in ComisionesVisibles)
+        {
+            <tr @key="item.IdComision">
+                <td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td>
+                <td>@item.Aliado</td><td>#@item.IdFactura<br /><small>@item.Cliente</small></td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td>
+                <td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td>@item.Estado</td>
+                <td><div class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item.IdComision, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)">Aplicar</button></div></td>
+            </tr>
+        }
+        </tbody></table></div>
+    </div></section>
+</div>
+
+@code {
+    private List<AliadoAdminRow> aliados = new();
+    private List<AliadoAdminComisionRow> comisiones = new();
+    private readonly HashSet<int> Seleccionadas = new();
+    private readonly Dictionary<int, decimal> porcentajesAjuste = new();
+    private int filtroAliado;
+    private string periodo = DateTime.Today.ToString("yyyy-MM");
+    private decimal porcentajePeriodo = 5m;
+    private string? observacionPago;
+    private IBrowserFile? comprobante;
+    private string? mensaje;
+    private bool exito;
+    private int actorId;
+
+    private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => filtroAliado == 0 ? comisiones : comisiones.Where(x => x.IdVendedor == filtroAliado);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out actorId);
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        aliados = (await AliadoService.ListarAliadosAsync()).ToList();
+        comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
+    }
+
+    private async Task GuardarParametroAsync()
+    {
+        var resultado = await AliadoService.GuardarParametroComisionAsync(actorId, filtroAliado, periodo, porcentajePeriodo);
+        exito = resultado.Success; mensaje = resultado.Message;
+    }
+
+    private void CambiarPeriodo(ChangeEventArgs args) => periodo = args.Value?.ToString() ?? periodo;
+
+    private async Task AjustarAsync(AliadoAdminComisionRow item)
+    {
+        var resultado = await AliadoService.AjustarComisionAsync(actorId, item.IdComision, PorcentajeAjuste(item), null);
+        exito = resultado.Success; mensaje = resultado.Message;
+        if (resultado.Success) await CargarAsync();
+    }
+
+    private void Seleccionar(int id, ChangeEventArgs e) { if (e.Value is true or "true" or "on") Seleccionadas.Add(id); else Seleccionadas.Remove(id); }
+    private decimal PorcentajeAjuste(AliadoAdminComisionRow item) => porcentajesAjuste.TryGetValue(item.IdComision, out var valor) ? valor : item.Porcentaje;
+    private void CambiarPorcentaje(int idComision, ChangeEventArgs e) { if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var valor)) porcentajesAjuste[idComision] = valor; }
+    private void SeleccionarComprobante(InputFileChangeEventArgs e) => comprobante = e.File;
+
+    private async Task PagarSeleccionadasAsync()
+    {
+        string? ruta = null;
+        if (comprobante is not null)
+        {
+            if (comprobante.Size > 5 * 1024 * 1024) { exito = false; mensaje = "El comprobante no puede superar 5 MB."; return; }
+            var extension = Path.GetExtension(comprobante.Name).ToLowerInvariant();
+            if (extension is not ".pdf" and not ".png" and not ".jpg" and not ".jpeg") { exito = false; mensaje = "Formato de comprobante no permitido."; return; }
+            var carpeta = Path.Combine(Env.WebRootPath, "uploads", "comisiones");
+            Directory.CreateDirectory(carpeta);
+            var nombre = $"{Guid.NewGuid():N}{extension}";
+            await using var destino = File.Create(Path.Combine(carpeta, nombre));
+            await comprobante.OpenReadStream(5 * 1024 * 1024).CopyToAsync(destino);
+            ruta = $"/uploads/comisiones/{nombre}";
+        }
+        var resultado = await AliadoService.LiquidarComisionesAsync(actorId, Seleccionadas.ToArray(), null, observacionPago, ruta);
+        exito = resultado.Success; mensaje = resultado.Message;
+        if (resultado.Success) { Seleccionadas.Clear(); observacionPago = null; comprobante = null; await CargarAsync(); }
+    }
+}

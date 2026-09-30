@@ -372,7 +372,7 @@ namespace Simetric.Services
 
         #region GESTIÓN DE CLIENTES
 
-        public async Task<Cliente?> GetClienteByIdentificacionAsync(int idUsuario, string identificacion)
+        public async Task<Cliente?> GetClienteByIdentificacionAsync(int idUsuario, string identificacion, bool soloBackOffice = false)
         {
             if (string.IsNullOrWhiteSpace(identificacion))
                 return null;
@@ -381,19 +381,24 @@ namespace Simetric.Services
             var idUsuarioTitular = (await GetFacturaUsuarioContextoAsync(context, idUsuario)).IdUsuarioTitularCuenta;
             var identificacionNormalizada = identificacion.Trim().ToLowerInvariant();
 
-            return await context.Clientes
+            var query = context.Clientes
                 .AsNoTracking()
-                .ExcluirClientesExclusivosBackOffice()
                 .Where(c =>
                     c.Usuario == idUsuarioTitular &&
                     c.Numeroidentificacion != null &&
                     c.Numeroidentificacion.Trim().ToLower() == identificacionNormalizada &&
-                    (c.Estado == null || c.Estado == true))
+                    (c.Estado == null || c.Estado == true));
+
+            query = soloBackOffice
+                ? query.SoloClientesExclusivosBackOffice()
+                : query.ExcluirClientesExclusivosBackOffice();
+
+            return await query
                 .OrderByDescending(c => c.Codcliente)
                 .FirstOrDefaultAsync();
         }
 
-        public async Task<List<Cliente>> BuscarClientesFiltroAsync(int idUsuario, string filtro)
+        public async Task<List<Cliente>> BuscarClientesFiltroAsync(int idUsuario, string filtro, bool soloBackOffice = false)
         {
             filtro = filtro.Trim().ToLowerInvariant();
 
@@ -402,10 +407,13 @@ namespace Simetric.Services
 
             var query = context.Clientes
                 .AsNoTracking()
-                .ExcluirClientesExclusivosBackOffice()
                 .Where(c =>
                     c.Usuario == idUsuarioTitular &&
                     (c.Estado == null || c.Estado == true));
+
+            query = soloBackOffice
+                ? query.SoloClientesExclusivosBackOffice()
+                : query.ExcluirClientesExclusivosBackOffice();
 
             if (!string.IsNullOrWhiteSpace(filtro))
             {
@@ -429,7 +437,7 @@ namespace Simetric.Services
                 .ToListAsync();
         }
 
-        public async Task<List<string>> GetCorreosAdicionalesClienteAsync(int idUsuario, int codCliente)
+        public async Task<List<string>> GetCorreosAdicionalesClienteAsync(int idUsuario, int codCliente, bool soloBackOffice = false)
         {
             if (idUsuario <= 0 || codCliente <= 0)
                 return new List<string>();
@@ -437,10 +445,15 @@ namespace Simetric.Services
             await using var context = await _dbFactory.CreateDbContextAsync();
             var idUsuarioTitular = (await GetFacturaUsuarioContextoAsync(context, idUsuario)).IdUsuarioTitularCuenta;
 
-            var perteneceAlUsuario = await context.Clientes
+            var clientesQuery = context.Clientes
                 .AsNoTracking()
-                .ExcluirClientesExclusivosBackOffice()
-                .AnyAsync(c => c.Codcliente == codCliente && c.Usuario == idUsuarioTitular);
+                .Where(c => c.Codcliente == codCliente && c.Usuario == idUsuarioTitular);
+
+            clientesQuery = soloBackOffice
+                ? clientesQuery.SoloClientesExclusivosBackOffice()
+                : clientesQuery.ExcluirClientesExclusivosBackOffice();
+
+            var perteneceAlUsuario = await clientesQuery.AnyAsync();
 
             if (!perteneceAlUsuario)
                 return new List<string>();
@@ -593,6 +606,7 @@ namespace Simetric.Services
                     f.Coddocumento == 1 &&
                     f.Idusuario.HasValue &&
                     usuarios.Contains(f.Idusuario.Value) &&
+                     f.Estado != false &&
                     (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)) &&
                     (f.Serie ?? string.Empty).Replace("-", string.Empty) == serie);
 
@@ -756,6 +770,7 @@ namespace Simetric.Services
                 .Where(f =>
                     f.Idusuario.HasValue &&
                     usuariosCuenta.Contains(f.Idusuario.Value) &&
+                    (f.Estado != false || f.Autorizado == true || f.Estadoenviosri == DocumentoAutorizacionHelper.EstadoAutorizado) &&
                     f.Serie == serieRaw);
 
             if (codEmisor is > 0)
@@ -780,6 +795,7 @@ namespace Simetric.Services
                 .Where(f =>
                     f.Idusuario.HasValue &&
                     usuariosCuenta.Contains(f.Idusuario.Value) &&
+                    (f.Estado != false || f.Autorizado == true || f.Estadoenviosri == DocumentoAutorizacionHelper.EstadoAutorizado) &&
                     (f.Serie ?? string.Empty).Replace("-", string.Empty) == serieRaw);
 
             if (codEmisor.HasValue)

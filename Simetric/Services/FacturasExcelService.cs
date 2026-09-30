@@ -58,15 +58,15 @@ public sealed class FacturasExcelService : IFacturasExcelService
         };
 
         var facturasIncluidas = items.Select(x => x.Codfactura).ToHashSet();
+        var facturasPorNumero = items.ToList();
         var notas = (notasCredito ?? Array.Empty<NotaCreditoListDto>())
-            .Where(x => DocumentoAutorizacionHelper.EstaAutorizado(x.Autorizado) &&
-                        x.DocumentoModificadoId.HasValue &&
-                        facturasIncluidas.Contains(x.DocumentoModificadoId.Value))
+            .Where(x => ObtenerFacturaModificadaId(x, facturasIncluidas, facturasPorNumero).HasValue)
             .OrderBy(x => x.FechaAutorizacion ?? x.FechaDocumentoModificado)
             .ThenBy(x => x.NumeroCompleto)
             .ToList();
         var facturasConNotaCredito = notas
-            .Select(x => x.DocumentoModificadoId!.Value)
+            .Where(x => x.Estado)
+            .Select(x => ObtenerFacturaModificadaId(x, facturasIncluidas, facturasPorNumero)!.Value)
             .ToHashSet();
         var facturasSinNotaCredito = items
             .Where(x => !facturasConNotaCredito.Contains(x.Codfactura))
@@ -102,23 +102,23 @@ public sealed class FacturasExcelService : IFacturasExcelService
             new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
             new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
             new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
-            new ExcelCellData("TOTAL CON ANULADAS NC", 4), new ExcelCellData(string.Empty),
-            Monto(items.Sum(x => x.Subtotal), 6), Monto(items.Sum(x => x.SubtotalIva), 6),
-            Monto(items.Sum(x => x.SubtotalCero), 6), Monto(items.Sum(x => x.SubtotalNoObjeto), 6),
-            Monto(items.Sum(x => x.SubtotalExento), 6), Monto(items.Sum(x => x.Descuentos), 6),
-            Monto(items.Sum(x => x.Iva), 6), Monto(items.Sum(x => x.Ice), 6), Monto(items.Sum(x => x.Total), 6)
+            new ExcelCellData("TOTAL SIN ANULACIONES", 4), new ExcelCellData(string.Empty),
+            Monto(facturasSinNotaCredito.Sum(x => x.Subtotal), 6), Monto(facturasSinNotaCredito.Sum(x => x.SubtotalIva), 6),
+            Monto(facturasSinNotaCredito.Sum(x => x.SubtotalCero), 6), Monto(facturasSinNotaCredito.Sum(x => x.SubtotalNoObjeto), 6),
+            Monto(facturasSinNotaCredito.Sum(x => x.SubtotalExento), 6), Monto(facturasSinNotaCredito.Sum(x => x.Descuentos), 6),
+            Monto(facturasSinNotaCredito.Sum(x => x.Iva), 6), Monto(facturasSinNotaCredito.Sum(x => x.Ice), 6), Monto(facturasSinNotaCredito.Sum(x => x.Total), 6)
         ]));
 
         rows.Add(new ExcelRowData([
             new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
             new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
             new ExcelCellData(string.Empty), new ExcelCellData(string.Empty), new ExcelCellData(string.Empty),
-            new ExcelCellData("TOTAL SIN ANULADAS NC", 4), new ExcelCellData(string.Empty),
-            Monto(facturasSinNotaCredito.Sum(x => x.Subtotal), 6), Monto(facturasSinNotaCredito.Sum(x => x.SubtotalIva), 6),
-            Monto(facturasSinNotaCredito.Sum(x => x.SubtotalCero), 6), Monto(facturasSinNotaCredito.Sum(x => x.SubtotalNoObjeto), 6),
-            Monto(facturasSinNotaCredito.Sum(x => x.SubtotalExento), 6), Monto(facturasSinNotaCredito.Sum(x => x.Descuentos), 6),
-            Monto(facturasSinNotaCredito.Sum(x => x.Iva), 6), Monto(facturasSinNotaCredito.Sum(x => x.Ice), 6),
-            Monto(facturasSinNotaCredito.Sum(x => x.Total), 6)
+            new ExcelCellData("TOTAL CON ANULACIONES", 4), new ExcelCellData(string.Empty),
+            Monto(items.Sum(x => x.Subtotal), 6), Monto(items.Sum(x => x.SubtotalIva), 6),
+            Monto(items.Sum(x => x.SubtotalCero), 6), Monto(items.Sum(x => x.SubtotalNoObjeto), 6),
+            Monto(items.Sum(x => x.SubtotalExento), 6), Monto(items.Sum(x => x.Descuentos), 6),
+            Monto(items.Sum(x => x.Iva), 6), Monto(items.Sum(x => x.Ice), 6),
+            Monto(items.Sum(x => x.Total), 6)
         ]));
 
         if (notas.Count > 0)
@@ -139,7 +139,7 @@ public sealed class FacturasExcelService : IFacturasExcelService
                     new ExcelCellData(nota.Motivo),
                     new ExcelCellData(nota.Cliente),
                     new ExcelCellData(nota.IdentificacionCliente),
-                    new ExcelCellData("AUTORIZADA"),
+                    new ExcelCellData(ObtenerEstadoNota(nota)),
                     new ExcelCellData(nota.NumeroAutorizacion),
                     Monto(-nota.Subtotal), Monto(-nota.SubtotalIva), Monto(-nota.SubtotalCero), Monto(0m), Monto(0m),
                     Monto(-nota.Descuentos), Monto(-nota.Iva), Monto(-nota.Ice), Monto(-nota.Total)
@@ -159,6 +159,39 @@ public sealed class FacturasExcelService : IFacturasExcelService
     private static ExcelCellData Monto(decimal? value, int styleIndex = 5) =>
         new((value ?? 0m).ToString("0.00", CultureInfo.InvariantCulture), styleIndex, ExcelCellType.Number);
 
+    private static int? ObtenerFacturaModificadaId(
+        NotaCreditoListDto nota,
+        IReadOnlySet<int> facturasIncluidas,
+        IReadOnlyCollection<FacturaListDto> facturas)
+    {
+        if (nota.DocumentoModificadoId is int id && facturasIncluidas.Contains(id))
+            return id;
+
+        var numeroNota = ObtenerClavesNumeroDocumento(nota.NumeroDocModificado).ToHashSet();
+        if (numeroNota.Count == 0)
+            return null;
+
+        return facturas
+            .FirstOrDefault(f => ObtenerClavesNumeroDocumento(f.NumeroCompleto)
+                .Concat(ObtenerClavesNumeroDocumento(f.Numfactura))
+                .Any(numeroNota.Contains))
+            ?.Codfactura;
+    }
+
+    private static IEnumerable<string> ObtenerClavesNumeroDocumento(string? numero)
+    {
+        var digitos = new string((numero ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (string.IsNullOrEmpty(digitos))
+            yield break;
+
+        yield return digitos;
+
+        if (digitos.Length <= 9)
+            yield return digitos.PadLeft(9, '0');
+        else
+            yield return digitos[^9..];
+    }
+
     private static string ObtenerEstadoFactura(FacturaListDto factura, IReadOnlySet<int> facturasConNotaCredito)
     {
         if (facturasConNotaCredito.Contains(factura.Codfactura))
@@ -170,5 +203,16 @@ public sealed class FacturasExcelService : IFacturasExcelService
         return DocumentoAutorizacionHelper.EstaAutorizado(factura.Autorizado, factura.EstadoSri)
             ? "AUTORIZADA"
             : "PENDIENTE";
+    }
+
+    private static string ObtenerEstadoNota(NotaCreditoListDto nota)
+    {
+        if (!nota.Estado)
+            return "ANULADA";
+
+        if (DocumentoAutorizacionHelper.EstaAutorizado(nota.Autorizado))
+            return "AUTORIZADA";
+
+        return string.IsNullOrWhiteSpace(nota.Autorizado) ? "PENDIENTE" : nota.Autorizado;
     }
 }

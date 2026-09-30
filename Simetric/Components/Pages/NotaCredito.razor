@@ -1,4 +1,5 @@
 ﻿@page "/facturacion/nota-credito"
+@page "/backoffice/nota-credito"
 @using Simetric.DTOs
 @implements IDisposable
 @using Simetric.Components.Shared
@@ -27,10 +28,20 @@
 @inject SweetAlertService AlertService
 @inject NavigationManager NavigationManager
 @inject FirmaPathResolver FirmaPathResolver
+@inject EmisorSistemaService EmisorSistemaService
 
-<PageTitle>Nota de Credito | Numerica e-fact</PageTitle>
+<PageTitle>@(EsContextoBackOffice ? "Nota de Crédito BackOffice | Numerica" : "Nota de Credito | Numerica e-fact")</PageTitle>
 
-<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern docs-unified-page" data-tour="nc.page">
+@if (backofficeSinAcceso)
+{
+    <div class="alert alert-danger border-0 rounded-3 m-3">
+        <strong>No puedes emitir notas de crédito desde BackOffice.</strong>
+        @backofficeMensaje
+    </div>
+}
+else
+{
+<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern docs-unified-page @(EsContextoBackOffice ? "backoffice-credit-note-page" : string.Empty)" data-tour="nc.page">
     <DocumentoEmisionToast Message="@mensajeRapidoEmision"
                            IsError="@mensajeRapidoEsError"
                            PdfUrl="@documentoGeneradoPdfUrl"
@@ -773,6 +784,7 @@
         </div>
     </div>
 </div>
+    }
 
 <DocumentWorkspaceModal Visible="@mostrarHistorialNotasCredito"
                         Eyebrow="Historial"
@@ -854,6 +866,22 @@
 }
 
 <style>
+    .backoffice-credit-note-page {
+        --n-blue: #111827;
+        --n-blue-hover: #000000;
+        --n-blue-light: #f1f1f1;
+        --n-blue-mid: #9ca3af;
+        --n-card-border: #d1d5db;
+        --n-bg-light: #f3f4f6;
+        --n-input-border: #9ca3af;
+    }
+
+    .backoffice-credit-note-page .docs-form-hero[data-tour="nc.hero"],
+    .backoffice-credit-note-page .n-card-header,
+    .backoffice-credit-note-page .n-btn-primary {
+        background: #111111 !important;
+    }
+
     .docs-unified-page .docs-form-hero[data-tour="nc.hero"] {
         position: relative;
         overflow: hidden;
@@ -1706,6 +1734,27 @@
             width: 100%;
         }
     }
+    .backoffice-credit-note-page,
+    .backoffice-credit-note-page * {
+        background-image: none !important;
+    }
+
+    .backoffice-credit-note-page :is(.docs-form-hero[data-tour="nc.hero"], .n-card-header, .docs-total-fiscal-total) {
+        background-color: #111111 !important;
+        color: #ffffff !important;
+    }
+
+    .backoffice-credit-note-page :is(.btn-primary, .btn-outline-primary, .n-btn-primary, .n-btn-secondary, .n-btn-link, .n-table-add-product-btn, .n-email-add-btn, .n-choice-btn.is-active, .n-history-action-btn, .secondary-btn, .document-toast-action.is-primary) {
+        background-color: #111111 !important;
+        border-color: #111111 !important;
+        color: #ffffff !important;
+    }
+
+    .backoffice-credit-note-page :is(.btn-primary, .btn-outline-primary, .n-btn-primary, .n-btn-secondary, .n-btn-link, .n-table-add-product-btn, .n-email-add-btn, .n-choice-btn.is-active, .n-history-action-btn, .secondary-btn, .document-toast-action.is-primary):is(:hover, :focus-visible) {
+        background-color: #000000 !important;
+        border-color: #000000 !important;
+        color: #ffffff !important;
+    }
 </style>
 
 @code {
@@ -1725,6 +1774,11 @@
     private bool guardando = false;
     private int currentUserId;
     private EmisionEstado? emisionEstado;
+    private bool backofficeSinAcceso;
+    private string backofficeMensaje = string.Empty;
+    private bool EsContextoBackOffice =>
+        NavigationManager.ToBaseRelativePath(NavigationManager.Uri)
+            .StartsWith("backoffice/nota-credito", StringComparison.OrdinalIgnoreCase);
 
     private string numFacturaBuscar = "";
     private string estadoCarga = string.Empty;
@@ -1963,7 +2017,7 @@
 
     private async Task BuscarSugerenciasClienteNotaAsync(string? filtro)
     {
-        sugerenciasClientesNota = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, filtro ?? string.Empty);
+        sugerenciasClientesNota = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, filtro ?? string.Empty, EsContextoBackOffice);
         clienteDetectadoEnCatalogoNota = sugerenciasClientesNota.Any(c =>
             string.Equals((c.Numeroidentificacion ?? string.Empty).Trim(), (cliente.Numeroidentificacion ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
         await InvokeAsync(StateHasChanged);
@@ -2022,7 +2076,7 @@
         if (string.IsNullOrWhiteSpace(identificacion))
             return;
 
-        var coincidencias = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, identificacion);
+        var coincidencias = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, identificacion, EsContextoBackOffice);
         var clienteCreado = coincidencias.FirstOrDefault(c =>
             string.Equals(c.Numeroidentificacion?.Trim(), identificacion, StringComparison.Ordinal));
 
@@ -2063,7 +2117,7 @@
         if (cliente.Codcliente <= 0)
             return;
 
-        correosPersistidosClienteNota = (await FacturacionService.GetCorreosAdicionalesClienteAsync(currentUserId, cliente.Codcliente))
+        correosPersistidosClienteNota = (await FacturacionService.GetCorreosAdicionalesClienteAsync(currentUserId, cliente.Codcliente, EsContextoBackOffice))
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -2149,11 +2203,33 @@
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
         currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+        Simetric.Models.Emisor? emisorSistema = null;
+        if (EsContextoBackOffice)
+        {
+            if (!await EmisorSistemaService.TieneAccesoBackOfficeAsync(currentUserId))
+            {
+                backofficeSinAcceso = true;
+                backofficeMensaje = "Tu usuario no tiene permisos para emitir con el emisor maestro.";
+                return;
+            }
+
+            emisorSistema = await EmisorSistemaService.GetEmisorSistemaAsync();
+            if (emisorSistema is null || emisorSistema.IdUsuario is not > 0)
+            {
+                backofficeSinAcceso = true;
+                backofficeMensaje = "Primero configura el emisor maestro y su caja principal en Facturación.";
+                return;
+            }
+
+            currentUserId = emisorSistema.IdUsuario.Value;
+        }
         await CargarEstadoEmisionAsync();
 
         tiposCliente = await FacturacionService.GetTiposClienteAsync();
         identificaciones = await IdentificacionService.GetAllActiveAsync();
-        emisores = await FacturacionService.GetEmisoresActivosAsync(currentUserId);
+        emisores = emisorSistema is null
+            ? await FacturacionService.GetEmisoresActivosAsync(currentUserId)
+            : new List<Simetric.Models.Emisor> { emisorSistema };
         emisor = emisores.FirstOrDefault();
 
         cajaUsuario = await FacturacionService.GetCajaUsuarioAsync(currentUserId);

@@ -443,6 +443,31 @@ public sealed class EmisorSistemaService
         };
     }
 
+    public async Task<EmisorSistemaSecuenciaInfo?> GetSecuenciaLiquidacionCompraSistemaAsync()
+    {
+        await EnsureSchemaAsync();
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return null;
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await GetCajaPrincipalSistemaAsync(context);
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieCompras);
+        var state = await _initialSequencePromptService.GetStateAsync(emisor.IdUsuario.Value, "liquidacion-compra", serieRaw, emisor.Codigo);
+        return new EmisorSistemaSecuenciaInfo
+        {
+            EmisorCodigo = emisor.Codigo,
+            OwnerUserId = emisor.IdUsuario.Value,
+            SerieRaw = serieRaw,
+            SerieVisual = FormatearSerieVisual(cajaSistema?.SerieCompras),
+            Inicializada = state.Initialized,
+            UltimaSecuencia = state.PreviousSequence,
+            SiguienteSecuencia = state.Initialized && state.HadPreviousDocuments
+                ? _initialSequencePromptService.GetNextSequenceFromPrevious(state.PreviousSequence)
+                : string.Empty
+        };
+    }
+
     public async Task<EmisorSistemaGuardadoResultado> GuardarSecuenciaFacturaSistemaAsync(
         int idUsuarioBackOffice,
         bool yaFacturoAntes,
@@ -574,6 +599,40 @@ public sealed class EmisorSistemaService
             Message = yaFacturoAntes
                 ? $"Secuencia maestra de notas de crédito guardada correctamente. La siguiente saldra desde {_initialSequencePromptService.GetNextSequenceFromPrevious(secuenciaNormalizada)}."
                 : "Secuencia maestra de notas de crédito inicializada correctamente desde 000000001."
+        };
+    }
+
+    public async Task<EmisorSistemaGuardadoResultado> GuardarSecuenciaLiquidacionCompraSistemaAsync(
+        int idUsuarioBackOffice,
+        bool yaFacturoAntes,
+        string? ultimaSecuencia)
+    {
+        await EnsureSchemaAsync();
+        if (!await TieneAccesoBackOfficeAsync(idUsuarioBackOffice))
+            return EmisorSistemaGuardadoResultado.Error("Solo los usuarios autorizados pueden configurar la secuencia maestra de liquidaciones de compra.");
+
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar el emisor maestro del sistema.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await GetCajaPrincipalSistemaAsync(context);
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieCompras);
+        if (string.IsNullOrWhiteSpace(serieRaw))
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar la caja maestra del sistema para definir la serie de compras.");
+
+        string secuenciaNormalizada = string.Empty;
+        if (yaFacturoAntes && !_initialSequencePromptService.TryNormalizeSequence(ultimaSecuencia, out secuenciaNormalizada))
+            return EmisorSistemaGuardadoResultado.Error("La secuencia indicada no es valida. Debe estar entre 000000001 y 999999999.");
+
+        await _initialSequencePromptService.SaveStateAsync(emisor.IdUsuario.Value, "liquidacion-compra", serieRaw,
+            new InitialSequencePromptState { Initialized = true, HadPreviousDocuments = yaFacturoAntes, PreviousSequence = secuenciaNormalizada }, emisor.Codigo);
+
+        return EmisorSistemaGuardadoResultado.Ok(emisor) with
+        {
+            Message = yaFacturoAntes
+                ? $"Secuencia de liquidaciones de compra guardada. La siguiente saldra desde {_initialSequencePromptService.GetNextSequenceFromPrevious(secuenciaNormalizada)}."
+                : "Secuencia de liquidaciones de compra inicializada desde 000000001."
         };
     }
 

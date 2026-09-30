@@ -14,4 +14,7 @@ public sealed class AliadoLiquidacion
     public DateTime Fecha { get; set; }
     [Required, MaxLength(30)] public string Estado { get; set; } = "Pendiente";
     [MaxLength(100)] public string? ReferenciaPago { get; set; }
+    [MaxLength(500)] public string? ObservacionPago { get; set; }
+    [MaxLength(300)] public string? ComprobantePagoUrl { get; set; }
+    public int? CodLiquidacionCompra { get; set; }
 }

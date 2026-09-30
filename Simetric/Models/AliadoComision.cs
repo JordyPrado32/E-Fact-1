@@ -19,6 +19,7 @@ public sealed class AliadoComision
     public decimal BaseComisionable { get; set; }
     public decimal Porcentaje { get; set; }
     public decimal Valor { get; set; }
+    [Required, MaxLength(7)] public string Periodo { get; set; } = string.Empty;
 
     [Required, MaxLength(30)]
     public string Estado { get; set; } = "Generada";

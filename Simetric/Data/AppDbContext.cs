@@ -79,6 +79,7 @@ namespace Simetric.Data
         public DbSet<AliadoRenovacionGestion> AliadoRenovacionGestiones { get; set; }
         public DbSet<AliadoLiquidacion> AliadoLiquidaciones { get; set; }
         public DbSet<AliadoComision> AliadoComisiones { get; set; }
+        public DbSet<AliadoComisionParametro> AliadoComisionParametros { get; set; }
         public DbSet<AliadoRenovacionNotificacion> AliadoRenovacionNotificaciones { get; set; }
         public DbSet<AliadoPortalConfiguracion> AliadoPortalConfiguraciones { get; set; }
         public DbSet<AliadoPortalRol> AliadoPortalRoles { get; set; }

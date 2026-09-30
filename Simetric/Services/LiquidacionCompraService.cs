@@ -20,6 +20,7 @@ public class LiquidacionCompraService
     private readonly ComprobanteCorreoEstadoService _comprobanteCorreoEstadoService;
     private readonly InitialSequencePromptService _initialSequencePromptService;
     private readonly SriXmlProcessorService _sriXmlProcessorService;
+    private readonly EmisorSistemaService _emisorSistemaService;
 
     public LiquidacionCompraService(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -30,7 +31,8 @@ public class LiquidacionCompraService
         IEmailService emailService,
         ComprobanteCorreoEstadoService comprobanteCorreoEstadoService,
         InitialSequencePromptService initialSequencePromptService,
-        SriXmlProcessorService sriXmlProcessorService)
+        SriXmlProcessorService sriXmlProcessorService,
+        EmisorSistemaService emisorSistemaService)
     {
         _dbFactory = dbFactory;
         _xmlGenerator = xmlGenerator;
@@ -41,6 +43,7 @@ public class LiquidacionCompraService
         _comprobanteCorreoEstadoService = comprobanteCorreoEstadoService;
         _initialSequencePromptService = initialSequencePromptService;
         _sriXmlProcessorService = sriXmlProcessorService;
+        _emisorSistemaService = emisorSistemaService;
     }
 
     private async Task<CajaSerieResolucion> ResolverSerieLiquidacionAsync(int userId)
@@ -737,6 +740,58 @@ public class LiquidacionCompraService
                 throw;
             }
         });
+    }
+
+    public async Task<int> GenerarLiquidacionCompraAliadoAsync(int idLiquidacion, CancellationToken cancellationToken = default)
+    {
+        await using var context = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        var liquidacion = await context.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == idLiquidacion, cancellationToken)
+            ?? throw new InvalidOperationException("No se encontró la liquidación de comisiones.");
+
+        if (liquidacion.Estado != "Pagada")
+            throw new InvalidOperationException("La liquidación de compra solo se genera después de aprobar el pago.");
+        if (liquidacion.CodLiquidacionCompra is > 0)
+            return liquidacion.CodLiquidacionCompra.Value;
+
+        var aliado = await context.Usuarios.AsNoTracking().FirstOrDefaultAsync(x => x.IdVendedor == liquidacion.IdVendedor && x.Estado == true, cancellationToken)
+            ?? throw new InvalidOperationException("No se encontró la cuenta del aliado.");
+        if (string.IsNullOrWhiteSpace(aliado.Identificacion) || string.IsNullOrWhiteSpace(aliado.DireccionEmpresa))
+            throw new InvalidOperationException("El aliado debe tener identificación y dirección fiscal para emitir su liquidación de compra.");
+
+        var emisor = await _emisorSistemaService.GetEmisorSistemaAsync()
+            ?? throw new InvalidOperationException("Configura primero el emisor maestro.");
+        if (emisor.IdUsuario is not > 0)
+            throw new InvalidOperationException("El emisor maestro no tiene una cuenta propietaria válida.");
+
+        var preview = await CrearPreviewManualAsync(emisor.IdUsuario);
+        preview.TipoIdentificacionProveedor = aliado.Identificacion.Trim().Length == 13 ? "04" : aliado.Identificacion.Trim().Length == 10 ? "05" : "06";
+        preview.IdentificacionProveedor = aliado.Identificacion.Trim();
+        preview.RazonSocialProveedor = aliado.NombreCompleto;
+        preview.DireccionProveedor = aliado.DireccionEmpresa.Trim();
+        preview.EmailProveedor = aliado.Email?.Trim() ?? string.Empty;
+        preview.TelefonoProveedor = aliado.Celular?.Trim() ?? string.Empty;
+        preview.ObligadoContabilidad = "NO";
+        preview.FormaPago = "20";
+        preview.Detalles = new List<LiquidacionCompraDetalleDto>
+        {
+            new()
+            {
+                Cantidad = 1m,
+                Descripcion = $"Liquidación de comisiones {liquidacion.Periodo}",
+                PrecioUnitario = liquidacion.Total,
+                PrecioTotalSinImpuesto = liquidacion.Total,
+                ValorTotal = liquidacion.Total,
+                CodigoPorcentaje = 0,
+                Tarifa = 0
+            }
+        };
+        RecalcularTotalesDesdeDetalles(preview);
+
+        var codFactura = await GuardarLiquidacionAsync(preview);
+        liquidacion.CodLiquidacionCompra = codFactura;
+        await context.SaveChangesAsync(cancellationToken);
+        await EmitirLiquidacionSriAsync(codFactura, emisor.IdUsuario, intentarEnviarCorreo: true);
+        return codFactura;
     }
 
     public async Task<LiquidacionCompraGuardadoResultadoDto> GuardarLiquidacionConArchivosAsync(LiquidacionCompraPreviewDto preview)

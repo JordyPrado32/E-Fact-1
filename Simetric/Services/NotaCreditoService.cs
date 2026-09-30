@@ -1181,7 +1181,8 @@ public class NotaCreditoService
             join ti in db.Identificacion.AsNoTracking()
                 on c.Tipoidentificacion equals ti.IdeCodigo into tipoJoin
             from ti in tipoJoin.DefaultIfEmpty()
-            where e != null && e.EsEmisorSistema
+            where (e != null && e.EsEmisorSistema) ||
+                  (f != null && f.CodemisorNavigation != null && f!.CodemisorNavigation!.EsEmisorSistema)
             orderby nc.Sec descending
             select new
             {
@@ -1208,7 +1209,9 @@ public class NotaCreditoService
                 MensajeSri = nc.Observacion ?? "",
                 FechaAutorizacion = nc.FchAutorizacion,
                 ClaveAcceso = nc.CodClave ?? "",
-                RucEmisor = e.Ruc ?? "",
+                RucEmisor = f != null && f.CodemisorNavigation != null && f!.CodemisorNavigation!.EsEmisorSistema
+                    ? (f!.CodemisorNavigation!.Ruc ?? "")
+                    : (e != null ? (e.Ruc ?? "") : ""),
                 FechaVencimientoDocumento = f != null
                     ? (f.Fechavence
                         ?? ((f.Fchautorizacion ?? f.Fechaentrega).HasValue

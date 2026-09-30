@@ -12,4 +12,13 @@ public static class ClienteQueryExtensions
             cliente.Facturas.Any(factura =>
                 factura.CodemisorNavigation == null ||
                 !factura.CodemisorNavigation.EsEmisorSistema));
+
+    public static IQueryable<Cliente> SoloClientesExclusivosBackOffice(this IQueryable<Cliente> query) =>
+        query.Where(cliente =>
+            cliente.Facturas.Any(factura =>
+                factura.CodemisorNavigation != null &&
+                factura.CodemisorNavigation.EsEmisorSistema) &&
+            !cliente.Facturas.Any(factura =>
+                factura.CodemisorNavigation == null ||
+                !factura.CodemisorNavigation.EsEmisorSistema));
 }
