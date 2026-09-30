@@ -830,12 +830,15 @@ namespace Simetric.Services
 
         #region BÚSQUEDA DE PRODUCTOS
 
-        public async Task<List<ProductoLookupDetalleDto>> BuscarProductosFiltroAsync(int idUsuario, string filtro)
+        public async Task<List<ProductoLookupDetalleDto>> BuscarProductosFiltroAsync(int idUsuario, string filtro, bool backOffice = false)
         {
             filtro = (filtro ?? string.Empty).Trim();
             var filtroLower = filtro.ToLowerInvariant();
 
             await using var context = await _dbFactory.CreateDbContextAsync();
+            if (backOffice)
+                idUsuario = await ProductoCatalogoScope.ResolverAsync(context, idUsuario, true)
+                    ?? throw new InvalidOperationException("No tiene acceso al catálogo de BackOffice.");
 
             var query = context.Productos
                 .AsNoTracking()
@@ -864,7 +867,7 @@ namespace Simetric.Services
             return productos.Select(MapearAProductoDto).ToList();
         }
 
-        public async Task<ProductoLookupDetalleDto?> BuscarProductoParaDetalleAsync(int idUsuario, string codigoOTexto)
+        public async Task<ProductoLookupDetalleDto?> BuscarProductoParaDetalleAsync(int idUsuario, string codigoOTexto, bool backOffice = false)
         {
             if (string.IsNullOrWhiteSpace(codigoOTexto))
                 return null;
@@ -873,6 +876,9 @@ namespace Simetric.Services
             var filtroLower = filtro.ToLowerInvariant();
 
             await using var context = await _dbFactory.CreateDbContextAsync();
+            if (backOffice)
+                idUsuario = await ProductoCatalogoScope.ResolverAsync(context, idUsuario, true)
+                    ?? throw new InvalidOperationException("No tiene acceso al catálogo de BackOffice.");
 
             var p = await context.Productos
                 .AsNoTracking()
@@ -1286,7 +1292,20 @@ namespace Simetric.Services
                         factura.Estado = true;
                         factura.Idusuario = idUsuario;
 
-                        await VincularProductosManualesAsync(context, idUsuarioEmisor, detalles);
+                        context.CatalogoEmisorId = factura.Codemisor == EmisorSistemaService.CodigoEmisorBackOffice
+                            ? EmisorSistemaService.CodigoEmisorBackOffice : null;
+                        var catalogOwnerId = context.CatalogoEmisorId.HasValue
+                            ? await context.Emisores.Where(e => e.Codigo == context.CatalogoEmisorId)
+                                .Select(e => e.IdUsuario).SingleAsync()
+                            : idUsuarioEmisor;
+                        if (catalogOwnerId is not > 0)
+                            throw new InvalidOperationException("El emisor no tiene un propietario de catálogo configurado.");
+
+                        var codigosCatalogo = detalles.Where(d => d.Codproducto > 0).Select(d => d.Codproducto).Distinct().ToList();
+                        if (await context.Productos.CountAsync(p => p.Idusuario == catalogOwnerId && codigosCatalogo.Contains(p.Codigo)) != codigosCatalogo.Count)
+                            throw new InvalidOperationException("Uno o más productos no pertenecen al catálogo del documento.");
+
+                        await VincularProductosManualesAsync(context, catalogOwnerId.Value, detalles);
 
                         if (factura.DescuentoGlobalPct == null)
                             factura.DescuentoGlobalPct = 0m;
@@ -4265,6 +4284,12 @@ IF @resultado < 0
                 {
                     factura.Estado = false;
                     await context.SaveChangesAsync();
+
+                    using (var scope = _serviceScopeFactory.CreateScope())
+                    {
+                        var aliados = scope.ServiceProvider.GetRequiredService<AliadoPortalService>();
+                        await aliados.CancelarComisionesFacturaAsync(codfactura, "Factura anulada");
+                    }
 
                     if (notificarCobranzasBackOffice)
                     {

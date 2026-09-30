@@ -30,6 +30,7 @@
 
     <section class="card border-0 shadow-sm"><div class="card-body">
         <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+            <div><label class="form-label">Referencia de pago</label><input class="form-control" @bind="referenciaPago" /></div>
             <div><label class="form-label">Observación del pago</label><input class="form-control" @bind="observacionPago" /></div>
             <div><label class="form-label">Comprobante</label><InputFile class="form-control" accept=".pdf,.png,.jpg,.jpeg" OnChange="SeleccionarComprobante" /></div>
             <button class="btn btn-primary" @onclick="PagarSeleccionadasAsync" disabled="@(!Seleccionadas.Any())">Pagar seleccionadas (@Seleccionadas.Count)</button>
@@ -38,7 +39,7 @@
         @foreach (var grupo in ComisionesPorCliente)
         {
             <tr @key="grupo.Key">
-                <td>@grupo.First().Cliente</td><td>@grupo.First().Aliado</td><td>@grupo.Count()</td><td>$ @grupo.Sum(x => x.Valor).ToString("N2")</td><td>@(grupo.All(x => x.Estado == "Pagada") ? "Pagada" : "Pendiente")</td>
+                <td>@grupo.First().Cliente</td><td>@grupo.First().Aliado</td><td>@grupo.Count()</td><td>$ @grupo.Sum(x => x.Valor).ToString("N2")</td><td>@string.Join(", ", grupo.Select(x => x.Estado).Distinct())</td>
                 <td><button class="btn btn-outline-primary btn-sm" @onclick="() => clienteSeleccionado = clienteSeleccionado == grupo.Key ? null : grupo.Key">@(clienteSeleccionado == grupo.Key ? "Ocultar" : "Ver comisiones")</button></td>
             </tr>
             @if (clienteSeleccionado == grupo.Key)
@@ -67,13 +68,14 @@
     private decimal porcentajeHastaMil = 5m;
     private decimal porcentajeDesdeMil = 10m;
     private string? observacionPago;
+    private string? referenciaPago;
     private IBrowserFile? comprobante;
     private string? mensaje;
     private bool exito;
     private int actorId;
 
     private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => filtroAliado == 0 ? comisiones : comisiones.Where(x => x.IdVendedor == filtroAliado);
-    private IEnumerable<IGrouping<string, AliadoAdminComisionRow>> ComisionesPorCliente => ComisionesVisibles.GroupBy(x => x.Cliente).OrderBy(x => x.Key);
+    private IEnumerable<IGrouping<string, AliadoAdminComisionRow>> ComisionesPorCliente => ComisionesVisibles.GroupBy(x => $"{x.IdVendedor}|{x.Cliente}|{x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM")}").OrderBy(x => x.First().Cliente);
     private IEnumerable<AliadoAdminRow> AliadosVisibles => string.IsNullOrWhiteSpace(busquedaAliado) ? aliados : aliados.Where(x => x.Nombre.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync()
@@ -124,8 +126,8 @@
             await comprobante.OpenReadStream(5 * 1024 * 1024).CopyToAsync(destino);
             ruta = $"/uploads/comisiones/{nombre}";
         }
-        var resultado = await AliadoService.LiquidarComisionesAsync(actorId, Seleccionadas.ToArray(), null, observacionPago, ruta);
+        var resultado = await AliadoService.LiquidarComisionesAsync(actorId, Seleccionadas.ToArray(), referenciaPago, observacionPago, ruta);
         exito = resultado.Success; mensaje = resultado.Message;
-        if (resultado.Success) { Seleccionadas.Clear(); observacionPago = null; comprobante = null; await CargarAsync(); }
+        if (resultado.Success) { Seleccionadas.Clear(); referenciaPago = observacionPago = null; comprobante = null; await CargarAsync(); }
     }
 }

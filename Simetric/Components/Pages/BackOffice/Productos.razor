@@ -8,7 +8,6 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
-@using System.Security.Claims
 @using Simetric.Data
 @using Simetric.Services
 @using Simetric.Models
@@ -577,7 +576,6 @@
                                             step="0.01"
                                             class="form-control form-control-sm"
                                             @bind="model.ValorUnitario"
-                                            @bind:event="oninput"
                                             @onblur='() => NormalizarCampoPrecio(1)' />
                                     <ValidationMessage For="() => model.ValorUnitario" class="text-danger small d-block mt-1" />
                                     <small class="text-muted">Este será el precio base del producto o servicio.</small>
@@ -603,7 +601,6 @@
                                             step="0.01"
                                             class="form-control form-control-sm"
                                             @bind="model.Precio2"
-                                            @bind:event="oninput"
                                             @onblur='() => NormalizarCampoPrecio(2)' />
                                     <ValidationMessage For="() => model.Precio2" class="text-danger small d-block mt-1" />
                                 </div>
@@ -628,7 +625,6 @@
                                             step="0.01"
                                             class="form-control form-control-sm"
                                             @bind="model.Precio3"
-                                            @bind:event="oninput"
                                             @onblur='() => NormalizarCampoPrecio(3)' />
                                     <ValidationMessage For="() => model.Precio3" class="text-danger small d-block mt-1" />
                                 </div>
@@ -1460,7 +1456,7 @@
             return;
         }
 
-        usuarioLogueadoId = ObtenerIdUsuario(user);
+        usuarioLogueadoId = int.TryParse(user.FindFirst("IdUsuario")?.Value, out var actorId) ? actorId : 0;
 
         if (usuarioLogueadoId <= 0)
         {
@@ -1474,13 +1470,6 @@
         await InvokeAsync(StateHasChanged);
     }
 
-    private static int ObtenerIdUsuario(ClaimsPrincipal user)
-    {
-        var id = user.FindFirst("IdUsuario")?.Value
-            ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-        return int.TryParse(id, out var userId) ? userId : 0;
-    }
 
     private async Task CargarTodo()
     {
@@ -1493,7 +1482,7 @@
         cargando = true;
         try
         {
-            var respLook = await Http.GetFromJsonAsync<LookupResponse>($"api/productos/lookups?userId={usuarioLogueadoId}");
+            var respLook = await Http.GetFromJsonAsync<LookupResponse>($"api/productos/lookups?userId={usuarioLogueadoId}&backOffice=true");
             if (respLook != null)
             {
                 tiposProducto = respLook.tipos
@@ -1516,7 +1505,7 @@
                 }
             }
 
-            productos = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/productos?userId={usuarioLogueadoId}") ?? new();
+            productos = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/productos?userId={usuarioLogueadoId}&backOffice=true") ?? new();
             await EmisorOnboardingService.RefreshRequirementAsync(usuarioLogueadoId);
             emisionEstado = await EmisionControlService.ObtenerEstadoAsync(usuarioLogueadoId);
         }
@@ -1604,7 +1593,7 @@
                     Descripcion = tempDescripcionCategoriaProducto,
                     Idtipoproducto = tempCategoriaPadreProducto,
                     Estado = "A"
-                }, usuarioLogueadoId);
+                }, usuarioLogueadoId, backOffice: true);
             }
             else
             {
@@ -1612,7 +1601,7 @@
                 {
                     Descripcion = tempDescripcionCategoriaProducto,
                     Estado = true
-                }, usuarioLogueadoId);
+                }, usuarioLogueadoId, backOffice: true);
             }
 
             await CargarTodo();
@@ -1729,7 +1718,7 @@
         generandoCotizacion = true;
         try
         {
-            var response = await Http.PostAsJsonAsync($"api/productos/cotizaciones?userId={usuarioLogueadoId}", new
+            var response = await Http.PostAsJsonAsync($"api/productos/cotizaciones?userId={usuarioLogueadoId}&backOffice=true", new
             {
                 detalles = lineasCotizacion.Select(linea => new { codigoProducto = linea.Producto.Codigo, precioUnitario = Math.Max(0, linea.PrecioUnitario), cantidad = Math.Max(1, linea.Cantidad) })
             });
@@ -1842,7 +1831,7 @@
 
     private async Task ExportarProductosCsvAsync()
     {
-        var productosExportar = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/productos?userId={usuarioLogueadoId}") ?? productos;
+        var productosExportar = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/productos?userId={usuarioLogueadoId}&backOffice=true") ?? productos;
 
         if (productosExportar.Count == 0)
         {
@@ -2123,7 +2112,7 @@
             var creados = 0;
             if (dtoList.Any())
             {
-                var respuesta = await Http.PostAsJsonAsync($"api/productos/bulk?userId={usuarioLogueadoId}", dtoList);
+                var respuesta = await Http.PostAsJsonAsync($"api/productos/bulk?userId={usuarioLogueadoId}&backOffice=true", dtoList);
                 if (respuesta.IsSuccessStatusCode)
                 {
                     var result = await respuesta.Content.ReadFromJsonAsync<BulkImportResult>();
@@ -2191,7 +2180,7 @@
                     Descripcion = catName,
                     Estado = true
                 };
-                await CategoryService.SaveTipoAsync(cat, usuarioLogueadoId);
+                await CategoryService.SaveTipoAsync(cat, usuarioLogueadoId, backOffice: true);
             }
 
             // Recargar lookups
@@ -2216,7 +2205,7 @@
                         Idtipoproducto = catId,
                         Estado = "A"
                     };
-                    await CategoryService.SaveSubtipoAsync(sub, usuarioLogueadoId);
+                    await CategoryService.SaveSubtipoAsync(sub, usuarioLogueadoId, backOffice: true);
                 }
             }
 
@@ -2395,7 +2384,7 @@
             debugError = null;
             productoEnVista = null;
 
-            var item = await Http.GetFromJsonAsync<ProductoDto>($"api/productos/{codigo}?userId={usuarioLogueadoId}");
+            var item = await Http.GetFromJsonAsync<ProductoDto>($"api/productos/{codigo}?userId={usuarioLogueadoId}&backOffice=true");
             if (item != null)
             {
                 var nombreProducto = string.IsNullOrWhiteSpace(item.Nombre)
@@ -2505,8 +2494,8 @@
         try
         {
             var resp = editando
-                ? await Http.PutAsJsonAsync($"api/productos/{model.Codigo}?userId={usuarioLogueadoId}", model)
-                : await Http.PostAsJsonAsync($"api/productos?userId={usuarioLogueadoId}", model);
+                ? await Http.PutAsJsonAsync($"api/productos/{model.Codigo}?userId={usuarioLogueadoId}&backOffice=true", model)
+                : await Http.PostAsJsonAsync($"api/productos?userId={usuarioLogueadoId}&backOffice=true", model);
 
             if (resp.IsSuccessStatusCode)
             {
@@ -2686,7 +2675,7 @@
 
         try
         {
-            var del = await Http.DeleteAsync($"api/productos/{p.Codigo}?userId={usuarioLogueadoId}");
+            var del = await Http.DeleteAsync($"api/productos/{p.Codigo}?userId={usuarioLogueadoId}&backOffice=true");
 
             if (del.IsSuccessStatusCode)
             {
@@ -2744,7 +2733,7 @@
 
         try
         {
-            var del = await Http.DeleteAsync($"api/productos/{productoAEliminar.Codigo}?userId={usuarioLogueadoId}");
+            var del = await Http.DeleteAsync($"api/productos/{productoAEliminar.Codigo}?userId={usuarioLogueadoId}&backOffice=true");
 
             if (del.IsSuccessStatusCode)
             {

@@ -314,13 +314,20 @@ public class NotaCreditoService
         return await CrearAsync(nc, detalleAnulacion); // Reutiliza tu método CrearAsync existente 
     }
 
-    public async Task<(bool Success, string Message)> CambiarProductoNotaCreditoAsync(DetalleNcDto productoOriginal, int nuevoCodProducto)
+    public async Task<(bool Success, string Message)> CambiarProductoNotaCreditoAsync(DetalleNcDto productoOriginal, int nuevoCodProducto, int? usuarioCatalogo = null, bool backOffice = false)
     {
         using var db = await _dbFactory.CreateDbContextAsync();
 
+        int? ownerId = null;
+        if (backOffice)
+        {
+            ownerId = await ProductoCatalogoScope.ResolverAsync(db, usuarioCatalogo ?? 0, true);
+            if (ownerId is null) return (false, "No tiene acceso al catálogo de BackOffice.");
+        }
+
         // Buscar el nuevo producto en la base 
         var nuevoProducto = await db.Productos
-            .FirstOrDefaultAsync(p => p.Codigo == nuevoCodProducto);
+            .FirstOrDefaultAsync(p => p.Codigo == nuevoCodProducto && (!backOffice || p.Idusuario == ownerId));
 
         if (nuevoProducto == null) return (false, "El producto nuevo no existe.");
 
@@ -617,6 +624,14 @@ public class NotaCreditoService
         var emisor = await db.Emisores.FirstOrDefaultAsync(e => e.Codigo == nc.CodEmisor);
         var xmlContent = GenerarXmlNotaCredito(nc, detalles, emisor, cliente);
         await GuardarXmlEnServidor(xmlContent, nc.NumNotaCredito ?? "", emisor?.Ruc ?? "");
+
+        var comisiones = await db.AliadoComisiones
+            .Where(x => x.IdFactura == nc.IdDocModificado.Value && x.Estado != "Anulada")
+            .ToListAsync();
+        foreach (var comision in comisiones)
+            comision.Estado = comision.Estado == "Pagada" ? "AjustePendiente" : "Anulada";
+        if (comisiones.Count > 0)
+            await db.SaveChangesAsync();
 
         return nc.Sec;
     }

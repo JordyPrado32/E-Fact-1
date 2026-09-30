@@ -8,6 +8,9 @@ namespace Simetric.Models;
 [Table("Productotipo")] // Forzar nombre singular en la BD
 public partial class Productotipo
 {
+    [Column("CATALOGO_EMISOR_ID")]
+    public int? CatalogoEmisorId { get; set; }
+
     [Key]
     public int Idtipoproducto { get; set; }
 

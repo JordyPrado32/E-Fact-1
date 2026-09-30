@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.Models;
+using Simetric.Services;
 
 namespace Simetric.Controllers;
 
@@ -19,22 +20,13 @@ public class CategoriasController : ControllerBase
         public bool? Estado { get; set; }
     }
 
-    private async Task<int?> GetOwnerIdAsync(int userId)
-    {
-        if (userId <= 0) return null;
-
-        var user = await _db.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
-
-        return user is null ? null : user.idJefe ?? user.IdUsuario;
-    }
+    private Task<int?> GetOwnerIdAsync(int userId, bool backOffice) =>
+        ProductoCatalogoScope.ResolverAsync(_db, userId, backOffice);
 
     [HttpGet]
-    public async Task<ActionResult> GetAll([FromQuery] int userId, [FromQuery] bool incluirInactivos = false)
+    public async Task<ActionResult> GetAll([FromQuery] int userId, [FromQuery] bool incluirInactivos = false, [FromQuery] bool backOffice = false)
     {
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return Unauthorized("Sesión no válida.");
 
         var query = _db.Productotipos.AsNoTracking().Where(x => x.Idusuario == ownerId.Value);
@@ -50,9 +42,9 @@ public class CategoriasController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult> Create([FromQuery] int userId, [FromBody] CategoriaUpsertDto model)
+    public async Task<ActionResult> Create([FromQuery] int userId, [FromBody] CategoriaUpsertDto model, [FromQuery] bool backOffice = false)
     {
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return Unauthorized("Sesión no válida.");
 
         var descripcion = (model.Descripcion ?? string.Empty).Trim();
@@ -76,9 +68,9 @@ public class CategoriasController : ControllerBase
     }
 
     [HttpPut("{idCategoria:int}")]
-    public async Task<ActionResult> Update(int idCategoria, [FromQuery] int userId, [FromBody] CategoriaUpsertDto model)
+    public async Task<ActionResult> Update(int idCategoria, [FromQuery] int userId, [FromBody] CategoriaUpsertDto model, [FromQuery] bool backOffice = false)
     {
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return Unauthorized("Sesión no válida.");
 
         var descripcion = (model.Descripcion ?? string.Empty).Trim();
@@ -97,9 +89,9 @@ public class CategoriasController : ControllerBase
     }
 
     [HttpPut("{idCategoria:int}/desactivar")]
-    public async Task<ActionResult> Desactivar(int idCategoria, [FromQuery] int userId)
+    public async Task<ActionResult> Desactivar(int idCategoria, [FromQuery] int userId, [FromQuery] bool backOffice = false)
     {
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return Unauthorized("Sesión no válida.");
 
         var entity = await _db.Productotipos.FirstOrDefaultAsync(x => x.Idtipoproducto == idCategoria && x.Idusuario == ownerId.Value);
@@ -126,22 +118,13 @@ public class SubcategoriasController : ControllerBase
         public bool? Estado { get; set; }
     }
 
-    private async Task<int?> GetOwnerIdAsync(int userId)
-    {
-        if (userId <= 0) return null;
-
-        var user = await _db.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
-
-        return user is null ? null : user.idJefe ?? user.IdUsuario;
-    }
+    private Task<int?> GetOwnerIdAsync(int userId, bool backOffice) =>
+        ProductoCatalogoScope.ResolverAsync(_db, userId, backOffice);
 
     [HttpGet]
-    public async Task<ActionResult> GetAll([FromQuery] int userId, [FromQuery] bool incluirInactivos = false, [FromQuery] int? categoriaId = null)
+    public async Task<ActionResult> GetAll([FromQuery] int userId, [FromQuery] bool incluirInactivos = false, [FromQuery] int? categoriaId = null, [FromQuery] bool backOffice = false)
     {
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return Unauthorized("Sesión no válida.");
 
         var query = _db.Productosubtipos.AsNoTracking().Where(x => x.Idusuario == ownerId.Value);
@@ -166,17 +149,17 @@ public class SubcategoriasController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult> Create([FromQuery] int userId, [FromBody] SubcategoriaUpsertDto model) =>
-        await Save(null, userId, model);
+    public async Task<ActionResult> Create([FromQuery] int userId, [FromBody] SubcategoriaUpsertDto model, [FromQuery] bool backOffice = false) =>
+        await Save(null, userId, model, backOffice);
 
     [HttpPut("{idSubcategoria:int}")]
-    public async Task<ActionResult> Update(int idSubcategoria, [FromQuery] int userId, [FromBody] SubcategoriaUpsertDto model) =>
-        await Save(idSubcategoria, userId, model);
+    public async Task<ActionResult> Update(int idSubcategoria, [FromQuery] int userId, [FromBody] SubcategoriaUpsertDto model, [FromQuery] bool backOffice = false) =>
+        await Save(idSubcategoria, userId, model, backOffice);
 
     [HttpPut("{idSubcategoria:int}/desactivar")]
-    public async Task<ActionResult> Desactivar(int idSubcategoria, [FromQuery] int userId)
+    public async Task<ActionResult> Desactivar(int idSubcategoria, [FromQuery] int userId, [FromQuery] bool backOffice = false)
     {
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return Unauthorized("Sesión no válida.");
 
         var entity = await _db.Productosubtipos.FirstOrDefaultAsync(x => x.Idsubtipo == idSubcategoria && x.Idusuario == ownerId.Value);
@@ -187,9 +170,9 @@ public class SubcategoriasController : ControllerBase
         return NoContent();
     }
 
-    private async Task<ActionResult> Save(int? idSubcategoria, int userId, SubcategoriaUpsertDto model)
+    private async Task<ActionResult> Save(int? idSubcategoria, int userId, SubcategoriaUpsertDto model, bool backOffice)
     {
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return Unauthorized("Sesión no válida.");
 
         var descripcion = (model.Descripcion ?? string.Empty).Trim();

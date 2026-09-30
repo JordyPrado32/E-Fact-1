@@ -23,17 +23,8 @@ public class ProductosController : ControllerBase
     // Métodos de ayuda para la jerarquía
     private static bool IsValidUser(int userId) => userId > 0;
 
-    private async Task<int?> GetOwnerIdAsync(int userId)
-    {
-        if (await _db.Emisores.AsNoTracking().AnyAsync(e => e.IdUsuario == userId && e.EsEmisorSistema && e.Estado))
-            return userId;
-        var user = await _db.Usuarios
-            .Where(u => u.IdUsuario == userId)
-            .Select(u => new { u.IdUsuario, u.idJefe })
-            .FirstOrDefaultAsync();
-
-        return user == null ? null : (user.idJefe ?? user.IdUsuario);
-    }
+    private Task<int?> GetOwnerIdAsync(int userId, bool backOffice) =>
+        ProductoCatalogoScope.ResolverAsync(_db, userId, backOffice);
 
     #region DTOs
     public class ProductoDto
@@ -92,10 +83,10 @@ public class ProductosController : ControllerBase
     #endregion
 
     [HttpPost("cotizaciones")]
-    public async Task<ActionResult> CrearCotizacion([FromQuery] int userId, [FromBody] CotizacionCrearDto model)
+    public async Task<ActionResult> CrearCotizacion([FromQuery] int userId, [FromBody] CotizacionCrearDto model, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId)) return Unauthorized();
-        var ownerId = await GetOwnerIdAsync(userId);
+        var ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId is null) return NotFound();
         if (model.Detalles.Count == 0) return BadRequest("Selecciona al menos un producto.");
         if (model.Detalles.Any(x => x.Cantidad < 1 || x.PrecioUnitario < 0 || x.PrecioUnitario > PrecioMaximoPermitido))
@@ -129,13 +120,13 @@ public class ProductosController : ControllerBase
     }
 
     [HttpGet("lookups")]
-    public async Task<ActionResult> Lookups([FromQuery] int userId)
+    public async Task<ActionResult> Lookups([FromQuery] int userId, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId))
             return Unauthorized("Sesión no válida.");
 
         // ✅ Corregido: Buscar el dueño para traer las categorías correctas
-        int? ownerId = await GetOwnerIdAsync(userId);
+        int? ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId == null) return NotFound("Usuario no encontrado.");
         var tipos = await _db.Productotipos
             .AsNoTracking()
@@ -168,11 +159,11 @@ public class ProductosController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<ProductoDto>>> GetAll([FromQuery] int userId, [FromQuery] bool incluirInactivos = false)
+    public async Task<ActionResult<List<ProductoDto>>> GetAll([FromQuery] int userId, [FromQuery] bool incluirInactivos = false, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId)) return Unauthorized("Sesión no válida.");
 
-        int? ownerId = await GetOwnerIdAsync(userId);
+        int? ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId == null) return NotFound("Usuario no encontrado.");
         var query = _db.Productos
             .AsNoTracking()
@@ -206,11 +197,11 @@ public class ProductosController : ControllerBase
     }
 
     [HttpGet("{codigo:int}")]
-    public async Task<ActionResult> GetByCodigo(int codigo, [FromQuery] int userId)
+    public async Task<ActionResult> GetByCodigo(int codigo, [FromQuery] int userId, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId)) return Unauthorized("Sesión no válida.");
 
-        int? ownerId = await GetOwnerIdAsync(userId);
+        int? ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId == null) return NotFound();
         var item = await _db.Productos
             .AsNoTracking()
@@ -238,11 +229,11 @@ public class ProductosController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult> Create([FromQuery] int userId, [FromBody] ProductoUpsertDto model)
+    public async Task<ActionResult> Create([FromQuery] int userId, [FromBody] ProductoUpsertDto model, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
-        int? ownerId = await GetOwnerIdAsync(userId);
+        int? ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId == null) return NotFound();
 
         var error = await ValidarProductoAsync(ownerId.Value, model);
@@ -292,11 +283,11 @@ public class ProductosController : ControllerBase
     }
 
     [HttpPost("bulk")]
-    public async Task<ActionResult<BulkImportResultDto>> BulkCreate([FromQuery] int userId, [FromBody] List<ProductoUpsertDto> models)
+    public async Task<ActionResult<BulkImportResultDto>> BulkCreate([FromQuery] int userId, [FromBody] List<ProductoUpsertDto> models, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
-        int? ownerId = await GetOwnerIdAsync(userId);
+        int? ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId == null) return NotFound("Usuario no encontrado.");
 
         var result = new BulkImportResultDto();
@@ -480,11 +471,11 @@ public class ProductosController : ControllerBase
     }
 
     [HttpPut("{codigo:int}")]
-    public async Task<ActionResult> Update(int codigo, [FromQuery] int userId, [FromBody] ProductoUpsertDto model)
+    public async Task<ActionResult> Update(int codigo, [FromQuery] int userId, [FromBody] ProductoUpsertDto model, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
-        int? ownerId = await GetOwnerIdAsync(userId);
+        int? ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId == null) return NotFound();
 
         // ✅ Corregido: Buscar por ownerId
@@ -517,11 +508,11 @@ public class ProductosController : ControllerBase
     }
 
     [HttpDelete("{codigo:int}")]
-    public async Task<ActionResult> Delete(int codigo, [FromQuery] int userId)
+    public async Task<ActionResult> Delete(int codigo, [FromQuery] int userId, [FromQuery] bool backOffice = false)
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
-        int? ownerId = await GetOwnerIdAsync(userId);
+        int? ownerId = await GetOwnerIdAsync(userId, backOffice);
         if (ownerId == null) return NotFound();
 
         var existente = await _db.Productos

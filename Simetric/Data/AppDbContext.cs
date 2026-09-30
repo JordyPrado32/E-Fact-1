@@ -11,6 +11,7 @@ namespace Simetric.Data
     public class AppDbContext : DbContext
     {
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+        public int? CatalogoEmisorId { get; set; }
         public DbSet<ClienteCorreo> ClientesCorreos { get; set; }
         public DbSet<Auditoria> Auditorias { get; set; }
         public DbSet<BlacklistIp> BlacklistIps { get; set; }
@@ -100,26 +101,44 @@ namespace Simetric.Data
 
         public override int SaveChanges()
         {
+            PrepararCatalogo();
             NormalizarUsuarios();
             return base.SaveChanges();
         }
 
         public override int SaveChanges(bool acceptAllChangesOnSuccess)
         {
+            PrepararCatalogo();
             NormalizarUsuarios();
             return base.SaveChanges(acceptAllChangesOnSuccess);
         }
 
         public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
+            PrepararCatalogo();
             NormalizarUsuarios();
             return base.SaveChangesAsync(cancellationToken);
         }
 
         public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
         {
+            PrepararCatalogo();
             NormalizarUsuarios();
             return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+
+        private void PrepararCatalogo()
+        {
+            foreach (var entry in ChangeTracker.Entries()
+                .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
+            {
+                if (entry.Entity is not (Producto or Productotipo or Productosubtipo)) continue;
+                var scope = entry.Property("CatalogoEmisorId");
+                if (entry.State == EntityState.Added)
+                    scope.CurrentValue = CatalogoEmisorId;
+                else if (!Equals(scope.OriginalValue, CatalogoEmisorId) || !Equals(scope.CurrentValue, CatalogoEmisorId))
+                    throw new InvalidOperationException("El registro no pertenece al catálogo activo.");
+            }
         }
 
         private void NormalizarUsuarios()
@@ -349,6 +368,7 @@ namespace Simetric.Data
             // =========================
             modelBuilder.Entity<Productotipo>(entity =>
             {
+                entity.HasQueryFilter(e => e.CatalogoEmisorId == CatalogoEmisorId);
                 entity.ToTable("PRODUCTOTIPO", "dbo");
                 entity.HasKey(e => e.Idtipoproducto);
 
@@ -369,6 +389,7 @@ namespace Simetric.Data
             modelBuilder.Entity<Proveedor>().ToTable("PROVEEDORES");
             modelBuilder.Entity<Productosubtipo>(entity =>
             {
+                entity.HasQueryFilter(e => e.CatalogoEmisorId == CatalogoEmisorId);
                 entity.ToTable("PRODUCTOSUBTIPO", "dbo");
                 entity.HasKey(e => e.Idsubtipo);
 
@@ -617,6 +638,7 @@ namespace Simetric.Data
             // =========================
             modelBuilder.Entity<Producto>(entity =>
             {
+                entity.HasQueryFilter(e => e.CatalogoEmisorId == CatalogoEmisorId);
                 entity.ToTable("PRODUCTO");
                 entity.HasKey(e => e.Codigo);
 

@@ -13,28 +13,16 @@ namespace Simetric.Services
             _dbFactory = dbFactory;
         }
 
-        // Método privado vital para resolver la jerarquía en cada operación
-        private async Task<int> GetOwnerIdAsync(AppDbContext context, int idUsuario)
-        {
-            if (await context.Emisores.AsNoTracking().AnyAsync(e => e.IdUsuario == idUsuario && e.EsEmisorSistema && e.Estado))
-                return idUsuario;
-            var usuario = await context.Usuarios
-                .Where(u => u.IdUsuario == idUsuario)
-                .Select(u => new { u.IdUsuario, u.idJefe })
-                .FirstOrDefaultAsync();
-
-            if (usuario == null) throw new Exception("Usuario no encontrado en el sistema.");
-
-            // Si tiene jefe, el dueño es el jefe. Si no, es él mismo.
-            return usuario.idJefe ?? usuario.IdUsuario;
-        }
+        private static async Task<int> GetOwnerIdAsync(AppDbContext context, int idUsuario, bool backOffice) =>
+            await ProductoCatalogoScope.ResolverAsync(context, idUsuario, backOffice)
+            ?? throw new InvalidOperationException("No tiene acceso al catálogo solicitado o falta configurar el emisor maestro.");
 
         #region Producto Tipo (Categorías)
 
-        public async Task<List<Productotipo>> GetTiposAsync(int idUsuario)
+        public async Task<List<Productotipo>> GetTiposAsync(int idUsuario, bool backOffice = false)
         {
             using var context = await _dbFactory.CreateDbContextAsync();
-            int idOwner = await GetOwnerIdAsync(context, idUsuario);
+            int idOwner = await GetOwnerIdAsync(context, idUsuario, backOffice);
 
             return await context.Productotipos
                 .Where(x => x.Idusuario == idOwner && x.Estado == true)
@@ -42,10 +30,10 @@ namespace Simetric.Services
                 .ToListAsync();
         }
 
-        public async Task SaveTipoAsync(Productotipo model, int idUsuario)
+        public async Task SaveTipoAsync(Productotipo model, int idUsuario, bool backOffice = false)
         {
             using var context = await _dbFactory.CreateDbContextAsync();
-            int idOwner = await GetOwnerIdAsync(context, idUsuario);
+            int idOwner = await GetOwnerIdAsync(context, idUsuario, backOffice);
             var descripcion = NormalizarDescripcion(model.Descripcion);
 
             if (string.IsNullOrWhiteSpace(descripcion))
@@ -104,10 +92,10 @@ namespace Simetric.Services
             await context.SaveChangesAsync();
         }
 
-        public async Task SoftDeleteTipoAsync(int id, int idUsuario)
+        public async Task SoftDeleteTipoAsync(int id, int idUsuario, bool backOffice = false)
         {
             using var context = await _dbFactory.CreateDbContextAsync();
-            int idOwner = await GetOwnerIdAsync(context, idUsuario);
+            int idOwner = await GetOwnerIdAsync(context, idUsuario, backOffice);
 
             var item = await context.Productotipos
                 .FirstOrDefaultAsync(x => x.Idtipoproducto == id && x.Idusuario == idOwner);
@@ -123,10 +111,10 @@ namespace Simetric.Services
 
         #region Producto Subtipo
 
-        public async Task<List<Productosubtipo>> GetSubtiposAsync(int idUsuario)
+        public async Task<List<Productosubtipo>> GetSubtiposAsync(int idUsuario, bool backOffice = false)
         {
             using var context = await _dbFactory.CreateDbContextAsync();
-            int idOwner = await GetOwnerIdAsync(context, idUsuario);
+            int idOwner = await GetOwnerIdAsync(context, idUsuario, backOffice);
 
             return await context.Productosubtipos
                 .Where(x => x.Idusuario == idOwner && x.Estado == "A")
@@ -135,10 +123,10 @@ namespace Simetric.Services
                 .ToListAsync();
         }
 
-        public async Task SaveSubtipoAsync(Productosubtipo model, int idUsuario)
+        public async Task SaveSubtipoAsync(Productosubtipo model, int idUsuario, bool backOffice = false)
         {
             using var context = await _dbFactory.CreateDbContextAsync();
-            int idOwner = await GetOwnerIdAsync(context, idUsuario);
+            int idOwner = await GetOwnerIdAsync(context, idUsuario, backOffice);
             var descripcion = NormalizarDescripcion(model.Descripcion);
 
             if (string.IsNullOrWhiteSpace(descripcion))
@@ -203,10 +191,10 @@ namespace Simetric.Services
             await context.SaveChangesAsync();
         }
 
-        public async Task SoftDeleteSubtipoAsync(int id, int idUsuario)
+        public async Task SoftDeleteSubtipoAsync(int id, int idUsuario, bool backOffice = false)
         {
             using var context = await _dbFactory.CreateDbContextAsync();
-            int idOwner = await GetOwnerIdAsync(context, idUsuario);
+            int idOwner = await GetOwnerIdAsync(context, idUsuario, backOffice);
 
             var item = await context.Productosubtipos
                 .FirstOrDefaultAsync(x => x.Idsubtipo == id && x.Idusuario == idOwner);

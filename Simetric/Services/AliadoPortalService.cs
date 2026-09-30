@@ -591,6 +591,8 @@ public sealed class AliadoPortalService
         if (idsComision.Count == 0)
             return (false, "Selecciona al menos una comisión.");
         referenciaPago = string.IsNullOrWhiteSpace(referenciaPago) ? null : referenciaPago.Trim();
+        if (referenciaPago is null && string.IsNullOrWhiteSpace(comprobantePagoUrl))
+            return (false, "Registra la referencia de pago o adjunta el comprobante.");
         if (referenciaPago?.Length > 100)
             return (false, "La referencia de pago no puede superar 100 caracteres.");
         observacionPago = string.IsNullOrWhiteSpace(observacionPago) ? null : observacionPago.Trim();
@@ -636,6 +638,10 @@ public sealed class AliadoPortalService
             liquidacion.ReferenciaPago = referenciaPago;
             liquidacion.ObservacionPago = observacionPago;
             liquidacion.ComprobantePagoUrl = comprobantePagoUrl;
+            liquidacion.FechaPago = ahora;
+            liquidacion.IdUsuarioPago = actorId;
+            liquidacion.EstadoSri = "Pendiente";
+            liquidacion.ErrorSri = null;
             liquidacionesPagadas.Add(liquidacion.IdLiquidacion);
             foreach (var comision in grupo)
             {
@@ -651,12 +657,60 @@ public sealed class AliadoPortalService
         var erroresLiquidacionCompra = new List<string>();
         foreach (var idLiquidacion in liquidacionesPagadas.Distinct())
         {
-            try { await _liquidacionCompraService.GenerarLiquidacionCompraAliadoAsync(idLiquidacion); }
-            catch (Exception ex) { erroresLiquidacionCompra.Add(ex.Message); }
+            try
+            {
+                await _liquidacionCompraService.GenerarLiquidacionCompraAliadoAsync(idLiquidacion);
+                await ActualizarEstadoSriAsync(idLiquidacion, "Enviada", null);
+            }
+            catch (Exception ex)
+            {
+                await ActualizarEstadoSriAsync(idLiquidacion, "Error", ex.Message);
+                erroresLiquidacionCompra.Add(ex.Message);
+            }
         }
         return erroresLiquidacionCompra.Count == 0
             ? (true, $"Se liquidaron {comisiones.Count} comisión(es) y se enviaron al SRI.")
             : (true, $"Se liquidaron {comisiones.Count} comisión(es). La liquidación SRI queda pendiente de reintento: {erroresLiquidacionCompra[0]}");
+    }
+
+    public async Task<(bool Success, string Message)> ReintentarLiquidacionSriAsync(int actorId, int idLiquidacion)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorPortalAsync(db, actorId)) return (false, "No tienes permisos para reenviar al SRI.");
+        var liquidacion = await db.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == idLiquidacion);
+        if (liquidacion is null || liquidacion.Estado != "Pagada") return (false, "La liquidación no está pagada.");
+        try
+        {
+            await _liquidacionCompraService.GenerarLiquidacionCompraAliadoAsync(idLiquidacion);
+            await ActualizarEstadoSriAsync(idLiquidacion, "Enviada", null);
+            return (true, "Liquidación enviada al SRI.");
+        }
+        catch (Exception ex)
+        {
+            await ActualizarEstadoSriAsync(idLiquidacion, "Error", ex.Message);
+            return (false, "No se pudo enviar al SRI: " + ex.Message);
+        }
+    }
+
+    public async Task CancelarComisionesFacturaAsync(int idFactura, string motivo)
+    {
+        if (idFactura <= 0) return;
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var comisiones = await db.AliadoComisiones.Where(x => x.IdFactura == idFactura && x.Estado != "Anulada").ToListAsync();
+        foreach (var comision in comisiones)
+            comision.Estado = comision.Estado == "Pagada" ? "AjustePendiente" : "Anulada";
+        if (comisiones.Count > 0) await db.SaveChangesAsync();
+    }
+
+    private async Task ActualizarEstadoSriAsync(int idLiquidacion, string estadoSri, string? error)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var liquidacion = await db.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == idLiquidacion);
+        if (liquidacion is null) return;
+        liquidacion.EstadoSri = estadoSri;
+        liquidacion.ErrorSri = string.IsNullOrWhiteSpace(error) ? null : error[..Math.Min(error.Length, 1000)];
+        await db.SaveChangesAsync();
     }
 
     public async Task<(bool Success, string Message)> GuardarParametroComisionAsync(int actorId, int idVendedor, string periodo, decimal porcentajeHastaMil, decimal porcentajeDesdeMil)
@@ -1460,6 +1514,7 @@ public sealed class AliadoPortalService
                 Fecha = x.Fecha,
                 Estado = x.Estado,
                 ReferenciaPago = x.ReferenciaPago,
+                EstadoSri = x.EstadoSri,
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.IdLiquidacion)
             })
             .ToListAsync();
@@ -1483,6 +1538,11 @@ public sealed class AliadoPortalService
                 Fecha = x.l.Fecha,
                 Estado = x.l.Estado,
                 ReferenciaPago = x.l.ReferenciaPago,
+                EstadoSri = x.l.EstadoSri,
+                ErrorSri = x.l.ErrorSri,
+                CodLiquidacionCompra = x.l.CodLiquidacionCompra,
+                FechaPago = x.l.FechaPago,
+                IdUsuarioPago = x.l.IdUsuarioPago,
                 ObservacionPago = x.l.ObservacionPago,
                 ComprobantePagoUrl = x.l.ComprobantePagoUrl,
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.l.IdLiquidacion)
@@ -1949,12 +2009,20 @@ BEGIN
         ,ObservacionPago NVARCHAR(500) NULL
         ,ComprobantePagoUrl NVARCHAR(300) NULL
         ,CodLiquidacionCompra INT NULL
+        ,EstadoSri NVARCHAR(30) NOT NULL CONSTRAINT DF_ALIADO_LIQUIDACION_ESTADO_SRI DEFAULT(N'Pendiente')
+        ,ErrorSri NVARCHAR(1000) NULL
+        ,FechaPago DATETIME2 NULL
+        ,IdUsuarioPago INT NULL
     );
 END
 IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'IdCliente') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD IdCliente INT NULL;
 IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'ObservacionPago') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD ObservacionPago NVARCHAR(500) NULL;
 IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'ComprobantePagoUrl') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD ComprobantePagoUrl NVARCHAR(300) NULL;
 IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'CodLiquidacionCompra') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD CodLiquidacionCompra INT NULL;
+IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'EstadoSri') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD EstadoSri NVARCHAR(30) NOT NULL CONSTRAINT DF_ALIADO_LIQUIDACION_ESTADO_SRI DEFAULT(N'Pendiente');
+IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'ErrorSri') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD ErrorSri NVARCHAR(1000) NULL;
+IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'FechaPago') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD FechaPago DATETIME2 NULL;
+IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'IdUsuarioPago') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD IdUsuarioPago INT NULL;
 """;
 
         yield return """
@@ -2170,6 +2238,7 @@ public class AliadoLiquidacionDto
     public DateTime Fecha { get; init; }
     public string Estado { get; init; } = string.Empty;
     public string? ReferenciaPago { get; init; }
+    public string EstadoSri { get; init; } = "Pendiente";
     public int CantidadComisiones { get; init; }
 }
 
@@ -2178,6 +2247,10 @@ public sealed class AliadoAdminLiquidacionRow : AliadoLiquidacionDto
     public string Aliado { get; init; } = string.Empty;
     public string? ObservacionPago { get; init; }
     public string? ComprobantePagoUrl { get; init; }
+    public string? ErrorSri { get; init; }
+    public int? CodLiquidacionCompra { get; init; }
+    public DateTime? FechaPago { get; init; }
+    public int? IdUsuarioPago { get; init; }
 }
 
 public sealed class AliadoRenovacionNotificacionDto

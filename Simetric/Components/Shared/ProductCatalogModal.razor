@@ -241,6 +241,7 @@
 
 @code {
     [Parameter] public int UserId { get; set; }
+    [Parameter] public bool BackOffice { get; set; }
     [Parameter] public string ContextLabel { get; set; } = "detalle";
     [Parameter] public bool ShowCatalog { get; set; }
     [Parameter] public EventCallback<bool> ShowCatalogChanged { get; set; }
@@ -262,6 +263,7 @@
     private List<ProductSubtypeLookup> productSubtypes = new();
     private List<VatLookup> vats = new();
     private ProductModalModel productModel = CreateProductModel();
+    private (int UserId, bool BackOffice)? loadedScope;
 
     private IEnumerable<ProductoLookupDetalleDto> FilteredProducts
     {
@@ -314,6 +316,17 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        if (loadedScope != (UserId, BackOffice))
+        {
+            loadedScope = (UserId, BackOffice);
+            catalogProducts.Clear();
+            productTypes.Clear();
+            productSubtypes.Clear();
+            selectedKeys.Clear();
+            addedKeys.Clear();
+            productModel = CreateProductModel();
+        }
+
         if (ShowCatalog && !catalogProducts.Any() && !catalogLoading)
             await LoadCatalogAsync();
 
@@ -329,7 +342,7 @@
         catalogLoading = true;
         try
         {
-            catalogProducts = (await FacturacionService.BuscarProductosFiltroAsync(UserId, string.Empty)).Take(80).ToList();
+            catalogProducts = (await FacturacionService.BuscarProductosFiltroAsync(UserId, string.Empty, BackOffice)).Take(80).ToList();
         }
         finally
         {
@@ -341,7 +354,7 @@
     {
         try
         {
-            var response = await Http.GetFromJsonAsync<LookupsResponse>($"api/productos/lookups?userId={UserId}");
+            var response = await Http.GetFromJsonAsync<LookupsResponse>($"api/productos/lookups?userId={UserId}&backOffice={BackOffice}");
             if (response is null)
                 return;
 
@@ -438,7 +451,7 @@
             productModel.TipoCompravena = productModel.TipoCompravena?.Trim().ToUpperInvariant();
             productModel.Codigoimpuesto = string.IsNullOrWhiteSpace(productModel.Porcentajeimpuesto) ? null : "2";
 
-            var response = await Http.PostAsJsonAsync($"api/productos?userId={UserId}", new
+            var response = await Http.PostAsJsonAsync($"api/productos?userId={UserId}&backOffice={BackOffice}", new
             {
                 Codigo = 0,
                 productModel.Nombre,
@@ -466,7 +479,7 @@
                 return;
             }
 
-            var product = await FacturacionService.BuscarProductoParaDetalleAsync(UserId, productModel.CodigoPrincipal);
+            var product = await FacturacionService.BuscarProductoParaDetalleAsync(UserId, productModel.CodigoPrincipal, BackOffice);
             productModel = CreateProductModel();
             catalogProducts.Clear();
             await CerrarCrearAsync();

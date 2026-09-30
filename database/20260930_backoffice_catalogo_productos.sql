@@ -1,0 +1,33 @@
+-- Aplicar antes de iniciar la versión que utiliza CATALOGO_EMISOR_ID.
+-- NULL conserva los catálogos de las cuentas; 38 identifica el catálogo compartido de BackOffice.
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
+IF NOT EXISTS (SELECT 1 FROM dbo.EMISOR WHERE codigo = 38 AND ESTADO = 1 AND es_emisor_sistema = 1 AND id_usuario IS NOT NULL)
+    THROW 50001, 'Configure el emisor maestro 38 antes de crear su catálogo.', 1;
+
+IF COL_LENGTH('dbo.PRODUCTO', 'CATALOGO_EMISOR_ID') IS NULL
+    ALTER TABLE dbo.PRODUCTO ADD CATALOGO_EMISOR_ID int NULL;
+IF COL_LENGTH('dbo.PRODUCTOTIPO', 'CATALOGO_EMISOR_ID') IS NULL
+    ALTER TABLE dbo.PRODUCTOTIPO ADD CATALOGO_EMISOR_ID int NULL;
+IF COL_LENGTH('dbo.PRODUCTOSUBTIPO', 'CATALOGO_EMISOR_ID') IS NULL
+    ALTER TABLE dbo.PRODUCTOSUBTIPO ADD CATALOGO_EMISOR_ID int NULL;
+
+-- Lote dinámico para que SQL Server compile después de añadir las columnas.
+EXEC sys.sp_executesql N'
+    IF NOT EXISTS (SELECT 1 FROM dbo.PRODUCTOTIPO WHERE CATALOGO_EMISOR_ID = 38)
+        INSERT dbo.PRODUCTOTIPO (DESCRIPCION, ESTADO, IDUSUARIO, CATALOGO_EMISOR_ID)
+        SELECT N''Servicios'', 1, id_usuario, 38 FROM dbo.EMISOR WHERE codigo = 38;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N''CK_PRODUCTO_CATALOGO_EMISOR'')
+        ALTER TABLE dbo.PRODUCTO ADD CONSTRAINT CK_PRODUCTO_CATALOGO_EMISOR CHECK (CATALOGO_EMISOR_ID IS NULL OR CATALOGO_EMISOR_ID = 38);
+    IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N''CK_PRODUCTOTIPO_CATALOGO_EMISOR'')
+        ALTER TABLE dbo.PRODUCTOTIPO ADD CONSTRAINT CK_PRODUCTOTIPO_CATALOGO_EMISOR CHECK (CATALOGO_EMISOR_ID IS NULL OR CATALOGO_EMISOR_ID = 38);
+    IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N''CK_PRODUCTOSUBTIPO_CATALOGO_EMISOR'')
+        ALTER TABLE dbo.PRODUCTOSUBTIPO ADD CONSTRAINT CK_PRODUCTOSUBTIPO_CATALOGO_EMISOR CHECK (CATALOGO_EMISOR_ID IS NULL OR CATALOGO_EMISOR_ID = 38);
+';
+
+COMMIT TRANSACTION;
+
+-- No reasigna productos históricos: su IDUSUARIO no permite determinar si se crearon en BackOffice.
+-- Los registros existentes conservan su propietario y las referencias de documentos emitidos.

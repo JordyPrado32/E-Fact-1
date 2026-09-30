@@ -652,6 +652,14 @@ public class LiquidacionCompraService
                 if (emisor == null)
                     throw new Exception("No se encontro el emisor relacionado con la liquidacion.");
 
+                if (emisor.EsEmisorSistema && emisor.Codigo == EmisorSistemaService.CodigoEmisorBackOffice)
+                {
+                    if (emisor.IdUsuario is not > 0)
+                        throw new Exception("El emisor maestro no tiene un propietario configurado.");
+
+                    persistible.Usuario = emisor.IdUsuario.Value;
+                }
+
                 var clienteProveedor = await ObtenerOCrearClienteProveedorAsync(persistible, context);
                 await SincronizarCorreosAdicionalesProveedorAsync(persistible, clienteProveedor, context);
                 await ObtenerOCrearProveedorAsync(persistible, context);
@@ -1765,6 +1773,19 @@ public class LiquidacionCompraService
 
     private async Task<string> ObtenerSerieComprasAsync(int? usuario, Emisor? emisor, AppDbContext context)
     {
+        if (emisor?.EsEmisorSistema == true && emisor.Codigo == EmisorSistemaService.CodigoEmisorBackOffice)
+        {
+            var secuenciaSistema = await _emisorSistemaService.GetSecuenciaLiquidacionCompraSistemaAsync();
+            if (!string.IsNullOrWhiteSpace(secuenciaSistema?.SerieVisual))
+                return secuenciaSistema.SerieVisual;
+
+            if (!string.IsNullOrWhiteSpace(emisor.CodEstablecimiento) &&
+                !string.IsNullOrWhiteSpace(emisor.CodPuntoEmision))
+            {
+                return $"{emisor.CodEstablecimiento.Trim()}-{emisor.CodPuntoEmision.Trim()}";
+            }
+        }
+
         if (usuario.HasValue && usuario.Value > 0)
         {
             var resolucion = await ResolverSerieLiquidacionAsync(usuario.Value);
@@ -1795,7 +1816,7 @@ public class LiquidacionCompraService
         if (codEmisor.HasValue)
             query = query.Where(x => x.CodEmisor == codEmisor.Value);
 
-        if (codEmisor.HasValue)
+        if (codEmisor.HasValue && codEmisor.Value != EmisorSistemaService.CodigoEmisorBackOffice)
         {
             var usuarioEmisor = await context.Emisores
                 .AsNoTracking()

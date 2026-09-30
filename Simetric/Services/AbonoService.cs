@@ -32,11 +32,11 @@ namespace Simetric.Services
         /// <summary>
         /// Obtiene el saldo a favor disponible de un cliente (AbonoMultiples con saldo > 0 y estado activo).
         /// </summary>
-        public async Task<decimal> GetSaldoAFavor(int idUsuario, int idCliente)
+        public async Task<decimal> GetSaldoAFavor(int idUsuario, int idCliente, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
-            if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente))
+            if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente, codEmisor))
                 return 0m;
 
             return await context.AbonoMultiples
@@ -48,11 +48,11 @@ namespace Simetric.Services
         /// <summary>
         /// Obtiene el detalle de cada AbonoMultiple que tiene saldo a favor disponible.
         /// </summary>
-        public async Task<List<SaldoAFavorVM>> GetDetalleSaldoAFavor(int idUsuario, int idCliente)
+        public async Task<List<SaldoAFavorVM>> GetDetalleSaldoAFavor(int idUsuario, int idCliente, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
-            if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente))
+            if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente, codEmisor))
                 return new List<SaldoAFavorVM>();
 
             return await context.AbonoMultiples
@@ -74,7 +74,7 @@ namespace Simetric.Services
         /// Obtiene el historial de facturas completamente saldadas del cliente,
         /// ordenadas por la fecha del último abono (más reciente primero).
         /// </summary>
-        public async Task<List<FacturaHistorialVM>> GetHistorialFacturasSaldadas(int idUsuario, int idCliente)
+        public async Task<List<FacturaHistorialVM>> GetHistorialFacturasSaldadas(int idUsuario, int idCliente, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
@@ -83,6 +83,7 @@ namespace Simetric.Services
                 .Where(f => f.Tipopago == "19"
                          && f.Idusuario == idUsuario
                          && f.Codclientes == idCliente
+                         && (!codEmisor.HasValue || f.Codemisor == codEmisor.Value)
                          && (f.Estado == true || f.Estado == null))
                 .Select(f => new
                 {
@@ -147,9 +148,10 @@ namespace Simetric.Services
                 })
                 .ToListAsync();
 
+            var facturaIds = facturas.Select(f => f.Codfactura).ToList();
             var pagosCliente = await context.Abonos
                 .AsNoTracking()
-                .Where(a => a.estado == true && a.idCliente != null)
+                .Where(a => a.estado == true && a.idCliente != null && a.codFactura.HasValue && facturaIds.Contains(a.codFactura.Value))
                 .GroupBy(a => a.idCliente!.Value)
                 .Select(g => new
                 {
@@ -215,7 +217,7 @@ namespace Simetric.Services
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
-            if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente))
+            if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente, codEmisor))
                 return null;
 
             var facturas = await BuildFacturasCreditoBaseQuery(context, idUsuario, codEmisor)
@@ -253,10 +255,11 @@ namespace Simetric.Services
             }
 
             var facturaLookup = facturas.ToDictionary(f => f.IdFactura);
+            var facturaIds = facturas.Select(f => f.IdFactura).ToList();
 
             var abonosRaw = await context.Abonos
                 .AsNoTracking()
-                .Where(a => a.estado == true && a.idCliente == idCliente)
+                .Where(a => a.estado == true && a.idCliente == idCliente && a.codFactura.HasValue && facturaIds.Contains(a.codFactura.Value))
                 .OrderByDescending(a => a.fechaPago)
                 .ThenByDescending(a => a.sec)
                 .Select(a => new
@@ -331,7 +334,7 @@ namespace Simetric.Services
         /// Registra un pago y distribuye el monto entre las facturas pendientes del cliente.
         /// Si sobra saldo, queda registrado en AbonoMultiples para uso posterior.
         /// </summary>
-        public async Task<bool> RegistrarPagoGeneral(int idUsuario, int idCliente, decimal montoRecibido, string observacion)
+        public async Task<bool> RegistrarPagoGeneral(int idUsuario, int idCliente, decimal montoRecibido, string observacion, int? codEmisor = null)
         {
             await using var strategyContext = await _dbFactory.CreateDbContextAsync();
             var strategy = strategyContext.Database.CreateExecutionStrategy();
@@ -340,7 +343,7 @@ namespace Simetric.Services
             {
                 await using var context = await _dbFactory.CreateDbContextAsync();
 
-                if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente))
+                if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente, codEmisor))
                     return false;
 
                 await using var transaction = await context.Database.BeginTransactionAsync();
@@ -361,7 +364,7 @@ namespace Simetric.Services
                     context.AbonoMultiples.Add(maestro);
                     await context.SaveChangesAsync();
 
-                    var pendientes = await GetFacturasCreditoPendientesCoreAsync(context, idUsuario, idCliente);
+                    var pendientes = await GetFacturasCreditoPendientesCoreAsync(context, idUsuario, idCliente, codEmisor);
                     decimal saldoPorRepartir = montoRecibido;
 
                     foreach (var fac in pendientes)
@@ -413,7 +416,8 @@ namespace Simetric.Services
             decimal montoRecibido,
             Dictionary<int, decimal> distribucion,
             string observacion,
-            bool usarSaldoAFavor = false)
+            bool usarSaldoAFavor = false,
+            int? codEmisor = null)
         {
             await using var strategyContext = await _dbFactory.CreateDbContextAsync();
             var strategy = strategyContext.Database.CreateExecutionStrategy();
@@ -422,7 +426,7 @@ namespace Simetric.Services
             {
                 await using var context = await _dbFactory.CreateDbContextAsync();
 
-                if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente))
+                if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente, codEmisor))
                     return false;
 
                 await using var transaction = await context.Database.BeginTransactionAsync();
@@ -472,6 +476,7 @@ namespace Simetric.Services
                         .Where(f =>
                             f.Idusuario == idUsuario &&
                             f.Codclientes == idCliente &&
+                            (!codEmisor.HasValue || f.Codemisor == codEmisor.Value) &&
                             distribucion.Keys.Contains(f.Codfactura))
                         .Select(f => f.Codfactura)
                         .ToListAsync();
@@ -658,14 +663,21 @@ namespace Simetric.Services
                                      nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado)
                         .Sum(nc => (decimal?)nc.ValorTotal) ?? 0m) < (f.Valortotal ?? 0m));
 
-        private static async Task<bool> ClientePerteneceUsuarioAsync(AppDbContext context, int idUsuario, int idCliente)
+        private static async Task<bool> ClientePerteneceUsuarioAsync(AppDbContext context, int idUsuario, int idCliente, int? codEmisor = null)
         {
             if (idUsuario <= 0 || idCliente <= 0)
                 return false;
 
-            return await context.Clientes
+            var pertenece = await context.Clientes
                 .AsNoTracking()
                 .AnyAsync(c => c.Codcliente == idCliente && c.Usuario == idUsuario);
+
+            if (!pertenece)
+                return false;
+
+            return !codEmisor.HasValue || await context.Facturas
+                .AsNoTracking()
+                .AnyAsync(f => f.Idusuario == idUsuario && f.Codclientes == idCliente && f.Codemisor == codEmisor.Value);
         }
 
         private static bool MatchesSearch(FacturaPendienteVM factura, string filtro)

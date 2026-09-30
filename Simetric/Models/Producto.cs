@@ -5,6 +5,9 @@ namespace Simetric.Models;
 
 public partial class Producto
 {
+    [Column("CATALOGO_EMISOR_ID")]
+    public int? CatalogoEmisorId { get; set; }
+
     [Key]
     public int Codigo { get; set; }
 

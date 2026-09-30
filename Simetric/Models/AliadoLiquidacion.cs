@@ -18,4 +18,8 @@ public sealed class AliadoLiquidacion
     [MaxLength(500)] public string? ObservacionPago { get; set; }
     [MaxLength(300)] public string? ComprobantePagoUrl { get; set; }
     public int? CodLiquidacionCompra { get; set; }
+    [MaxLength(30)] public string EstadoSri { get; set; } = "Pendiente";
+    [MaxLength(1000)] public string? ErrorSri { get; set; }
+    public DateTime? FechaPago { get; set; }
+    public int? IdUsuarioPago { get; set; }
 }

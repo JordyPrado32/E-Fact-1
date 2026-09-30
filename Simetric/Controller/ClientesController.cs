@@ -30,6 +30,23 @@ public class ClientesController : ControllerBase
 
     private static bool IsValidUser(int userId) => userId > 0;
 
+    private async Task<int?> GetCatalogOwnerIdAsync(int userId)
+    {
+        var user = await _context.Usuarios
+            .AsNoTracking()
+            .Where(u => u.IdUsuario == userId)
+            .Select(u => new { u.IdUsuario, u.IdTipoUsuario })
+            .FirstOrDefaultAsync();
+
+        if (user is null) return null;
+        if (user.IdTipoUsuario != BackOfficePermissionHelper.BackOfficeRoleId) return user.IdUsuario;
+
+        return await _context.Emisores.AsNoTracking()
+            .Where(e => e.Codigo == EmisorSistemaService.CodigoEmisorBackOffice && e.Estado && e.EsEmisorSistema)
+            .Select(e => e.IdUsuario)
+            .FirstOrDefaultAsync();
+    }
+
     private async Task EnsureDiasCreditoColumnAsync()
     {
         await _context.Database.ExecuteSqlRawAsync("""
@@ -93,12 +110,15 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
-        await _clienteService.EnsureConsumidorFinalAsync(userId);
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound("Usuario no encontrado.");
+
+        await _clienteService.EnsureConsumidorFinalAsync(ownerId.Value);
 
         var query = _context.Clientes
             .AsNoTracking()
             .ExcluirClientesExclusivosBackOffice()
-            .Where(c => c.Usuario == userId);
+            .Where(c => c.Usuario == ownerId.Value);
 
         if (!incluirInactivos)
             query = query.Where(c => c.Estado == true);
@@ -188,12 +208,15 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
-        await _clienteService.EnsureConsumidorFinalAsync(userId);
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound("Usuario no encontrado.");
+
+        await _clienteService.EnsureConsumidorFinalAsync(ownerId.Value);
 
         var c = await _context.Clientes
             .AsNoTracking()
             .ExcluirClientesExclusivosBackOffice()
-            .Where(x => x.Codcliente == id && x.Usuario == userId)
+            .Where(x => x.Codcliente == id && x.Usuario == ownerId.Value)
             .Select(x => new
             {
                 x.Codcliente,
@@ -285,9 +308,12 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound("Usuario no encontrado.");
+
         await ResolverUbicacionEcuadorQuemada(dto, null, null);
 
-        var error = await ValidarCliente(dto, userId);
+        var error = await ValidarCliente(dto, ownerId.Value);
         if (error is not null)
             return BadRequest(error);
 
@@ -325,7 +351,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
             Provincia = dto.Provincia,
             Ciudad = dto.Ciudad,
             Tipoidentificacion = codigoReal,
-            Usuario = userId
+            Usuario = ownerId.Value
         };
 
         _context.Clientes.Add(entity);
@@ -372,6 +398,9 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound("Usuario no encontrado.");
+
         var result = new BulkImportResultDto();
         if (models == null || !models.Any())
         {
@@ -381,7 +410,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         // Load existing identifications and names to prevent duplicates
         var existingClients = await _context.Clientes
             .ExcluirClientesExclusivosBackOffice()
-            .Where(c => c.Usuario == userId && c.Estado == true)
+            .Where(c => c.Usuario == ownerId.Value && c.Estado == true)
             .Select(c => new { c.Numeroidentificacion, c.Apellidos, c.Nombres, c.Nombrerazonsocial, c.Correo })
             .ToListAsync();
 
@@ -506,7 +535,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
                 Provincia = dto.Provincia,
                 Ciudad = dto.Ciudad,
                 Tipoidentificacion = codigoReal,
-                Usuario = userId
+                Usuario = ownerId.Value
             };
 
             _context.Clientes.Add(entity);
@@ -580,16 +609,19 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         if (!usuarioExiste)
             return NotFound("Usuario no encontrado.");
 
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound("Usuario no encontrado.");
+
         var cliente = await _context.Clientes
             .ExcluirClientesExclusivosBackOffice()
-            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId.Value);
 
         if (cliente is null)
             return NotFound("El cliente no existe o no pertenece a su cuenta.");
 
         await ResolverUbicacionEcuadorQuemada(dto, null, null);
 
-        var error = await ValidarCliente(dto, userId, clienteIdExistente: id);
+        var error = await ValidarCliente(dto, ownerId.Value, clienteIdExistente: id);
         if (error is not null)
             return BadRequest(error);
 
@@ -629,7 +661,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         if (dto.Estado is not null)
             cliente.Estado = dto.Estado;
 
-        cliente.Usuario = userId;
+        cliente.Usuario = ownerId.Value;
 
         // Manejo de correos adicionales (borrón y cuenta nueva)
         var correosExistentes = await _context.ClientesCorreos
@@ -662,9 +694,12 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound();
+
         var c = await _context.Clientes
             .ExcluirClientesExclusivosBackOffice()
-            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId.Value);
 
         if (c is null) return NotFound();
         c.Estado = false;
@@ -676,9 +711,12 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound();
+
         var c = await _context.Clientes
             .ExcluirClientesExclusivosBackOffice()
-            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId.Value);
 
         if (c is null) return NotFound();
         c.Estado = true;
@@ -691,9 +729,12 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
     {
         if (!IsValidUser(userId)) return Unauthorized();
 
+        var ownerId = await GetCatalogOwnerIdAsync(userId);
+        if (ownerId is null) return NotFound();
+
         var c = await _context.Clientes
             .ExcluirClientesExclusivosBackOffice()
-            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == userId);
+            .FirstOrDefaultAsync(x => x.Codcliente == id && x.Usuario == ownerId.Value);
 
         if (c is null) return NotFound();
         _context.Clientes.Remove(c);
