@@ -48,6 +48,13 @@ public class LiquidacionCompraService
 
     private async Task<CajaSerieResolucion> ResolverSerieLiquidacionAsync(int userId)
     {
+        var emisorSistema = await _emisorSistemaService.GetEmisorSistemaAsync();
+        if (emisorSistema?.IdUsuario == userId)
+        {
+            var secuenciaSistema = await _emisorSistemaService.GetSecuenciaLiquidacionCompraSistemaAsync();
+            if (!string.IsNullOrWhiteSpace(secuenciaSistema?.SerieVisual))
+                return new CajaSerieResolucion(0, 0, 0, 0, string.Empty, string.Empty, secuenciaSistema.SerieVisual, secuenciaSistema.SerieRaw);
+        }
         var resolucionBase = await _cajaSerieResolver.ResolverComprasAsync(userId);
         var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
             userId,
@@ -863,7 +870,7 @@ public class LiquidacionCompraService
         return resultado;
     }
 
-    public async Task<List<LiquidacionCompraListDto>> ListarLiquidacionesUsuarioAsync(int idUsuario)
+    public async Task<List<LiquidacionCompraListDto>> ListarLiquidacionesUsuarioAsync(int idUsuario, int? codEmisor = null)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();
 
@@ -875,7 +882,8 @@ public class LiquidacionCompraService
 
             where compra.Estado == true &&
                   compra.CodDocumento == "03" &&
-                  compra.Usuario == idUsuario
+                  compra.Usuario == idUsuario &&
+                  (!codEmisor.HasValue || compra.CodEmisor == codEmisor.Value)
             orderby compra.CodFactura descending
             select new
             {

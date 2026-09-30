@@ -10,6 +10,8 @@ public sealed class AliadoComisionParametro
     public int IdVendedor { get; set; }
     [Required, MaxLength(7)] public string Periodo { get; set; } = string.Empty;
     public decimal Porcentaje { get; set; }
+    public decimal PorcentajeHastaMil { get; set; }
+    public decimal PorcentajeDesdeMil { get; set; }
     public DateTime FechaActualizacion { get; set; }
     public int IdUsuarioActualizacion { get; set; }
 }

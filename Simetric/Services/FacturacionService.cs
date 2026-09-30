@@ -938,7 +938,7 @@ namespace Simetric.Services
             };
         }
 
-        public async Task<List<FacturaBusquedaDto>> BuscarFacturasAutocompleteAsync(string texto, int idUsuario)
+        public async Task<List<FacturaBusquedaDto>> BuscarFacturasAutocompleteAsync(string texto, int idUsuario, int? codEmisor = null)
         {
             texto = (texto ?? string.Empty).Trim();
 
@@ -952,6 +952,7 @@ namespace Simetric.Services
                 join c in context.Clientes.AsNoTracking() on f.Codclientes equals c.Codcliente into cliJoin
                 from c in cliJoin.DefaultIfEmpty()
                 where f.Idusuario == idUsuario &&
+                      (!codEmisor.HasValue || f.Codemisor == codEmisor.Value) &&
                       f.Estado == true &&
                       f.Numfactura != null &&
                       f.Numfactura.Contains(texto)
@@ -3141,7 +3142,7 @@ IF @resultado < 0
             }
         }
 
-        public async Task<FacturaViewDto?> GetFacturaPorNumeroUsuarioAsync(string numFactura, int idUsuario, string? serie = null)
+        public async Task<FacturaViewDto?> GetFacturaPorNumeroUsuarioAsync(string numFactura, int idUsuario, string? serie = null, int? codEmisor = null)
         {
             if (string.IsNullOrWhiteSpace(numFactura))
                 return null;
@@ -3158,6 +3159,7 @@ IF @resultado < 0
                 .AsNoTracking()
                 .Where(f =>
                     f.Idusuario == idUsuario &&
+                    (!codEmisor.HasValue || f.Codemisor == codEmisor.Value) &&
                     f.Numfactura == numFactura &&
                     (serieNorm == null || (f.Serie ?? "") == serieNorm))
                 .Select(f => new FacturaViewDto

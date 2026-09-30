@@ -23,10 +23,10 @@ namespace Simetric.Services
         /// <summary>
         /// Obtiene las facturas a crédito o marcadas internamente como no cobradas que aún tienen saldo pendiente.
         /// </summary>
-        public async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientes(int idUsuario, int? idCliente = null)
+        public async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientes(int idUsuario, int? idCliente = null, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
-            return await GetFacturasCreditoPendientesCoreAsync(context, idUsuario, idCliente);
+            return await GetFacturasCreditoPendientesCoreAsync(context, idUsuario, idCliente, codEmisor);
         }
 
         /// <summary>
@@ -112,11 +112,11 @@ namespace Simetric.Services
                 .ToList();
         }
 
-        public async Task<List<EstadoCuentaClienteResumenVM>> GetEstadoCuentaClientesAsync(int idUsuario)
+        public async Task<List<EstadoCuentaClienteResumenVM>> GetEstadoCuentaClientesAsync(int idUsuario, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
-            var facturas = await BuildFacturasCreditoBaseQuery(context, idUsuario)
+            var facturas = await BuildFacturasCreditoBaseQuery(context, idUsuario, codEmisor)
                 .Select(f => new
                 {
                     f.Codfactura,
@@ -211,14 +211,14 @@ namespace Simetric.Services
                 .ToList();
         }
 
-        public async Task<EstadoCuentaDetalleVM?> GetEstadoCuentaDetalleAsync(int idUsuario, int idCliente)
+        public async Task<EstadoCuentaDetalleVM?> GetEstadoCuentaDetalleAsync(int idUsuario, int idCliente, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
             if (!await ClientePerteneceUsuarioAsync(context, idUsuario, idCliente))
                 return null;
 
-            var facturas = await BuildFacturasCreditoBaseQuery(context, idUsuario)
+            var facturas = await BuildFacturasCreditoBaseQuery(context, idUsuario, codEmisor)
                 .Where(f => f.Codclientes == idCliente)
                 .Select(f => new EstadoCuentaFacturaVM
                 {
@@ -507,15 +507,15 @@ namespace Simetric.Services
         }
 
         // Búsqueda mejorada por Cédula o Nombre
-        public async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientes(int idUsuario, string filtro)
+        public async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientes(int idUsuario, string filtro, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
-            return await GetFacturasCreditoPendientesCoreAsync(context, idUsuario, filtro);
+            return await GetFacturasCreditoPendientesCoreAsync(context, idUsuario, filtro, codEmisor);
         }
 
-        private static async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientesCoreAsync(AppDbContext context, int idUsuario, int? idCliente = null)
+        private static async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientesCoreAsync(AppDbContext context, int idUsuario, int? idCliente = null, int? codEmisor = null)
         {
-            var query = BuildFacturasCreditoBaseQuery(context, idUsuario);
+            var query = BuildFacturasCreditoBaseQuery(context, idUsuario, codEmisor);
 
             if (idCliente.HasValue)
             {
@@ -557,14 +557,14 @@ namespace Simetric.Services
                 .ToList();
         }
 
-        private static async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientesCoreAsync(AppDbContext context, int idUsuario, string filtro)
+        private static async Task<List<FacturaPendienteVM>> GetFacturasCreditoPendientesCoreAsync(AppDbContext context, int idUsuario, string filtro, int? codEmisor = null)
         {
             if (string.IsNullOrWhiteSpace(filtro))
                 return new List<FacturaPendienteVM>();
 
             filtro = filtro.Trim();
 
-            var facturas = await BuildFacturasCreditoBaseQuery(context, idUsuario)
+            var facturas = await BuildFacturasCreditoBaseQuery(context, idUsuario, codEmisor)
                 .Select(f => new FacturaPendienteVM
             {
                 IdFactura = f.Codfactura,
@@ -643,11 +643,12 @@ namespace Simetric.Services
             return 4;
         }
 
-        private static IQueryable<Factura> BuildFacturasCreditoBaseQuery(AppDbContext context, int idUsuario) =>
+        private static IQueryable<Factura> BuildFacturasCreditoBaseQuery(AppDbContext context, int idUsuario, int? codEmisor = null) =>
             context.Facturas
                 .AsNoTracking()
                 .Where(f =>
                     f.Idusuario == idUsuario &&
+                    (!codEmisor.HasValue || f.Codemisor == codEmisor.Value) &&
                     (f.Tipopago == "19" || f.Estadopago == "PENDIENTE") &&
                     (f.Estado == true || f.Estado == null) &&
                     (f.Valortotal ?? 0m) > 0m &&

@@ -610,7 +610,7 @@ public sealed class AliadoPortalService
         var ahora = DateTime.Now;
         var liquidacionesPagadas = new List<int>();
         await using var transaction = await db.Database.BeginTransactionAsync();
-        foreach (var grupo in comisiones.GroupBy(x => x.IdVendedor))
+        foreach (var grupo in comisiones.GroupBy(x => new { x.IdVendedor, x.IdCliente }))
         {
             var liquidacionIds = grupo.Where(x => x.IdLiquidacion.HasValue).Select(x => x.IdLiquidacion!.Value).Distinct().ToArray();
             if (liquidacionIds.Length > 1 || (liquidacionIds.Length == 1 && grupo.Any(x => x.IdLiquidacion != liquidacionIds[0])))
@@ -620,12 +620,12 @@ public sealed class AliadoPortalService
             var liquidacion = liquidacionIds.Length == 1
                 ? await db.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == liquidacionIds[0])
                 : await db.AliadoLiquidaciones
-                    .Where(x => x.IdVendedor == grupo.Key && x.Periodo == periodo && x.Estado == "Pendiente")
+                    .Where(x => x.IdVendedor == grupo.Key.IdVendedor && x.IdCliente == grupo.Key.IdCliente && x.Periodo == periodo && x.Estado == "Pendiente")
                     .OrderByDescending(x => x.IdLiquidacion)
                     .FirstOrDefaultAsync();
             if (liquidacion is null)
             {
-                liquidacion = new AliadoLiquidacion { IdVendedor = grupo.Key, Periodo = periodo, Fecha = ahora, Estado = "Pendiente" };
+                liquidacion = new AliadoLiquidacion { IdVendedor = grupo.Key.IdVendedor, IdCliente = grupo.Key.IdCliente, Periodo = periodo, Fecha = ahora, Estado = "Pendiente" };
                 db.AliadoLiquidaciones.Add(liquidacion);
                 await db.SaveChangesAsync();
             }
@@ -659,10 +659,12 @@ public sealed class AliadoPortalService
             : (true, $"Se liquidaron {comisiones.Count} comisión(es). La liquidación SRI queda pendiente de reintento: {erroresLiquidacionCompra[0]}");
     }
 
-    public async Task<(bool Success, string Message)> GuardarParametroComisionAsync(int actorId, int idVendedor, string periodo, decimal porcentaje)
+    public async Task<(bool Success, string Message)> GuardarParametroComisionAsync(int actorId, int idVendedor, string periodo, decimal porcentajeHastaMil, decimal porcentajeDesdeMil)
     {
         await EnsureSchemaAsync();
-        if (!DateTime.TryParseExact($"{periodo}-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out _) || !TryNormalizarPorcentaje(porcentaje, out porcentaje))
+        if (!DateTime.TryParseExact($"{periodo}-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out _) ||
+            !TryNormalizarPorcentaje(porcentajeHastaMil, out porcentajeHastaMil) ||
+            !TryNormalizarPorcentaje(porcentajeDesdeMil, out porcentajeDesdeMil))
             return (false, "El período o porcentaje no es válido.");
         await using var db = await _dbFactory.CreateDbContextAsync();
         if (!await EsAdministradorPortalAsync(db, actorId))
@@ -673,7 +675,9 @@ public sealed class AliadoPortalService
             parametro = new AliadoComisionParametro { IdVendedor = idVendedor, Periodo = periodo };
             db.AliadoComisionParametros.Add(parametro);
         }
-        parametro.Porcentaje = porcentaje;
+        parametro.Porcentaje = porcentajeHastaMil;
+        parametro.PorcentajeHastaMil = porcentajeHastaMil;
+        parametro.PorcentajeDesdeMil = porcentajeDesdeMil;
         parametro.FechaActualizacion = DateTime.Now;
         parametro.IdUsuarioActualizacion = actorId;
         await db.SaveChangesAsync();
@@ -871,9 +875,10 @@ public sealed class AliadoPortalService
 
         return await db.VendedoresBackOffice
             .AsNoTracking()
-            .Where(x => !x.EsSistema && db.Usuarios.Any(u =>
-                u.IdVendedor == x.IdVendedor &&
-                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)))
+            .Where(x => !x.EsSistema &&
+                (db.Usuarios.Any(u => u.IdVendedor == x.IdVendedor &&
+                    db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)) ||
+                 db.AliadoComisiones.Any(c => c.IdVendedor == x.IdVendedor)))
             .OrderBy(x => x.Nombre)
             .Select(x => new AliadoAdminRow
             {
@@ -1688,12 +1693,15 @@ public sealed class AliadoPortalService
             var periodo = factura.Fecha.ToString("yyyy-MM");
             var parametro = await db.AliadoComisionParametros.AsNoTracking()
                 .Where(x => x.IdVendedor == idVendedor && x.Periodo == periodo)
-                .Select(x => (decimal?)x.Porcentaje)
+                .Select(x => new { x.Porcentaje, x.PorcentajeHastaMil, x.PorcentajeDesdeMil })
                 .SingleOrDefaultAsync();
             var ventasPeriodo = facturas.Where(x => x.Fecha.Year == factura.Fecha.Year && x.Fecha.Month == factura.Fecha.Month)
                 .Sum(x => ObtenerBaseNeta(x.Subtotal, x.Subtotal0, x.Subtotal12));
             var porcentajePredeterminado = ventasPeriodo >= 1000m ? 10m : 5m;
-            var porcentaje = parametro ?? (tipo switch
+            var porcentajeParametro = parametro is null ? (decimal?)null : ventasPeriodo >= 1000m
+                ? (parametro.PorcentajeDesdeMil > 0m ? parametro.PorcentajeDesdeMil : parametro.Porcentaje)
+                : (parametro.PorcentajeHastaMil > 0m ? parametro.PorcentajeHastaMil : parametro.Porcentaje);
+            var porcentaje = porcentajeParametro ?? (tipo switch
             {
                 "RenovacionNumerica" => configuracion.PorcentajeRenovacionNumerica,
                 "RenovacionAliado" => aliado.PorcentajeBase > 0m
@@ -1733,11 +1741,12 @@ public sealed class AliadoPortalService
             .Where(x => x.Estado == "Aprobada" && x.IdLiquidacion == null && x.FechaGeneracion < inicioPeriodoActual)
             .ToListAsync();
 
-        foreach (var grupo in pendientes.GroupBy(x => new { x.IdVendedor, Periodo = x.FechaGeneracion.ToString("yyyy-MM") }))
+        foreach (var grupo in pendientes.GroupBy(x => new { x.IdVendedor, x.IdCliente, Periodo = x.FechaGeneracion.ToString("yyyy-MM") }))
         {
             var liquidacion = new AliadoLiquidacion
             {
                 IdVendedor = grupo.Key.IdVendedor,
+                IdCliente = grupo.Key.IdCliente,
                 Periodo = grupo.Key.Periodo,
                 Total = grupo.Sum(x => x.Valor),
                 Fecha = DateTime.Now,
@@ -1942,6 +1951,7 @@ BEGIN
         ,CodLiquidacionCompra INT NULL
     );
 END
+IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'IdCliente') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD IdCliente INT NULL;
 IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'ObservacionPago') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD ObservacionPago NVARCHAR(500) NULL;
 IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'ComprobantePagoUrl') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD ComprobantePagoUrl NVARCHAR(300) NULL;
 IF COL_LENGTH('dbo.ALIADO_LIQUIDACION', 'CodLiquidacionCompra') IS NULL ALTER TABLE dbo.ALIADO_LIQUIDACION ADD CodLiquidacionCompra INT NULL;
@@ -1985,9 +1995,12 @@ BEGIN
     );
 END
 IF COL_LENGTH('dbo.ALIADO_COMISION', 'Periodo') IS NULL ALTER TABLE dbo.ALIADO_COMISION ADD Periodo NVARCHAR(7) NULL;
-UPDATE dbo.ALIADO_COMISION SET Periodo = CONVERT(char(7), FechaGeneracion, 120) WHERE Periodo IS NULL;
+EXEC(N'UPDATE dbo.ALIADO_COMISION SET Periodo = CONVERT(char(7), FechaGeneracion, 120) WHERE Periodo IS NULL;');
 IF OBJECT_ID(N'dbo.ALIADO_COMISION_PARAMETRO', N'U') IS NULL
-    CREATE TABLE dbo.ALIADO_COMISION_PARAMETRO (IdParametro INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdVendedor INT NOT NULL, Periodo NVARCHAR(7) NOT NULL, Porcentaje DECIMAL(9,4) NOT NULL, FechaActualizacion DATETIME2 NOT NULL, IdUsuarioActualizacion INT NOT NULL, CONSTRAINT UX_ALIADO_COMISION_PARAMETRO UNIQUE(IdVendedor, Periodo));
+    CREATE TABLE dbo.ALIADO_COMISION_PARAMETRO (IdParametro INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdVendedor INT NOT NULL, Periodo NVARCHAR(7) NOT NULL, Porcentaje DECIMAL(9,4) NOT NULL, PorcentajeHastaMil DECIMAL(9,4) NOT NULL CONSTRAINT DF_ALIADO_COMISION_PARAMETRO_HASTA_MIL DEFAULT(5), PorcentajeDesdeMil DECIMAL(9,4) NOT NULL CONSTRAINT DF_ALIADO_COMISION_PARAMETRO_DESDE_MIL DEFAULT(10), FechaActualizacion DATETIME2 NOT NULL, IdUsuarioActualizacion INT NOT NULL, CONSTRAINT UX_ALIADO_COMISION_PARAMETRO UNIQUE(IdVendedor, Periodo));
+IF COL_LENGTH('dbo.ALIADO_COMISION_PARAMETRO', 'PorcentajeHastaMil') IS NULL ALTER TABLE dbo.ALIADO_COMISION_PARAMETRO ADD PorcentajeHastaMil DECIMAL(9,4) NOT NULL CONSTRAINT DF_ALIADO_COMISION_PARAMETRO_HASTA_MIL DEFAULT(5);
+IF COL_LENGTH('dbo.ALIADO_COMISION_PARAMETRO', 'PorcentajeDesdeMil') IS NULL ALTER TABLE dbo.ALIADO_COMISION_PARAMETRO ADD PorcentajeDesdeMil DECIMAL(9,4) NOT NULL CONSTRAINT DF_ALIADO_COMISION_PARAMETRO_DESDE_MIL DEFAULT(10);
+EXEC(N'UPDATE dbo.ALIADO_COMISION_PARAMETRO SET PorcentajeHastaMil = Porcentaje, PorcentajeDesdeMil = Porcentaje WHERE PorcentajeHastaMil = 5 AND PorcentajeDesdeMil = 10;');
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ALIADO_COMISION_VENDEDOR_FACTURA_TIPO' AND object_id = OBJECT_ID(N'dbo.ALIADO_COMISION'))
     CREATE UNIQUE INDEX UX_ALIADO_COMISION_VENDEDOR_FACTURA_TIPO ON dbo.ALIADO_COMISION (IdVendedor, IdFactura, TipoComision);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ALIADO_COMISION_VENDEDOR_ESTADO' AND object_id = OBJECT_ID(N'dbo.ALIADO_COMISION'))

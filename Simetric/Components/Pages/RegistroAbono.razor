@@ -1,4 +1,5 @@
 @page "/cuentas-por-cobrar"
+@page "/backoffice/cartera"
 @page "/demo/cuentas-por-cobrar"
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Authorization
@@ -14,6 +15,7 @@
 @inject TutorialRegistryService TutorialRegistry
 @inject TutorialStateService TutorialStateService
 @inject IJSRuntime JS
+@inject EmisorSistemaService EmisorSistemaService
 
 <PageTitle>Registro de Abonos | Numerica e-fact</PageTitle>
 
@@ -3628,8 +3630,17 @@
             return;
         }
 
-        carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId);
+        if (EsContextoBackOffice)
+        {
+            if (!await EmisorSistemaService.TieneAccesoBackOfficeAsync(currentUserId)) return;
+            currentUserId = (await EmisorSistemaService.GetEmisorSistemaAsync())?.IdUsuario ?? 0;
+            if (currentUserId <= 0) return;
+        }
+
+        carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId, codEmisor: EsContextoBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : null);
     }
+
+    private bool EsContextoBackOffice => Navigation.ToBaseRelativePath(Navigation.Uri).StartsWith("backoffice/", StringComparison.OrdinalIgnoreCase);
 
     protected override void OnParametersSet()
     {
@@ -3773,7 +3784,7 @@
         try
         {
             await Task.Delay(180, token);
-            var resultados = await AbonoService.GetFacturasCreditoPendientes(currentUserId, filtroNormalizado);
+            var resultados = await AbonoService.GetFacturasCreditoPendientes(currentUserId, filtroNormalizado, EsContextoBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : null);
             token.ThrowIfCancellationRequested();
 
             if (searchVersion != _searchVersion)
@@ -3911,7 +3922,7 @@
 
         // EF Core no permite operaciones concurrentes en el mismo DbContext:
         // se deben ejecutar en secuencia, no con Task.WhenAll.
-        facturasPendientes = await AbonoService.GetFacturasCreditoPendientes(currentUserId, item.IdCliente);
+        facturasPendientes = await AbonoService.GetFacturasCreditoPendientes(currentUserId, item.IdCliente, EsContextoBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : null);
         facturasPage = 1;
         saldoAFavorCliente = await AbonoService.GetSaldoAFavor(currentUserId, item.IdCliente);
         detalleSaldoAFavor = await AbonoService.GetDetalleSaldoAFavor(currentUserId, item.IdCliente);
@@ -4181,7 +4192,7 @@
                 detalleSaldoAFavor.Clear();
                 pasoActual = 1;
                 LimpiarBusqueda();
-                carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId);
+                carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId, codEmisor: EsContextoBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : null);
             }
             else
             {

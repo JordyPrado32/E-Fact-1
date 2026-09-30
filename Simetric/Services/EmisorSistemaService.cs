@@ -7,6 +7,7 @@ namespace Simetric.Services;
 
 public sealed class EmisorSistemaService
 {
+    public const int CodigoEmisorBackOffice = 38;
     private const string MarcadorCompraNotas = "[COMPRA_DOCS:";
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static bool _schemaEnsured;
@@ -59,8 +60,7 @@ public sealed class EmisorSistemaService
         var emisor = await context.Emisores
             .AsNoTracking()
             .Include(e => e.Usuario)
-            .Where(e => e.Estado && e.EsEmisorSistema)
-            .OrderByDescending(e => e.Codigo)
+            .Where(e => e.Estado && e.EsEmisorSistema && e.Codigo == CodigoEmisorBackOffice)
             .FirstOrDefaultAsync();
 
         if (emisor != null)

@@ -9,6 +9,7 @@ public sealed class AliadoLiquidacion
     [Key]
     public int IdLiquidacion { get; set; }
     public int IdVendedor { get; set; }
+    public int? IdCliente { get; set; }
     [Required, MaxLength(20)] public string Periodo { get; set; } = string.Empty;
     public decimal Total { get; set; }
     public DateTime Fecha { get; set; }

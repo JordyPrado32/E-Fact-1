@@ -180,7 +180,7 @@ public class NotaCreditoService
             || valor.Equals("autorizado", StringComparison.OrdinalIgnoreCase);
     }
 
-    public async Task<List<FacturaBusquedaDto>> BuscarFacturasAutocompleteAsync(string texto, int idUsuario)
+    public async Task<List<FacturaBusquedaDto>> BuscarFacturasAutocompleteAsync(string texto, int idUsuario, int? codEmisor = null)
     {
         using var db = await _dbFactory.CreateDbContextAsync();
 
@@ -193,6 +193,7 @@ public class NotaCreditoService
                     join c in db.Clientes.AsNoTracking() on f.Codclientes equals c.Codcliente into cliJoin
                     from c in cliJoin.DefaultIfEmpty()
                     where f.Idusuario == idUsuario &&
+                          (!codEmisor.HasValue || f.Codemisor == codEmisor.Value) &&
                           f.Estado == true &&
                           f.Numfactura != null &&
                           f.Numfactura.Contains(texto)

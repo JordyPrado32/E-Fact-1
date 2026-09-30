@@ -197,6 +197,15 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
             query = query.AsNoTracking();
         }
 
+        if (await context.Emisores.AsNoTracking().AnyAsync(e => e.IdUsuario == idUsuario && e.EsEmisorSistema && e.Estado))
+        {
+            return await query
+                .Where(c => c.Estado == true && c.EsCajaSistema == true)
+                .OrderBy(c => c.NumCaja)
+                .ThenBy(c => c.Sec)
+                .FirstOrDefaultAsync();
+        }
+
         var preferredSeries = SoloDigitos(preferredSeriesRaw);
         if (preferredSeries.Length >= 6)
         {

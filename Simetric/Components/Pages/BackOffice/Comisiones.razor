@@ -13,16 +13,18 @@
 
 <div class="container-fluid py-3">
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
-        <div><span class="text-primary fw-bold small">ALIADOS</span><h2 class="mb-1">Comisiones por pagar</h2><p class="text-muted mb-0">Elige un aliado o revisa todas las comisiones del período.</p></div>
+        <div><span class="text-primary fw-bold small">ALIADOS</span><h2 class="mb-1">Todas las comisiones</h2><p class="text-muted mb-0">Consulta el estado y paga las comisiones aprobadas.</p></div>
         <a class="btn btn-outline-primary" href="/backoffice/liquidaciones-comisiones">Liquidaciones pagadas</a>
     </div>
 
     @if (!string.IsNullOrWhiteSpace(mensaje)) { <div class="alert @(exito ? "alert-success" : "alert-danger")">@mensaje</div> }
 
     <section class="card border-0 shadow-sm mb-3"><div class="card-body row g-3 align-items-end">
-        <div class="col-md-4"><label class="form-label">Aliado</label><select class="form-select" @bind="filtroAliado"><option value="">Todos los aliados</option>@foreach (var aliado in aliados) { <option value="@aliado.IdVendedor">@aliado.Nombre</option> }</select></div>
+        <div class="col-md-3"><label class="form-label">Buscar aliado</label><input class="form-control" @bind="busquedaAliado" @bind:event="oninput" /></div>
+        <div class="col-md-3"><label class="form-label">Aliado</label><select class="form-select" @bind="filtroAliado"><option value="">Todos los aliados</option>@foreach (var aliado in AliadosVisibles) { <option value="@aliado.IdVendedor">@aliado.Nombre</option> }</select></div>
         <div class="col-md-3"><label class="form-label">Período a parametrizar</label><input class="form-control" type="month" value="@periodo" @onchange="CambiarPeriodo" /></div>
-        <div class="col-md-3"><label class="form-label">Porcentaje personalizado</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajePeriodo" /></div>
+        <div class="col-md-2"><label class="form-label">Hasta $1.000</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajeHastaMil" /></div>
+        <div class="col-md-2"><label class="form-label">Desde $1.000</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajeDesdeMil" /></div>
         <div class="col-md-2"><button class="btn btn-primary w-100" @onclick="GuardarParametroAsync" disabled="@(filtroAliado == 0)">Guardar período</button></div>
     </div></section>
 
@@ -30,17 +32,24 @@
         <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
             <div><label class="form-label">Observación del pago</label><input class="form-control" @bind="observacionPago" /></div>
             <div><label class="form-label">Comprobante</label><InputFile class="form-control" accept=".pdf,.png,.jpg,.jpeg" OnChange="SeleccionarComprobante" /></div>
-            <button class="btn btn-primary" @onclick="PagarSeleccionadasAsync" disabled="@(!Seleccionadas.Any())">Aprobar pago (@Seleccionadas.Count)</button>
+            <button class="btn btn-primary" @onclick="PagarSeleccionadasAsync" disabled="@(!Seleccionadas.Any())">Pagar seleccionadas (@Seleccionadas.Count)</button>
         </div>
-        <div class="table-responsive"><table class="table align-middle"><thead><tr><th></th><th>Aliado</th><th>Factura / cliente</th><th>Período</th><th>Base</th><th>Comisión</th><th>Estado</th><th>Ajuste</th></tr></thead><tbody>
-        @foreach (var item in ComisionesVisibles)
+        <div class="table-responsive"><table class="table align-middle"><thead><tr><th>Cliente</th><th>Aliado</th><th>Comisiones</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody>
+        @foreach (var grupo in ComisionesPorCliente)
         {
-            <tr @key="item.IdComision">
-                <td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td>
-                <td>@item.Aliado</td><td>#@item.IdFactura<br /><small>@item.Cliente</small></td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td>
-                <td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td>@item.Estado</td>
-                <td><div class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item.IdComision, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)">Aplicar</button></div></td>
+            <tr @key="grupo.Key">
+                <td>@grupo.First().Cliente</td><td>@grupo.First().Aliado</td><td>@grupo.Count()</td><td>$ @grupo.Sum(x => x.Valor).ToString("N2")</td><td>@(grupo.All(x => x.Estado == "Pagada") ? "Pagada" : "Pendiente")</td>
+                <td><button class="btn btn-outline-primary btn-sm" @onclick="() => clienteSeleccionado = clienteSeleccionado == grupo.Key ? null : grupo.Key">@(clienteSeleccionado == grupo.Key ? "Ocultar" : "Ver comisiones")</button></td>
             </tr>
+            @if (clienteSeleccionado == grupo.Key)
+            {
+                <tr><td colspan="6" class="p-0"><table class="table table-sm mb-0"><thead><tr><th></th><th>Factura</th><th>Período</th><th>Base</th><th>Comisión</th><th>Estado / ajuste</th></tr></thead><tbody>
+                @foreach (var item in grupo)
+                {
+                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>#@item.IdFactura</td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td>@item.Estado<br /><div class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item.IdComision, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)">Aplicar</button></div></td></tr>
+                }
+                </tbody></table></td></tr>
+            }
         }
         </tbody></table></div>
     </div></section>
@@ -52,8 +61,11 @@
     private readonly HashSet<int> Seleccionadas = new();
     private readonly Dictionary<int, decimal> porcentajesAjuste = new();
     private int filtroAliado;
+    private string? clienteSeleccionado;
+    private string busquedaAliado = string.Empty;
     private string periodo = DateTime.Today.ToString("yyyy-MM");
-    private decimal porcentajePeriodo = 5m;
+    private decimal porcentajeHastaMil = 5m;
+    private decimal porcentajeDesdeMil = 10m;
     private string? observacionPago;
     private IBrowserFile? comprobante;
     private string? mensaje;
@@ -61,6 +73,8 @@
     private int actorId;
 
     private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => filtroAliado == 0 ? comisiones : comisiones.Where(x => x.IdVendedor == filtroAliado);
+    private IEnumerable<IGrouping<string, AliadoAdminComisionRow>> ComisionesPorCliente => ComisionesVisibles.GroupBy(x => x.Cliente).OrderBy(x => x.Key);
+    private IEnumerable<AliadoAdminRow> AliadosVisibles => string.IsNullOrWhiteSpace(busquedaAliado) ? aliados : aliados.Where(x => x.Nombre.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync()
     {
@@ -77,7 +91,7 @@
 
     private async Task GuardarParametroAsync()
     {
-        var resultado = await AliadoService.GuardarParametroComisionAsync(actorId, filtroAliado, periodo, porcentajePeriodo);
+        var resultado = await AliadoService.GuardarParametroComisionAsync(actorId, filtroAliado, periodo, porcentajeHastaMil, porcentajeDesdeMil);
         exito = resultado.Success; mensaje = resultado.Message;
     }
 

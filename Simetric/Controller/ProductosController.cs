@@ -25,6 +25,8 @@ public class ProductosController : ControllerBase
 
     private async Task<int?> GetOwnerIdAsync(int userId)
     {
+        if (await _db.Emisores.AsNoTracking().AnyAsync(e => e.IdUsuario == userId && e.EsEmisorSistema && e.Estado))
+            return userId;
         var user = await _db.Usuarios
             .Where(u => u.IdUsuario == userId)
             .Select(u => new { u.IdUsuario, u.idJefe })

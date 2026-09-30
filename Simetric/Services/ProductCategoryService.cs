@@ -16,6 +16,8 @@ namespace Simetric.Services
         // Método privado vital para resolver la jerarquía en cada operación
         private async Task<int> GetOwnerIdAsync(AppDbContext context, int idUsuario)
         {
+            if (await context.Emisores.AsNoTracking().AnyAsync(e => e.IdUsuario == idUsuario && e.EsEmisorSistema && e.Estado))
+                return idUsuario;
             var usuario = await context.Usuarios
                 .Where(u => u.IdUsuario == idUsuario)
                 .Select(u => new { u.IdUsuario, u.idJefe })

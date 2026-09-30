@@ -38,7 +38,7 @@ public sealed class ReporteComprobantesService
         _liquidacionCompraService = liquidacionCompraService;
     }
 
-    public async Task<ReporteComprobantesCargaDto> ObtenerReporteUsuarioAsync(int idUsuario)
+    public async Task<ReporteComprobantesCargaDto> ObtenerReporteUsuarioAsync(int idUsuario, int? codEmisor = null)
     {
         if (idUsuario <= 0)
         {
@@ -50,7 +50,7 @@ public sealed class ReporteComprobantesService
         var notasDebitoTask = _notaDebitoService.ListarNotasDebitoUsuarioAsync(idUsuario);
         var guiasTask = _guiaRemisionService.ListarGuiasRemisionUsuarioAsync(idUsuario);
         var retencionesTask = _retencionGeneradaService.ListarRetencionesUsuarioAsync(idUsuario);
-        var liquidacionesTask = _liquidacionCompraService.ListarLiquidacionesUsuarioAsync(idUsuario);
+        var liquidacionesTask = _liquidacionCompraService.ListarLiquidacionesUsuarioAsync(idUsuario, codEmisor);
 
         await Task.WhenAll(
             facturasTask,
@@ -68,6 +68,24 @@ public sealed class ReporteComprobantesService
         var liquidaciones = liquidacionesTask.Result;
 
         await using var context = await _dbFactory.CreateDbContextAsync();
+
+        if (codEmisor.HasValue)
+        {
+            var facturaIdsEmisor = await context.Facturas.AsNoTracking()
+                .Where(x => x.Codemisor == codEmisor.Value)
+                .Select(x => x.Codfactura)
+                .ToListAsync();
+            var notaCreditoIdsEmisor = await context.NotaCreditos.AsNoTracking()
+                .Where(x => x.CodEmisor == codEmisor.Value)
+                .Select(x => x.Sec)
+                .ToListAsync();
+
+            facturas = facturas.Where(x => facturaIdsEmisor.Contains(x.Codfactura)).ToList();
+            notasCredito = notasCredito.Where(x => notaCreditoIdsEmisor.Contains(x.Sec)).ToList();
+            notasDebito = new List<NotaDebitoListDto>();
+            guias = new List<GuiaRemisionListDto>();
+            retenciones = new List<RetencionGeneradaListDto>();
+        }
 
         var usuario = await context.Usuarios
             .AsNoTracking()
