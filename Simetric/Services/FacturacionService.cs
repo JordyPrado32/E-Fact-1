@@ -2690,11 +2690,11 @@ IF @resultado < 0
             IQueryable<Factura> query = context.Facturas
                 .AsNoTracking()
                 .Where(f =>
-                    f.Idusuario.HasValue && usuariosCuentaIds.Contains(f.Idusuario.Value) &&
                     (codEmisor.HasValue
                         ? f.Codemisor == codEmisor.Value
-                        : (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true)) &&
-                    (f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)))
+                        : f.Idusuario.HasValue && usuariosCuentaIds.Contains(f.Idusuario.Value) &&
+                          (f.CodemisorNavigation == null || f.CodemisorNavigation.EsEmisorSistema != true)) &&
+                    (codEmisor.HasValue || f.Notas == null || !f.Notas.Contains(MarcadorCompraDocumentosNotas)))
                 .OrderByDescending(f => f.Codfactura);
 
             if (top > 0)

@@ -1100,10 +1100,9 @@ public class NotaCreditoService
                 on c.Tipoidentificacion equals ti.IdeCodigo into tipoJoin
             from ti in tipoJoin.DefaultIfEmpty()
 
-            where nc.Usuario == idUsuario &&
-                  (codEmisor.HasValue
+            where (codEmisor.HasValue
                       ? nc.CodEmisor == codEmisor.Value
-                      : (e == null || e.EsEmisorSistema != true))
+                      : nc.Usuario == idUsuario && (e == null || e.EsEmisorSistema != true))
             orderby nc.Sec descending
             select new
             {

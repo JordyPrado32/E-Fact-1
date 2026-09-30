@@ -100,7 +100,7 @@
                 <i class="ri-search-line"></i>
                 <span>Buscar</span>
             </button>
-            <button type="button" class="ghost-btn ghost-btn-sm" @onclick="() => mostrarPagoMasivo = !mostrarPagoMasivo">
+            <button type="button" class="ghost-btn ghost-btn-sm" @onclick="AlternarPagoMasivoAsync">
                 <i class="ri-bank-card-line"></i>
                 <span>Pagos masivos</span>
             </button>
@@ -119,18 +119,18 @@
                 <div class="cartera-filter-grid">
                     <label class="cartera-filter-field">
                         <span>Valor por cliente</span>
-                        <input type="number" min="0.01" step="0.01" @bind="montoPagoMasivo" />
+                        <input type="number" min="0.01" step="0.01" @bind="montoPagoMasivo" @bind:after="GuardarPagoMasivoAsync" />
                     </label>
                     <label class="cartera-filter-field">
                         <span>Observación</span>
-                        <input @bind="observacionPagoMasivo" maxlength="250" />
+                        <input @bind="observacionPagoMasivo" @bind:after="GuardarPagoMasivoAsync" maxlength="250" />
                     </label>
                     <div class="cartera-toolbar-actions">
                         <button type="button" class="confirm-btn confirm-btn-sm" disabled="@(clientesPagoMasivo.Count == 0 || montoPagoMasivo <= 0 || procesandoPagoMasivo)" @onclick="RegistrarPagosMasivosAsync">
                             <i class="ri-check-double-line"></i>
                             <span>@(procesandoPagoMasivo ? "Registrando..." : "Registrar pagos")</span>
                         </button>
-                        <button type="button" class="ghost-btn ghost-btn-sm" @onclick="LimpiarSeleccionPagoMasivo">Limpiar selección</button>
+                        <button type="button" class="ghost-btn ghost-btn-sm" @onclick="LimpiarSeleccionPagoMasivoAsync">Limpiar selección</button>
                     </div>
                 </div>
                 <small>Selecciona los clientes desde la primera columna de la cartera. El valor indicado se aplica a cada cliente y se distribuye entre sus facturas pendientes.</small>
@@ -244,7 +244,7 @@
                                         <input type="checkbox"
                                                checked="@clientesPagoMasivo.Contains(facturaPendiente.IdCliente)"
                                                @onclick:stopPropagation="true"
-                                               @onchange="() => AlternarClientePagoMasivo(facturaPendiente.IdCliente)" />
+                                               @onchange="() => AlternarClientePagoMasivoAsync(facturaPendiente.IdCliente)" />
                                     </td>
                                     <td><strong>@facturaPendiente.NumFactura</strong></td>
                                     <td>
@@ -3684,6 +3684,7 @@
         }
 
         carteraPendiente = await AbonoService.GetFacturasCreditoPendientes(currentUserId, codEmisor: EsContextoBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : null);
+        await RestaurarPagoMasivoAsync();
     }
 
     private bool EsContextoBackOffice => Navigation.ToBaseRelativePath(Navigation.Uri).StartsWith("backoffice/", StringComparison.OrdinalIgnoreCase);
@@ -3933,18 +3934,79 @@
         await RegistrarAbonoDesdeCartera();
     }
 
-    private void AlternarClientePagoMasivo(int idCliente)
+    private string PagoMasivoStorageKey => $"numerica:cartera-pago-masivo:{(EsContextoBackOffice ? "backoffice" : "cuenta")}:{currentUserId}";
+
+    private async Task AlternarPagoMasivoAsync()
+    {
+        mostrarPagoMasivo = !mostrarPagoMasivo;
+        await GuardarPagoMasivoAsync();
+    }
+
+    private async Task AlternarClientePagoMasivoAsync(int idCliente)
     {
         if (idCliente <= 0)
             return;
 
         if (!clientesPagoMasivo.Add(idCliente))
             clientesPagoMasivo.Remove(idCliente);
+
+        await GuardarPagoMasivoAsync();
     }
 
-    private void LimpiarSeleccionPagoMasivo()
+    private async Task LimpiarSeleccionPagoMasivoAsync()
     {
         clientesPagoMasivo.Clear();
+        await GuardarPagoMasivoAsync();
+    }
+
+    private async Task GuardarPagoMasivoAsync()
+    {
+        if (currentUserId <= 0)
+            return;
+
+        var estado = new
+        {
+            Visible = mostrarPagoMasivo,
+            Clientes = clientesPagoMasivo.ToArray(),
+            Monto = montoPagoMasivo,
+            Observacion = observacionPagoMasivo
+        };
+        await JS.InvokeVoidAsync("localStorage.setItem", PagoMasivoStorageKey, System.Text.Json.JsonSerializer.Serialize(estado));
+    }
+
+    private async Task RestaurarPagoMasivoAsync()
+    {
+        if (currentUserId <= 0)
+            return;
+
+        var raw = await JS.InvokeAsync<string?>("localStorage.getItem", PagoMasivoStorageKey);
+        if (string.IsNullOrWhiteSpace(raw))
+            return;
+
+        try
+        {
+            var estado = System.Text.Json.JsonSerializer.Deserialize<PagoMasivoEstado>(raw);
+            if (estado is null)
+                return;
+
+            mostrarPagoMasivo = estado.Visible;
+            montoPagoMasivo = estado.Monto;
+            observacionPagoMasivo = string.IsNullOrWhiteSpace(estado.Observacion) ? observacionPagoMasivo : estado.Observacion;
+            var clientesDisponibles = carteraPendiente.Select(x => x.IdCliente).ToHashSet();
+            clientesPagoMasivo = estado.Clientes.Where(clientesDisponibles.Contains).ToHashSet();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            await JS.InvokeVoidAsync("localStorage.removeItem", PagoMasivoStorageKey);
+        }
+    }
+
+    private sealed class PagoMasivoEstado
+    {
+        public bool Visible { get; set; }
+        public int[] Clientes { get; set; } = Array.Empty<int>();
+        public decimal Monto { get; set; }
+        public string? Observacion { get; set; }
     }
 
     private async Task RegistrarPagosMasivosAsync()
@@ -3988,6 +4050,8 @@
 
             if (registrados < totalClientes)
                 mensajeError = "Algunos pagos no pudieron registrarse; revisa los clientes pendientes.";
+
+            await GuardarPagoMasivoAsync();
         }
         finally
         {
