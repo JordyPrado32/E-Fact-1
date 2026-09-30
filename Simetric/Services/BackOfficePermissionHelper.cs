@@ -32,7 +32,8 @@ public static class BackOfficePermissionHelper
         string.Equals(email?.Trim(), AdministradorUanacreditosEmail, StringComparison.OrdinalIgnoreCase);
 
     public static bool PuedeGestionarCatalogo(string? email) =>
-        string.Equals(email?.Trim(), GestorCatalogoBackOfficeEmail, StringComparison.OrdinalIgnoreCase);
+        string.Equals(email?.Trim(), GestorCatalogoBackOfficeEmail, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(email?.Trim(), AdministradorUanacreditosEmail, StringComparison.OrdinalIgnoreCase);
 
     public static async Task<bool> PuedeGestionarCatalogoAsync(
         ClaimsPrincipal user,
