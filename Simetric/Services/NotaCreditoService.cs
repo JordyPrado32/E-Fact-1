@@ -23,6 +23,8 @@ public class NotaCreditoService
     private readonly SriXmlProcessorService _sriXmlProcessorService;
     private readonly EmisorCertificadoProtector _certificadoProtector;
     private readonly EmisorSistemaService _emisorSistemaService;
+    private readonly AliadoPortalService _aliadoPortalService;
+    private readonly EDeclara.ComisionesService _comisionesEDeclaraService;
 
     public NotaCreditoService(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -34,7 +36,9 @@ public class NotaCreditoService
         InitialSequencePromptService initialSequencePromptService,
         SriXmlProcessorService sriXmlProcessorService,
         EmisorCertificadoProtector certificadoProtector,
-        EmisorSistemaService emisorSistemaService)
+        EmisorSistemaService emisorSistemaService,
+        AliadoPortalService aliadoPortalService,
+        EDeclara.ComisionesService comisionesEDeclaraService)
     {
         _dbFactory = dbFactory;
         _env = env;
@@ -46,6 +50,8 @@ public class NotaCreditoService
         _sriXmlProcessorService = sriXmlProcessorService;
         _certificadoProtector = certificadoProtector;
         _emisorSistemaService = emisorSistemaService;
+        _aliadoPortalService = aliadoPortalService;
+        _comisionesEDeclaraService = comisionesEDeclaraService;
     }
 
     private async Task<CajaSerieResolucion> ResolverSerieNotaCreditoAsync(int userId, string? serieSolicitadaRaw = null)
@@ -625,13 +631,16 @@ public class NotaCreditoService
         var xmlContent = GenerarXmlNotaCredito(nc, detalles, emisor, cliente);
         await GuardarXmlEnServidor(xmlContent, nc.NumNotaCredito ?? "", emisor?.Ruc ?? "");
 
-        var comisiones = await db.AliadoComisiones
-            .Where(x => x.IdFactura == nc.IdDocModificado.Value && x.Estado != "Anulada")
-            .ToListAsync();
-        foreach (var comision in comisiones)
-            comision.Estado = comision.Estado == "Pagada" ? "AjustePendiente" : "Anulada";
-        if (comisiones.Count > 0)
-            await db.SaveChangesAsync();
+        await _aliadoPortalService.CancelarComisionesFacturaAsync(
+            nc.IdDocModificado.Value,
+            $"Nota de crédito {nc.NumNotaCredito ?? nc.Sec.ToString()}",
+            nc.Usuario);
+        if (nc.Usuario is > 0)
+            await _comisionesEDeclaraService.RevertirFacturaAsync(
+                nc.Usuario.Value,
+                nc.IdDocModificado.Value,
+                $"Nota de crédito {nc.NumNotaCredito ?? nc.Sec.ToString()}",
+                nc.Usuario.Value);
 
         return nc.Sec;
     }

@@ -4297,6 +4297,12 @@ IF @resultado < 0
                     {
                         var aliados = scope.ServiceProvider.GetRequiredService<AliadoPortalService>();
                         await aliados.CancelarComisionesFacturaAsync(codfactura, "Factura anulada");
+
+                        if (factura.Idusuario is > 0)
+                        {
+                            var comisionesEDeclara = scope.ServiceProvider.GetRequiredService<EDeclara.ComisionesService>();
+                            await comisionesEDeclara.RevertirFacturaAsync(factura.Idusuario.Value, codfactura, "Factura anulada", factura.Idusuario.Value);
+                        }
                     }
 
                     if (notificarCobranzasBackOffice)

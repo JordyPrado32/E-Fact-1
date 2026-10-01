@@ -233,6 +233,7 @@ builder.Services.AddScoped<ConfiguracionService>();
 builder.Services.AddScoped<ClienteService>();
     builder.Services.AddScoped<VendedorBackOfficeService>();
     builder.Services.AddScoped<AliadoPortalService>();
+builder.Services.AddScoped<AliadoComisionGenerationService>();
 builder.Services.AddScoped<PagoService>();
 builder.Services.AddScoped<IUsuarioService, UsuarioService>();
 builder.Services.AddScoped<RetencionesService>();

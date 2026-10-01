@@ -22,20 +22,33 @@
     <section class="card border-0 shadow-sm mb-3"><div class="card-body row g-3 align-items-end">
         <div class="col-md-3"><label class="form-label">Buscar aliado</label><input class="form-control" @bind="busquedaAliado" @bind:event="oninput" /></div>
         <div class="col-md-3"><label class="form-label">Aliado</label><select class="form-select" @bind="filtroAliado"><option value="">Todos los aliados</option>@foreach (var aliado in AliadosVisibles) { <option value="@aliado.IdVendedor">@aliado.Nombre</option> }</select></div>
+        <div class="col-md-3"><label class="form-label">Buscar comisión</label><input class="form-control" @bind="busquedaComision" @bind:event="oninput" placeholder="Cliente o factura" /></div>
+        <div class="col-md-2"><label class="form-label">Estado</label><select class="form-select" @bind="filtroEstado"><option value="">Todos</option><option>Pendiente</option><option>Generada</option><option>Aprobada</option><option>Pagada</option><option>Anulada</option><option>Revertida</option></select></div>
         <div class="col-md-3"><label class="form-label">Período a parametrizar</label><input class="form-control" type="month" value="@periodo" @onchange="CambiarPeriodo" /></div>
         <div class="col-md-2"><label class="form-label">Hasta $1.000</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajeHastaMil" /></div>
         <div class="col-md-2"><label class="form-label">Desde $1.000</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajeDesdeMil" /></div>
         <div class="col-md-2"><button class="btn btn-primary w-100" @onclick="GuardarParametroAsync" disabled="@(filtroAliado == 0)">Guardar período</button></div>
     </div></section>
 
+    <section class="row g-3 mb-3">
+        <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><small class="text-muted">Pendientes de revisión</small><h3 class="mb-0">@ComisionesVisibles.Count(x => x.Estado is "Generada" or "Pendiente")</h3></div></div></div>
+        <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><small class="text-muted">Listas para pago</small><h3 class="mb-0">$ @ComisionesVisibles.Where(x => x.Estado == "Aprobada").Sum(x => x.Valor).ToString("N2")</h3></div></div></div>
+        <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><small class="text-muted">Pagadas</small><h3 class="mb-0">$ @ComisionesVisibles.Where(x => x.Estado == "Pagada").Sum(x => x.Valor).ToString("N2")</h3></div></div></div>
+        <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><small class="text-muted">Registros visibles</small><h3 class="mb-0">@ComisionesVisibles.Count()</h3></div></div></div>
+    </section>
+
     <section class="card border-0 shadow-sm"><div class="card-body">
         <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
             <div><label class="form-label">Referencia de pago</label><input class="form-control" @bind="referenciaPago" /></div>
             <div><label class="form-label">Observación del pago</label><input class="form-control" @bind="observacionPago" /></div>
             <div><label class="form-label">Comprobante</label><InputFile class="form-control" accept=".pdf,.png,.jpg,.jpeg" OnChange="SeleccionarComprobante" /></div>
-            <button class="btn btn-primary" @onclick="PagarSeleccionadasAsync" disabled="@(!Seleccionadas.Any())">Pagar seleccionadas (@Seleccionadas.Count)</button>
+            <button class="btn btn-primary" @onclick="PagarSeleccionadasAsync" disabled="@(procesando || !Seleccionadas.Any())">@(procesando ? "Procesando..." : $"Pagar seleccionadas ({Seleccionadas.Count})")</button>
         </div>
         <div class="table-responsive"><table class="table align-middle"><thead><tr><th>Cliente</th><th>Aliado</th><th>Comisiones</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody>
+        @if (!ComisionesPorCliente.Any())
+        {
+            <tr><td colspan="6" class="text-center text-muted py-5">No hay comisiones para los filtros seleccionados.</td></tr>
+        }
         @foreach (var grupo in ComisionesPorCliente)
         {
             <tr @key="grupo.Key">
@@ -47,7 +60,7 @@
                 <tr><td colspan="6" class="p-0"><table class="table table-sm mb-0"><thead><tr><th></th><th>Factura</th><th>Período</th><th>Base</th><th>Comisión</th><th>Estado / ajuste</th></tr></thead><tbody>
                 @foreach (var item in grupo)
                 {
-                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>#@item.IdFactura</td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td>@item.Estado<br /><div class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item.IdComision, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)">Aplicar</button></div></td></tr>
+                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>#@item.IdFactura</td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="badge @EstadoCss(item.Estado)">@EstadoTexto(item.Estado)</span><div class="input-group input-group-sm mt-2"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item.IdComision, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)" disabled="@(procesando)">Aplicar</button></div>@if (item.Estado == "Generada") { <button class="btn btn-link btn-sm px-0" @onclick="() => AprobarAsync(item)" disabled="@(procesando)">Aprobar</button> }</td></tr>
                 }
                 </tbody></table></td></tr>
             }
@@ -64,6 +77,8 @@
     private int filtroAliado;
     private string? clienteSeleccionado;
     private string busquedaAliado = string.Empty;
+    private string busquedaComision = string.Empty;
+    private string filtroEstado = string.Empty;
     private string periodo = DateTime.Today.ToString("yyyy-MM");
     private decimal porcentajeHastaMil = 5m;
     private decimal porcentajeDesdeMil = 10m;
@@ -74,7 +89,12 @@
     private bool exito;
     private int actorId;
 
-    private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => filtroAliado == 0 ? comisiones : comisiones.Where(x => x.IdVendedor == filtroAliado);
+    private bool procesando;
+    private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => comisiones.Where(x =>
+        (filtroAliado == 0 || x.IdVendedor == filtroAliado) &&
+        (string.IsNullOrWhiteSpace(busquedaAliado) || x.Aliado.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado) &&
+        (string.IsNullOrWhiteSpace(busquedaComision) || $"{x.Cliente} {x.IdFactura}".Contains(busquedaComision, StringComparison.OrdinalIgnoreCase)));
     private IEnumerable<IGrouping<string, AliadoAdminComisionRow>> ComisionesPorCliente => ComisionesVisibles.GroupBy(x => $"{x.IdVendedor}|{x.Cliente}|{x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM")}").OrderBy(x => x.First().Cliente);
     private IEnumerable<AliadoAdminRow> AliadosVisibles => string.IsNullOrWhiteSpace(busquedaAliado) ? aliados : aliados.Where(x => x.Nombre.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase));
 
@@ -101,9 +121,22 @@
 
     private async Task AjustarAsync(AliadoAdminComisionRow item)
     {
+        if (procesando) return;
+        procesando = true;
         var resultado = await AliadoService.AjustarComisionAsync(actorId, item.IdComision, PorcentajeAjuste(item), null);
         exito = resultado.Success; mensaje = resultado.Message;
         if (resultado.Success) await CargarAsync();
+        procesando = false;
+    }
+
+    private async Task AprobarAsync(AliadoAdminComisionRow item)
+    {
+        if (procesando) return;
+        procesando = true;
+        var resultado = await AliadoService.AprobarComisionAsync(actorId, item.IdComision);
+        exito = resultado.Success; mensaje = resultado.Message;
+        if (resultado.Success) await CargarAsync();
+        procesando = false;
     }
 
     private void Seleccionar(int id, ChangeEventArgs e) { if (e.Value is true or "true" or "on") Seleccionadas.Add(id); else Seleccionadas.Remove(id); }
@@ -111,23 +144,50 @@
     private void CambiarPorcentaje(int idComision, ChangeEventArgs e) { if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var valor)) porcentajesAjuste[idComision] = valor; }
     private void SeleccionarComprobante(InputFileChangeEventArgs e) => comprobante = e.File;
 
+    private static string EstadoTexto(string estado) => estado switch
+    {
+        "Generada" => "Pendiente de revisión",
+        "Aprobada" => "Lista para pago",
+        "Pagada" => "Pagada",
+        "Anulada" => "Anulada",
+        "Revertida" => "Revertida",
+        _ => estado
+    };
+
+    private static string EstadoCss(string estado) => estado switch
+    {
+        "Pagada" => "text-bg-success",
+        "Aprobada" => "text-bg-primary",
+        "Anulada" or "Revertida" => "text-bg-danger",
+        _ => "text-bg-warning"
+    };
+
     private async Task PagarSeleccionadasAsync()
     {
+        if (procesando || !Seleccionadas.Any()) return;
+        procesando = true;
         string? ruta = null;
-        if (comprobante is not null)
+        try
         {
-            if (comprobante.Size > 5 * 1024 * 1024) { exito = false; mensaje = "El comprobante no puede superar 5 MB."; return; }
-            var extension = Path.GetExtension(comprobante.Name).ToLowerInvariant();
-            if (extension is not ".pdf" and not ".png" and not ".jpg" and not ".jpeg") { exito = false; mensaje = "Formato de comprobante no permitido."; return; }
-            var carpeta = Path.Combine(Env.WebRootPath, "uploads", "comisiones");
-            Directory.CreateDirectory(carpeta);
-            var nombre = $"{Guid.NewGuid():N}{extension}";
-            await using var destino = File.Create(Path.Combine(carpeta, nombre));
-            await comprobante.OpenReadStream(5 * 1024 * 1024).CopyToAsync(destino);
-            ruta = $"/uploads/comisiones/{nombre}";
+            if (comprobante is not null)
+            {
+                if (comprobante.Size > 5 * 1024 * 1024) { exito = false; mensaje = "El comprobante no puede superar 5 MB."; return; }
+                var extension = Path.GetExtension(comprobante.Name).ToLowerInvariant();
+                if (extension is not ".pdf" and not ".png" and not ".jpg" and not ".jpeg") { exito = false; mensaje = "Formato de comprobante no permitido."; return; }
+                var carpeta = Path.Combine(Env.WebRootPath, "uploads", "comisiones");
+                Directory.CreateDirectory(carpeta);
+                var nombre = $"{Guid.NewGuid():N}{extension}";
+                await using var destino = File.Create(Path.Combine(carpeta, nombre));
+                await comprobante.OpenReadStream(5 * 1024 * 1024).CopyToAsync(destino);
+                ruta = $"/uploads/comisiones/{nombre}";
+            }
+            var resultado = await AliadoService.LiquidarComisionesAsync(actorId, Seleccionadas.ToArray(), referenciaPago, observacionPago, ruta);
+            exito = resultado.Success; mensaje = resultado.Message;
+            if (resultado.Success) { Seleccionadas.Clear(); referenciaPago = observacionPago = null; comprobante = null; await CargarAsync(); }
         }
-        var resultado = await AliadoService.LiquidarComisionesAsync(actorId, Seleccionadas.ToArray(), referenciaPago, observacionPago, ruta);
-        exito = resultado.Success; mensaje = resultado.Message;
-        if (resultado.Success) { Seleccionadas.Clear(); referenciaPago = observacionPago = null; comprobante = null; await CargarAsync(); }
+        finally
+        {
+            procesando = false;
+        }
     }
 }

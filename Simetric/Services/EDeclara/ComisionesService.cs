@@ -61,7 +61,7 @@ public sealed class ComisionesService
             WHERE i.IdEmpresa=@idEmpresa
             AND (@filtro IS NULL OR i.Nombre LIKE '%'+@filtro+'%' OR i.Identificacion LIKE '%'+@filtro+'%') ORDER BY i.Nombre;";
         var items = (await db.QueryAsync<ComisionInvolucrado>(sql, new { idEmpresa, filtro = string.IsNullOrWhiteSpace(filtro) ? null : filtro.Trim() })).ToList();
-        foreach (var item in items) item.PorcentajePredeterminado = NormalizarPorcentaje(item.PorcentajePredeterminado);
+        foreach (var item in items) item.PorcentajePredeterminado = ComisionCalculationService.NormalizarPorcentaje(item.PorcentajePredeterminado);
         return items;
     }
 
@@ -171,8 +171,8 @@ public sealed class ComisionesService
             var items = (await db.QueryAsync<ComisionHistorial>(sql, new { idEmpresa, limite = Math.Clamp(limite, 1, 100) })).ToList();
             foreach (var item in items)
             {
-                if (item.PorcentajeAnterior.HasValue) item.PorcentajeAnterior = NormalizarPorcentaje(item.PorcentajeAnterior.Value);
-                item.PorcentajeNuevo = NormalizarPorcentaje(item.PorcentajeNuevo);
+                if (item.PorcentajeAnterior.HasValue) item.PorcentajeAnterior = ComisionCalculationService.NormalizarPorcentaje(item.PorcentajeAnterior.Value);
+                item.PorcentajeNuevo = ComisionCalculationService.NormalizarPorcentaje(item.PorcentajeNuevo);
             }
             return items;
         }
@@ -213,7 +213,7 @@ public sealed class ComisionesService
         if (idEmpresa <= 0 || idFactura <= 0) throw new ArgumentException("La empresa y la factura son obligatorias.");
         if (detalles.Any(x => x.Porcentaje is < 0 or > 100 || x.ValorFijo < 0))
             throw new ArgumentException("La comisión contiene valores inválidos.");
-        using var db = Connection; db.Open(); using var tx = db.BeginTransaction();
+        using var db = Connection; db.Open(); using var tx = db.BeginTransaction(IsolationLevel.Serializable);
         try
         {
             var configuracion = await db.QuerySingleOrDefaultAsync<ComisionConfiguracion>(
@@ -223,20 +223,23 @@ public sealed class ComisionesService
             foreach (var detalle in detalles)
             {
                 if (!involucrados.TryGetValue(detalle.IdInvolucrado, out var involucrado)) throw new InvalidOperationException("El involucrado no está activo o no pertenece a la empresa.");
-                if (detalle.Base == BaseCalculoComision.Utilidad)
-                    throw new InvalidOperationException("La comisión sobre utilidad requiere una base de costos y todavía no puede calcularse en la factura.");
-                var baseCalculo = detalle.Base == BaseCalculoComision.Total ? total : subtotal;
-                var porcentaje = NormalizarPorcentaje(configuracion.PermitirModificarPorcentaje ? detalle.Porcentaje : involucrado.PorcentajePredeterminado);
-                var valorFijo = configuracion.PermitirModificarPorcentaje ? detalle.ValorFijo : involucrado.ValorPredeterminado;
-                var valorSinRedondear = involucrado.TipoCalculo == TipoCalculoComision.ValorFijo ? valorFijo : baseCalculo * porcentaje / 100m;
-                var valor = configuracion.ReglaRedondeo.Equals("Sin decimales", StringComparison.OrdinalIgnoreCase)
-                    ? Math.Round(valorSinRedondear, 0, MidpointRounding.AwayFromZero)
-                    : Math.Round(valorSinRedondear, 2, MidpointRounding.AwayFromZero);
-                var sobreLimite = configuracion.LimitePorFactura > 0 && valor > configuracion.LimitePorFactura;
-                var estado = configuracion.MomentoPendiente.Equals("Al autorizar", StringComparison.OrdinalIgnoreCase) && !(sobreLimite && configuracion.RequiereAutorizacionSobreLimite)
-                    ? ComisionEstado.Pendiente.ToString()
-                    : ComisionEstado.Generada.ToString();
-                await db.ExecuteAsync(@"INSERT INTO DECLARA_COMISION_MOVIMIENTO (IdEmpresa,IdFactura,IdInvolucrado,BaseUtilizada,Porcentaje,ValorFacturado,ComisionGenerada,Estado,FechaGeneracion,UsuarioResponsable,Motivo) SELECT @idEmpresa,@idFactura,@idInvolucrado,@base,@porcentaje,@valorFacturado,@valor,@estado,SYSUTCDATETIME(),@usuarioId,@motivo WHERE NOT EXISTS (SELECT 1 FROM DECLARA_COMISION_MOVIMIENTO WHERE IdFactura=@idFactura AND IdInvolucrado=@idInvolucrado)", new { idEmpresa,idFactura,detalle.IdInvolucrado, @base=detalle.Base.ToString(), porcentaje, valorFacturado=baseCalculo, valor, estado, usuarioId, motivo = sobreLimite && configuracion.RequiereAutorizacionSobreLimite ? "Supera el límite configurado; requiere autorización. " + detalle.Motivo : detalle.Motivo }, tx);
+                var calculo = ComisionCalculationService.Calcular(involucrado, configuracion, detalle, subtotal, total);
+                await db.ExecuteAsync(@"INSERT INTO DECLARA_COMISION_MOVIMIENTO (IdEmpresa,IdFactura,IdInvolucrado,BaseUtilizada,Porcentaje,ValorFacturado,ComisionGenerada,Estado,FechaGeneracion,UsuarioResponsable,Motivo,IdempotencyKey)
+                    SELECT @idEmpresa,@idFactura,@idInvolucrado,@base,@porcentaje,@valorFacturado,@valor,@estado,SYSUTCDATETIME(),@usuarioId,@motivo,@idempotencyKey
+                    WHERE NOT EXISTS (SELECT 1 FROM DECLARA_COMISION_MOVIMIENTO WHERE IdEmpresa=@idEmpresa AND IdFactura=@idFactura AND IdInvolucrado=@idInvolucrado)", new
+                {
+                    idEmpresa,
+                    idFactura,
+                    detalle.IdInvolucrado,
+                    @base = detalle.Base.ToString(),
+                    porcentaje = calculo.Porcentaje,
+                    valorFacturado = calculo.Base,
+                    valor = calculo.Valor,
+                    estado = calculo.Estado.ToString(),
+                    usuarioId,
+                    motivo = calculo.Motivo,
+                    idempotencyKey = $"edeclara:{idEmpresa}:{idFactura}:{detalle.IdInvolucrado}"
+                }, tx);
             }
             tx.Commit();
         }
@@ -249,10 +252,17 @@ public sealed class ComisionesService
         if (movimientoIds.Length == 0) throw new ArgumentException("Selecciona al menos una comisión.");
         if (string.IsNullOrWhiteSpace(metodoPago)) throw new ArgumentException("El método de pago es obligatorio.");
         using var db = Connection;
-        var elegibles = await db.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM DECLARA_COMISION_MOVIMIENTO WHERE IdEmpresa=@idEmpresa AND Id IN @ids AND Estado='Pendiente'", new { idEmpresa, ids=movimientoIds });
-        if (elegibles != movimientoIds.Length) throw new InvalidOperationException("Todas las comisiones seleccionadas deben estar pendientes.");
-        var afectados = await db.ExecuteAsync("UPDATE m SET Estado='Pagada',FechaPago=SYSUTCDATETIME(),MetodoPago=@metodoPago,ReferenciaPago=@referencia,UsuarioResponsable=@usuarioId FROM DECLARA_COMISION_MOVIMIENTO m WHERE m.IdEmpresa=@idEmpresa AND m.Id IN @ids AND m.Estado='Pendiente'", new { idEmpresa, ids=movimientoIds, metodoPago=metodoPago.Trim(), referencia=referencia?.Trim(), usuarioId });
-        if (afectados == 0) throw new InvalidOperationException("Las comisiones seleccionadas deben estar pendientes para registrar el pago.");
+        db.Open();
+        using var tx = db.BeginTransaction(IsolationLevel.Serializable);
+        try
+        {
+            var elegibles = await db.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM DECLARA_COMISION_MOVIMIENTO WITH (UPDLOCK,HOLDLOCK) WHERE IdEmpresa=@idEmpresa AND Id IN @ids AND Estado='Pendiente'", new { idEmpresa, ids=movimientoIds }, tx);
+            if (elegibles != movimientoIds.Length) throw new InvalidOperationException("Todas las comisiones seleccionadas deben estar pendientes.");
+            var afectados = await db.ExecuteAsync("UPDATE m SET Estado='Pagada',FechaPago=SYSUTCDATETIME(),MetodoPago=@metodoPago,ReferenciaPago=@referencia,UsuarioResponsable=@usuarioId FROM DECLARA_COMISION_MOVIMIENTO m WHERE m.IdEmpresa=@idEmpresa AND m.Id IN @ids AND m.Estado='Pendiente'", new { idEmpresa, ids=movimientoIds, metodoPago=metodoPago.Trim(), referencia=referencia?.Trim(), usuarioId }, tx);
+            if (afectados != movimientoIds.Length) throw new InvalidOperationException("Las comisiones seleccionadas deben estar pendientes para registrar el pago.");
+            tx.Commit();
+        }
+        catch { tx.Rollback(); throw; }
         await _audit.RegistrarAuditoriaAsync(usuarioId, "PAGAR", null, new { Ids = movimientoIds, MetodoPago = metodoPago, Referencia = referencia }, new { Modulo = "Comisiones", Entidad = "Movimiento" });
     }
 
@@ -261,10 +271,17 @@ public sealed class ComisionesService
         var movimientoIds = ids.Distinct().ToArray();
         if (movimientoIds.Length == 0) throw new ArgumentException("Selecciona al menos una comisión.");
         using var db = Connection;
-        var elegibles = await db.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM DECLARA_COMISION_MOVIMIENTO WHERE IdEmpresa=@idEmpresa AND Id IN @ids AND Estado='Generada'", new { idEmpresa, ids=movimientoIds });
-        if (elegibles != movimientoIds.Length) throw new InvalidOperationException("Todas las comisiones seleccionadas deben estar generadas.");
-        var afectados = await db.ExecuteAsync("UPDATE DECLARA_COMISION_MOVIMIENTO SET Estado='Pendiente',UsuarioResponsable=@usuarioId WHERE IdEmpresa=@idEmpresa AND Id IN @ids AND Estado='Generada'", new { idEmpresa, ids=movimientoIds, usuarioId });
-        if (afectados == 0) throw new InvalidOperationException("Solo las comisiones generadas pueden pasar a pendientes.");
+        db.Open();
+        using var tx = db.BeginTransaction(IsolationLevel.Serializable);
+        try
+        {
+            var elegibles = await db.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM DECLARA_COMISION_MOVIMIENTO WITH (UPDLOCK,HOLDLOCK) WHERE IdEmpresa=@idEmpresa AND Id IN @ids AND Estado='Generada'", new { idEmpresa, ids=movimientoIds }, tx);
+            if (elegibles != movimientoIds.Length) throw new InvalidOperationException("Todas las comisiones seleccionadas deben estar generadas.");
+            var afectados = await db.ExecuteAsync("UPDATE DECLARA_COMISION_MOVIMIENTO SET Estado='Pendiente',UsuarioResponsable=@usuarioId WHERE IdEmpresa=@idEmpresa AND Id IN @ids AND Estado='Generada'", new { idEmpresa, ids=movimientoIds, usuarioId }, tx);
+            if (afectados != movimientoIds.Length) throw new InvalidOperationException("Solo las comisiones generadas pueden pasar a pendientes.");
+            tx.Commit();
+        }
+        catch { tx.Rollback(); throw; }
         await _audit.RegistrarAuditoriaAsync(usuarioId, "MARCAR_PENDIENTE", null, new { Ids = movimientoIds }, new { Modulo = "Comisiones", Entidad = "Movimiento" });
     }
 
@@ -280,8 +297,32 @@ public sealed class ComisionesService
 
     public async Task RevertirFacturaAsync(int idEmpresa, int idFactura, string motivo, int usuarioId)
     {
-        using var db=Connection; await db.ExecuteAsync("UPDATE DECLARA_COMISION_MOVIMIENTO SET Estado='Revertida',Motivo=@motivo,UsuarioResponsable=@usuarioId WHERE IdEmpresa=@idEmpresa AND IdFactura=@idFactura AND Estado NOT IN ('Revertida','Anulada')", new { idEmpresa,idFactura,motivo,usuarioId });
+        if (string.IsNullOrWhiteSpace(motivo)) throw new ArgumentException("El motivo de reversión es obligatorio.");
+
+        using var db = Connection;
+        db.Open();
+        using var tx = db.BeginTransaction(IsolationLevel.Serializable);
+        var movimientosRevertidos = 0;
+        try
+        {
+            var movimientos = (await db.QueryAsync<ComisionStateRow>(
+                "SELECT Id,Estado FROM DECLARA_COMISION_MOVIMIENTO WITH (UPDLOCK,HOLDLOCK) WHERE IdEmpresa=@idEmpresa AND IdFactura=@idFactura AND Estado NOT IN ('Revertida','Anulada')",
+                new { idEmpresa, idFactura }, tx)).ToList();
+            foreach (var movimiento in movimientos)
+                ComisionStateMachine.Validar(movimiento.Estado, ComisionEstado.Revertida);
+
+            if (movimientos.Count > 0)
+                movimientosRevertidos = await db.ExecuteAsync("UPDATE DECLARA_COMISION_MOVIMIENTO SET Estado='Revertida',Motivo=@motivo,UsuarioResponsable=@usuarioId WHERE IdEmpresa=@idEmpresa AND IdFactura=@idFactura AND Estado NOT IN ('Revertida','Anulada')", new { idEmpresa, idFactura, motivo = motivo.Trim(), usuarioId }, tx);
+            tx.Commit();
+        }
+        catch { tx.Rollback(); throw; }
+        if (movimientosRevertidos > 0)
+            await _audit.RegistrarAuditoriaAsync(usuarioId, "REVERTIR", null, new { idEmpresa, idFactura, motivo }, new { Modulo = "Comisiones", Entidad = "Movimiento" });
     }
 
-    private static decimal NormalizarPorcentaje(decimal valor) => valor > 100m && valor <= 10000m ? valor / 1000m : valor;
+    private sealed class ComisionStateRow
+    {
+        public long Id { get; set; }
+        public string Estado { get; set; } = string.Empty;
+    }
 }
