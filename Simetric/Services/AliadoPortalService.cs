@@ -622,8 +622,10 @@ public sealed class AliadoPortalService
         var cantidadLiquidada = 0;
         var executionStrategy = db.Database.CreateExecutionStrategy();
 
-        await executionStrategy.ExecuteAsync(async () =>
+        try
         {
+            await executionStrategy.ExecuteAsync(async () =>
+            {
             liquidacionesPagadas.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
             var comisiones = await db.AliadoComisiones.Where(x => ids.Contains(x.IdComision)).ToListAsync();
@@ -685,14 +687,19 @@ public sealed class AliadoPortalService
 
                 if (!reutilizarLiquidacion && liquidacionOrigen is not null)
                     liquidacionOrigen.Total = await db.AliadoComisiones
-                        .Where(x => x.IdLiquidacion == liquidacionOrigen.IdLiquidacion && x.Estado != "Pagada" && x.Estado != "Anulada" && x.Estado != "Revertida")
+                        .Where(x => x.IdLiquidacion == liquidacionOrigen.IdLiquidacion && !ids.Contains(x.IdComision) && x.Estado != "Pagada" && x.Estado != "Anulada" && x.Estado != "Revertida")
                         .SumAsync(x => (decimal?)x.Valor) ?? 0m;
             }
 
             cantidadLiquidada = comisiones.Count;
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
-        });
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (false, ex.Message);
+        }
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "PAGAR", null, new { IdsComision = ids, ReferenciaPago = referenciaPago }, new { Modulo = "PortalAliados", Entidad = "Liquidacion" });
         var erroresLiquidacionCompra = new List<string>();
         foreach (var idLiquidacion in liquidacionesPagadas.Distinct())
