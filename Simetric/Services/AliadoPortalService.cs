@@ -451,7 +451,7 @@ public sealed class AliadoPortalService
             return Array.Empty<AliadoRenovacionDto>();
 
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
-        var ids = facturas.Where(x => x.FechaVencimiento.HasValue).Select(x => x.IdFactura).ToList();
+        var ids = facturas.Select(x => x.IdFactura).ToList();
         await using var db = await _dbFactory.CreateDbContextAsync();
         var gestiones = await db.AliadoRenovacionGestiones
             .AsNoTracking()
@@ -464,6 +464,28 @@ public sealed class AliadoPortalService
             .Where(x => EsRenovacionVisible(x, DateTime.Today, -30, 90))
             .OrderBy(x => x.FechaVencimiento)
             .Select(x => ToRenovacion(x, gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null, contexto.PorcentajeBase))
+            .ToList();
+
+        var facturasPorSaldo = facturas
+            .Where(x => !x.FechaVencimiento.HasValue && x.IdCliente.HasValue && x.Autorizado && EsPagoConfirmado(x.EstadoPago))
+            .GroupBy(x => x.IdCliente!.Value)
+            .Select(x => x.OrderByDescending(y => y.Fecha).First())
+            .ToList();
+        var clienteIds = facturasPorSaldo.Select(x => x.IdCliente!.Value).ToList();
+        var saldos = await db.Clientes.AsNoTracking()
+            .Where(x => clienteIds.Contains(x.Codcliente) && x.Usuario.HasValue)
+            .Select(x => new { x.Codcliente, Saldo = x.UsuarioNavegacion!.SaldoDocumentos })
+            .ToDictionaryAsync(x => x.Codcliente, x => x.Saldo);
+        resultado.AddRange(facturasPorSaldo
+            .Where(x => saldos.ContainsKey(x.IdCliente!.Value))
+            .Select(x => ToRenovacionPorSaldo(
+                x,
+                gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null,
+                contexto.PorcentajeBase,
+                saldos[x.IdCliente!.Value])));
+        resultado = resultado
+            .OrderBy(x => x.EsPorSaldo ? 1 : 0)
+            .ThenBy(x => x.EsPorSaldo ? x.SaldoDocumentos : x.DiasRestantes)
             .ToList();
 
         if (!string.IsNullOrWhiteSpace(filtro))
@@ -1589,6 +1611,24 @@ public sealed class AliadoPortalService
         ProximoSeguimiento = gestion?.ProximoSeguimiento
     };
 
+    private static AliadoRenovacionDto ToRenovacionPorSaldo(FacturaPortalRow factura, AliadoRenovacionGestion? gestion, decimal porcentajeBase, int saldoDocumentos) => new()
+    {
+        IdFactura = factura.IdFactura,
+        IdCliente = factura.IdCliente ?? 0,
+        Cliente = factura.Cliente,
+        Producto = factura.Producto,
+        FechaVencimiento = DateTime.MaxValue,
+        DiasRestantes = int.MaxValue,
+        Valor = factura.Total,
+        ComisionPotencial = AliadoComisionCalculationService.CalcularValor(AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12), porcentajeBase),
+        EstadoGestion = gestion?.Resultado ?? "Pendiente",
+        UltimaGestion = gestion?.FechaGestion,
+        Observacion = gestion?.Observacion,
+        ProximoSeguimiento = gestion?.ProximoSeguimiento,
+        EsPorSaldo = true,
+        SaldoDocumentos = Math.Max(saldoDocumentos, 0)
+    };
+
     private static bool EsRenovacionVisible(FacturaPortalRow factura, DateTime hoy, int diasDesde, int diasHasta)
         => factura.FechaVencimiento.HasValue &&
            factura.FechaVencimiento.Value.Date >= hoy.AddDays(diasDesde) &&
@@ -2097,6 +2137,7 @@ public class AliadoClienteDto
     public DateTime? FechaCompra { get; set; }
     public DateTime? FechaVencimiento { get; set; }
     public string? Estado { get; set; }
+    public string Servicio => AliadoServicioHelper.Clasificar(Producto);
 }
 
 public sealed class AliadoClienteDetalleDto : AliadoClienteDto
@@ -2113,6 +2154,7 @@ public sealed class AliadoProductoDto
     public DateTime? FechaVencimiento { get; init; }
     public string? Estado { get; init; }
     public decimal Valor { get; init; }
+    public string Servicio => AliadoServicioHelper.Clasificar(Producto);
 }
 
 public sealed class AliadoRenovacionDto
@@ -2129,6 +2171,8 @@ public sealed class AliadoRenovacionDto
     public DateTime? UltimaGestion { get; init; }
     public string? Observacion { get; init; }
     public DateTime? ProximoSeguimiento { get; init; }
+    public bool EsPorSaldo { get; init; }
+    public int SaldoDocumentos { get; init; }
 }
 
 public sealed class AliadoComisionesDto
@@ -2158,6 +2202,23 @@ public sealed class AliadoComisionMovimientoDto
     public int? IdLiquidacion { get; init; }
     public string? PeriodoLiquidacion { get; init; }
     public string? ReferenciaPago { get; init; }
+    public string Servicio => AliadoServicioHelper.Clasificar(Producto);
+}
+
+internal static class AliadoServicioHelper
+{
+    public static string Clasificar(string? producto)
+    {
+        var texto = producto ?? string.Empty;
+        return texto.Contains("firma", StringComparison.OrdinalIgnoreCase) ||
+               texto.Contains("rúbrica", StringComparison.OrdinalIgnoreCase) ||
+               texto.Contains("rubrica", StringComparison.OrdinalIgnoreCase) ||
+               texto.Contains("e-sign", StringComparison.OrdinalIgnoreCase) ||
+               texto.Contains("esign", StringComparison.OrdinalIgnoreCase) ||
+               texto.Contains("certificado", StringComparison.OrdinalIgnoreCase)
+            ? "E-RÚBRICA"
+            : "E-FACT";
+    }
 }
 
 public sealed class AliadoAdminComisionRow
