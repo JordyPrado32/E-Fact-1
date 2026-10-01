@@ -7,7 +7,6 @@ namespace Simetric.Services;
 
 public sealed class AliadoComisionGenerationService
 {
-    private const string BackOfficeInvoiceMarker = "[COMPRA_DOCS:";
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
     public AliadoComisionGenerationService(IDbContextFactory<AppDbContext> dbFactory)
@@ -36,6 +35,12 @@ public sealed class AliadoComisionGenerationService
             return;
 
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var executionStrategy = db.Database.CreateExecutionStrategy();
+        await executionStrategy.ExecuteAsync(() => SincronizarEnTransaccionAsync(db, idVendedor));
+    }
+
+    private static async Task SincronizarEnTransaccionAsync(AppDbContext db, int idVendedor)
+    {
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var aliado = await db.VendedoresBackOffice.AsNoTracking()
             .Where(x => x.IdVendedor == idVendedor && !x.EsSistema && x.Activo)
@@ -49,8 +54,7 @@ public sealed class AliadoComisionGenerationService
             ?? new AliadoPortalConfiguracion();
         var facturas = await db.Facturas.AsNoTracking()
             .Where(x => x.Idvendedor == idVendedor &&
-                        (x.Estado == true || x.Estado == null) &&
-                        x.Notas != null && x.Notas.Contains(BackOfficeInvoiceMarker))
+                        (x.Estado == true || x.Estado == null))
             .Select(x => new FacturaComisionRow
             {
                 IdFactura = x.Codfactura,
@@ -169,6 +173,12 @@ public sealed class AliadoComisionGenerationService
     public async Task CerrarPeriodosAsync()
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var executionStrategy = db.Database.CreateExecutionStrategy();
+        await executionStrategy.ExecuteAsync(() => CerrarPeriodosEnTransaccionAsync(db));
+    }
+
+    private static async Task CerrarPeriodosEnTransaccionAsync(AppDbContext db)
+    {
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var inicioPeriodoActual = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
         var pendientes = await db.AliadoComisiones

@@ -521,8 +521,9 @@ public sealed class AliadoPortalService
             .Where(x => !x.EsSistema &&
                 (db.Usuarios.Any(u =>
                     u.IdVendedor == x.IdVendedor &&
-                    db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
-                        db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Nombre == RoleName))) ||
+                    (db.TipoUsuario.Any(t => t.IdTipoUsuario == u.IdTipoUsuario && t.NombreTipo == RoleName) ||
+                     db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
+                        db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName)))) ||
                  db.AliadoComisiones.Any(c => c.IdVendedor == x.IdVendedor)))
             .Select(x => x.IdVendedor)
             .ToListAsync();
@@ -808,6 +809,25 @@ public sealed class AliadoPortalService
         return (true, "Comisión ajustada.");
     }
 
+    public async Task<(bool Success, string Message)> AjustarValorComisionAsync(int actorId, int idComision, decimal valor)
+    {
+        await EnsureSchemaAsync();
+        if (valor < 0)
+            return (false, "El valor de la comisión no puede ser negativo.");
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorPortalAsync(db, actorId))
+            return (false, "No tienes permisos para ajustar comisiones.");
+        var comision = await db.AliadoComisiones.SingleOrDefaultAsync(x => x.IdComision == idComision);
+        if (comision is null || comision.Estado == "Pagada")
+            return (false, "Solo se pueden ajustar comisiones sin pagar.");
+
+        comision.Valor = decimal.Round(valor, 2, MidpointRounding.AwayFromZero);
+        if (comision.BaseComisionable > 0)
+            comision.Porcentaje = decimal.Round(comision.Valor / comision.BaseComisionable * 100m, 2, MidpointRounding.AwayFromZero);
+        await db.SaveChangesAsync();
+        return (true, "Valor de comisión ajustado.");
+    }
+
     public async Task<(bool Success, string Message)> RevertirComisionAsync(int actorId, int idComision, string? motivo)
     {
         await EnsureSchemaAsync();
@@ -978,18 +998,13 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
-        var idRolAliado = await db.AliadoPortalRoles
-            .Where(x => x.Nombre == RoleName && x.Activo)
-            .Select(x => (int?)x.IdRol)
-            .FirstOrDefaultAsync();
-        if (!idRolAliado.HasValue)
-            return Array.Empty<AliadoAdminRow>();
-
         return await db.VendedoresBackOffice
             .AsNoTracking()
             .Where(x => !x.EsSistema &&
                 (db.Usuarios.Any(u => u.IdVendedor == x.IdVendedor &&
-                    db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)) ||
+                    (db.TipoUsuario.Any(t => t.IdTipoUsuario == u.IdTipoUsuario && t.NombreTipo == RoleName) ||
+                     db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario &&
+                         db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName)))) ||
                  db.AliadoComisiones.Any(c => c.IdVendedor == x.IdVendedor)))
             .OrderBy(x => x.Nombre)
             .Select(x => new AliadoAdminRow
@@ -999,9 +1014,15 @@ public sealed class AliadoPortalService
                 CodigoReferencia = x.CodigoReferencia,
                 Activo = x.Activo,
                 PorcentajeBase = x.PorcentajeBase,
-                IdUsuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)).Select(u => (int?)u.IdUsuario).FirstOrDefault(),
-                Usuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)).Select(u => u.Email).FirstOrDefault(),
-                UsuarioActivo = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor && db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == idRolAliado.Value)).Select(u => u.Estado ?? false).FirstOrDefault()
+                IdUsuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor &&
+                    (db.TipoUsuario.Any(t => t.IdTipoUsuario == u.IdTipoUsuario && t.NombreTipo == RoleName) ||
+                     db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName)))).Select(u => (int?)u.IdUsuario).FirstOrDefault(),
+                Usuario = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor &&
+                    (db.TipoUsuario.Any(t => t.IdTipoUsuario == u.IdTipoUsuario && t.NombreTipo == RoleName) ||
+                     db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName)))).Select(u => u.Email).FirstOrDefault(),
+                UsuarioActivo = db.Usuarios.Where(u => u.IdVendedor == x.IdVendedor &&
+                    (db.TipoUsuario.Any(t => t.IdTipoUsuario == u.IdTipoUsuario && t.NombreTipo == RoleName) ||
+                     db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName)))).Select(u => u.Estado ?? false).FirstOrDefault()
             })
             .ToListAsync();
     }

@@ -24,10 +24,6 @@
         <div class="col-md-3"><label class="form-label">Aliado</label><select class="form-select" @bind="filtroAliado"><option value="">Todos los aliados</option>@foreach (var aliado in AliadosVisibles) { <option value="@aliado.IdVendedor">@aliado.Nombre</option> }</select></div>
         <div class="col-md-3"><label class="form-label">Buscar comisión</label><input class="form-control" @bind="busquedaComision" @bind:event="oninput" placeholder="Cliente o factura" /></div>
         <div class="col-md-2"><label class="form-label">Estado</label><select class="form-select" @bind="filtroEstado"><option value="">Todos</option><option>Pendiente</option><option>Generada</option><option>Aprobada</option><option>Pagada</option><option>Anulada</option><option>Revertida</option></select></div>
-        <div class="col-md-3"><label class="form-label">Período a parametrizar</label><input class="form-control" type="month" value="@periodo" @onchange="CambiarPeriodo" /></div>
-        <div class="col-md-2"><label class="form-label">Hasta $1.000</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajeHastaMil" /></div>
-        <div class="col-md-2"><label class="form-label">Desde $1.000</label><input class="form-control" type="number" min="0" max="100" step=".01" @bind="porcentajeDesdeMil" /></div>
-        <div class="col-md-2"><button class="btn btn-primary w-100" @onclick="GuardarParametroAsync" disabled="@(filtroAliado == 0)">Guardar período</button></div>
     </div></section>
 
     <section class="row g-3 mb-3">
@@ -44,26 +40,14 @@
             <div><label class="form-label">Comprobante</label><InputFile class="form-control" accept=".pdf,.png,.jpg,.jpeg" OnChange="SeleccionarComprobante" /></div>
             <button class="btn btn-primary" @onclick="PagarSeleccionadasAsync" disabled="@(procesando || !Seleccionadas.Any())">@(procesando ? "Procesando..." : $"Pagar seleccionadas ({Seleccionadas.Count})")</button>
         </div>
-        <div class="table-responsive"><table class="table align-middle"><thead><tr><th>Cliente</th><th>Aliado</th><th>Comisiones</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody>
-        @if (!ComisionesPorCliente.Any())
+        <div class="table-responsive"><table class="table align-middle"><thead><tr><th></th><th>Cliente</th><th>Aliado</th><th>Factura / período</th><th>Base</th><th>Comisión</th><th>Estado</th><th>Ajuste</th><th></th></tr></thead><tbody>
+        @if (!ComisionesVisibles.Any())
         {
-            <tr><td colspan="6" class="text-center text-muted py-5">No hay comisiones para los filtros seleccionados.</td></tr>
+            <tr><td colspan="9" class="text-center text-muted py-5">No hay comisiones para los filtros seleccionados.</td></tr>
         }
-        @foreach (var grupo in ComisionesPorCliente)
+        @foreach (var item in ComisionesVisibles)
         {
-            <tr @key="grupo.Key">
-                <td>@grupo.First().Cliente</td><td>@grupo.First().Aliado</td><td>@grupo.Count()</td><td>$ @grupo.Sum(x => x.Valor).ToString("N2")</td><td>@string.Join(", ", grupo.Select(x => x.Estado).Distinct())</td>
-                <td><button class="btn btn-outline-primary btn-sm" @onclick="() => clienteSeleccionado = clienteSeleccionado == grupo.Key ? null : grupo.Key">@(clienteSeleccionado == grupo.Key ? "Ocultar" : "Ver comisiones")</button></td>
-            </tr>
-            @if (clienteSeleccionado == grupo.Key)
-            {
-                <tr><td colspan="6" class="p-0"><table class="table table-sm mb-0"><thead><tr><th></th><th>Factura</th><th>Período</th><th>Base</th><th>Comisión</th><th>Estado / ajuste</th></tr></thead><tbody>
-                @foreach (var item in grupo)
-                {
-                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>#@item.IdFactura</td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="badge @EstadoCss(item.Estado)">@EstadoTexto(item.Estado)</span><div class="input-group input-group-sm mt-2"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item.IdComision, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)" disabled="@(procesando)">Aplicar</button></div>@if (item.Estado == "Generada") { <button class="btn btn-link btn-sm px-0" @onclick="() => AprobarAsync(item)" disabled="@(procesando)">Aprobar</button> }</td></tr>
-                }
-                </tbody></table></td></tr>
-            }
+            <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>@item.Cliente</td><td>@item.Aliado</td><td>#@item.IdFactura<br /><small>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</small></td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%</small></td><td><span class="badge @EstadoCss(item.Estado)">@EstadoTexto(item.Estado)</span></td><td><div class="input-group input-group-sm mb-1"><button class="btn btn-outline-secondary" @onclick="() => AjustarPorcentajeAsync(item, -1m)" disabled="@(procesando || item.Estado == "Pagada")">−</button><input class="form-control" type="number" min="0" max="100" step=".01" value="@(PorcentajeAjuste(item).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))" @onchange="e => CambiarPorcentaje(item, e)" /><button class="btn btn-outline-secondary" @onclick="() => AjustarPorcentajeAsync(item, 1m)" disabled="@(procesando || item.Estado == "Pagada")">+</button><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)" disabled="@(procesando || item.Estado == "Pagada")">%</button></div><div class="input-group input-group-sm"><span class="input-group-text">$</span><input class="form-control" type="number" min="0" step=".01" value="@(ValorAjuste(item).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))" @onchange="e => CambiarValor(item, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarValorAsync(item)" disabled="@(procesando || item.Estado == "Pagada")">$</button></div></td><td>@if (item.Estado == "Generada") { <button class="btn btn-link btn-sm px-0" @onclick="() => AprobarAsync(item)" disabled="@(procesando)">Aprobar</button> }</td></tr>
         }
         </tbody></table></div>
     </div></section>
@@ -74,14 +58,11 @@
     private List<AliadoAdminComisionRow> comisiones = new();
     private readonly HashSet<int> Seleccionadas = new();
     private readonly Dictionary<int, decimal> porcentajesAjuste = new();
+    private readonly Dictionary<int, decimal> valoresAjuste = new();
     private int filtroAliado;
-    private string? clienteSeleccionado;
     private string busquedaAliado = string.Empty;
     private string busquedaComision = string.Empty;
     private string filtroEstado = string.Empty;
-    private string periodo = DateTime.Today.ToString("yyyy-MM");
-    private decimal porcentajeHastaMil = 5m;
-    private decimal porcentajeDesdeMil = 10m;
     private string? observacionPago;
     private string? referenciaPago;
     private IBrowserFile? comprobante;
@@ -95,7 +76,6 @@
         (string.IsNullOrWhiteSpace(busquedaAliado) || x.Aliado.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado) &&
         (string.IsNullOrWhiteSpace(busquedaComision) || $"{x.Cliente} {x.IdFactura}".Contains(busquedaComision, StringComparison.OrdinalIgnoreCase)));
-    private IEnumerable<IGrouping<string, AliadoAdminComisionRow>> ComisionesPorCliente => ComisionesVisibles.GroupBy(x => $"{x.IdVendedor}|{x.Cliente}|{x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM")}").OrderBy(x => x.First().Cliente);
     private IEnumerable<AliadoAdminRow> AliadosVisibles => string.IsNullOrWhiteSpace(busquedaAliado) ? aliados : aliados.Where(x => x.Nombre.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync()
@@ -109,21 +89,35 @@
     {
         aliados = (await AliadoService.ListarAliadosAsync()).ToList();
         comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
+        foreach (var item in comisiones)
+        {
+            porcentajesAjuste[item.IdComision] = item.Porcentaje;
+            valoresAjuste[item.IdComision] = item.Valor;
+        }
     }
-
-    private async Task GuardarParametroAsync()
-    {
-        var resultado = await AliadoService.GuardarParametroComisionAsync(actorId, filtroAliado, periodo, porcentajeHastaMil, porcentajeDesdeMil);
-        exito = resultado.Success; mensaje = resultado.Message;
-    }
-
-    private void CambiarPeriodo(ChangeEventArgs args) => periodo = args.Value?.ToString() ?? periodo;
 
     private async Task AjustarAsync(AliadoAdminComisionRow item)
     {
         if (procesando) return;
         procesando = true;
         var resultado = await AliadoService.AjustarComisionAsync(actorId, item.IdComision, PorcentajeAjuste(item), null);
+        exito = resultado.Success; mensaje = resultado.Message;
+        if (resultado.Success) await CargarAsync();
+        procesando = false;
+    }
+
+    private async Task AjustarPorcentajeAsync(AliadoAdminComisionRow item, decimal delta)
+    {
+        if (procesando) return;
+        porcentajesAjuste[item.IdComision] = Math.Clamp(PorcentajeAjuste(item) + delta, 0m, 100m);
+        await AjustarAsync(item);
+    }
+
+    private async Task AjustarValorAsync(AliadoAdminComisionRow item)
+    {
+        if (procesando) return;
+        procesando = true;
+        var resultado = await AliadoService.AjustarValorComisionAsync(actorId, item.IdComision, ValorAjuste(item));
         exito = resultado.Success; mensaje = resultado.Message;
         if (resultado.Success) await CargarAsync();
         procesando = false;
@@ -141,7 +135,17 @@
 
     private void Seleccionar(int id, ChangeEventArgs e) { if (e.Value is true or "true" or "on") Seleccionadas.Add(id); else Seleccionadas.Remove(id); }
     private decimal PorcentajeAjuste(AliadoAdminComisionRow item) => porcentajesAjuste.TryGetValue(item.IdComision, out var valor) ? valor : item.Porcentaje;
-    private void CambiarPorcentaje(int idComision, ChangeEventArgs e) { if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var valor)) porcentajesAjuste[idComision] = valor; }
+    private decimal ValorAjuste(AliadoAdminComisionRow item) => valoresAjuste.TryGetValue(item.IdComision, out var valor) ? valor : item.Valor;
+    private void CambiarPorcentaje(AliadoAdminComisionRow item, ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var valor) && valor is >= 0 and <= 100)
+            porcentajesAjuste[item.IdComision] = valor;
+    }
+    private void CambiarValor(AliadoAdminComisionRow item, ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var valor) && valor >= 0)
+            valoresAjuste[item.IdComision] = valor;
+    }
     private void SeleccionarComprobante(InputFileChangeEventArgs e) => comprobante = e.File;
 
     private static string EstadoTexto(string estado) => estado switch
