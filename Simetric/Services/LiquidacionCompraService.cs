@@ -766,7 +766,22 @@ public class LiquidacionCompraService
         if (liquidacion.Estado != "Pagada")
             throw new InvalidOperationException("La liquidación de compra solo se genera después de aprobar el pago.");
         if (liquidacion.CodLiquidacionCompra is > 0)
+        {
+            var resultadoExistente = await EmitirLiquidacionSriAsync(
+                liquidacion.CodLiquidacionCompra.Value,
+                intentarEnviarCorreo: true);
+
+            if (!string.Equals(resultadoExistente.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrWhiteSpace(resultadoExistente.autorizacion))
+            {
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(resultadoExistente.mensaje)
+                        ? "La liquidación quedó pendiente de autorización del SRI."
+                        : resultadoExistente.mensaje);
+            }
+
             return liquidacion.CodLiquidacionCompra.Value;
+        }
 
         var aliado = await context.Usuarios.AsNoTracking().FirstOrDefaultAsync(x => x.IdVendedor == liquidacion.IdVendedor && x.Estado == true, cancellationToken)
             ?? throw new InvalidOperationException("No se encontró la cuenta del aliado.");
@@ -805,7 +820,16 @@ public class LiquidacionCompraService
         var codFactura = await GuardarLiquidacionAsync(preview);
         liquidacion.CodLiquidacionCompra = codFactura;
         await context.SaveChangesAsync(cancellationToken);
-        await EmitirLiquidacionSriAsync(codFactura, emisor.IdUsuario, intentarEnviarCorreo: true);
+        var resultadoSri = await EmitirLiquidacionSriAsync(codFactura, emisor.IdUsuario, intentarEnviarCorreo: true);
+        if (!string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(resultadoSri.autorizacion))
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(resultadoSri.mensaje)
+                    ? "La liquidación quedó pendiente de autorización del SRI."
+                    : resultadoSri.mensaje);
+        }
+
         return codFactura;
     }
 

@@ -76,10 +76,6 @@ public sealed class AliadoComisionGenerationService
         var ventasPorPeriodo = facturas
             .GroupBy(x => x.Fecha.ToString("yyyy-MM"))
             .ToDictionary(x => x.Key, x => x.Sum(y => AliadoComisionCalculationService.ObtenerBaseNeta(y.Subtotal, y.Subtotal0, y.Subtotal12)));
-        var periodos = facturas.Select(x => x.Fecha.ToString("yyyy-MM")).Distinct().ToArray();
-        var parametrosPorPeriodo = await db.AliadoComisionParametros.AsNoTracking()
-            .Where(x => x.IdVendedor == idVendedor && periodos.Contains(x.Periodo))
-            .ToDictionaryAsync(x => x.Periodo);
         var comisionesPendientes = await db.AliadoComisiones
             .Where(x => x.IdVendedor == idVendedor && (x.Estado == "Generada" || x.Estado == "Pendiente"))
             .ToListAsync();
@@ -130,22 +126,16 @@ public sealed class AliadoComisionGenerationService
                 continue;
 
             var periodo = factura.Fecha.ToString("yyyy-MM");
-            parametrosPorPeriodo.TryGetValue(periodo, out var parametro);
             var ventasPeriodo = ventasPorPeriodo.GetValueOrDefault(periodo);
             var porcentajePredeterminado = ventasPeriodo >= 1000m ? 10m : 5m;
-            var porcentajeParametro = parametro is null ? (decimal?)null : ventasPeriodo >= 1000m
-                ? (parametro.PorcentajeDesdeMil > 0m ? parametro.PorcentajeDesdeMil : parametro.Porcentaje)
-                : (parametro.PorcentajeHastaMil > 0m ? parametro.PorcentajeHastaMil : parametro.Porcentaje);
-            var porcentaje = porcentajeParametro ?? (tipo switch
+            var porcentaje = tipo switch
             {
                 "RenovacionNumerica" => configuracion.PorcentajeRenovacionNumerica,
                 "RenovacionAliado" => aliado.PorcentajeBase > 0m
                     ? aliado.PorcentajeBase
                     : configuracion.PorcentajeRenovacionAliado,
-                _ => aliado.PorcentajeBase > 0m
-                    ? aliado.PorcentajeBase
-                    : porcentajePredeterminado
-            });
+                _ => porcentajePredeterminado
+            };
             nuevas.Add(new AliadoComision
             {
                 IdVendedor = idVendedor,

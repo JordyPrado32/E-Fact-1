@@ -50,6 +50,7 @@ public sealed class FacturaSriReintentoDispatcherService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var facturacionService = scope.ServiceProvider.GetRequiredService<FacturacionService>();
+        var aliadoPortalService = scope.ServiceProvider.GetRequiredService<AliadoPortalService>();
 
         var vencidas = await facturacionService.GetFacturasVencidasReintentoSriAsync(10);
         foreach (var idFactura in vencidas)
@@ -85,5 +86,7 @@ public sealed class FacturaSriReintentoDispatcherService : BackgroundService
                 _logger.LogInformation("Factura {IdFactura} quedo pendiente para reenvio manual tras alcanzar el limite diario.", idFactura);
             }
         }
+
+        await aliadoPortalService.ReintentarLiquidacionesSriAutomaticamenteAsync(10);
     }
 }

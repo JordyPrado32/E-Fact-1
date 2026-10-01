@@ -72,7 +72,7 @@
                     @if (!LiquidacionesVisibles.Any()) { <tr><td colspan="9" class="text-center text-muted py-5">No hay liquidaciones para los filtros seleccionados.</td></tr> }
                     @foreach (var item in LiquidacionesPaginadas)
                     {
-                        <tr @key="item.IdLiquidacion"><td><strong>@FechaPago(item).ToString("dd/MM/yyyy")</strong></td><td><strong>@item.Aliado</strong><small>@(item.ObservacionPago ?? "Sin observación")</small></td><td>@item.Periodo</td><td>@item.CantidadComisiones</td><td><strong class="text-blue">$ @item.Total.ToString("N2")</strong></td><td>@(item.ReferenciaPago ?? "Sin referencia")<small>LC: @(item.CodLiquidacionCompra?.ToString() ?? "Pendiente")</small></td><td><span class="report-tab-badge @(EstadoSri(item) == "Enviada" ? "text-bg-success" : EstadoSri(item) == "Error" ? "text-bg-danger" : "text-bg-warning")">@EstadoSri(item)</span>@if (!string.IsNullOrWhiteSpace(ErrorSri(item))) { <small class="text-danger">@ErrorSri(item)</small> }</td><td>@if (!string.IsNullOrWhiteSpace(item.ComprobantePagoUrl)) { <a href="@item.ComprobantePagoUrl" target="_blank" rel="noopener">Ver comprobante</a> } else { <span class="text-muted">No adjunto</span> }</td><td>@if (EstadoSri(item) == "Error") { <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => ReintentarAsync(item.IdLiquidacion)" disabled="@reintentando.Contains(item.IdLiquidacion)">@(reintentando.Contains(item.IdLiquidacion) ? "Enviando..." : "Reintentar")</button> }</td></tr>
+                        <tr @key="item.IdLiquidacion"><td><strong>@FechaPago(item).ToString("dd/MM/yyyy")</strong></td><td><strong>@item.Aliado</strong><small>@(item.ObservacionPago ?? "Sin observación")</small></td><td>@item.Periodo</td><td>@item.CantidadComisiones</td><td><strong class="text-blue">$ @item.Total.ToString("N2")</strong></td><td>@(item.ReferenciaPago ?? "Sin referencia")<small>LC: @(item.CodLiquidacionCompra?.ToString() ?? "Pendiente")</small></td><td><span class="report-tab-badge @(EstadoSri(item) == "Enviada" ? "text-bg-success" : EstadoSri(item) == "Error" ? "text-bg-danger" : "text-bg-warning")">@EstadoSri(item)</span>@if (!string.IsNullOrWhiteSpace(ErrorSri(item))) { <small class="text-danger">@ErrorSri(item)</small> }</td><td><div class="liquidation-document-actions">@if (!string.IsNullOrWhiteSpace(item.CodClave)) { <a class="row-action-btn row-action-xml" href="@XmlUrl(item)" target="_blank" rel="noopener" title="Ver XML"><i class="bi bi-filetype-xml"></i></a><a class="row-action-btn row-action-pdf" href="@PdfUrl(item)" target="_blank" rel="noopener" title="Ver PDF"><i class="bi bi-file-earmark-pdf"></i></a> }@if (!string.IsNullOrWhiteSpace(item.ComprobantePagoUrl)) { <button type="button" class="row-action-btn row-action-view" @onclick="() => AbrirComprobante(item)" title="Ver comprobante"><i class="bi bi-paperclip"></i></button> }</div></td><td>@if (EstadoSri(item) == "Error") { <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => ReintentarAsync(item.IdLiquidacion)" disabled="@reintentando.Contains(item.IdLiquidacion)">@(reintentando.Contains(item.IdLiquidacion) ? "Enviando..." : "Reintentar")</button> }</td></tr>
                     }
                 </tbody></table></div>
                 <div class="pagination-controls"><span class="page-indicator">Página @pagina de @TotalPaginas</span><div class="pagination-btn-group"><button type="button" class="btn-pagination" disabled="@(pagina <= 1)" @onclick="() => CambiarPagina(-1)"><i class="bi bi-chevron-left"></i> Anterior</button><button type="button" class="btn-pagination" disabled="@(pagina >= TotalPaginas)" @onclick="() => CambiarPagina(1)">Siguiente <i class="bi bi-chevron-right"></i></button></div></div>
@@ -81,8 +81,19 @@
     </div>
 </div>
 
+@if (comprobanteSeleccionado is not null && !string.IsNullOrWhiteSpace(comprobanteSeleccionado.ComprobantePagoUrl))
+{
+    <div class="liquidation-preview-backdrop" @onclick="CerrarComprobante">
+        <div class="liquidation-preview-modal" role="dialog" aria-modal="true" aria-label="Vista previa del comprobante" @onclick:stopPropagation="true">
+            <div class="liquidation-preview-header"><strong>Comprobante de pago</strong><button type="button" @onclick="CerrarComprobante" aria-label="Cerrar vista previa"><i class="bi bi-x-lg"></i></button></div>
+            <div class="liquidation-preview-body">@if (EsPdf(comprobanteSeleccionado.ComprobantePagoUrl)) { <iframe src="@comprobanteSeleccionado.ComprobantePagoUrl" title="Comprobante de pago"></iframe> } else { <img src="@comprobanteSeleccionado.ComprobantePagoUrl" alt="Comprobante de pago" /> }</div>
+        </div>
+    </div>
+}
+
 @code {
     private List<AliadoAdminLiquidacionRow> liquidaciones = new();
+    private AliadoAdminLiquidacionRow? comprobanteSeleccionado;
     private readonly HashSet<int> reintentando = new();
     private readonly Dictionary<int, string> estadosSri = new();
     private readonly Dictionary<int, string?> erroresSri = new();
@@ -117,6 +128,11 @@
     private int AliadosConPagos => LiquidacionesVisibles.Select(x => x.Aliado).Distinct(StringComparer.OrdinalIgnoreCase).Count();
     private string EstadoSri(AliadoAdminLiquidacionRow item) => estadosSri.TryGetValue(item.IdLiquidacion, out var estado) ? estado : item.EstadoSri;
     private string? ErrorSri(AliadoAdminLiquidacionRow item) => erroresSri.TryGetValue(item.IdLiquidacion, out var error) ? error : item.ErrorSri;
+    private static string XmlUrl(AliadoAdminLiquidacionRow item) => $"/comprobantes/liquidaciones/LIQ_{item.CodClave}.xml";
+    private static string PdfUrl(AliadoAdminLiquidacionRow item) => $"/comprobantes/liquidaciones/LIQ_{item.CodClave}.pdf";
+    private static bool EsPdf(string? url) => url?.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) == true;
+    private void AbrirComprobante(AliadoAdminLiquidacionRow item) => comprobanteSeleccionado = item;
+    private void CerrarComprobante() => comprobanteSeleccionado = null;
     private int CantidadSri(string estado) => LiquidacionesVisibles.Count(x => EstadoSri(x).Equals(estado, StringComparison.OrdinalIgnoreCase));
     private static DateTime FechaPago(AliadoAdminLiquidacionRow item) => item.FechaPago ?? item.Fecha;
 

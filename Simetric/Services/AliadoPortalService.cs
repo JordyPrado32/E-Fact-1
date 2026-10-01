@@ -747,6 +747,61 @@ public sealed class AliadoPortalService
         }
     }
 
+    public async Task<int> ReintentarLiquidacionesSriAutomaticamenteAsync(int maxRegistros = 10)
+    {
+        if (maxRegistros <= 0) return 0;
+
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var candidatas = await (
+            from liquidacion in db.AliadoLiquidaciones.AsNoTracking()
+            join compra in db.ComprasFacturas.AsNoTracking()
+                on liquidacion.CodLiquidacionCompra equals compra.CodFactura
+            where liquidacion.Estado == "Pagada" &&
+                  liquidacion.CodLiquidacionCompra.HasValue &&
+                  (liquidacion.EstadoSri == "Pendiente" || liquidacion.EstadoSri == "Error") &&
+                  compra.Estado == true &&
+                  compra.CodDocumento == "03" &&
+                  (compra.EstadoEnvioSRI == null ||
+                   compra.EstadoEnvioSRI == "PENDIENTE" ||
+                   compra.EstadoEnvioSRI == "MANUAL" ||
+                   EF.Functions.Like(compra.EstadoEnvioSRI, "ERROR%"))
+            orderby liquidacion.Fecha
+            select new
+            {
+                liquidacion.IdLiquidacion,
+                CodLiquidacionCompra = liquidacion.CodLiquidacionCompra ?? 0
+            })
+            .Take(maxRegistros)
+            .ToListAsync();
+
+        foreach (var candidata in candidatas)
+        {
+            try
+            {
+                var resultado = await _liquidacionCompraService.EmitirLiquidacionSriAsync(
+                    candidata.CodLiquidacionCompra,
+                    intentarEnviarCorreo: true);
+                var autorizada = string.Equals(
+                    resultado.estado,
+                    DocumentoAutorizacionHelper.EstadoAutorizado,
+                    StringComparison.OrdinalIgnoreCase) ||
+                    !string.IsNullOrWhiteSpace(resultado.autorizacion);
+
+                await ActualizarEstadoSriAsync(
+                    candidata.IdLiquidacion,
+                    autorizada ? "Enviada" : "Error",
+                    autorizada ? null : resultado.mensaje ?? resultado.estado);
+            }
+            catch (Exception ex)
+            {
+                await ActualizarEstadoSriAsync(candidata.IdLiquidacion, "Error", ex.Message);
+            }
+        }
+
+        return candidatas.Count;
+    }
+
     public async Task CancelarComisionesFacturaAsync(int idFactura, string motivo, int? actorId = null)
     {
         if (idFactura <= 0) return;
@@ -1642,6 +1697,10 @@ public sealed class AliadoPortalService
                 EstadoSri = x.l.EstadoSri,
                 ErrorSri = x.l.ErrorSri,
                 CodLiquidacionCompra = x.l.CodLiquidacionCompra,
+                CodClave = db.ComprasFacturas
+                    .Where(c => c.CodFactura == x.l.CodLiquidacionCompra)
+                    .Select(c => c.CodClave)
+                    .FirstOrDefault(),
                 FechaPago = x.l.FechaPago,
                 IdUsuarioPago = x.l.IdUsuarioPago,
                 ObservacionPago = x.l.ObservacionPago,
@@ -2206,6 +2265,7 @@ public sealed class AliadoAdminLiquidacionRow : AliadoLiquidacionDto
     public string? ComprobantePagoUrl { get; init; }
     public string? ErrorSri { get; init; }
     public int? CodLiquidacionCompra { get; init; }
+    public string? CodClave { get; init; }
     public DateTime? FechaPago { get; init; }
     public int? IdUsuarioPago { get; init; }
 }
