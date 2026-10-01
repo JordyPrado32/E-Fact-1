@@ -25,7 +25,21 @@
         </a>
     </header>
 
-    @if (!string.IsNullOrWhiteSpace(mensaje)) { <div class="alert @(exito ? "alert-success" : "alert-danger")">@mensaje</div> }
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="commission-alert @(exito ? "commission-alert-success" : "commission-alert-error")" role="alert">
+            <i class="@(exito ? "ri-checkbox-circle-line" : "ri-error-warning-line")"></i>
+            <span>@mensaje</span>
+            <button type="button" aria-label="Cerrar mensaje" @onclick="() => mensaje = null"><i class="ri-close-line"></i></button>
+        </div>
+    }
+    @if (cargando || procesando)
+    {
+        <div class="commission-loading" role="status" aria-live="polite">
+            <span class="commission-loading-track"><span></span></span>
+            <span>@(cargando ? "Cargando comisiones y aliados..." : "Procesando operación...")</span>
+        </div>
+    }
 
     <section class="commissions-kpis">
         <article class="commissions-kpi purple"><span><i class="ri-time-line"></i></span><div><small>Pendientes de revisión</small><strong>@ComisionesVisibles.Count(x => x.Estado is "Generada" or "Pendiente")</strong></div></article>
@@ -56,7 +70,7 @@
     </section>
 
     <section class="commissions-panel payment-panel">
-        <div class="commissions-panel-heading"><span><i class="ri-bank-card-line"></i></span><div><h2>Pago de comisiones seleccionadas</h2><p>Registra el pago de las comisiones seleccionadas.</p></div></div>
+        <div class="commissions-panel-heading"><span><i class="ri-bank-card-line"></i></span><div><h2>Acciones sobre la selección</h2><p>Selecciona comisiones pendientes para aprobarlas o aprobadas para pagarlas.</p></div><strong class="selection-counter">@Seleccionadas.Count seleccionada(s)</strong></div>
         <div class="payment-fields">
             <label>Referencia de pago<input @bind="referenciaPago" placeholder="Ej. TRANSF-001" /></label>
             <label>Observación del pago<input @bind="observacionPago" placeholder="Ej. Pago comisiones del período" /></label>
@@ -68,31 +82,33 @@
                     <small title="@NombreComprobante">@NombreComprobante</small>
                 </div>
             </div>
-            <button class="primary-action pay-action" @onclick="PagarSeleccionadasAsync" disabled="@(procesando || !Seleccionadas.Any())"><i class="ri-send-plane-line"></i> @(procesando ? "Procesando..." : $"Pagar seleccionadas ({Seleccionadas.Count})")</button>
         </div>
+        <div class="selection-toolbar"><button class="secondary-action" type="button" @onclick="AprobarSeleccionadasAsync" disabled="@(procesando || !TieneSeleccionadasPorAprobar)"><i class="ri-checkbox-circle-line"></i> Pasar a aprobado</button><button class="primary-action pay-action" type="button" @onclick="PagarSeleccionadasAsync" disabled="@(procesando || !TieneSeleccionadasAprobadas)"><i class="ri-send-plane-line"></i> @(procesando ? "Procesando..." : "Pagar aprobadas seleccionadas")</button><button class="btn-clear" type="button" @onclick="LimpiarSeleccion" disabled="@procesando">Limpiar selección</button></div>
     </section>
 
     <section class="commissions-panel list-panel">
-        <div class="commissions-panel-heading list-heading"><span><i class="ri-list-check-3"></i></span><div><h2>Listado de comisiones</h2><p>Se encontraron @ComisionesPorCliente.Count() registros con los filtros aplicados.</p></div><button class="secondary-action" type="button" @onclick="SeleccionarTodasAprobadas" disabled="@(!ComisionesVisibles.Any(x => x.Estado == "Aprobada"))"><i class="ri-checkbox-multiple-line"></i> Seleccionar aprobadas</button></div>
-        <div class="table-responsive"><table class="table commissions-table align-middle"><thead><tr><th>Cliente</th><th>Aliado</th><th>Comisiones</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
-        @if (!ComisionesPorCliente.Any())
+        <div class="commissions-panel-heading list-heading"><span><i class="ri-list-check-3"></i></span><div><h2>Listado de comisiones</h2><p>Se encontraron @ComisionesPorAliado.Count() aliados/períodos con los filtros aplicados.</p></div><button class="secondary-action" type="button" @onclick="SeleccionarTodasAprobadas" disabled="@(!ComisionesVisibles.Any(x => x.Estado == "Aprobada"))"><i class="ri-checkbox-multiple-line"></i> Seleccionar aprobadas</button></div>
+        <div class="table-responsive"><table class="table commissions-table align-middle"><thead><tr><th>Aliado</th><th>Período</th><th>Comisiones</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+        @if (!ComisionesPorAliado.Any())
         {
             <tr><td colspan="9" class="text-center text-muted py-5">No hay comisiones para los filtros seleccionados.</td></tr>
         }
-        @foreach (var grupo in ComisionesPorCliente)
+        @foreach (var grupo in ComisionesPorAliado)
         {
             var grupoKey = GrupoKey(grupo.First());
             var aprobadas = grupo.Where(x => x.Estado == "Aprobada").ToList();
+            var porAprobar = grupo.Where(x => x.Estado is "Generada" or "Pendiente").ToList();
+            var seleccionables = grupo.Where(EsSeleccionable).ToList();
             <tr @key="grupoKey">
-                <td><strong>@grupo.First().Cliente</strong><small>@(grupo.First().Periodo ?? "Sin período")</small></td><td>@grupo.First().Aliado</td><td>@grupo.Count()</td><td><strong>$ @grupo.Sum(x => x.Valor).ToString("N2")</strong></td><td><span class="status-pill @EstadoCssPropio(grupo.First().Estado)"><i class="ri-time-line"></i>@EstadoTexto(grupo.First().Estado)</span></td>
-                <td><div class="d-flex flex-wrap gap-2"><button class="table-action" @onclick="() => grupoSeleccionado = grupoSeleccionado == grupoKey ? null : grupoKey">@(grupoSeleccionado == grupoKey ? "Ocultar" : "Ver comisiones") <i class="ri-arrow-down-s-line"></i></button>@if (aprobadas.Any()) { <button class="secondary-action" type="button" @onclick="() => SeleccionarGrupo(aprobadas)">@(aprobadas.All(x => Seleccionadas.Contains(x.IdComision)) ? "Quitar período" : "Seleccionar período")</button><button class="primary-action" type="button" @onclick="() => PagarGrupoAsync(aprobadas)" disabled="@procesando"><i class="ri-bank-card-line"></i> Pagar período</button> }</div></td>
+                <td><strong>@grupo.First().Aliado</strong></td><td>@(grupo.First().Periodo ?? "Sin período")</td><td>@grupo.Count()</td><td><strong>$ @grupo.Sum(x => x.Valor).ToString("N2")</strong></td><td><span class="status-pill @EstadoCssPropio(grupo.First().Estado)"><i class="ri-time-line"></i>@EstadoTexto(grupo.First().Estado)</span></td>
+                <td><div class="commission-group-actions"><div class="commission-group-adjust"><div class="commission-adjust-heading"><i class="ri-edit-2-line"></i><div><strong>Ajuste total</strong><small>Aplica al grupo completo</small></div></div><div class="commission-adjust-option"><label><span class="commission-adjust-icon">%</span><span><strong>Porcentaje</strong><small>Recalcula cada comisión</small></span></label><div class="commission-adjust-input"><input type="number" min="0" max="100" step=".01" value="@PorcentajeGrupo(grupoKey)" @onchange="e => CambiarPorcentajeGrupo(grupoKey, e)" placeholder="0,00" aria-label="Porcentaje total del aliado" /><span>%</span><button type="button" @onclick="() => AplicarPorcentajeGrupoAsync(grupo, grupoKey)" disabled="@(procesando)">Aplicar</button></div></div><div class="commission-adjust-option"><label><span class="commission-adjust-icon money">$</span><span><strong>Valor total</strong><small>Distribuye el monto indicado</small></span></label><div class="commission-adjust-input"><input type="number" min="0" step=".01" value="@ValorGrupo(grupoKey)" @onchange="e => CambiarValorGrupo(grupoKey, e)" placeholder="0,00" aria-label="Valor total del aliado" /><span>$</span><button type="button" @onclick="() => AplicarValorGrupoAsync(grupo, grupoKey)" disabled="@(procesando)">Aplicar</button></div></div></div><div class="d-flex flex-wrap gap-2"><button class="table-action" @onclick="() => grupoSeleccionado = grupoSeleccionado == grupoKey ? null : grupoKey">@(grupoSeleccionado == grupoKey ? "Ocultar" : "Ver detalle") <i class="ri-arrow-down-s-line"></i></button>@if (seleccionables.Any()) { <button class="secondary-action" type="button" @onclick="() => SeleccionarGrupo(seleccionables)">@(seleccionables.All(x => Seleccionadas.Contains(x.IdComision)) ? "Quitar selección" : "Seleccionar todo")</button> }@if (porAprobar.Any()) { <button class="secondary-action" type="button" @onclick="() => AprobarGrupoAsync(porAprobar)" disabled="@procesando"><i class="ri-checkbox-circle-line"></i> Pasar a aprobado</button> }@if (aprobadas.Any()) { <button class="primary-action" type="button" @onclick="() => PagarGrupoAsync(aprobadas)" disabled="@procesando"><i class="ri-bank-card-line"></i> Pagar aliado</button> }</div></div></td>
             </tr>
             @if (grupoSeleccionado == grupoKey)
             {
-                <tr><td colspan="6" class="p-0"><table class="table table-sm mb-0"><thead><tr><th></th><th>Factura</th><th>Período</th><th>Base</th><th>Comisión</th><th>Estado / ajuste</th></tr></thead><tbody>
+                <tr><td colspan="6" class="p-0"><table class="table table-sm mb-0"><thead><tr><th></th><th>Cliente</th><th>Factura</th><th>Base</th><th>Comisión</th><th>Estado / ajuste</th></tr></thead><tbody>
                 @foreach (var item in grupo)
                 {
-                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>#@item.IdFactura</td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="badge @EstadoCss(item.Estado)">@EstadoTexto(item.Estado)</span><div class="input-group input-group-sm mt-2"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item, e)" /><button class="btn btn-outline-primary" @onclick="() => AplicarPorcentajeAsync(item)" disabled="@(procesando)">Aplicar %</button></div><div class="input-group input-group-sm mt-2"><input class="form-control" type="number" min="0" step=".01" value="@ValorAjuste(item)" @onchange="e => CambiarValor(item, e)" /><button class="btn btn-outline-primary" @onclick="() => AplicarValorAsync(item)" disabled="@(procesando)">Aplicar $</button></div>@if (item.Estado == "Generada") { <button class="btn btn-link btn-sm px-0" @onclick="() => AprobarAsync(item)" disabled="@(procesando)">Aprobar</button> }</td></tr>
+                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(!EsSeleccionable(item))" @onchange="e => Seleccionar(item.IdComision, e)" aria-label="Seleccionar comisión" /></td><td>@item.Cliente</td><td>@item.NumeroFactura</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="badge @EstadoCss(item.Estado)">@EstadoTexto(item.Estado)</span><div class="commission-adjust-box"><div class="commission-adjust-heading"><i class="ri-edit-2-line"></i><div><strong>Ajuste individual</strong><small>Modifica esta comisión</small></div></div><div class="commission-adjust-option"><label><span class="commission-adjust-icon">%</span><span><strong>Porcentaje</strong><small>Calcula el valor sobre la base</small></span></label><div class="commission-adjust-input"><input type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item, e)" aria-label="Porcentaje de comisión" placeholder="0,00" /><span>%</span><button type="button" @onclick="() => AplicarPorcentajeAsync(item)" disabled="@(procesando || !PuedeAjustar(item))">Aplicar</button></div></div><div class="commission-adjust-option"><label><span class="commission-adjust-icon money">$</span><span><strong>Valor fijo</strong><small>Define el monto exacto</small></span></label><div class="commission-adjust-input"><input type="number" min="0" step=".01" value="@ValorAjuste(item)" @onchange="e => CambiarValor(item, e)" aria-label="Valor de comisión" placeholder="0,00" /><span>$</span><button type="button" @onclick="() => AplicarValorAsync(item)" disabled="@(procesando || !PuedeAjustar(item))">Aplicar</button></div></div></div>@if (item.Estado is "Generada" or "Pendiente") { <button class="btn btn-link btn-sm px-0" @onclick="() => AprobarAsync(item)" disabled="@(procesando)"><i class="ri-checkbox-circle-line"></i> Pasar a aprobado</button> }</td></tr>
                 }
                 </tbody></table></td></tr>
             }
@@ -107,6 +123,8 @@
     private readonly HashSet<int> Seleccionadas = new();
     private readonly Dictionary<int, decimal> porcentajesAjuste = new();
     private readonly Dictionary<int, decimal> valoresAjuste = new();
+    private readonly Dictionary<string, string> porcentajesGrupo = new();
+    private readonly Dictionary<string, string> valoresGrupo = new();
     private int filtroAliado;
     private string busquedaAliado = string.Empty;
     private string busquedaComision = string.Empty;
@@ -122,13 +140,18 @@
     private bool exito;
     private int actorId;
 
+    private bool cargando;
     private bool procesando;
+    private bool TieneSeleccionadasPorAprobar => comisiones.Any(x => Seleccionadas.Contains(x.IdComision) && (x.Estado is "Generada" or "Pendiente"));
+    private bool TieneSeleccionadasAprobadas => comisiones.Any(x => Seleccionadas.Contains(x.IdComision) && x.Estado == "Aprobada");
+    private static bool EsSeleccionable(AliadoAdminComisionRow item) => item.Estado is "Generada" or "Pendiente" or "Aprobada";
+    private static bool PuedeAjustar(AliadoAdminComisionRow item) => item.Estado is not "Pagada" and not "Anulada" and not "Revertida";
     private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => comisiones.Where(x =>
         (filtroAliado == 0 || x.IdVendedor == filtroAliado) &&
         (string.IsNullOrWhiteSpace(busquedaAliado) || x.Aliado.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado) &&
-        (string.IsNullOrWhiteSpace(busquedaComision) || $"{x.Cliente} {x.IdFactura}".Contains(busquedaComision, StringComparison.OrdinalIgnoreCase)));
-    private IEnumerable<IGrouping<GrupoComisionesKey, AliadoAdminComisionRow>> ComisionesPorCliente => ComisionesVisibles.GroupBy(x => new GrupoComisionesKey(x.IdVendedor, x.IdCliente, x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM")));
+        (string.IsNullOrWhiteSpace(busquedaComision) || $"{x.Cliente} {x.NumeroFactura}".Contains(busquedaComision, StringComparison.OrdinalIgnoreCase)));
+    private IEnumerable<IGrouping<GrupoComisionesKey, AliadoAdminComisionRow>> ComisionesPorAliado => ComisionesVisibles.GroupBy(x => new GrupoComisionesKey(x.IdVendedor, x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM")));
     private IEnumerable<AliadoAdminRow> AliadosVisibles => string.IsNullOrWhiteSpace(busquedaAliado) ? aliados : aliados.Where(x => x.Nombre.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync()
@@ -140,12 +163,20 @@
 
     private async Task CargarAsync()
     {
-        aliados = (await AliadoService.ListarAliadosAsync()).ToList();
-        comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
-        foreach (var item in comisiones)
+        cargando = true;
+        try
         {
-            porcentajesAjuste[item.IdComision] = item.Porcentaje;
-            valoresAjuste[item.IdComision] = item.Valor;
+            aliados = (await AliadoService.ListarAliadosAsync()).ToList();
+            comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
+            foreach (var item in comisiones)
+            {
+                porcentajesAjuste[item.IdComision] = item.Porcentaje;
+                valoresAjuste[item.IdComision] = item.Valor;
+            }
+        }
+        finally
+        {
+            cargando = false;
         }
     }
 
@@ -217,16 +248,107 @@
     {
         if (procesando) return;
         procesando = true;
-        var resultado = await AliadoService.AprobarComisionAsync(actorId, item.IdComision);
-        exito = resultado.Success; mensaje = resultado.Message;
-        if (resultado.Success) await CargarAsync();
-        procesando = false;
+        try
+        {
+            var resultado = await AliadoService.AprobarComisionAsync(actorId, item.IdComision);
+            exito = resultado.Success;
+            mensaje = resultado.Message;
+            if (resultado.Success) await CargarAsync();
+        }
+        catch (Exception)
+        {
+            exito = false;
+            mensaje = "No se pudo aprobar la comisión. Intenta nuevamente.";
+        }
+        finally
+        {
+            procesando = false;
+        }
     }
 
     private void Seleccionar(int id, ChangeEventArgs e) { if (e.Value is true or "true" or "on") Seleccionadas.Add(id); else Seleccionadas.Remove(id); }
+    private void LimpiarSeleccion() => Seleccionadas.Clear();
+    private string PorcentajeGrupo(string key) => porcentajesGrupo.TryGetValue(key, out var valor) ? valor : string.Empty;
+    private string ValorGrupo(string key) => valoresGrupo.TryGetValue(key, out var valor) ? valor : string.Empty;
+    private void CambiarPorcentajeGrupo(string key, ChangeEventArgs e) => porcentajesGrupo[key] = e.Value?.ToString() ?? string.Empty;
+    private void CambiarValorGrupo(string key, ChangeEventArgs e) => valoresGrupo[key] = e.Value?.ToString() ?? string.Empty;
+    private async Task AprobarSeleccionadasAsync()
+    {
+        if (procesando) return;
+        var ids = comisiones.Where(x => Seleccionadas.Contains(x.IdComision) && (x.Estado is "Generada" or "Pendiente")).Select(x => x.IdComision).ToArray();
+        if (ids.Length == 0) return;
+        procesando = true;
+        try
+        {
+            var aprobadas = 0;
+            foreach (var id in ids)
+            {
+                var resultado = await AliadoService.AprobarComisionAsync(actorId, id);
+                if (resultado.Success) aprobadas++;
+                mensaje = resultado.Message;
+                exito = resultado.Success;
+            }
+            if (aprobadas > 0)
+            {
+                foreach (var id in ids) Seleccionadas.Remove(id);
+                mensaje = $"Se aprobaron {aprobadas} comisión(es).";
+                exito = true;
+                await CargarAsync();
+            }
+        }
+        catch (Exception)
+        {
+            exito = false;
+            mensaje = "No se pudieron aprobar las comisiones seleccionadas. Intenta nuevamente.";
+        }
+        finally { procesando = false; }
+    }
+    private Task AprobarGrupoAsync(IEnumerable<AliadoAdminComisionRow> grupo)
+    {
+        Seleccionadas.Clear();
+        foreach (var item in grupo) Seleccionadas.Add(item.IdComision);
+        return AprobarSeleccionadasAsync();
+    }
+    private async Task AplicarPorcentajeGrupoAsync(IEnumerable<AliadoAdminComisionRow> grupo, string key)
+    {
+        if (procesando || !decimal.TryParse(PorcentajeGrupo(key), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var porcentaje) || porcentaje is < 0 or > 100) return;
+        var ajustables = grupo.Where(PuedeAjustar).ToList();
+        if (ajustables.Count == 0) return;
+        procesando = true;
+        try
+        {
+            foreach (var item in ajustables) await AliadoService.AjustarComisionAsync(actorId, item.IdComision, porcentaje, null);
+            mensaje = $"Porcentaje actualizado para {ajustables.Count} comisión(es) del aliado.";
+            exito = true;
+            await CargarAsync();
+        }
+        finally { procesando = false; }
+    }
+    private async Task AplicarValorGrupoAsync(IEnumerable<AliadoAdminComisionRow> grupo, string key)
+    {
+        if (procesando || !decimal.TryParse(ValorGrupo(key), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var total) || total < 0) return;
+        var ajustables = grupo.Where(PuedeAjustar).ToList();
+        if (ajustables.Count == 0) return;
+        procesando = true;
+        try
+        {
+            var actual = ajustables.Sum(x => x.Valor);
+            var acumulado = 0m;
+            for (var index = 0; index < ajustables.Count; index++)
+            {
+                var valor = index == ajustables.Count - 1 ? Math.Max(0m, total - acumulado) : actual > 0m ? decimal.Round(ajustables[index].Valor / actual * total, 2, MidpointRounding.AwayFromZero) : decimal.Round(total / ajustables.Count, 2, MidpointRounding.AwayFromZero);
+                acumulado += valor;
+                await AliadoService.AjustarValorComisionAsync(actorId, ajustables[index].IdComision, valor);
+            }
+            mensaje = $"Valor total actualizado para {ajustables.Count} comisión(es) del aliado.";
+            exito = true;
+            await CargarAsync();
+        }
+        finally { procesando = false; }
+    }
     private string? grupoSeleccionado;
-    private sealed record GrupoComisionesKey(int IdVendedor, int? IdCliente, string Periodo);
-    private static string GrupoKey(AliadoAdminComisionRow item) => $"{item.IdVendedor}:{item.IdCliente}:{item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM")}";
+    private sealed record GrupoComisionesKey(int IdVendedor, string Periodo);
+    private static string GrupoKey(AliadoAdminComisionRow item) => $"{item.IdVendedor}:{item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM")}";
     private void SeleccionarGrupo(IEnumerable<AliadoAdminComisionRow> grupo)
     {
         var ids = grupo.Select(x => x.IdComision).ToArray();

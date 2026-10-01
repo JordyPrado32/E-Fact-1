@@ -34,14 +34,9 @@ public sealed class AliadoComisionGenerationService
         if (idVendedor <= 0)
             return;
 
-        await using var strategyContext = await _dbFactory.CreateDbContextAsync();
-        var strategy = strategyContext.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
-        {
         await using var db = await _dbFactory.CreateDbContextAsync();
-        var executionStrategy = db.Database.CreateExecutionStrategy();
-        await executionStrategy.ExecuteAsync(() => SincronizarEnTransaccionAsync(db, idVendedor));
-        });
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(() => SincronizarEnTransaccionAsync(db, idVendedor));
     }
 
     private static async Task SincronizarEnTransaccionAsync(AppDbContext db, int idVendedor)
@@ -177,14 +172,9 @@ public sealed class AliadoComisionGenerationService
 
     public async Task CerrarPeriodosAsync()
     {
-        await using var strategyContext = await _dbFactory.CreateDbContextAsync();
-        var strategy = strategyContext.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
-        {
         await using var db = await _dbFactory.CreateDbContextAsync();
-        var executionStrategy = db.Database.CreateExecutionStrategy();
-        await executionStrategy.ExecuteAsync(() => CerrarPeriodosEnTransaccionAsync(db));
-        });
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(() => CerrarPeriodosEnTransaccionAsync(db));
     }
 
     private static async Task CerrarPeriodosEnTransaccionAsync(AppDbContext db)
@@ -195,11 +185,11 @@ public sealed class AliadoComisionGenerationService
             .Where(x => x.Estado == "Aprobada" && x.IdLiquidacion == null && x.FechaGeneracion < inicioPeriodoActual)
             .ToListAsync();
 
-        foreach (var grupo in pendientes.GroupBy(x => new { x.IdVendedor, x.IdCliente, Periodo = x.FechaGeneracion.ToString("yyyy-MM") }))
+        foreach (var grupo in pendientes.GroupBy(x => new { x.IdVendedor, Periodo = x.FechaGeneracion.ToString("yyyy-MM") }))
         {
             var liquidacion = await db.AliadoLiquidaciones
                 .SingleOrDefaultAsync(x => x.IdVendedor == grupo.Key.IdVendedor &&
-                                           x.IdCliente == grupo.Key.IdCliente &&
+                                           x.IdCliente == null &&
                                            x.Periodo == grupo.Key.Periodo &&
                                            x.Estado == "Pendiente");
             if (liquidacion is null)
@@ -207,7 +197,7 @@ public sealed class AliadoComisionGenerationService
                 liquidacion = new AliadoLiquidacion
                 {
                     IdVendedor = grupo.Key.IdVendedor,
-                    IdCliente = grupo.Key.IdCliente,
+                    IdCliente = null,
                     Periodo = grupo.Key.Periodo,
                     Total = 0,
                     Fecha = DateTime.Now,

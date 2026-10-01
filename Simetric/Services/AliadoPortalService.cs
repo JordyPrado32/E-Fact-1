@@ -544,6 +544,7 @@ public sealed class AliadoPortalService
                 IdCliente = x.comision.IdCliente,
                 Aliado = x.aliado.Nombre,
                 IdFactura = x.comision.IdFactura,
+                NumeroFactura = db.Facturas.Where(f => f.Codfactura == x.comision.IdFactura).Select(f => f.Numfactura).FirstOrDefault() ?? x.comision.IdFactura.ToString(),
                 Cliente = db.Clientes
                     .Where(c => c.Codcliente == x.comision.IdCliente)
                     .Select(c => c.Nombrerazonsocial ?? c.Nombrecomercial ?? ((c.Nombres ?? "") + " " + (c.Apellidos ?? "")))
@@ -557,7 +558,7 @@ public sealed class AliadoPortalService
                 Periodo = db.AliadoLiquidaciones
                     .Where(l => l.IdLiquidacion == x.comision.IdLiquidacion)
                     .Select(l => l.Periodo)
-                    .FirstOrDefault(),
+                    .FirstOrDefault() ?? x.comision.Periodo,
                 ReferenciaPago = db.AliadoLiquidaciones
                     .Where(l => l.IdLiquidacion == x.comision.IdLiquidacion)
                     .Select(l => l.ReferenciaPago)
@@ -573,7 +574,6 @@ public sealed class AliadoPortalService
         if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para aprobar comisiones.");
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var comision = await db.AliadoComisiones.FirstOrDefaultAsync(x => x.IdComision == idComision);
         if (comision is null)
             return (false, "La comisión no existe.");
@@ -591,7 +591,6 @@ public sealed class AliadoPortalService
         comision.FechaAprobacion = DateTime.Now;
         comision.IdUsuarioAprobacion = actorId;
         await db.SaveChangesAsync();
-        await transaction.CommitAsync();
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "APROBAR", new { IdComision = idComision, Estado = estadoAnterior }, comision, new { Modulo = "PortalAliados", Entidad = "Comision" });
         return (true, "Comisión aprobada correctamente.");
     }
@@ -634,21 +633,22 @@ public sealed class AliadoPortalService
             if (comisiones.Any(x => !string.Equals(x.Estado, AliadoComisionEstado.Aprobada.ToString(), StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Solo se pueden liquidar comisiones aprobadas.");
 
-            foreach (var grupo in comisiones.GroupBy(x => new { x.IdVendedor, x.IdCliente, x.Periodo }))
+            foreach (var grupo in comisiones.GroupBy(x => new { x.IdVendedor, x.Periodo }))
             {
                 var liquidacionIdsOrigen = grupo.Select(x => x.IdLiquidacion).Distinct().ToArray();
                 var liquidacionIdOrigen = liquidacionIdsOrigen.Length == 1 ? liquidacionIdsOrigen[0] : null;
-                var liquidacionOrigen = liquidacionIdOrigen.HasValue
-                    ? await db.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == liquidacionIdOrigen.Value && x.Estado == "Pendiente")
-                    : null;
+                var liquidacionesOrigen = liquidacionIdsOrigen.Length == 0
+                    ? new List<AliadoLiquidacion>()
+                    : await db.AliadoLiquidaciones.Where(x => liquidacionIdsOrigen.Contains(x.IdLiquidacion) && x.Estado == "Pendiente").ToListAsync();
+                var liquidacionOrigen = liquidacionIdOrigen.HasValue ? liquidacionesOrigen.SingleOrDefault() : null;
                 var pendientesOrigen = liquidacionOrigen is null
                     ? 0
                     : await db.AliadoComisiones.CountAsync(x => x.IdLiquidacion == liquidacionOrigen.IdLiquidacion && x.Estado != "Pagada" && x.Estado != "Anulada" && x.Estado != "Revertida");
-                var reutilizarLiquidacion = liquidacionOrigen is not null && pendientesOrigen == grupo.Count();
+                var reutilizarLiquidacion = liquidacionOrigen is not null && liquidacionOrigen.IdCliente is null && pendientesOrigen == grupo.Count();
                 var liquidacion = reutilizarLiquidacion ? liquidacionOrigen! : new AliadoLiquidacion
                 {
                     IdVendedor = grupo.Key.IdVendedor,
-                    IdCliente = grupo.Key.IdCliente,
+                    IdCliente = null,
                     Periodo = grupo.Key.Periodo,
                     Fecha = ahora,
                     Total = grupo.Sum(x => x.Valor),
@@ -685,10 +685,17 @@ public sealed class AliadoPortalService
                     comision.IdUsuarioPago = actorId;
                 }
 
-                if (!reutilizarLiquidacion && liquidacionOrigen is not null)
-                    liquidacionOrigen.Total = await db.AliadoComisiones
-                        .Where(x => x.IdLiquidacion == liquidacionOrigen.IdLiquidacion && !ids.Contains(x.IdComision) && x.Estado != "Pagada" && x.Estado != "Anulada" && x.Estado != "Revertida")
-                        .SumAsync(x => (decimal?)x.Valor) ?? 0m;
+                if (!reutilizarLiquidacion)
+                {
+                    foreach (var origen in liquidacionesOrigen)
+                    {
+                        origen.Total = await db.AliadoComisiones
+                            .Where(x => x.IdLiquidacion == origen.IdLiquidacion && !ids.Contains(x.IdComision) && x.Estado != "Pagada" && x.Estado != "Anulada" && x.Estado != "Revertida")
+                            .SumAsync(x => (decimal?)x.Valor) ?? 0m;
+                        if (origen.Total <= 0m)
+                            origen.Estado = "Anulada";
+                    }
+                }
             }
 
             cantidadLiquidada = comisiones.Count;
@@ -988,6 +995,7 @@ public sealed class AliadoPortalService
             {
                 IdComision = x.IdComision,
                 IdFactura = x.IdFactura,
+                NumeroFactura = db.Facturas.Where(f => f.Codfactura == x.IdFactura).Select(f => f.Numfactura).FirstOrDefault() ?? x.IdFactura.ToString(),
                 Cliente = db.Clientes
                     .Where(c => c.Codcliente == x.IdCliente)
                     .Select(c => c.Nombrerazonsocial ?? c.Nombrecomercial ?? ((c.Nombres ?? "") + " " + (c.Apellidos ?? "")))
@@ -1007,7 +1015,7 @@ public sealed class AliadoPortalService
                 PeriodoLiquidacion = db.AliadoLiquidaciones
                     .Where(l => l.IdLiquidacion == x.IdLiquidacion)
                     .Select(l => l.Periodo)
-                    .FirstOrDefault(),
+                    .FirstOrDefault() ?? x.Periodo,
                 ReferenciaPago = db.AliadoLiquidaciones
                     .Where(l => l.IdLiquidacion == x.IdLiquidacion)
                     .Select(l => l.ReferenciaPago)
@@ -2138,6 +2146,7 @@ public sealed class AliadoComisionMovimientoDto
 {
     public int IdComision { get; init; }
     public int IdFactura { get; init; }
+    public string NumeroFactura { get; init; } = string.Empty;
     public string Cliente { get; init; } = string.Empty;
     public string Producto { get; init; } = string.Empty;
     public string Tipo { get; init; } = string.Empty;
@@ -2158,6 +2167,7 @@ public sealed class AliadoAdminComisionRow
     public int? IdCliente { get; init; }
     public string Aliado { get; init; } = string.Empty;
     public int IdFactura { get; init; }
+    public string NumeroFactura { get; init; } = string.Empty;
     public string Cliente { get; init; } = string.Empty;
     public string TipoComision { get; init; } = string.Empty;
     public decimal BaseComisionable { get; init; }
