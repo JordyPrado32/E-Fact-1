@@ -41,6 +41,7 @@ public sealed class AliadoComisionGenerationService
         await using var db = await _dbFactory.CreateDbContextAsync();
         var executionStrategy = db.Database.CreateExecutionStrategy();
         await executionStrategy.ExecuteAsync(() => SincronizarEnTransaccionAsync(db, idVendedor));
+        });
     }
 
     private static async Task SincronizarEnTransaccionAsync(AppDbContext db, int idVendedor)
@@ -172,7 +173,6 @@ public sealed class AliadoComisionGenerationService
             await db.SaveChangesAsync();
         }
         await transaction.CommitAsync();
-        });
     }
 
     public async Task CerrarPeriodosAsync()
@@ -184,6 +184,7 @@ public sealed class AliadoComisionGenerationService
         await using var db = await _dbFactory.CreateDbContextAsync();
         var executionStrategy = db.Database.CreateExecutionStrategy();
         await executionStrategy.ExecuteAsync(() => CerrarPeriodosEnTransaccionAsync(db));
+        });
     }
 
     private static async Task CerrarPeriodosEnTransaccionAsync(AppDbContext db)
@@ -224,7 +225,6 @@ public sealed class AliadoComisionGenerationService
         if (pendientes.Count > 0)
             await db.SaveChangesAsync();
         await transaction.CommitAsync();
-        });
     }
 
     private static bool EsPagoConfirmado(string? estadoPago)

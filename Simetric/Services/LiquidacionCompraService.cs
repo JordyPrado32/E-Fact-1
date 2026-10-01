@@ -792,7 +792,7 @@ public class LiquidacionCompraService
             new()
             {
                 Cantidad = 1m,
-                Descripcion = $"Liquidación de comisiones {liquidacion.Periodo}",
+                Descripcion = "Comisiones Aliados Numerica Software",
                 PrecioUnitario = liquidacion.Total,
                 PrecioTotalSinImpuesto = liquidacion.Total,
                 ValorTotal = liquidacion.Total,

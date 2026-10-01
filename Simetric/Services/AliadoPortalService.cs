@@ -541,6 +541,7 @@ public sealed class AliadoPortalService
             {
                 IdComision = x.comision.IdComision,
                 IdVendedor = x.comision.IdVendedor,
+                IdCliente = x.comision.IdCliente,
                 Aliado = x.aliado.Nombre,
                 IdFactura = x.comision.IdFactura,
                 Cliente = db.Clientes
@@ -616,57 +617,82 @@ public sealed class AliadoPortalService
         if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para registrar pagos.");
         var ids = idsComision.Distinct().ToArray();
-        var comisiones = await db.AliadoComisiones.Where(x => ids.Contains(x.IdComision)).ToListAsync();
-        if (comisiones.Count != ids.Length)
-            return (false, "Una o más comisiones seleccionadas no existen.");
-        if (comisiones.Any(x => !string.Equals(x.Estado, AliadoComisionEstado.Aprobada.ToString(), StringComparison.OrdinalIgnoreCase)))
-            return (false, "Solo se pueden liquidar comisiones aprobadas.");
-
         var ahora = DateTime.Now;
         var liquidacionesPagadas = new List<int>();
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        foreach (var grupo in comisiones.GroupBy(x => new { x.IdVendedor, x.IdCliente, x.Periodo }))
-        {
-            var liquidacionIds = grupo.Where(x => x.IdLiquidacion.HasValue).Select(x => x.IdLiquidacion!.Value).Distinct().ToArray();
-            if (liquidacionIds.Length > 1 || (liquidacionIds.Length == 1 && grupo.Any(x => x.IdLiquidacion != liquidacionIds[0])))
-                return (false, "Liquida por separado las comisiones de períodos distintos.");
+        var cantidadLiquidada = 0;
+        var executionStrategy = db.Database.CreateExecutionStrategy();
 
-            var periodo = grupo.Key.Periodo;
-            var liquidacion = liquidacionIds.Length == 1
-                ? await db.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == liquidacionIds[0])
-                : await db.AliadoLiquidaciones
-                    .Where(x => x.IdVendedor == grupo.Key.IdVendedor && x.IdCliente == grupo.Key.IdCliente && x.Periodo == periodo && x.Estado == "Pendiente")
-                    .OrderByDescending(x => x.IdLiquidacion)
-                    .FirstOrDefaultAsync();
-            if (liquidacion is null)
+        await executionStrategy.ExecuteAsync(async () =>
+        {
+            liquidacionesPagadas.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var comisiones = await db.AliadoComisiones.Where(x => ids.Contains(x.IdComision)).ToListAsync();
+            if (comisiones.Count != ids.Length)
+                throw new InvalidOperationException("Una o más comisiones seleccionadas no existen.");
+            if (comisiones.Any(x => !string.Equals(x.Estado, AliadoComisionEstado.Aprobada.ToString(), StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Solo se pueden liquidar comisiones aprobadas.");
+
+            foreach (var grupo in comisiones.GroupBy(x => new { x.IdVendedor, x.IdCliente, x.Periodo }))
             {
-                liquidacion = new AliadoLiquidacion { IdVendedor = grupo.Key.IdVendedor, IdCliente = grupo.Key.IdCliente, Periodo = periodo, Fecha = ahora, Estado = "Pendiente" };
-                db.AliadoLiquidaciones.Add(liquidacion);
-                await db.SaveChangesAsync();
+                var liquidacionIdsOrigen = grupo.Select(x => x.IdLiquidacion).Distinct().ToArray();
+                var liquidacionIdOrigen = liquidacionIdsOrigen.Length == 1 ? liquidacionIdsOrigen[0] : null;
+                var liquidacionOrigen = liquidacionIdOrigen.HasValue
+                    ? await db.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == liquidacionIdOrigen.Value && x.Estado == "Pendiente")
+                    : null;
+                var pendientesOrigen = liquidacionOrigen is null
+                    ? 0
+                    : await db.AliadoComisiones.CountAsync(x => x.IdLiquidacion == liquidacionOrigen.IdLiquidacion && x.Estado != "Pagada" && x.Estado != "Anulada" && x.Estado != "Revertida");
+                var reutilizarLiquidacion = liquidacionOrigen is not null && pendientesOrigen == grupo.Count();
+                var liquidacion = reutilizarLiquidacion ? liquidacionOrigen! : new AliadoLiquidacion
+                {
+                    IdVendedor = grupo.Key.IdVendedor,
+                    IdCliente = grupo.Key.IdCliente,
+                    Periodo = grupo.Key.Periodo,
+                    Fecha = ahora,
+                    Total = grupo.Sum(x => x.Valor),
+                    Estado = "Pagada"
+                };
+
+                if (!reutilizarLiquidacion)
+                {
+                    db.AliadoLiquidaciones.Add(liquidacion);
+                    await db.SaveChangesAsync();
+                }
+                else
+                {
+                    liquidacion.Total = grupo.Sum(x => x.Valor);
+                }
+
+                liquidacion.Fecha = ahora;
+                liquidacion.Estado = "Pagada";
+                liquidacion.ReferenciaPago = referenciaPago;
+                liquidacion.ObservacionPago = observacionPago;
+                liquidacion.ComprobantePagoUrl = comprobantePagoUrl;
+                liquidacion.FechaPago = ahora;
+                liquidacion.IdUsuarioPago = actorId;
+                liquidacion.EstadoSri = "Pendiente";
+                liquidacion.ErrorSri = null;
+                liquidacionesPagadas.Add(liquidacion.IdLiquidacion);
+
+                foreach (var comision in grupo)
+                {
+                    AliadoComisionStateMachine.Require(comision.Estado, AliadoComisionEstado.Pagada);
+                    comision.Estado = "Pagada";
+                    comision.FechaPago = ahora;
+                    comision.IdLiquidacion = liquidacion.IdLiquidacion;
+                    comision.IdUsuarioPago = actorId;
+                }
+
+                if (!reutilizarLiquidacion && liquidacionOrigen is not null)
+                    liquidacionOrigen.Total = await db.AliadoComisiones
+                        .Where(x => x.IdLiquidacion == liquidacionOrigen.IdLiquidacion && x.Estado != "Pagada" && x.Estado != "Anulada" && x.Estado != "Revertida")
+                        .SumAsync(x => (decimal?)x.Valor) ?? 0m;
             }
-            if (liquidacionIds.Length == 0)
-                liquidacion.Total += grupo.Sum(x => x.Valor);
-            liquidacion.Fecha = ahora;
-            liquidacion.Estado = "Pagada";
-            liquidacion.ReferenciaPago = referenciaPago;
-            liquidacion.ObservacionPago = observacionPago;
-            liquidacion.ComprobantePagoUrl = comprobantePagoUrl;
-            liquidacion.FechaPago = ahora;
-            liquidacion.IdUsuarioPago = actorId;
-            liquidacion.EstadoSri = "Pendiente";
-            liquidacion.ErrorSri = null;
-            liquidacionesPagadas.Add(liquidacion.IdLiquidacion);
-            foreach (var comision in grupo)
-            {
-                AliadoComisionStateMachine.Require(comision.Estado, AliadoComisionEstado.Pagada);
-                comision.Estado = "Pagada";
-                comision.FechaPago = ahora;
-                comision.IdLiquidacion = liquidacion.IdLiquidacion;
-                comision.IdUsuarioPago = actorId;
-            }
-        }
-        await db.SaveChangesAsync();
-        await transaction.CommitAsync();
+
+            cantidadLiquidada = comisiones.Count;
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+        });
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "PAGAR", null, new { IdsComision = ids, ReferenciaPago = referenciaPago }, new { Modulo = "PortalAliados", Entidad = "Liquidacion" });
         var erroresLiquidacionCompra = new List<string>();
         foreach (var idLiquidacion in liquidacionesPagadas.Distinct())
@@ -683,8 +709,8 @@ public sealed class AliadoPortalService
             }
         }
         return erroresLiquidacionCompra.Count == 0
-            ? (true, $"Se liquidaron {comisiones.Count} comisión(es) y se enviaron al SRI.")
-            : (true, $"Se liquidaron {comisiones.Count} comisión(es). La liquidación SRI queda pendiente de reintento: {erroresLiquidacionCompra[0]}");
+            ? (true, $"Se liquidaron {cantidadLiquidada} comisión(es) y se enviaron al SRI.")
+            : (true, $"Se liquidaron {cantidadLiquidada} comisión(es). La liquidación SRI queda pendiente de reintento: {erroresLiquidacionCompra[0]}");
     }
 
     public async Task<(bool Success, string Message)> ReintentarLiquidacionSriAsync(int actorId, int idLiquidacion)
@@ -2122,6 +2148,7 @@ public sealed class AliadoAdminComisionRow
 {
     public int IdComision { get; init; }
     public int IdVendedor { get; init; }
+    public int? IdCliente { get; init; }
     public string Aliado { get; init; } = string.Empty;
     public int IdFactura { get; init; }
     public string Cliente { get; init; } = string.Empty;

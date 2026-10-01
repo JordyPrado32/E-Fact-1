@@ -79,18 +79,20 @@
         {
             <tr><td colspan="9" class="text-center text-muted py-5">No hay comisiones para los filtros seleccionados.</td></tr>
         }
-        @foreach (var item in ComisionesVisibles)
+        @foreach (var grupo in ComisionesPorCliente)
         {
-            <tr @key="grupo.Key">
-                <td><strong>@grupo.First().Cliente</strong></td><td>@grupo.First().Aliado</td><td>@grupo.Count()</td><td><strong>$ @grupo.Sum(x => x.Valor).ToString("N2")</strong></td><td><span class="status-pill @EstadoCssPropio(grupo.First().Estado)"><i class="ri-time-line"></i>@EstadoTexto(grupo.First().Estado)</span></td>
-                <td><button class="table-action" @onclick="() => clienteSeleccionado = clienteSeleccionado == grupo.Key ? null : grupo.Key">@(clienteSeleccionado == grupo.Key ? "Ocultar" : "Ver comisiones") <i class="ri-arrow-down-s-line"></i></button></td>
+            var grupoKey = GrupoKey(grupo.First());
+            var aprobadas = grupo.Where(x => x.Estado == "Aprobada").ToList();
+            <tr @key="grupoKey">
+                <td><strong>@grupo.First().Cliente</strong><small>@(grupo.First().Periodo ?? "Sin período")</small></td><td>@grupo.First().Aliado</td><td>@grupo.Count()</td><td><strong>$ @grupo.Sum(x => x.Valor).ToString("N2")</strong></td><td><span class="status-pill @EstadoCssPropio(grupo.First().Estado)"><i class="ri-time-line"></i>@EstadoTexto(grupo.First().Estado)</span></td>
+                <td><div class="d-flex flex-wrap gap-2"><button class="table-action" @onclick="() => grupoSeleccionado = grupoSeleccionado == grupoKey ? null : grupoKey">@(grupoSeleccionado == grupoKey ? "Ocultar" : "Ver comisiones") <i class="ri-arrow-down-s-line"></i></button>@if (aprobadas.Any()) { <button class="secondary-action" type="button" @onclick="() => SeleccionarGrupo(aprobadas)">@(aprobadas.All(x => Seleccionadas.Contains(x.IdComision)) ? "Quitar período" : "Seleccionar período")</button><button class="primary-action" type="button" @onclick="() => PagarGrupoAsync(aprobadas)" disabled="@procesando"><i class="ri-bank-card-line"></i> Pagar período</button> }</div></td>
             </tr>
-            @if (clienteSeleccionado == grupo.Key)
+            @if (grupoSeleccionado == grupoKey)
             {
                 <tr><td colspan="6" class="p-0"><table class="table table-sm mb-0"><thead><tr><th></th><th>Factura</th><th>Período</th><th>Base</th><th>Comisión</th><th>Estado / ajuste</th></tr></thead><tbody>
                 @foreach (var item in grupo)
                 {
-                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>#@item.IdFactura</td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="badge @EstadoCss(item.Estado)">@EstadoTexto(item.Estado)</span><div class="input-group input-group-sm mt-2"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item.IdComision, e)" /><button class="btn btn-outline-primary" @onclick="() => AjustarAsync(item)" disabled="@(procesando)">Aplicar</button></div>@if (item.Estado == "Generada") { <button class="btn btn-link btn-sm px-0" @onclick="() => AprobarAsync(item)" disabled="@(procesando)">Aprobar</button> }</td></tr>
+                    <tr @key="item.IdComision"><td><input type="checkbox" checked="@Seleccionadas.Contains(item.IdComision)" disabled="@(item.Estado != "Aprobada")" @onchange="e => Seleccionar(item.IdComision, e)" /></td><td>#@item.IdFactura</td><td>@(item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM"))</td><td>$ @item.BaseComisionable.ToString("N2")</td><td>$ @item.Valor.ToString("N2")<br /><small>@item.Porcentaje.ToString("0.##")%</small></td><td><span class="badge @EstadoCss(item.Estado)">@EstadoTexto(item.Estado)</span><div class="input-group input-group-sm mt-2"><input class="form-control" type="number" min="0" max="100" step=".01" value="@PorcentajeAjuste(item)" @onchange="e => CambiarPorcentaje(item, e)" /><button class="btn btn-outline-primary" @onclick="() => AplicarPorcentajeAsync(item)" disabled="@(procesando)">Aplicar %</button></div><div class="input-group input-group-sm mt-2"><input class="form-control" type="number" min="0" step=".01" value="@ValorAjuste(item)" @onchange="e => CambiarValor(item, e)" /><button class="btn btn-outline-primary" @onclick="() => AplicarValorAsync(item)" disabled="@(procesando)">Aplicar $</button></div>@if (item.Estado == "Generada") { <button class="btn btn-link btn-sm px-0" @onclick="() => AprobarAsync(item)" disabled="@(procesando)">Aprobar</button> }</td></tr>
                 }
                 </tbody></table></td></tr>
             }
@@ -109,6 +111,9 @@
     private string busquedaAliado = string.Empty;
     private string busquedaComision = string.Empty;
     private string filtroEstado = string.Empty;
+    private string periodo = DateTime.Today.ToString("yyyy-MM");
+    private decimal porcentajeHastaMil = 5m;
+    private decimal porcentajeDesdeMil = 10m;
     private string? observacionPago;
     private string? referenciaPago;
     private IBrowserFile? comprobante;
@@ -123,6 +128,7 @@
         (string.IsNullOrWhiteSpace(busquedaAliado) || x.Aliado.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado) &&
         (string.IsNullOrWhiteSpace(busquedaComision) || $"{x.Cliente} {x.IdFactura}".Contains(busquedaComision, StringComparison.OrdinalIgnoreCase)));
+    private IEnumerable<IGrouping<GrupoComisionesKey, AliadoAdminComisionRow>> ComisionesPorCliente => ComisionesVisibles.GroupBy(x => new GrupoComisionesKey(x.IdVendedor, x.IdCliente, x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM")));
     private IEnumerable<AliadoAdminRow> AliadosVisibles => string.IsNullOrWhiteSpace(busquedaAliado) ? aliados : aliados.Where(x => x.Nombre.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync()
@@ -143,7 +149,7 @@
         }
     }
 
-    private async Task AjustarAsync(AliadoAdminComisionRow item)
+    private async Task AplicarPorcentajeAsync(AliadoAdminComisionRow item)
     {
         if (procesando) return;
         procesando = true;
@@ -157,14 +163,35 @@
     {
         if (procesando) return;
         porcentajesAjuste[item.IdComision] = Math.Clamp(PorcentajeAjuste(item) + delta, 0m, 100m);
-        await AjustarAsync(item);
+        await AplicarPorcentajeAsync(item);
     }
 
     private void LimpiarFiltros()
     {
         busquedaAliado = busquedaComision = filtroEstado = string.Empty;
         filtroAliado = 0;
-        clienteSeleccionado = null;
+        grupoSeleccionado = null;
+    }
+
+    private void CambiarPeriodo(ChangeEventArgs e)
+    {
+        periodo = e.Value?.ToString() ?? DateTime.Today.ToString("yyyy-MM");
+    }
+
+    private async Task GuardarParametroAsync()
+    {
+        if (procesando || filtroAliado == 0) return;
+        procesando = true;
+        try
+        {
+            var resultado = await AliadoService.GuardarParametroComisionAsync(actorId, filtroAliado, periodo, porcentajeHastaMil, porcentajeDesdeMil);
+            exito = resultado.Success;
+            mensaje = resultado.Message;
+        }
+        finally
+        {
+            procesando = false;
+        }
     }
 
     private void SeleccionarTodasAprobadas()
@@ -176,7 +203,7 @@
             foreach (var id in aprobadas) Seleccionadas.Add(id);
     }
 
-    private async Task AjustarAsync(AliadoAdminComisionRow item)
+    private async Task AplicarValorAsync(AliadoAdminComisionRow item)
     {
         if (procesando) return;
         procesando = true;
@@ -197,6 +224,20 @@
     }
 
     private void Seleccionar(int id, ChangeEventArgs e) { if (e.Value is true or "true" or "on") Seleccionadas.Add(id); else Seleccionadas.Remove(id); }
+    private string? grupoSeleccionado;
+    private sealed record GrupoComisionesKey(int IdVendedor, int? IdCliente, string Periodo);
+    private static string GrupoKey(AliadoAdminComisionRow item) => $"{item.IdVendedor}:{item.IdCliente}:{item.Periodo ?? item.FechaGeneracion.ToString("yyyy-MM")}";
+    private void SeleccionarGrupo(IEnumerable<AliadoAdminComisionRow> grupo)
+    {
+        var ids = grupo.Select(x => x.IdComision).ToArray();
+        if (ids.All(Seleccionadas.Contains)) foreach (var id in ids) Seleccionadas.Remove(id);
+        else foreach (var id in ids) Seleccionadas.Add(id);
+    }
+    private async Task PagarGrupoAsync(IEnumerable<AliadoAdminComisionRow> grupo)
+    {
+        SeleccionarGrupo(grupo);
+        await PagarSeleccionadasAsync();
+    }
     private decimal PorcentajeAjuste(AliadoAdminComisionRow item) => porcentajesAjuste.TryGetValue(item.IdComision, out var valor) ? valor : item.Porcentaje;
     private decimal ValorAjuste(AliadoAdminComisionRow item) => valoresAjuste.TryGetValue(item.IdComision, out var valor) ? valor : item.Valor;
     private void CambiarPorcentaje(AliadoAdminComisionRow item, ChangeEventArgs e)
