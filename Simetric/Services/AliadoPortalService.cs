@@ -378,26 +378,26 @@ public sealed class AliadoPortalService
             .ToListAsync();
 
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
-        var ultimaPorCliente = facturas
-            .Where(x => x.IdCliente.HasValue)
-            .GroupBy(x => x.IdCliente!.Value)
-            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.Fecha).First());
-        var ultimaPorIdentificacion = facturas
-            .Where(x => !string.IsNullOrWhiteSpace(x.IdentificacionCliente))
-            .GroupBy(x => NormalizarIdentificacionCliente(x.IdentificacionCliente), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.Fecha).First(), StringComparer.OrdinalIgnoreCase);
-
         foreach (var cliente in clientes)
         {
-            if (!ultimaPorCliente.TryGetValue(cliente.IdCliente, out var factura) &&
-                (string.IsNullOrWhiteSpace(cliente.Identificacion) ||
-                 !ultimaPorIdentificacion.TryGetValue(NormalizarIdentificacionCliente(cliente.Identificacion), out factura)))
+            var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
+            var compras = facturas
+                .Where(x => x.IdCliente == cliente.IdCliente ||
+                            (!string.IsNullOrWhiteSpace(identificacion) &&
+                             string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(x => x.Fecha)
+                .ToList();
+            if (compras.Count == 0)
                 continue;
 
+            var factura = compras[0];
             cliente.Producto = factura.Producto;
             cliente.FechaCompra = factura.Fecha;
             cliente.FechaVencimiento = factura.FechaVencimiento;
             cliente.Estado = factura.Estado;
+            cliente.TotalCompras = compras.Count;
+            cliente.ComprasEFact = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-FACT");
+            cliente.ComprasERubrica = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA");
         }
 
         return clientes;
@@ -427,6 +427,23 @@ public sealed class AliadoPortalService
 
         if (cliente is null)
             return null;
+
+        if (!EsCorreoDisponible(cliente.Email) && !string.IsNullOrWhiteSpace(cliente.Identificacion))
+        {
+            var contactos = await db.Clientes
+                .AsNoTracking()
+                .Where(x => x.Idvendedor == contexto.IdVendedor && x.Estado != false && x.Usuario != userId)
+                .Select(x => new
+                {
+                    Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
+                    Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo
+                })
+                .ToListAsync();
+            cliente.Email = contactos
+                .Where(x => string.Equals(NormalizarIdentificacionCliente(x.Identificacion), NormalizarIdentificacionCliente(cliente.Identificacion), StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Email)
+                .FirstOrDefault(EsCorreoDisponible);
+        }
 
         var identificacionCliente = NormalizarIdentificacionCliente(cliente.Identificacion);
         var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor))
@@ -2054,6 +2071,10 @@ public sealed class AliadoPortalService
             ? string.Empty
             : new string(identificacion.Where(char.IsLetterOrDigit).ToArray());
 
+    private static bool EsCorreoDisponible(string? correo)
+        => !string.IsNullOrWhiteSpace(correo) &&
+           !correo.EndsWith("@deleted.local", StringComparison.OrdinalIgnoreCase);
+
     private static async Task<string> GenerarCodigoAsync(AppDbContext db, string nombre)
     {
         var baseCodigo = new string(nombre.ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray());
@@ -2315,12 +2336,15 @@ public class AliadoClienteDto
     public int IdCliente { get; init; }
     public string? Identificacion { get; init; }
     public string Nombre { get; init; } = string.Empty;
-    public string? Email { get; init; }
+    public string? Email { get; set; }
     public string? Telefono { get; init; }
     public string? Producto { get; set; }
     public DateTime? FechaCompra { get; set; }
     public DateTime? FechaVencimiento { get; set; }
     public string? Estado { get; set; }
+    public int TotalCompras { get; set; }
+    public int ComprasEFact { get; set; }
+    public int ComprasERubrica { get; set; }
     public string Servicio => AliadoServicioHelper.Clasificar(Producto);
 }
 
