@@ -386,7 +386,6 @@ public sealed class AliadoPortalService
             .OrderBy(x => x.Nombre)
             .ToListAsync();
 
-        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
         var ultimaPorCliente = facturas
             .Where(x => x.IdCliente.HasValue)
@@ -415,8 +414,6 @@ public sealed class AliadoPortalService
             cliente.FechaCompra = factura.Fecha;
             cliente.FechaVencimiento = factura.FechaVencimiento;
             cliente.Estado = factura.Estado;
-        }
-
             cliente.NivelAlerta = ObtenerNivelAlerta(cliente);
             cliente.Alerta = ObtenerDescripcionAlerta(cliente);
         }
@@ -1299,6 +1296,80 @@ public sealed class AliadoPortalService
                      db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName)))).Select(u => u.Estado ?? false).FirstOrDefault()
             })
             .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<AliadoClienteAsignacionRow>> ListarClientesParaAsignacionAsync(int actorId)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return Array.Empty<AliadoClienteAsignacionRow>();
+
+        return await db.Clientes
+            .AsNoTracking()
+            .Where(x => x.Estado != false)
+            .OrderBy(x => x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? string.Empty) + " " + (x.Apellidos ?? string.Empty)))
+            .Select(x => new AliadoClienteAsignacionRow
+            {
+                IdCliente = x.Codcliente,
+                Nombre = x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? string.Empty) + " " + (x.Apellidos ?? string.Empty)),
+                Identificacion = x.Numeroidentificacion,
+                Correo = x.Correo,
+                IdVendedorActual = x.Idvendedor,
+                AliadoActual = db.VendedoresBackOffice
+                    .Where(v => v.IdVendedor == x.Idvendedor)
+                    .Select(v => v.Nombre)
+                    .FirstOrDefault()
+            })
+            .ToListAsync();
+    }
+
+    public async Task<(bool Success, string Message)> AsignarClienteAliadoAsync(int actorId, int idCliente, int idVendedorDestino)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para asignar clientes.");
+
+        var aliado = await db.VendedoresBackOffice
+            .FirstOrDefaultAsync(x => x.IdVendedor == idVendedorDestino && !x.EsSistema && x.Activo);
+        if (aliado is null)
+            return (false, "El aliado seleccionado no está disponible.");
+
+        var cliente = await db.Clientes.FirstOrDefaultAsync(x => x.Codcliente == idCliente && x.Estado != false);
+        if (cliente is null)
+            return (false, "No se encontró el cliente seleccionado.");
+        if (cliente.Idvendedor == idVendedorDestino)
+            return (false, "El cliente ya está asignado a este aliado.");
+
+        var idVendedorAnterior = cliente.Idvendedor;
+        var aliadoAnterior = idVendedorAnterior.HasValue
+            ? await db.VendedoresBackOffice.AsNoTracking()
+                .Where(x => x.IdVendedor == idVendedorAnterior.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync()
+            : null;
+
+        cliente.Idvendedor = idVendedorDestino;
+        if (cliente.Usuario.HasValue)
+        {
+            var usuario = await db.Usuarios.FirstOrDefaultAsync(x => x.IdUsuario == cliente.Usuario.Value);
+            if (usuario is not null)
+                usuario.IdVendedor = idVendedorDestino;
+        }
+
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(
+            actorId,
+            "ASIGNAR",
+            new { IdCliente = idCliente, IdVendedor = idVendedorAnterior, Aliado = aliadoAnterior },
+            new { IdCliente = idCliente, IdVendedor = idVendedorDestino, Aliado = aliado.Nombre, ComisionesTransferidas = false },
+            new { Modulo = "PortalAliados", Entidad = "AsignacionCliente" });
+
+        var retiro = string.IsNullOrWhiteSpace(aliadoAnterior)
+            ? string.Empty
+            : $" Se retiró del aliado {aliadoAnterior}; sus comisiones anteriores no se transfirieron.";
+        return (true, $"Cliente asignado a {aliado.Nombre}.{retiro}");
     }
 
     public async Task<IReadOnlyList<AliadoUsuarioAdminRow>> ListarUsuariosAliadosAsync(int actorId)
@@ -2411,6 +2482,10 @@ public class AliadoClienteDto
     public int TotalCompras { get; set; }
     public int ComprasEFact { get; set; }
     public int ComprasERubrica { get; set; }
+    public int? DiasFirmaElectronica { get; set; }
+    public DateTime? FechaVencimientoFirmaElectronica { get; set; }
+    public string NivelAlerta { get; set; } = "warning";
+    public string Alerta { get; set; } = string.Empty;
     public string Servicio => AliadoServicioHelper.Clasificar(Producto);
 }
 
@@ -2584,6 +2659,16 @@ public sealed class AliadoAdminRow
     public bool UsuarioActivo { get; init; }
     public decimal PorcentajeBase { get; init; }
     public string? Usuario { get; init; }
+}
+
+public sealed class AliadoClienteAsignacionRow
+{
+    public int IdCliente { get; init; }
+    public string Nombre { get; init; } = string.Empty;
+    public string? Identificacion { get; init; }
+    public string? Correo { get; init; }
+    public int? IdVendedorActual { get; init; }
+    public string? AliadoActual { get; init; }
 }
 
 public sealed class AliadoUsuarioAdminRow
