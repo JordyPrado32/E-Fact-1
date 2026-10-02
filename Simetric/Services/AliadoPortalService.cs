@@ -386,6 +386,17 @@ public sealed class AliadoPortalService
             .OrderBy(x => x.Nombre)
             .ToListAsync();
 
+        var correosPorIdentificacion = clientes
+            .Where(x => !string.IsNullOrWhiteSpace(x.Identificacion) && EsCorreoDisponible(x.Email))
+            .GroupBy(x => NormalizarIdentificacionCliente(x.Identificacion), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Select(y => y.Email).First(EsCorreoDisponible), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var cliente in clientes.Where(x => !EsCorreoDisponible(x.Email)))
+        {
+            var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
+            cliente.Email = correosPorIdentificacion.GetValueOrDefault(identificacion);
+        }
+
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
         var ultimaPorCliente = facturas
             .Where(x => x.IdCliente.HasValue)
@@ -420,6 +431,9 @@ public sealed class AliadoPortalService
             cliente.FechaCompra = factura.Fecha;
             cliente.FechaVencimiento = factura.FechaVencimiento;
             cliente.Estado = factura.Estado;
+            cliente.TotalCompras = compras.Count;
+            cliente.ComprasEFact = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-FACT");
+            cliente.ComprasERubrica = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA");
             cliente.NivelAlerta = ObtenerNivelAlerta(cliente);
             cliente.Alerta = ObtenerDescripcionAlerta(cliente);
         }
