@@ -383,9 +383,9 @@ public sealed class AliadoPortalService
                     ?? x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
                 Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo,
                 Telefono = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Celular).FirstOrDefault() ?? x.Celular ?? x.Telefonoconvencional,
-                 SaldoDocumentos = x.UsuarioNavegacion == null ? 0 : x.UsuarioNavegacion.SaldoDocumentos,
-                 FechaUltimaRecargaDocumentos = x.UsuarioNavegacion == null ? null : x.UsuarioNavegacion.FechaUltimaRecargaDocumentos,
-                 HistorialComprasDocumentosJson = x.UsuarioNavegacion == null ? null : x.UsuarioNavegacion.HistorialComprasDocumentosJson
+                SaldoDocumentos = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => (int?)u.SaldoDocumentos).FirstOrDefault() ?? 0,
+                FechaUltimaRecargaDocumentos = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.FechaUltimaRecargaDocumentos).FirstOrDefault(),
+                HistorialComprasDocumentosJson = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.HistorialComprasDocumentosJson).FirstOrDefault()
             })
             .OrderBy(x => x.Nombre)
             .ToListAsync();
