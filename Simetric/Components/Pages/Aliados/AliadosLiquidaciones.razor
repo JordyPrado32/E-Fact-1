@@ -1,12 +1,12 @@
 @page "/aliados/liquidaciones"
 @using MiniExcelLibs
+@implements IAsyncDisposable
 
 <PageTitle>Liquidaciones | Portal de Aliados</PageTitle>
 
 <div class="ally-page">
     <section class="liquidations-hero">
         <div><span class="ally-eyebrow">LIQUIDACIONES</span><h2>Liquidaciones</h2><p>Consulta, revisa y descarga las liquidaciones de comisiones de tus clientes.</p></div>
-        <img class="liquidations-hero-mascot" src="/images/aliados-dashboard-numi.png" alt="Asistente Numérica para liquidaciones" />
         <div class="liquidations-hero-message"><i class="ri-coins-line"></i><div><strong>Todas tus liquidaciones en un solo lugar</strong><span>Mantén el control de tus comisiones y revisa el detalle de cada período.</span></div></div>
     </section>
     <section class="liquidations-summary">
@@ -24,7 +24,7 @@
         </div>
         <div class="liquidations-filter-footer"><span><i class="ri-filter-3-line"></i> @LiquidacionesFiltradas.Count resultado(s)</span></div>
     </section>
-    <aside class="liquidations-visual-panel"><header><span class="liquidations-visual-icon"><i class="ri-bar-chart-box-line"></i></span><div><strong>Resumen visual</strong><small>Información general de tus liquidaciones</small></div></header><div class="liquidations-visual-content"><div class="liquidations-monthly"><strong>Liquidaciones por mes</strong><div class="monthly-chart">@foreach (var periodo in ResumenPeriodos) { <div><span style="height:@AlturaPeriodo(periodo.Cantidad)%"><b>@periodo.Cantidad</b></span><small>@EtiquetaPeriodo(periodo.Periodo)</small></div> }</div></div><div class="liquidations-state"><strong>Estado de pago</strong><div class="state-layout"><div class="liquidations-status-total"><strong>@LiquidacionesFiltradas.Count</strong><span>liquidaciones</span></div><div class="liquidations-status-list"><div><span><b class="paid-dot"></b>Pagadas <strong>@LiquidacionesPagadas.Count</strong></span></div><div><span><b class="pending-dot"></b>Pendientes <strong>@LiquidacionesPendientes.Count</strong></span></div><div><span><b class="canceled-dot"></b>Anuladas <strong>@LiquidacionesAnuladas.Count</strong></span></div></div></div></div></div></aside>
+    <aside class="liquidations-visual-panel"><header><span class="liquidations-visual-icon"><i class="ri-bar-chart-box-line"></i></span><div><strong>Resumen visual</strong><small>Información general de tus liquidaciones</small></div></header><div class="liquidations-visual-content"><div class="liquidations-chart-block"><strong>Liquidaciones por mes</strong><div class="liquidations-chart-canvas"><canvas id="ally-liquidations-monthly"></canvas></div></div><div class="liquidations-chart-block state"><strong>Estado de pago</strong><div class="liquidations-chart-canvas"><canvas id="ally-liquidations-status"></canvas></div></div></div></aside>
     </div>
     <section class="ally-panel liquidations-list-card">
         <div class="liquidations-list-heading"><div><span class="ally-eyebrow">HISTORIAL</span><h3>Listado de liquidaciones</h3><p>Revisa el detalle, descarga documentos y consulta el estado de cada liquidación.</p></div><button class="ally-export-card" type="button" @onclick="ExportarExcelAsync" disabled="@(!LiquidacionesFiltradas.Any())"><span class="ally-export-card-icon"><i class="ri-download-2-line"></i></span><span><strong>Exportar liquidaciones</strong><small>Archivo Excel</small></span></button></div>
@@ -38,7 +38,7 @@
         }
         else
         {
-            <div class="ally-table-wrap"><table class="ally-table liquidations-table"><thead><tr><th>Aliado</th><th>Período</th><th>Fecha</th><th>Movimientos</th><th>Total</th><th>Referencia</th><th>Estado de pago</th><th>Documentos</th><th></th></tr></thead><tbody>
+            <div class="ally-table-wrap"><table class="ally-table liquidations-table"><thead><tr><th>Fecha / período</th><th>Aliado</th><th>Movimientos</th><th>Total</th><th>Referencia</th><th>Estado de pago</th><th>Documentos</th><th>Acciones</th></tr></thead><tbody>
             @foreach (var item in LiquidacionesPaginadas)
             {
                 <tr @key="item.IdLiquidacion"><td>@(string.IsNullOrWhiteSpace(item.Aliado) ? "-" : item.Aliado)</td><td><strong>@item.Periodo</strong></td><td>@item.Fecha.ToString("dd/MM/yyyy")</td><td>@item.CantidadComisiones comisión(es)</td><td>$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @EstadoLiquidacionCss(item.Estado)">@EstadoLiquidacionTexto(item.Estado)</span></td><td><div class="liquidation-document-actions">@if (item.CodLiquidacionCompra is > 0) { <button type="button" class="ally-document-link xml" @onclick="() => AbrirXmlAsync(item)" title="Descargar XML autorizado por el SRI">XML</button><button type="button" class="ally-document-link pdf" @onclick="() => AbrirPdfAsync(item)" title="Descargar PDF autorizado por el SRI">PDF</button> }@if (!string.IsNullOrWhiteSpace(item.ComprobantePagoUrl)) { <button type="button" class="ally-table-action" @onclick="() => AbrirComprobante(item)" title="Ver comprobante de pago"><i class="ri-attachment-2"></i></button> }</div></td><td><button type="button" class="ally-table-action" @onclick="() => VerDetalleAsync(item)">Ver detalle</button></td></tr>
@@ -120,6 +120,7 @@
         .ToList();
     private bool cargando = true;
     private bool cargandoDetalle;
+    private bool graficosPendientes;
     private string RangoActivo { get; set; } = "todo";
 
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
@@ -127,12 +128,12 @@
     [Inject] private IJSRuntime JS { get; set; } = null!;
     [Inject] private SweetAlertService AlertService { get; set; } = null!;
 
-    private void ReiniciarPagina() { pagina = 1; RangoActivo = string.Empty; }
+    private void ReiniciarPagina() { pagina = 1; RangoActivo = string.Empty; graficosPendientes = true; }
     private void SeleccionarEsteMes() => AplicarRango(DateTime.Today.AddDays(1 - DateTime.Today.Day), DateTime.Today, "mes");
     private void SeleccionarMesAnterior() { var inicio = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-1); AplicarRango(inicio, inicio.AddMonths(1).AddDays(-1), "anterior"); }
     private void SeleccionarUltimosSeisMeses() => AplicarRango(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5), DateTime.Today, "seis");
-    private void SeleccionarTodo() { fechaDesde = null; fechaHasta = null; RangoActivo = "todo"; pagina = 1; }
-    private void AplicarRango(DateTime desde, DateTime hasta, string rango) { fechaDesde = desde; fechaHasta = hasta; RangoActivo = rango; pagina = 1; }
+    private void SeleccionarTodo() { fechaDesde = null; fechaHasta = null; RangoActivo = "todo"; pagina = 1; graficosPendientes = true; }
+    private void AplicarRango(DateTime desde, DateTime hasta, string rango) { fechaDesde = desde; fechaHasta = hasta; RangoActivo = rango; pagina = 1; graficosPendientes = true; }
     private void RestablecerFiltros() { filtroEstado = string.Empty; filtroAliado = string.Empty; filtroPeriodo = string.Empty; busqueda = string.Empty; SeleccionarTodo(); }
     private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
     private void CerrarDetalle() => liquidacionSeleccionada = null;
@@ -146,7 +147,6 @@
     private static string EstadoPagoCss(AliadoComisionMovimientoDto item) => item.EstadoPago == "Pagada" ? "success" : item.EstadoPago == "Anulada" ? "danger" : "warning";
     private static string EstadoLiquidacionTexto(string estado) => estado == "Pagada" ? "Pagada" : estado == "Anulada" ? "Anulada" : "Pendiente de pago";
     private static string EstadoLiquidacionCss(string estado) => estado == "Pagada" ? "success" : estado == "Anulada" ? "danger" : "warning";
-    private int AlturaPeriodo(int cantidad) => Math.Max(14, (int)Math.Round(cantidad * 100d / Math.Max(1, ResumenPeriodos.Max(x => x.Cantidad))));
     private static string EtiquetaPeriodo(string periodo) => DateTime.TryParseExact($"{periodo}-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var fecha) ? fecha.ToString("MMM", new System.Globalization.CultureInfo("es-EC")) : periodo;
     private sealed record ResumenPeriodo(string Periodo, int Cantidad);
 
@@ -226,5 +226,24 @@
             liquidaciones = (await AliadoService.ObtenerLiquidacionesAsync(id)).ToList();
         }
         cargando = false;
+        graficosPendientes = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!graficosPendientes || cargando)
+            return;
+
+        graficosPendientes = false;
+        await JS.InvokeVoidAsync("aliadosLiquidacionesCharts.render", new
+        {
+            monthly = new { labels = ResumenPeriodos.Select(x => EtiquetaPeriodo(x.Periodo)), values = ResumenPeriodos.Select(x => x.Cantidad) },
+            status = new { labels = new[] { "Pagadas", "Pendientes", "Anuladas" }, values = new[] { LiquidacionesPagadas.Count, LiquidacionesPendientes.Count, LiquidacionesAnuladas.Count } }
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("aliadosLiquidacionesCharts.destroy"); } catch (JSDisconnectedException) { }
     }
 }
