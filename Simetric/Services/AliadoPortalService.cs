@@ -405,15 +405,6 @@ public sealed class AliadoPortalService
         }
 
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
-        var ultimaPorCliente = facturas
-            .Where(x => x.IdCliente.HasValue)
-            .GroupBy(x => x.IdCliente!.Value)
-            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.Fecha).First());
-        var ultimaPorIdentificacion = facturas
-            .Where(x => !string.IsNullOrWhiteSpace(x.IdentificacionCliente))
-            .GroupBy(x => NormalizarIdentificacionCliente(x.IdentificacionCliente), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.Fecha).First(), StringComparer.OrdinalIgnoreCase);
-
         foreach (var cliente in clientes)
         {
             var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
@@ -527,10 +518,51 @@ public sealed class AliadoPortalService
             return Array.Empty<AliadoRenovacionDto>();
 
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var vendedorIds = contexto.EsAdministrador
+            ? (await ListarAliadosAsync()).Select(x => x.IdVendedor).ToList()
+            : null;
         var clientes = (await ObtenerClientesAsync(userId))
-            .Where(x => !string.IsNullOrWhiteSpace(x.NivelAlerta))
+            .GroupBy(cliente =>
+            {
+                var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
+                return string.IsNullOrWhiteSpace(identificacion)
+                    ? $"cliente:{cliente.IdCliente}"
+                    : $"identificacion:{identificacion}";
+            }, StringComparer.OrdinalIgnoreCase)
+            .Select(grupo => grupo
+                .OrderByDescending(cliente => cliente.FechaUltimaRecargaDocumentos)
+                .ThenByDescending(cliente => cliente.SaldoDocumentos)
+                .First())
             .ToList();
-        var ids = clientes.Select(x => x.IdFactura).Where(x => x > 0).Distinct().ToList();
+        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
+        var renovacionesPorServicio = clientes
+            .SelectMany(cliente =>
+            {
+                var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
+                var comprasPorServicio = facturas
+                    .Where(x => x.IdCliente == cliente.IdCliente ||
+                                (!string.IsNullOrWhiteSpace(identificacion) &&
+                                 string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)))
+                    .GroupBy(x => AliadoServicioHelper.Clasificar(x.Producto), StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.OrderByDescending(y => y.Fecha).First())
+                    .ToList();
+
+                if (!comprasPorServicio.Any(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-FACT"))
+                {
+                    comprasPorServicio.Add(new FacturaPortalRow
+                    {
+                        IdFactura = cliente.IdFactura,
+                        IdCliente = cliente.IdCliente,
+                        Producto = "E-FACT",
+                        Fecha = cliente.FechaCompra ?? DateTime.Today,
+                        FechaVencimiento = cliente.FechaVencimiento
+                    });
+                }
+
+                return comprasPorServicio.Select(factura => new { Cliente = cliente, Factura = factura });
+            })
+            .ToList();
+        var ids = renovacionesPorServicio.Select(x => x.Factura.IdFactura).Distinct().ToList();
         var gestiones = await db.AliadoRenovacionGestiones
             .AsNoTracking()
             .Where(x => (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor) && ids.Contains(x.IdFactura))
@@ -538,8 +570,8 @@ public sealed class AliadoPortalService
             .Select(x => x.OrderByDescending(y => y.FechaGestion).First())
             .ToDictionaryAsync(x => x.IdFactura);
 
-        var resultado = clientes
-            .Select(cliente => ToRenovacionCliente(cliente, gestiones.TryGetValue(cliente.IdFactura, out var gestion) ? gestion : null))
+        var resultado = renovacionesPorServicio
+            .Select(x => ToRenovacionCliente(x.Cliente, x.Factura, gestiones.TryGetValue(x.Factura.IdFactura, out var gestion) ? gestion : null))
             .OrderBy(x => x.NivelAlerta == "danger" ? 0 : 1)
             .ThenBy(x => x.DiasFirmaElectronica ?? int.MaxValue)
             .ThenBy(x => x.SaldoDocumentos)
@@ -609,30 +641,48 @@ public sealed class AliadoPortalService
         return new FirmaClienteEstado(fechaVencimiento);
     }
 
-    private static AliadoRenovacionDto ToRenovacionCliente(AliadoClienteDto cliente, AliadoRenovacionGestion? gestion) => new()
+    private static AliadoRenovacionDto ToRenovacionCliente(AliadoClienteDto cliente, FacturaPortalRow factura, AliadoRenovacionGestion? gestion)
     {
-        IdFactura = cliente.IdFactura,
+        var servicio = AliadoServicioHelper.Clasificar(factura.Producto);
+        var esEFact = servicio == "E-FACT";
+        DateTime? vencimientoFirma = esEFact
+            ? (DateTime?)null
+            : factura.FechaVencimiento ?? CalcularEstadoFirma(factura.Fecha, factura.Producto).FechaVencimiento;
+        int? diasFirma = vencimientoFirma.HasValue
+            ? (vencimientoFirma.Value.Date - DateTime.Today).Days
+            : (int?)null;
+        var nivelAlerta = esEFact
+            ? cliente.SaldoDocumentos < 5 ? "danger" : cliente.SaldoDocumentos == 5 ? "warning" : "success"
+            : diasFirma <= 7 ? "danger" : diasFirma <= 30 ? "warning" : "success";
+        var alerta = esEFact
+            ? cliente.SaldoDocumentos < 5 ? "Atención urgente" : cliente.SaldoDocumentos == 5 ? "5 documentos" : "Disponible"
+            : diasFirma <= 0 ? "Firma vencida" : diasFirma <= 7 ? "Próxima a vencer" : diasFirma <= 30 ? $"Vence en {diasFirma} días" : "Vigente";
+
+        return new AliadoRenovacionDto
+        {
+        IdFactura = factura.IdFactura,
         IdCliente = cliente.IdCliente,
         Aliado = cliente.Aliado ?? string.Empty,
         Cliente = cliente.Nombre,
-        Producto = cliente.Producto ?? cliente.Servicio,
-        FechaVencimiento = cliente.FechaVencimientoFirmaElectronica ?? DateTime.Today,
-        DiasRestantes = cliente.DiasFirmaElectronica ?? 0,
+        Producto = factura.Producto,
+        FechaVencimiento = vencimientoFirma ?? factura.FechaVencimiento ?? DateTime.Today,
+        DiasRestantes = diasFirma ?? 0,
         EstadoGestion = gestion?.Resultado ?? "Pendiente",
         UltimaGestion = gestion?.FechaGestion,
         Observacion = gestion?.Observacion,
         ProximoSeguimiento = gestion?.ProximoSeguimiento,
-        EsPorSaldo = cliente.Servicio == "E-FACT",
+        EsPorSaldo = esEFact,
         SaldoDocumentos = cliente.SaldoDocumentos,
         Email = cliente.Email,
         Telefono = cliente.Telefono,
         Identificacion = cliente.Identificacion,
-        Servicio = cliente.Servicio,
-        DiasFirmaElectronica = cliente.DiasFirmaElectronica,
-        FechaVencimientoFirmaElectronica = cliente.FechaVencimientoFirmaElectronica,
-        NivelAlerta = cliente.NivelAlerta ?? "warning",
-        Alerta = cliente.Alerta
-    };
+        Servicio = servicio,
+        DiasFirmaElectronica = diasFirma,
+        FechaVencimientoFirmaElectronica = vencimientoFirma,
+        NivelAlerta = nivelAlerta,
+        Alerta = alerta
+        };
+    }
 
     private sealed record FirmaClienteEstado(DateTime FechaVencimiento);
 
