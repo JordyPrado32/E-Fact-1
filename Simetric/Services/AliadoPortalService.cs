@@ -415,35 +415,7 @@ public sealed class AliadoPortalService
             cliente.FechaCompra = factura.Fecha;
             cliente.FechaVencimiento = factura.FechaVencimiento;
             cliente.Estado = factura.Estado;
-            cliente.TotalCompras = compras.Count;
-            cliente.ComprasEFact = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-FACT");
-            cliente.ComprasERubrica = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA");
         }
-
-        var usuarioIds = clientes.Where(x => x.IdUsuario.HasValue).Select(x => x.IdUsuario!.Value).Distinct().ToList();
-        var firmas = await db.Set<UsuSolicitudFirma>()
-            .AsNoTracking()
-            .Where(x => usuarioIds.Contains(x.SolIdUsuarioCliente) && (x.SolIdEstadoNumerica == 3 || x.SolActivo))
-            .Select(x => new
-            {
-                x.SolIdUsuarioCliente,
-                FechaBase = x.SolFechaAprobacion ?? x.SolFechaSolicitud,
-                x.SolVigencia
-            })
-            .ToListAsync();
-        var firmaPorUsuario = firmas
-            .GroupBy(x => x.SolIdUsuarioCliente)
-            .ToDictionary(
-                x => x.Key,
-                x => CalcularEstadoFirma(x.OrderByDescending(y => y.FechaBase).First().FechaBase, x.OrderByDescending(y => y.FechaBase).First().SolVigencia));
-
-        foreach (var cliente in clientes)
-        {
-            if (cliente.IdUsuario.HasValue && firmaPorUsuario.TryGetValue(cliente.IdUsuario.Value, out var firma))
-            {
-                cliente.FechaVencimientoFirmaElectronica = firma.FechaVencimiento;
-                cliente.DiasFirmaElectronica = (firma.FechaVencimiento.Date - DateTime.Today).Days;
-            }
 
             cliente.NivelAlerta = ObtenerNivelAlerta(cliente);
             cliente.Alerta = ObtenerDescripcionAlerta(cliente);
@@ -2436,6 +2408,9 @@ public class AliadoClienteDto
     public DateTime? FechaCompra { get; set; }
     public DateTime? FechaVencimiento { get; set; }
     public string? Estado { get; set; }
+    public int TotalCompras { get; set; }
+    public int ComprasEFact { get; set; }
+    public int ComprasERubrica { get; set; }
     public string Servicio => AliadoServicioHelper.Clasificar(Producto);
 }
 
