@@ -161,7 +161,7 @@
     private bool cargando;
     private bool procesando;
     private bool TieneSeleccionadasAprobadas => comisiones.Any(x => Seleccionadas.Contains(x.IdComision) && x.Estado == "Aprobada");
-    private static bool PuedeAjustar(AliadoAdminComisionRow item) => item.Estado is not "Pagada" and not "Anulada" and not "Revertida";
+    private static bool PuedeAjustar(AliadoAdminComisionRow item) => item.Estado is not "Pagada" and not "AjustePendiente" and not "Anulada" and not "Revertida";
     private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => comisiones.Where(x =>
         (filtroAliado == 0 || x.IdVendedor == filtroAliado) &&
         (string.IsNullOrWhiteSpace(busquedaAliado) || x.Aliado.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase)) &&
@@ -176,7 +176,9 @@
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-        int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out actorId);
+        var claimValue = auth.User.FindFirst("IdUsuario")?.Value
+            ?? auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        int.TryParse(claimValue, out actorId);
         await CargarAsync();
     }
 
@@ -351,7 +353,9 @@
         return comisiones
             .Where(x => x.IdVendedor == item.IdVendedor &&
                         (x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM")) == periodo &&
-                        x.BaseComisionable > 0)
+                        x.BaseComisionable > 0 &&
+                        x.Estado is not "Anulada" and not "Revertida" &&
+                        !x.TipoComision.StartsWith("Reversion-", StringComparison.OrdinalIgnoreCase))
             .GroupBy(x => x.IdFactura)
             .Sum(x => x.Max(y => y.BaseComisionable));
     }

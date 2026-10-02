@@ -1302,8 +1302,47 @@ namespace Simetric.Services
                             throw new InvalidOperationException("El emisor no tiene un propietario de catálogo configurado.");
 
                         var codigosCatalogo = detalles.Where(d => d.Codproducto > 0).Select(d => d.Codproducto).Distinct().ToList();
-                        if (await context.Productos.CountAsync(p => p.Idusuario == catalogOwnerId && codigosCatalogo.Contains(p.Codigo)) != codigosCatalogo.Count)
-                            throw new InvalidOperationException("Uno o más productos no pertenecen al catálogo del documento.");
+                        var codigosValidos = await context.Productos
+                            .Where(p => p.Idusuario == catalogOwnerId && codigosCatalogo.Contains(p.Codigo))
+                            .Select(p => p.Codigo)
+                            .ToHashSetAsync();
+                        var detallesFueraCatalogo = detalles
+                            .Where(d => d.Codproducto > 0 && !codigosValidos.Contains(d.Codproducto))
+                            .ToList();
+                        if (detallesFueraCatalogo.Count > 0)
+                        {
+                            var precioDocumento = Math.Round(detallesFueraCatalogo[0].Precioproducto, 2, MidpointRounding.AwayFromZero);
+                            var documento = await context.Productos.FirstOrDefaultAsync(p =>
+                                p.Idusuario == catalogOwnerId &&
+                                p.Nombre != null &&
+                                p.Nombre.Trim().ToUpper() == "DOCUMENTO");
+                            if (documento is null)
+                            {
+                                documento = new Producto
+                                {
+                                    Nombre = "DOCUMENTO",
+                                    CodigoPrincipal = "DOCUMENTO",
+                                    ValorUnitario = precioDocumento,
+                                    Estado = true,
+                                    Facturable = true,
+                                    Tipocompravena = "SERVICIO",
+                                    Idusuario = catalogOwnerId
+                                };
+                                context.Productos.Add(documento);
+                                await context.SaveChangesAsync();
+                            }
+                            else
+                            {
+                                documento.ValorUnitario = precioDocumento;
+                            }
+
+                            foreach (var detalle in detallesFueraCatalogo)
+                            {
+                                detalle.Codproducto = documento.Codigo;
+                                detalle.Codprincipal = documento.CodigoPrincipal;
+                                detalle.Codauxiliar = documento.CodAuxiliar;
+                            }
+                        }
 
                         await VincularProductosManualesAsync(context, catalogOwnerId.Value, detalles);
 
@@ -2582,6 +2621,10 @@ IF @resultado < 0
                     context.Productos.Add(producto);
                     await context.SaveChangesAsync();
                     productosPorNombre[clave] = producto;
+                }
+                else if (clave == "DOCUMENTO")
+                {
+                    producto.ValorUnitario = Math.Round(detalle.Precioproducto, 2, MidpointRounding.AwayFromZero);
                 }
 
                 detalle.Codproducto = producto.Codigo;

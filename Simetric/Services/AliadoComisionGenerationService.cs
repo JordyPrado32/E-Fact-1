@@ -54,11 +54,16 @@ public sealed class AliadoComisionGenerationService
             ?? new AliadoPortalConfiguracion();
         var facturas = await db.Facturas.AsNoTracking()
             .Where(x => x.Idvendedor == idVendedor &&
-                        (x.Estado == true || x.Estado == null))
+                        (x.Estado == true || x.Estado == null) &&
+                        !db.NotaCreditos.Any(nc =>
+                            nc.IdDocModificado == x.Codfactura &&
+                            nc.Estado == true &&
+                            nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado))
             .Select(x => new FacturaComisionRow
             {
                 IdFactura = x.Codfactura,
                 IdCliente = x.Codclientes,
+                Producto = x.Detallefacturas.OrderBy(d => d.Codlinea).Select(d => d.Descripproducto).FirstOrDefault() ?? string.Empty,
                 FechaVencimiento = x.Fechavence,
                 Subtotal = x.Subtotal,
                 Subtotal0 = x.Subtotal0,
@@ -68,6 +73,14 @@ public sealed class AliadoComisionGenerationService
                 EstadoPago = x.Estadopago
             })
             .ToListAsync();
+        var comprasClienteServicio = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var factura in facturas.OrderBy(x => x.Fecha).ThenBy(x => x.IdFactura))
+        {
+            if (factura.IdCliente is not > 0 || string.IsNullOrWhiteSpace(factura.Producto))
+                continue;
+            var clave = $"{factura.IdCliente.Value}|{AliadoServicioHelper.Normalizar(factura.Producto)}";
+            factura.EsRenovacion = !comprasClienteServicio.Add(clave) || factura.FechaVencimiento.HasValue;
+        }
         var existentes = await db.AliadoComisiones.AsNoTracking()
             .Where(x => x.IdVendedor == idVendedor)
             .Select(x => new { x.IdFactura, x.TipoComision })
@@ -110,12 +123,13 @@ public sealed class AliadoComisionGenerationService
                 continue;
 
             gestiones.TryGetValue(factura.IdFactura, out var gestion);
-            var esRenovacion = factura.FechaVencimiento.HasValue;
+            var esRenovacion = factura.EsRenovacion;
             var gestionAliadoEfectiva = gestion?.OrigenGestion != "Numerica" &&
                                          gestion?.Resultado is not null &&
                                          gestion.Resultado is not "Pendiente" and not "No responde";
+            var fechaReferenciaRenovacion = factura.FechaVencimiento ?? factura.Fecha;
             var intervieneNumerica = esRenovacion &&
-                                     factura.FechaVencimiento!.Value.Date <= DateTime.Today.AddDays(configuracion.DiasIntervencionNumerica) &&
+                                     fechaReferenciaRenovacion.Date <= DateTime.Today.AddDays(configuracion.DiasIntervencionNumerica) &&
                                      !gestionAliadoEfectiva;
             var tipo = !esRenovacion
                 ? "VentaNueva"

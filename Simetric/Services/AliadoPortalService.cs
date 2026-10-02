@@ -193,8 +193,12 @@ public sealed class AliadoPortalService
             esRutaAdmin)
             return false;
 
+        var esReporteCompartido = relative.Equals($"{RootRoute}/renovaciones", StringComparison.OrdinalIgnoreCase) ||
+                                  relative.Equals($"{RootRoute}/comisiones", StringComparison.OrdinalIgnoreCase) ||
+                                  relative.Equals($"{RootRoute}/liquidaciones", StringComparison.OrdinalIgnoreCase);
         if (contexto.EsAdministrador &&
             !esRutaAdmin &&
+            !esReporteCompartido &&
             !relative.Equals(HomeRoute, StringComparison.OrdinalIgnoreCase) &&
             !relative.Equals($"{RootRoute}/perfil", StringComparison.OrdinalIgnoreCase))
             return false;
@@ -314,6 +318,7 @@ public sealed class AliadoPortalService
 
         await SincronizarComisionesAsync(contexto.IdVendedor);
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
+        MarcarComprasRepetidas(facturas);
         var hoy = DateTime.Today;
         var desde = (inicioPeriodo ?? new DateTime(hoy.Year, hoy.Month, 1)).Date;
         var hasta = (finPeriodo ?? hoy).Date.AddDays(1);
@@ -450,12 +455,16 @@ public sealed class AliadoPortalService
         if (contexto is null)
             return Array.Empty<AliadoRenovacionDto>();
 
-        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
-        var ids = facturas.Select(x => x.IdFactura).ToList();
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var vendedorIds = contexto.EsAdministrador
+            ? await db.VendedoresBackOffice.AsNoTracking().Where(x => !x.EsSistema).Select(x => x.IdVendedor).ToListAsync()
+            : null;
+        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
+        MarcarComprasRepetidas(facturas);
+        var ids = facturas.Select(x => x.IdFactura).ToList();
         var gestiones = await db.AliadoRenovacionGestiones
             .AsNoTracking()
-            .Where(x => x.IdVendedor == contexto.IdVendedor && ids.Contains(x.IdFactura))
+            .Where(x => (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor) && ids.Contains(x.IdFactura))
             .GroupBy(x => x.IdFactura)
             .Select(x => x.OrderByDescending(y => y.FechaGestion).First())
             .ToDictionaryAsync(x => x.IdFactura);
@@ -463,7 +472,7 @@ public sealed class AliadoPortalService
         var resultado = facturas
             .Where(x => EsRenovacionVisible(x, DateTime.Today, -30, 90))
             .OrderBy(x => x.FechaVencimiento)
-            .Select(x => ToRenovacion(x, gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null, contexto.PorcentajeBase))
+            .Select(x => ToRenovacion(x, gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null, contexto.EsAdministrador ? x.PorcentajeBase : contexto.PorcentajeBase))
             .ToList();
 
         var facturasPorSaldo = facturas
@@ -481,7 +490,7 @@ public sealed class AliadoPortalService
             .Select(x => ToRenovacionPorSaldo(
                 x,
                 gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null,
-                contexto.PorcentajeBase,
+                 contexto.EsAdministrador ? x.PorcentajeBase : contexto.PorcentajeBase,
                 saldos[x.IdCliente!.Value])));
         resultado = resultado
             .OrderBy(x => x.EsPorSaldo ? 1 : 0)
@@ -553,10 +562,17 @@ public sealed class AliadoPortalService
             await _aliadoComisionGenerationService.SincronizarAsync(idVendedor);
 
         await _aliadoComisionGenerationService.CerrarPeriodosAsync();
+        await NormalizarComisionesPagadasAsync(db);
 
         return await db.AliadoComisiones
             .AsNoTracking()
-            .Where(x => db.VendedoresBackOffice.Any(v => v.IdVendedor == x.IdVendedor && !v.EsSistema))
+            .Where(x => db.VendedoresBackOffice.Any(v => v.IdVendedor == x.IdVendedor && !v.EsSistema) &&
+                        db.Facturas.Any(f => f.Codfactura == x.IdFactura &&
+                                             (f.Estado == true || f.Estado == null)) &&
+                        !db.NotaCreditos.Any(nc =>
+                            nc.IdDocModificado == x.IdFactura &&
+                            nc.Estado == true &&
+                            nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado))
             .Join(db.VendedoresBackOffice.AsNoTracking(), x => x.IdVendedor, x => x.IdVendedor, (comision, aliado) => new { comision, aliado })
             .OrderByDescending(x => x.comision.FechaGeneracion)
             .Select(x => new AliadoAdminComisionRow
@@ -587,6 +603,33 @@ public sealed class AliadoPortalService
                     .FirstOrDefault()
             })
             .ToListAsync();
+    }
+
+    private async Task NormalizarComisionesPagadasAsync(AppDbContext db)
+    {
+        var desincronizadas = await (
+            from comision in db.AliadoComisiones
+            join liquidacion in db.AliadoLiquidaciones
+                on comision.IdLiquidacion equals liquidacion.IdLiquidacion
+            where comision.Estado == "AjustePendiente" && liquidacion.Estado == "Pagada"
+            select new
+            {
+                Comision = comision,
+                liquidacion.FechaPago,
+                liquidacion.Fecha,
+                liquidacion.IdUsuarioPago
+            })
+            .ToListAsync();
+
+        foreach (var item in desincronizadas)
+        {
+            item.Comision.Estado = "Pagada";
+            item.Comision.FechaPago ??= item.FechaPago ?? item.Fecha;
+            item.Comision.IdUsuarioPago ??= item.IdUsuarioPago;
+        }
+
+        if (desincronizadas.Count > 0)
+            await db.SaveChangesAsync();
     }
 
     public async Task<(bool Success, string Message)> AprobarComisionAsync(int actorId, int idComision)
@@ -918,7 +961,7 @@ public sealed class AliadoPortalService
         if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para ajustar comisiones.");
         var comision = await db.AliadoComisiones.SingleOrDefaultAsync(x => x.IdComision == idComision);
-        if (comision is null || comision.Estado == "Pagada")
+        if (comision is null || comision.Estado is "Pagada" or "AjustePendiente")
             return (false, "Solo se pueden ajustar comisiones sin pagar.");
         comision.Porcentaje = porcentaje;
         comision.Valor = valor ?? decimal.Round(comision.BaseComisionable * porcentaje / 100m, 2, MidpointRounding.AwayFromZero);
@@ -935,7 +978,7 @@ public sealed class AliadoPortalService
         if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para ajustar comisiones.");
         var comision = await db.AliadoComisiones.SingleOrDefaultAsync(x => x.IdComision == idComision);
-        if (comision is null || comision.Estado == "Pagada")
+        if (comision is null || comision.Estado is "Pagada" or "AjustePendiente")
             return (false, "Solo se pueden ajustar comisiones sin pagar.");
 
         comision.Valor = decimal.Round(valor, 2, MidpointRounding.AwayFromZero);
@@ -1062,6 +1105,32 @@ public sealed class AliadoPortalService
         if (contexto is null)
             return null;
 
+        if (contexto.EsAdministrador)
+        {
+            var administracion = await ObtenerComisionesAdministracionAsync(userId);
+            return new AliadoComisionesDto
+            {
+                Movimientos = administracion.Select(x => new AliadoComisionMovimientoDto
+                {
+                    IdComision = x.IdComision,
+                    IdFactura = x.IdFactura,
+                    NumeroFactura = x.NumeroFactura,
+                    Aliado = x.Aliado,
+                    Cliente = x.Cliente,
+                    Producto = "Servicio Numerica",
+                    Tipo = x.TipoComision,
+                    BaseComisionable = x.BaseComisionable,
+                    Porcentaje = x.Porcentaje,
+                    ValorComision = x.Valor,
+                    FechaGeneracion = x.FechaGeneracion,
+                    Estado = x.Estado,
+                    PeriodoLiquidacion = x.Periodo,
+                    EstadoPago = x.Estado == "Pagada" ? "Pagada" : null,
+                    ReferenciaPago = x.ReferenciaPago
+                }).ToList()
+            };
+        }
+
         await SincronizarComisionesAsync(contexto.IdVendedor);
         await using var db = await _dbFactory.CreateDbContextAsync();
         var movimientos = await db.AliadoComisiones
@@ -1072,6 +1141,10 @@ public sealed class AliadoPortalService
             {
                 IdComision = x.IdComision,
                 IdFactura = x.IdFactura,
+                Aliado = db.VendedoresBackOffice
+                    .Where(v => v.IdVendedor == x.IdVendedor)
+                    .Select(v => v.Nombre)
+                    .FirstOrDefault() ?? string.Empty,
                 NumeroFactura = db.Facturas.Where(f => f.Codfactura == x.IdFactura).Select(f => f.Numfactura).FirstOrDefault() ?? x.IdFactura.ToString(),
                 Cliente = db.Clientes
                     .Where(c => c.Codcliente == x.IdCliente)
@@ -1093,6 +1166,10 @@ public sealed class AliadoPortalService
                     .Where(l => l.IdLiquidacion == x.IdLiquidacion)
                     .Select(l => l.Periodo)
                     .FirstOrDefault() ?? x.Periodo,
+                 EstadoPago = db.AliadoLiquidaciones
+                     .Where(l => l.IdLiquidacion == x.IdLiquidacion)
+                     .Select(l => l.Estado)
+                     .FirstOrDefault(),
                 ReferenciaPago = db.AliadoLiquidaciones
                     .Where(l => l.IdLiquidacion == x.IdLiquidacion)
                     .Select(l => l.ReferenciaPago)
@@ -1622,16 +1699,18 @@ public sealed class AliadoPortalService
         return (true, mensaje);
     }
 
-    private async Task<List<FacturaPortalRow>> ObtenerFacturasAsync(int idVendedor, int? idCliente = null)
+    private async Task<List<FacturaPortalRow>> ObtenerFacturasAsync(int idVendedor, int? idCliente = null, IReadOnlyCollection<int>? vendedores = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         return await db.Facturas
             .AsNoTracking()
-            .Where(x => x.Idvendedor == idVendedor && (!idCliente.HasValue || x.Codclientes == idCliente) && (x.Estado == true || x.Estado == null))
+            .Where(x => (vendedores == null ? x.Idvendedor == idVendedor : x.Idvendedor.HasValue && vendedores.Contains(x.Idvendedor.Value)) && (!idCliente.HasValue || x.Codclientes == idCliente) && (x.Estado == true || x.Estado == null))
             .OrderByDescending(x => x.Fchautorizacion ?? x.Fechaentrega)
             .Select(x => new FacturaPortalRow
             {
                 IdFactura = x.Codfactura,
+                Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.Nombre).FirstOrDefault() ?? string.Empty,
+                PorcentajeBase = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.PorcentajeBase).FirstOrDefault(),
                 IdCliente = x.Codclientes,
                 IdentificacionCliente = x.CodclientesNavigation == null ? null : x.CodclientesNavigation.Numeroidentificacion,
                 Cliente = x.CodclientesNavigation == null ? "Cliente" : (x.CodclientesNavigation.Nombrerazonsocial ?? x.CodclientesNavigation.Nombrecomercial ?? ((x.CodclientesNavigation.Nombres ?? "") + " " + (x.CodclientesNavigation.Apellidos ?? ""))),
@@ -1650,26 +1729,42 @@ public sealed class AliadoPortalService
             .ToListAsync();
     }
 
+    private static void MarcarComprasRepetidas(IEnumerable<FacturaPortalRow> facturas)
+    {
+        var comprasClienteServicio = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var factura in facturas.OrderBy(x => x.Fecha).ThenBy(x => x.IdFactura))
+        {
+            if (factura.IdCliente is not > 0 || string.IsNullOrWhiteSpace(factura.Producto))
+                continue;
+            var clave = $"{factura.IdCliente.Value}|{AliadoServicioHelper.Normalizar(factura.Producto)}";
+            factura.EsCompraRepetida = !comprasClienteServicio.Add(clave);
+            factura.EsRenovacion = factura.EsCompraRepetida || factura.FechaVencimiento.HasValue;
+        }
+    }
+
     private static AliadoRenovacionDto ToRenovacion(FacturaPortalRow factura, AliadoRenovacionGestion? gestion, decimal porcentajeBase) => new()
     {
         IdFactura = factura.IdFactura,
         IdCliente = factura.IdCliente ?? 0,
+        Aliado = factura.Aliado,
         Cliente = factura.Cliente,
         Producto = factura.Producto,
-        FechaVencimiento = factura.FechaVencimiento!.Value,
-        DiasRestantes = (factura.FechaVencimiento.Value.Date - DateTime.Today).Days,
+        FechaVencimiento = factura.FechaVencimiento ?? factura.Fecha,
+        DiasRestantes = factura.FechaVencimiento.HasValue ? (factura.FechaVencimiento.Value.Date - DateTime.Today).Days : 0,
         Valor = factura.Total,
         ComisionPotencial = AliadoComisionCalculationService.CalcularValor(AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12), porcentajeBase),
         EstadoGestion = gestion?.Resultado ?? "Pendiente",
         UltimaGestion = gestion?.FechaGestion,
         Observacion = gestion?.Observacion,
-        ProximoSeguimiento = gestion?.ProximoSeguimiento
+        ProximoSeguimiento = gestion?.ProximoSeguimiento,
+        EsCompraRepetida = factura.EsCompraRepetida
     };
 
     private static AliadoRenovacionDto ToRenovacionPorSaldo(FacturaPortalRow factura, AliadoRenovacionGestion? gestion, decimal porcentajeBase, int saldoDocumentos) => new()
     {
         IdFactura = factura.IdFactura,
         IdCliente = factura.IdCliente ?? 0,
+        Aliado = factura.Aliado,
         Cliente = factura.Cliente,
         Producto = factura.Producto,
         FechaVencimiento = DateTime.MaxValue,
@@ -1681,13 +1776,14 @@ public sealed class AliadoPortalService
         Observacion = gestion?.Observacion,
         ProximoSeguimiento = gestion?.ProximoSeguimiento,
         EsPorSaldo = true,
+        EsCompraRepetida = factura.EsCompraRepetida,
         SaldoDocumentos = Math.Max(saldoDocumentos, 0)
     };
 
     private static bool EsRenovacionVisible(FacturaPortalRow factura, DateTime hoy, int diasDesde, int diasHasta)
-        => factura.FechaVencimiento.HasValue &&
-           factura.FechaVencimiento.Value.Date >= hoy.AddDays(diasDesde) &&
-           factura.FechaVencimiento.Value.Date <= hoy.AddDays(diasHasta) &&
+        => (factura.EsCompraRepetida
+                ? factura.Fecha.Date >= hoy.AddDays(diasDesde) && factura.Fecha.Date <= hoy.AddDays(diasHasta)
+                : factura.FechaVencimiento.HasValue && factura.FechaVencimiento.Value.Date >= hoy.AddDays(diasDesde) && factura.FechaVencimiento.Value.Date <= hoy.AddDays(diasHasta)) &&
            factura.Autorizado &&
            EsPagoConfirmado(factura.EstadoPago);
 
@@ -1695,8 +1791,11 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         var contexto = await ObtenerContextoAsync(userId);
-        if (contexto is null || contexto.EsAdministrador)
+        if (contexto is null)
             return Array.Empty<AliadoLiquidacionDto>();
+
+        if (contexto.EsAdministrador)
+            return (await ObtenerLiquidacionesAdministracionAsync(userId)).Cast<AliadoLiquidacionDto>().ToList();
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         return await db.AliadoLiquidaciones.AsNoTracking()
@@ -1705,12 +1804,26 @@ public sealed class AliadoPortalService
             .Select(x => new AliadoLiquidacionDto
             {
                 IdLiquidacion = x.IdLiquidacion,
+                Aliado = db.VendedoresBackOffice
+                    .Where(v => v.IdVendedor == x.IdVendedor)
+                    .Select(v => v.Nombre)
+                    .FirstOrDefault() ?? string.Empty,
                 Periodo = x.Periodo,
                 Total = x.Total,
                 Fecha = x.Fecha,
                 Estado = x.Estado,
                 ReferenciaPago = x.ReferenciaPago,
                 EstadoSri = x.EstadoSri,
+                ErrorSri = x.ErrorSri,
+                CodLiquidacionCompra = x.CodLiquidacionCompra,
+                CodClave = db.ComprasFacturas
+                    .Where(c => c.CodFactura == x.CodLiquidacionCompra)
+                    .Select(c => c.CodClave)
+                    .FirstOrDefault(),
+                FechaPago = x.FechaPago,
+                ObservacionPago = x.ObservacionPago,
+                ComprobantePagoUrl = x.ComprobantePagoUrl,
+                IdUsuarioPago = x.IdUsuarioPago,
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.IdLiquidacion)
             })
             .ToListAsync();
@@ -1753,22 +1866,26 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         var contexto = await ObtenerContextoAsync(userId);
-        if (contexto is null || contexto.EsAdministrador || idLiquidacion <= 0)
+        if (contexto is null || idLiquidacion <= 0)
             return Array.Empty<AliadoComisionMovimientoDto>();
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         var pertenece = await db.AliadoLiquidaciones.AsNoTracking()
-            .AnyAsync(x => x.IdLiquidacion == idLiquidacion && x.IdVendedor == contexto.IdVendedor);
+            .AnyAsync(x => x.IdLiquidacion == idLiquidacion && (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor));
         if (!pertenece)
             return Array.Empty<AliadoComisionMovimientoDto>();
 
         return await db.AliadoComisiones.AsNoTracking()
-            .Where(x => x.IdLiquidacion == idLiquidacion && x.IdVendedor == contexto.IdVendedor)
+            .Where(x => x.IdLiquidacion == idLiquidacion && (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor))
             .OrderByDescending(x => x.FechaGeneracion)
             .Select(x => new AliadoComisionMovimientoDto
             {
                 IdComision = x.IdComision,
                 IdFactura = x.IdFactura,
+                Aliado = db.VendedoresBackOffice
+                    .Where(v => v.IdVendedor == x.IdVendedor)
+                    .Select(v => v.Nombre)
+                    .FirstOrDefault() ?? string.Empty,
                 Cliente = db.Clientes
                     .Where(c => c.Codcliente == x.IdCliente)
                     .Select(c => c.Nombrerazonsocial ?? c.Nombrecomercial ?? ((c.Nombres ?? "") + " " + (c.Apellidos ?? "")))
@@ -1784,7 +1901,15 @@ public sealed class AliadoPortalService
                 ValorComision = x.Valor,
                 FechaGeneracion = x.FechaGeneracion,
                 Estado = x.Estado,
-                IdLiquidacion = x.IdLiquidacion
+                 IdLiquidacion = x.IdLiquidacion,
+                 EstadoPago = db.AliadoLiquidaciones
+                     .Where(l => l.IdLiquidacion == x.IdLiquidacion)
+                     .Select(l => l.Estado)
+                     .FirstOrDefault(),
+                 ReferenciaPago = db.AliadoLiquidaciones
+                     .Where(l => l.IdLiquidacion == x.IdLiquidacion)
+                     .Select(l => l.ReferenciaPago)
+                     .FirstOrDefault()
             })
             .ToListAsync();
     }
@@ -1897,7 +2022,7 @@ public sealed class AliadoPortalService
             .Where(x => x.IdUsuario == actorId && x.Estado == true)
             .Select(x => new { x.IdTipoUsuario })
             .FirstOrDefaultAsync();
-        if (actor?.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId)
+        if (actor?.IdTipoUsuario is BackOfficePermissionHelper.SuperAdministradorRoleId or BackOfficePermissionHelper.BackOfficeRoleId)
             return true;
 
         return await db.AliadoPortalUsuariosRoles.AnyAsync(ur =>
@@ -1949,7 +2074,7 @@ IF OBJECT_ID(N'dbo.ALIADO_PORTAL_ROL_MENU', N'U') IS NULL CREATE TABLE dbo.ALIAD
 IF OBJECT_ID(N'dbo.ALIADO_PORTAL_USUARIO_ROL', N'U') IS NULL CREATE TABLE dbo.ALIADO_PORTAL_USUARIO_ROL (IdUsuarioRol INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdUsuario INT NOT NULL UNIQUE, IdRol INT NOT NULL);
 MERGE dbo.ALIADO_PORTAL_ROL AS t USING (VALUES (N'{RoleName}', N'Acceso comercial externo.'), (N'{AdminRoleName}', N'Administración interna del portal.')) s(Nombre,Descripcion) ON t.Nombre=s.Nombre WHEN NOT MATCHED THEN INSERT(Nombre,Descripcion,Activo) VALUES(s.Nombre,s.Descripcion,1);
 MERGE dbo.ALIADO_PORTAL_MENU AS t USING (VALUES (N'Inicio',N'{RootRoute}',N'ri-dashboard-3-line',1),(N'Mis clientes',N'{RootRoute}/clientes',N'ri-user-3-line',2),(N'Renovaciones',N'{RootRoute}/renovaciones',N'ri-refresh-line',3),(N'Comisiones',N'{RootRoute}/comisiones',N'ri-hand-coin-line',4),(N'Liquidaciones',N'{RootRoute}/liquidaciones',N'ri-bank-card-line',5),(N'Mi perfil',N'{RootRoute}/perfil',N'ri-user-settings-line',6),(N'Administración de aliados',N'{AdminRoute}',N'ri-admin-line',10),(N'Usuarios',N'{AdminRoute}/usuarios',N'ri-group-line',11)) s(Nombre,Ruta,Icono,Orden) ON t.Ruta=s.Ruta WHEN NOT MATCHED THEN INSERT(Nombre,Ruta,Icono,Orden,Activo) VALUES(s.Nombre,s.Ruta,s.Icono,s.Orden,1);
-INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol,IdMenu) SELECT r.IdRol,m.IdMenu FROM dbo.ALIADO_PORTAL_ROL r CROSS JOIN dbo.ALIADO_PORTAL_MENU m WHERE ((r.Nombre=N'{RoleName}' AND m.Ruta NOT IN(N'{AdminRoute}',N'{AdminRoute}/usuarios')) OR (r.Nombre=N'{AdminRoleName}' AND m.Ruta IN(N'{AdminRoute}',N'{AdminRoute}/usuarios'))) AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x WHERE x.IdRol=r.IdRol AND x.IdMenu=m.IdMenu);
+INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol,IdMenu) SELECT r.IdRol,m.IdMenu FROM dbo.ALIADO_PORTAL_ROL r CROSS JOIN dbo.ALIADO_PORTAL_MENU m WHERE ((r.Nombre=N'{RoleName}' AND m.Ruta NOT IN(N'{AdminRoute}',N'{AdminRoute}/usuarios')) OR (r.Nombre=N'{AdminRoleName}' AND m.Ruta IN(N'{AdminRoute}',N'{AdminRoute}/usuarios',N'{RootRoute}/renovaciones',N'{RootRoute}/comisiones',N'{RootRoute}/liquidaciones'))) AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x WHERE x.IdRol=r.IdRol AND x.IdMenu=m.IdMenu);
 INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario,IdRol) SELECT u.IdUsuario,r.IdRol FROM dbo.Usuarios u INNER JOIN dbo.TIPOUSUARIO tu ON tu.IdTipoUsuario=u.IdTipoUsuario INNER JOIN dbo.ALIADO_PORTAL_ROL r ON r.Nombre=tu.NombreTipo WHERE tu.NombreTipo IN(N'{RoleName}',N'{AdminRoleName}') AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x WHERE x.IdUsuario=u.IdUsuario);
 INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario,IdRol) SELECT u.IdUsuario,r.IdRol FROM dbo.Usuarios u CROSS JOIN dbo.ALIADO_PORTAL_ROL r WHERE u.IdTipoUsuario={BackOfficePermissionHelper.SuperAdministradorRoleId} AND r.Nombre=N'{AdminRoleName}' AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x WHERE x.IdUsuario=u.IdUsuario);
 """;
@@ -2005,7 +2130,7 @@ WHERE m.RUTAMENU IN (N'{RootRoute}', N'{RootRoute}/clientes', N'{RootRoute}/reno
    AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAliado AND rm.IDMENU = m.IDMENU);
 INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
 SELECT @idRolAdmin, m.IDMENU FROM dbo.MENUS m
-WHERE m.RUTAMENU = N'{AdminRoute}'
+WHERE m.RUTAMENU IN (N'{AdminRoute}', N'{RootRoute}/renovaciones', N'{RootRoute}/comisiones', N'{RootRoute}/liquidaciones')
   AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAdmin AND rm.IDMENU = m.IDMENU);
 """;
 
@@ -2220,6 +2345,7 @@ public sealed class AliadoRenovacionDto
 {
     public int IdFactura { get; init; }
     public int IdCliente { get; init; }
+    public string Aliado { get; init; } = string.Empty;
     public string Cliente { get; init; } = string.Empty;
     public string Producto { get; init; } = string.Empty;
     public DateTime FechaVencimiento { get; init; }
@@ -2231,6 +2357,7 @@ public sealed class AliadoRenovacionDto
     public string? Observacion { get; init; }
     public DateTime? ProximoSeguimiento { get; init; }
     public bool EsPorSaldo { get; init; }
+    public bool EsCompraRepetida { get; init; }
     public int SaldoDocumentos { get; init; }
 }
 
@@ -2249,6 +2376,7 @@ public sealed class AliadoComisionMovimientoDto
 {
     public int IdComision { get; init; }
     public int IdFactura { get; init; }
+    public string Aliado { get; init; } = string.Empty;
     public string NumeroFactura { get; init; } = string.Empty;
     public string Cliente { get; init; } = string.Empty;
     public string Producto { get; init; } = string.Empty;
@@ -2260,6 +2388,7 @@ public sealed class AliadoComisionMovimientoDto
     public string Estado { get; init; } = string.Empty;
     public int? IdLiquidacion { get; init; }
     public string? PeriodoLiquidacion { get; init; }
+    public string? EstadoPago { get; init; }
     public string? ReferenciaPago { get; init; }
     public string Servicio => AliadoServicioHelper.Clasificar(Producto);
 }
@@ -2278,6 +2407,9 @@ internal static class AliadoServicioHelper
             ? "E-RÚBRICA"
             : "E-FACT";
     }
+
+    public static string Normalizar(string? producto)
+        => string.Join(' ', (producto ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToUpperInvariant();
 }
 
 public sealed class AliadoAdminComisionRow
@@ -2310,25 +2442,25 @@ internal sealed class AliadoComisionResumen
 public class AliadoLiquidacionDto
 {
     public int IdLiquidacion { get; init; }
+    public string Aliado { get; init; } = string.Empty;
     public string Periodo { get; init; } = string.Empty;
     public decimal Total { get; init; }
     public DateTime Fecha { get; init; }
     public string Estado { get; init; } = string.Empty;
     public string? ReferenciaPago { get; init; }
     public string EstadoSri { get; init; } = "Pendiente";
+    public string? ErrorSri { get; init; }
+    public int? CodLiquidacionCompra { get; init; }
+    public string? CodClave { get; init; }
+    public DateTime? FechaPago { get; init; }
+    public string? ObservacionPago { get; init; }
+    public string? ComprobantePagoUrl { get; init; }
+    public int? IdUsuarioPago { get; init; }
     public int CantidadComisiones { get; init; }
 }
 
 public sealed class AliadoAdminLiquidacionRow : AliadoLiquidacionDto
 {
-    public string Aliado { get; init; } = string.Empty;
-    public string? ObservacionPago { get; init; }
-    public string? ComprobantePagoUrl { get; init; }
-    public string? ErrorSri { get; init; }
-    public int? CodLiquidacionCompra { get; init; }
-    public string? CodClave { get; init; }
-    public DateTime? FechaPago { get; init; }
-    public int? IdUsuarioPago { get; init; }
 }
 
 public sealed class AliadoRenovacionNotificacionDto
@@ -2388,10 +2520,14 @@ internal sealed class FacturaPortalRow
 {
     public int IdFactura { get; init; }
     public int? IdCliente { get; init; }
+    public string Aliado { get; init; } = string.Empty;
+    public decimal PorcentajeBase { get; init; }
     public string? IdentificacionCliente { get; init; }
     public string Cliente { get; init; } = string.Empty;
     public string Producto { get; init; } = string.Empty;
     public string Plan { get; init; } = string.Empty;
+    public bool EsRenovacion { get; set; }
+    public bool EsCompraRepetida { get; set; }
     public DateTime Fecha { get; init; }
     public DateTime? FechaVencimiento { get; init; }
     public decimal Total { get; init; }
@@ -2412,6 +2548,8 @@ internal sealed class FacturaComisionRow
 {
     public int IdFactura { get; init; }
     public int? IdCliente { get; init; }
+    public string Producto { get; init; } = string.Empty;
+    public bool EsRenovacion { get; set; }
     public DateTime? FechaVencimiento { get; init; }
     public decimal? Subtotal { get; init; }
     public decimal? Subtotal0 { get; init; }

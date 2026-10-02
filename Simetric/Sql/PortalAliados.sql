@@ -88,7 +88,7 @@ WHERE m.RUTAMENU IN (N'/aliados', N'/aliados/clientes', N'/aliados/renovaciones'
 INSERT INTO dbo.ROL_MENU (IDROL, IDMENU)
 SELECT @idRolAdmin, m.IDMENU
 FROM dbo.MENUS m
-WHERE m.RUTAMENU = N'/aliados/admin'
+WHERE m.RUTAMENU IN (N'/aliados/admin', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/liquidaciones')
   AND NOT EXISTS (SELECT 1 FROM dbo.ROL_MENU rm WHERE rm.IDROL = @idRolAdmin AND rm.IDMENU = m.IDMENU);
 
 IF OBJECT_ID(N'dbo.ALIADO_PORTAL_ROL', N'U') IS NULL
@@ -156,7 +156,7 @@ SELECT r.IdRol, m.IdMenu
 FROM dbo.ALIADO_PORTAL_ROL r
 CROSS JOIN dbo.ALIADO_PORTAL_MENU m
 WHERE ((r.Nombre = N'Aliado Comercial' AND m.Ruta NOT IN (N'/aliados/admin', N'/aliados/admin/usuarios'))
-    OR (r.Nombre = N'Administrador Portal de Aliados' AND m.Ruta IN (N'/aliados/admin', N'/aliados/admin/usuarios')))
+    OR (r.Nombre = N'Administrador Portal de Aliados' AND m.Ruta IN (N'/aliados/admin', N'/aliados/admin/usuarios', N'/aliados/renovaciones', N'/aliados/comisiones', N'/aliados/liquidaciones')))
   AND NOT EXISTS (
       SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x
       WHERE x.IdRol = r.IdRol AND x.IdMenu = m.IdMenu
