@@ -363,7 +363,7 @@ public sealed class AliadoPortalService
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         var vendedorIds = contexto.EsAdministrador
-            ? await db.VendedoresBackOffice.AsNoTracking().Where(x => !x.EsSistema).Select(x => x.IdVendedor).ToListAsync()
+            ? (await ListarAliadosAsync()).Select(x => x.IdVendedor).ToList()
             : null;
         var clientes = await db.Clientes
             .AsNoTracking()
@@ -406,9 +406,15 @@ public sealed class AliadoPortalService
                 .OrderByDescending(x => x.Fecha)
                 .ToList();
             if (compras.Count == 0)
+            {
+                cliente.Estado = "Sin compras";
                 continue;
+            }
 
             var factura = compras[0];
+            cliente.TotalCompras = compras.Count;
+            cliente.ComprasEFact = compras.Count(x => string.Equals(AliadoServicioHelper.Clasificar(x.Producto), "E-FACT", StringComparison.OrdinalIgnoreCase));
+            cliente.ComprasERubrica = compras.Count(x => string.Equals(AliadoServicioHelper.Clasificar(x.Producto), "E-RÚBRICA", StringComparison.OrdinalIgnoreCase));
             cliente.Producto = factura.Producto;
             cliente.IdFactura = factura.IdFactura;
             cliente.FechaCompra = factura.Fecha;
@@ -428,9 +434,15 @@ public sealed class AliadoPortalService
             return null;
 
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var vendedorIds = contexto.EsAdministrador
+            ? (await ListarAliadosAsync()).Select(x => x.IdVendedor).ToList()
+            : null;
         var cliente = await db.Clientes
             .AsNoTracking()
-            .Where(x => x.Codcliente == idCliente && x.Idvendedor == contexto.IdVendedor && x.Usuario != userId)
+            .Where(x => x.Codcliente == idCliente && x.Usuario != userId &&
+                        (contexto.EsAdministrador
+                            ? x.Idvendedor.HasValue && vendedorIds!.Contains(x.Idvendedor.Value)
+                            : x.Idvendedor == contexto.IdVendedor))
             .Select(x => new AliadoClienteDetalleDto
             {
                 IdCliente = x.Codcliente,
@@ -450,7 +462,10 @@ public sealed class AliadoPortalService
         {
             var contactos = await db.Clientes
                 .AsNoTracking()
-                .Where(x => x.Idvendedor == contexto.IdVendedor && x.Estado != false && x.Usuario != userId)
+                .Where(x => x.Estado != false && x.Usuario != userId &&
+                            (contexto.EsAdministrador
+                                ? x.Idvendedor.HasValue && vendedorIds!.Contains(x.Idvendedor.Value)
+                                : x.Idvendedor == contexto.IdVendedor))
                 .Select(x => new
                 {
                     Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
@@ -464,7 +479,7 @@ public sealed class AliadoPortalService
         }
 
         var identificacionCliente = NormalizarIdentificacionCliente(cliente.Identificacion);
-        var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor))
+        var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds))
             .Where(x => x.IdCliente == idCliente ||
                         (!string.IsNullOrWhiteSpace(identificacionCliente) &&
                          string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacionCliente, StringComparison.OrdinalIgnoreCase)))
@@ -1305,9 +1320,14 @@ public sealed class AliadoPortalService
         if (!await EsAdministradorInternoAsync(db, actorId))
             return Array.Empty<AliadoClienteAsignacionRow>();
 
+        var aliadosDisponibles = (await ListarAliadosAsync())
+            .Select(x => x.IdVendedor)
+            .ToHashSet();
+
         return await db.Clientes
             .AsNoTracking()
-            .Where(x => x.Estado != false)
+            .Where(x => x.Estado != false &&
+                        (!x.Idvendedor.HasValue || aliadosDisponibles.Contains(x.Idvendedor.Value)))
             .OrderBy(x => x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? string.Empty) + " " + (x.Apellidos ?? string.Empty)))
             .Select(x => new AliadoClienteAsignacionRow
             {
@@ -1336,9 +1356,17 @@ public sealed class AliadoPortalService
         if (aliado is null)
             return (false, "El aliado seleccionado no está disponible.");
 
+        var aliadosDisponibles = (await ListarAliadosAsync())
+            .Select(x => x.IdVendedor)
+            .ToHashSet();
+        if (!aliadosDisponibles.Contains(idVendedorDestino))
+            return (false, "El destino seleccionado no es un asociado válido.");
+
         var cliente = await db.Clientes.FirstOrDefaultAsync(x => x.Codcliente == idCliente && x.Estado != false);
         if (cliente is null)
             return (false, "No se encontró el cliente seleccionado.");
+        if (cliente.Idvendedor.HasValue && !aliadosDisponibles.Contains(cliente.Idvendedor.Value))
+            return (false, "Los clientes de vendedores no pueden asignarse a un asociado.");
         if (cliente.Idvendedor == idVendedorDestino)
             return (false, "El cliente ya está asignado a este aliado.");
 
@@ -1372,6 +1400,84 @@ public sealed class AliadoPortalService
         return (true, $"Cliente asignado a {aliado.Nombre}.{retiro}");
     }
 
+    public async Task<IReadOnlyList<AliadoUsuarioAsignacionRow>> ListarUsuariosEfactParaAsignacionAsync(int actorId)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return Array.Empty<AliadoUsuarioAsignacionRow>();
+
+        return await db.Usuarios.AsNoTracking()
+            .Where(u => u.IdTipoUsuario == 1 && u.Estado == true &&
+                u.Identificacion != "9999999999999" &&
+                u.Email != "consumidorfinal@numerica" &&
+                db.Clientes.Any(c => c.Usuario == u.IdUsuario && c.Estado != false && c.Numeroidentificacion != "9999999999999"))
+            .OrderBy(u => u.Nombres).ThenBy(u => u.Apellidos)
+            .Select(u => new AliadoUsuarioAsignacionRow
+            {
+                IdUsuario = u.IdUsuario,
+                Nombre = ((u.Nombres ?? string.Empty) + " " + (u.Apellidos ?? string.Empty)).Trim(),
+                Identificacion = u.Identificacion,
+                Correo = u.Email,
+                IdVendedorActual = db.VendedoresBackOffice
+                    .Where(v => v.IdVendedor == u.IdVendedor && !v.EsSistema)
+                    .Select(v => (int?)v.IdVendedor)
+                    .FirstOrDefault(),
+                AliadoActual = db.VendedoresBackOffice
+                    .Where(v => v.IdVendedor == u.IdVendedor && !v.EsSistema)
+                    .Select(v => v.Nombre)
+                    .FirstOrDefault()
+            })
+            .ToListAsync();
+    }
+
+    public async Task<(bool Success, string Message)> AsignarUsuarioAliadoAsync(int actorId, int idUsuario, int idVendedorDestino)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorInternoAsync(db, actorId))
+            return (false, "No tienes permisos para asignar usuarios.");
+
+        var aliado = await db.VendedoresBackOffice
+            .FirstOrDefaultAsync(x => x.IdVendedor == idVendedorDestino && !x.EsSistema && x.Activo);
+        if (aliado is null)
+            return (false, "El aliado seleccionado no está disponible.");
+
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(x =>
+            x.IdUsuario == idUsuario && x.IdTipoUsuario == 1 && x.Estado == true &&
+            x.Identificacion != "9999999999999" && x.Email != "consumidorfinal@numerica");
+        if (usuario is null)
+            return (false, "No se encontró un usuario normal de E-Fact válido.");
+        if (usuario.IdVendedor == idVendedorDestino)
+            return (false, "El usuario ya está asignado a este aliado.");
+
+        var vendedorAnterior = usuario.IdVendedor.HasValue
+            ? await db.VendedoresBackOffice.AsNoTracking()
+                .Where(x => x.IdVendedor == usuario.IdVendedor.Value && !x.EsSistema)
+                .Select(x => new { x.IdVendedor, x.Nombre })
+                .FirstOrDefaultAsync()
+            : null;
+
+        usuario.IdVendedor = idVendedorDestino;
+        var clientesUsuario = await db.Clientes
+            .Where(x => x.Usuario == idUsuario && x.Estado != false && x.Numeroidentificacion != "9999999999999")
+            .ToListAsync();
+        foreach (var cliente in clientesUsuario)
+            cliente.Idvendedor = idVendedorDestino;
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(
+            actorId,
+            "ASIGNAR",
+            new { IdUsuario = idUsuario, IdVendedor = vendedorAnterior?.IdVendedor, Aliado = vendedorAnterior?.Nombre },
+            new { IdUsuario = idUsuario, IdVendedor = idVendedorDestino, Aliado = aliado.Nombre, ClientesActualizados = clientesUsuario.Count, ComisionesTransferidas = false },
+            new { Modulo = "PortalAliados", Entidad = "AsignacionUsuario" });
+
+        var retiro = vendedorAnterior is null
+            ? string.Empty
+            : $" Se retiró del aliado {vendedorAnterior.Nombre}; sus comisiones anteriores no se transfirieron.";
+        return (true, $"Usuario asignado a {aliado.Nombre}.{retiro}");
+    }
+
     public async Task<IReadOnlyList<AliadoUsuarioAdminRow>> ListarUsuariosAliadosAsync(int actorId)
     {
         await EnsureSchemaAsync();
@@ -1394,6 +1500,12 @@ public sealed class AliadoPortalService
                 Bloqueado = u.CuentaBloqueada ?? false,
                 ClaveTemporal = u.ClaveTemporal ?? false,
                 Identificacion = u.Identificacion,
+                 TipoCliente = u.TipoCliente ?? 1,
+                 TipoDocumento = u.IdTipoIdentificacion == 2 ? "RUC" : u.IdTipoIdentificacion == 3 ? "EXTERIOR" : "CEDULA",
+                 RazonSocial = u.TipoCliente == 2 ? u.Nombres : null,
+                 NombreComercial = u.NombreEmpresa,
+                 Celular = u.Celular,
+                 Direccion = u.DireccionEmpresa,
                 FechaNacimiento = u.FechaNacimiento,
                 FechaCreacion = u.FechaCreacion,
                 Rol = db.AliadoPortalRoles.Where(r => db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == u.IdUsuario && ur.IdRol == r.IdRol)).Select(r => r.Nombre).FirstOrDefault() ?? "Sin rol",
@@ -1440,15 +1552,34 @@ public sealed class AliadoPortalService
     public async Task<(bool Success, string Message)> ActualizarPerfilUsuarioAliadoAsync(
         int actorId, int idUsuario, string nombres, string apellidos, string email,
         string? identificacion, DateTime? fechaNacimiento, string? avatarUrl, decimal porcentajeComision,
-        bool esAdministradorPortal)
+        bool esAdministradorPortal, int tipoCliente = 1, string? razonSocial = null,
+        string? nombreComercial = null, string? tipoDocumento = null, string? celular = null,
+        string? direccion = null, bool validarDatosFiscales = false)
     {
         await EnsureSchemaAsync();
+        tipoDocumento = (tipoDocumento ?? "CEDULA").Trim().ToUpperInvariant();
+        razonSocial = razonSocial?.Trim();
+        nombreComercial = nombreComercial?.Trim();
+        celular = celular?.Trim();
+        direccion = direccion?.Trim();
         nombres = nombres.Trim();
         apellidos = apellidos.Trim();
+        if (tipoCliente == 2)
+        {
+            nombres = razonSocial ?? nombres;
+            apellidos = string.Empty;
+        }
         email = email.Trim();
         identificacion = identificacion?.Trim();
-        if (nombres.Length < 2 || apellidos.Length < 2 || !MailAddress.TryCreate(email, out _))
-            return (false, "Ingresa nombres, apellidos y correo válidos.");
+        if (!MailAddress.TryCreate(email, out _))
+            return (false, "Ingresa un correo válido.");
+        if (tipoCliente == 2 && (string.IsNullOrWhiteSpace(razonSocial) || razonSocial.Length < 3))
+            return (false, "La razón social es obligatoria.");
+        if (tipoCliente != 2 && (nombres.Length < 2 || apellidos.Length < 2))
+            return (false, "Ingresa nombres y apellidos válidos.");
+        var validacionDatos = ValidarDatosAliado(tipoCliente, tipoDocumento, nombres, apellidos, razonSocial, nombreComercial, email, identificacion, celular, direccion, null, validarDatosFiscales);
+        if (validacionDatos is not null)
+            return (false, validacionDatos);
         if (!TryNormalizarPorcentaje(porcentajeComision, out porcentajeComision))
             return (false, "La comisión debe estar entre 0 y 100.");
 
@@ -1516,6 +1647,11 @@ public sealed class AliadoPortalService
         usuario.Apellidos = apellidos;
         usuario.Email = email;
         usuario.Identificacion = identificacion;
+        usuario.IdTipoIdentificacion = ObtenerIdTipoIdentificacion(tipoDocumento);
+        usuario.TipoCliente = tipoCliente;
+        usuario.NombreEmpresa = tipoCliente == 2 ? nombreComercial : string.Empty;
+        usuario.DireccionEmpresa = direccion;
+        usuario.Celular = celular;
         usuario.FechaNacimiento = fechaNacimiento;
         usuario.AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl;
         var aliado = usuario.IdVendedor.HasValue
@@ -1523,7 +1659,7 @@ public sealed class AliadoPortalService
             : await db.VendedoresBackOffice.FirstOrDefaultAsync(v => v.IdUsuarioCreacion == usuario.IdUsuario && !v.EsSistema);
         if (aliado is not null)
         {
-            aliado.Nombre = $"{nombres} {apellidos}".Trim();
+            aliado.Nombre = (tipoCliente == 2 ? nombreComercial : $"{nombres} {apellidos}")?.Trim() ?? nombres;
             aliado.PorcentajeBase = porcentajeComision;
         }
         await db.SaveChangesAsync();
@@ -1752,11 +1888,23 @@ public sealed class AliadoPortalService
     public async Task<(bool Success, string Message)> CrearCuentaAliadoAsync(
         int actorId, string nombre, string email, string password, decimal porcentajeBase = 30m,
         bool esAdministradorPortal = false, string? apellidos = null, string? identificacion = null,
-        DateTime? fechaNacimiento = null, string? avatarUrl = null)
+        DateTime? fechaNacimiento = null, string? avatarUrl = null, int tipoCliente = 1,
+        string? razonSocial = null, string? nombreComercial = null, string? tipoDocumento = null,
+        string? celular = null, string? direccion = null, bool validarDatosFiscales = false)
     {
         await EnsureSchemaAsync();
+        tipoDocumento = (tipoDocumento ?? "CEDULA").Trim().ToUpperInvariant();
+        razonSocial = razonSocial?.Trim();
+        nombreComercial = nombreComercial?.Trim();
+        celular = celular?.Trim();
+        direccion = direccion?.Trim();
         nombre = nombre.Trim();
         apellidos = apellidos?.Trim();
+        if (tipoCliente == 2)
+        {
+            nombre = razonSocial ?? nombre;
+            apellidos = string.Empty;
+        }
         email = email.Trim();
         password = password.Trim();
         if (string.IsNullOrWhiteSpace(nombre) || string.IsNullOrWhiteSpace(email) || password.Length < 8)
@@ -1765,6 +1913,9 @@ public sealed class AliadoPortalService
             return (false, "El nombre o el correo no tienen un formato válido.");
         if (!TryNormalizarPorcentaje(porcentajeBase, out porcentajeBase))
             return (false, "El porcentaje debe estar entre 0 y 100.");
+        var validacionDatos = ValidarDatosAliado(tipoCliente, tipoDocumento, nombre, apellidos ?? string.Empty, razonSocial, nombreComercial, email, identificacion, celular, direccion, password, validarDatosFiscales);
+        if (validacionDatos is not null)
+            return (false, validacionDatos);
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         var actor = await db.Usuarios
@@ -1796,7 +1947,7 @@ public sealed class AliadoPortalService
             var codigo = await GenerarCodigoAsync(db, nombre);
             aliado = new VendedorBackOffice
             {
-                Nombre = $"{nombre} {apellidos}".Trim(),
+                Nombre = (tipoCliente == 2 ? nombreComercial : $"{nombre} {apellidos}")?.Trim() ?? nombre,
                 CodigoReferencia = codigo,
                 Activo = true,
                 EsSistema = false,
@@ -1821,6 +1972,11 @@ public sealed class AliadoPortalService
             CuentaBloqueada = false,
             AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl,
             Identificacion = identificacion?.Trim(),
+            IdTipoIdentificacion = ObtenerIdTipoIdentificacion(tipoDocumento),
+            TipoCliente = tipoCliente,
+            NombreEmpresa = tipoCliente == 2 ? nombreComercial : string.Empty,
+            DireccionEmpresa = direccion,
+            Celular = celular,
             FechaNacimiento = fechaNacimiento,
             FechaCreacion = DateTime.Now,
             estadoAsociado = true
@@ -1847,6 +2003,112 @@ public sealed class AliadoPortalService
             mensaje += " No se pudo enviar el correo de bienvenida.";
         }
         return (true, mensaje);
+    }
+
+    public async Task<(bool Success, string Message)> CrearCuentaClienteAliadoAsync(
+        int aliadoUserId,
+        AliadoClienteRegistroDto registro)
+    {
+        await EnsureSchemaAsync();
+        var contexto = await ObtenerContextoAsync(aliadoUserId);
+        if (contexto is null)
+            return (false, "No tienes permisos para crear cuentas de clientes.");
+
+        registro.Normalizar();
+        var validacion = registro.Validar();
+        if (validacion is not null)
+            return (false, validacion);
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var idVendedor = contexto.IdVendedor;
+        if (contexto.EsAdministrador)
+        {
+            if (registro.IdVendedorDestino is not > 0)
+                return (false, "Selecciona el aliado al que se asociará el cliente.");
+
+            var aliadosDisponibles = (await ListarAliadosAsync())
+                .Select(x => x.IdVendedor)
+                .ToHashSet();
+            if (!await db.VendedoresBackOffice.AnyAsync(x => x.IdVendedor == registro.IdVendedorDestino.Value && !x.EsSistema && x.Activo) ||
+                !aliadosDisponibles.Contains(registro.IdVendedorDestino.Value))
+                return (false, "El aliado seleccionado no está disponible.");
+
+            idVendedor = registro.IdVendedorDestino.Value;
+        }
+
+        if (idVendedor <= 0)
+            return (false, "No se pudo determinar el aliado asociado.");
+
+        if (await db.Usuarios.AnyAsync(x => x.Email.ToLower() == registro.Email.ToLower()))
+            return (false, "Ya existe una cuenta con ese correo.");
+        if (await db.Usuarios.AnyAsync(x => x.Identificacion == registro.Identificacion))
+            return (false, "Ya existe una cuenta con esa identificación.");
+
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var usuario = new Usuario
+        {
+            Nombres = registro.TipoCliente == 2 ? registro.RazonSocial : registro.Nombres,
+            Apellidos = registro.TipoCliente == 2 ? string.Empty : registro.Apellidos,
+            NombreEmpresa = registro.TipoCliente == 2 ? registro.RazonSocial : string.Empty,
+            Email = registro.Email,
+            DireccionEmpresa = registro.Direccion,
+            Celular = registro.Celular,
+            AvatarUrl = string.IsNullOrWhiteSpace(registro.AvatarUrl) ? null : registro.AvatarUrl,
+            Identificacion = registro.Identificacion,
+            IdTipoIdentificacion = registro.TipoDocumento switch
+            {
+                "RUC" => 2,
+                "PASAPORTE" or "EXTERIOR" => 3,
+                _ => 1
+            },
+            PasswordHash = SecurityHelper.HashPassword(registro.Password),
+            IdTipoUsuario = 1,
+            Estado = true,
+            ClaveTemporal = true,
+            FechaCreacion = DateTime.Now,
+            SaldoDocumentos = 5,
+            TipoCliente = registro.TipoCliente,
+            IdVendedor = idVendedor,
+            estadoAsociado = true
+        };
+        db.Usuarios.Add(usuario);
+        await db.SaveChangesAsync();
+
+        db.Clientes.Add(new Cliente
+        {
+            Nombres = registro.TipoCliente == 2 ? registro.RazonSocial : registro.Nombres,
+            Apellidos = registro.TipoCliente == 2 ? string.Empty : registro.Apellidos,
+            Nombrerazonsocial = registro.TipoCliente == 2 ? registro.RazonSocial : null,
+            Nombrecomercial = registro.TipoCliente == 2 ? registro.RazonSocial : null,
+            Tipoidentificacion = registro.TipoDocumento,
+            Numeroidentificacion = registro.Identificacion,
+            Direccion = registro.Direccion,
+            Celular = registro.Celular,
+            Correo = registro.Email,
+            TipoCliente = registro.TipoCliente,
+            Usuario = usuario.IdUsuario,
+            Idvendedor = idVendedor,
+            Estado = true,
+            Fechaingreso = DateOnly.FromDateTime(DateTime.Today)
+        });
+        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        await _auditService.TryRegistrarAuditoriaAsync(
+            aliadoUserId,
+            "CREAR",
+            null,
+            new { usuario.IdUsuario, usuario.Email, usuario.IdVendedor, ClaveTemporal = true },
+            new { Modulo = "PortalAliados", Entidad = "CuentaCliente" });
+        try
+        {
+            await _emailService.EnviarCuentaCreadaAsync(usuario.Email, usuario.Nombres, registro.Password);
+        }
+        catch
+        {
+        }
+
+        return (true, "Cuenta creada. El cliente deberá cambiar la clave en su primer ingreso.");
     }
 
     private async Task<List<FacturaPortalRow>> ObtenerFacturasAsync(int idVendedor, int? idCliente = null, IReadOnlyCollection<int>? vendedores = null)
@@ -1977,6 +2239,52 @@ public sealed class AliadoPortalService
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.IdLiquidacion)
             })
             .ToListAsync();
+    }
+
+    public async Task<string?> AsegurarXmlLiquidacionAsync(int userId, int idLiquidacion)
+    {
+        var documento = await ObtenerDocumentoLiquidacionAsync(userId, idLiquidacion);
+        return documento is null
+            ? null
+            : await _liquidacionCompraService.AsegurarXmlLiquidacionUsuarioAsync(documento.Value.CodFactura, documento.Value.IdUsuario);
+    }
+
+    public async Task<string?> AsegurarPdfLiquidacionAsync(int userId, int idLiquidacion)
+    {
+        var documento = await ObtenerDocumentoLiquidacionAsync(userId, idLiquidacion);
+        return documento is null
+            ? null
+            : await _liquidacionCompraService.AsegurarPdfLiquidacionUsuarioAsync(documento.Value.CodFactura, documento.Value.IdUsuario);
+    }
+
+    private async Task<(int CodFactura, int IdUsuario)?> ObtenerDocumentoLiquidacionAsync(int userId, int idLiquidacion)
+    {
+        if (idLiquidacion <= 0)
+            return null;
+
+        var contexto = await ObtenerContextoAsync(userId);
+        if (contexto is null)
+            return null;
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var documento = await (
+            from liquidacion in db.AliadoLiquidaciones.AsNoTracking()
+            join compra in db.ComprasFacturas.AsNoTracking()
+                on liquidacion.CodLiquidacionCompra equals compra.CodFactura
+            where liquidacion.IdLiquidacion == idLiquidacion &&
+                  liquidacion.CodLiquidacionCompra.HasValue &&
+                  compra.Estado == true &&
+                  compra.CodDocumento == "03" &&
+                  compra.Usuario.HasValue &&
+                  (contexto.EsAdministrador || liquidacion.IdVendedor == contexto.IdVendedor)
+            select new
+            {
+                compra.CodFactura,
+                IdUsuario = compra.Usuario.Value
+            })
+            .FirstOrDefaultAsync();
+
+        return documento is null ? null : (documento.CodFactura, documento.IdUsuario);
     }
 
     public async Task<IReadOnlyList<AliadoAdminLiquidacionRow>> ObtenerLiquidacionesAdministracionAsync(int actorId)
@@ -2194,6 +2502,88 @@ public sealed class AliadoPortalService
 
         normalizado = decimal.Round(valor, 2, MidpointRounding.AwayFromZero);
         return true;
+    }
+
+    private static int ObtenerIdTipoIdentificacion(string? tipoDocumento) =>
+        tipoDocumento?.Trim().ToUpperInvariant() switch
+        {
+            "RUC" => 2,
+            "PASAPORTE" or "EXTERIOR" => 3,
+            _ => 1
+        };
+
+    private static string? ValidarDatosAliado(
+        int tipoCliente, string tipoDocumento, string nombres, string apellidos,
+        string? razonSocial, string? nombreComercial, string email, string? identificacion,
+        string? celular, string? direccion, string? password, bool requerirDatosFiscales)
+    {
+        if (!requerirDatosFiscales)
+            return null;
+        if (tipoCliente is not 1 and not 2)
+            return "Selecciona un tipo de cliente válido.";
+        if (!MailAddress.TryCreate(email, out _))
+            return "Ingresa un correo válido.";
+        if (tipoCliente == 2)
+        {
+            if (tipoDocumento != "RUC")
+                return "Las empresas deben registrarse con RUC.";
+            if (string.IsNullOrWhiteSpace(razonSocial) || razonSocial.Length is < 3 or > 150)
+                return "La razón social debe tener entre 3 y 150 caracteres.";
+            if (string.IsNullOrWhiteSpace(nombreComercial) || nombreComercial.Length is < 2 or > 150)
+                return "El nombre comercial debe tener entre 2 y 150 caracteres.";
+        }
+        else if (!EsNombreValidoAliado(nombres) || !EsNombreValidoAliado(apellidos))
+        {
+            return "Ingresa nombres y apellidos válidos.";
+        }
+
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return "La identificación es obligatoria.";
+        var identificacionNormalizada = identificacion.Trim();
+        if (tipoDocumento == "RUC")
+        {
+            if (identificacionNormalizada.Length != 13 || !identificacionNormalizada.All(char.IsDigit) ||
+                !identificacionNormalizada.EndsWith("001", StringComparison.Ordinal) ||
+                !ValidarCedulaAliado(identificacionNormalizada[..10]))
+                return "El RUC debe tener 13 dígitos y terminar en 001.";
+        }
+        else if (tipoDocumento == "CEDULA")
+        {
+            if (identificacionNormalizada.Length != 10 || !identificacionNormalizada.All(char.IsDigit) || !ValidarCedulaAliado(identificacionNormalizada))
+                return "La cédula debe tener 10 dígitos.";
+        }
+        else if (identificacionNormalizada.Length is < 3 or > 20 || !identificacionNormalizada.All(char.IsLetterOrDigit))
+        {
+            return "La identificación debe tener entre 3 y 20 caracteres alfanuméricos.";
+        }
+
+        if (string.IsNullOrWhiteSpace(celular) || celular.Count(char.IsDigit) is < 7 or > 15)
+            return "El teléfono debe tener entre 7 y 15 dígitos.";
+        if (string.IsNullOrWhiteSpace(direccion) || direccion.Length is < 5 or > 100)
+            return "La dirección debe tener entre 5 y 100 caracteres.";
+        if (password is not null && !System.Text.RegularExpressions.Regex.IsMatch(password, @"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\da-zA-Z]).{8,}$"))
+            return "La clave debe tener mínimo 8 caracteres, mayúscula, minúscula, número y carácter especial.";
+        return null;
+    }
+
+    private static bool EsNombreValidoAliado(string valor) =>
+        valor.Length >= 2 && System.Text.RegularExpressions.Regex.IsMatch(valor, @"^[a-zA-ZÀ-ÿ\s]{2,}$");
+
+    private static bool ValidarCedulaAliado(string cedula)
+    {
+        if (cedula.Length != 10 || !cedula.All(char.IsDigit))
+            return false;
+        var provincia = int.Parse(cedula[..2]);
+        var tercerDigito = int.Parse(cedula[2].ToString());
+        if (provincia is < 1 or > 24 || tercerDigito > 5)
+            return false;
+        var suma = 0;
+        for (var i = 0; i < 9; i++)
+        {
+            var valor = int.Parse(cedula[i].ToString()) * (i % 2 == 0 ? 2 : 1);
+            suma += valor > 9 ? valor - 9 : valor;
+        }
+        return (10 - suma % 10) % 10 == int.Parse(cedula[9].ToString());
     }
 
     private static bool EsPagoConfirmado(string? estadoPago)
@@ -2671,6 +3061,117 @@ public sealed class AliadoClienteAsignacionRow
     public string? AliadoActual { get; init; }
 }
 
+public sealed class AliadoClienteRegistroDto
+{
+    public string Nombres { get; set; } = string.Empty;
+    public string Apellidos { get; set; } = string.Empty;
+    public string RazonSocial { get; set; } = string.Empty;
+    public string? AvatarUrl { get; set; }
+    public string Email { get; set; } = string.Empty;
+    public string Direccion { get; set; } = string.Empty;
+    public string Celular { get; set; } = string.Empty;
+    public string TipoDocumento { get; set; } = "CEDULA";
+    public string Identificacion { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+    public string ConfirmarPassword { get; set; } = string.Empty;
+    public int TipoCliente { get; set; } = 1;
+    public int? IdVendedorDestino { get; set; }
+
+    public void Normalizar()
+    {
+        Nombres = Nombres.Trim();
+        Apellidos = Apellidos.Trim();
+        RazonSocial = RazonSocial.Trim();
+        Email = Email.Trim();
+        Direccion = Direccion.Trim();
+        Celular = Celular.Trim();
+        TipoDocumento = TipoDocumento.Trim().ToUpperInvariant();
+        Identificacion = PermiteAlfanumerico(TipoDocumento)
+            ? new string(Identificacion.Trim().Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant()
+            : new string(Identificacion.Trim().Where(char.IsDigit).ToArray());
+    }
+
+    public string? Validar()
+    {
+        if (TipoCliente is not 1 and not 2)
+            return "Selecciona un tipo de cliente válido.";
+        if (TipoCliente == 2 && !string.Equals(TipoDocumento, "RUC", StringComparison.Ordinal))
+            return "Las empresas deben registrarse con RUC.";
+        if (TipoCliente == 2)
+        {
+            if (RazonSocial.Length < 3 || RazonSocial.Length > 150)
+                return "La razón social debe tener entre 3 y 150 caracteres.";
+        }
+        else
+        {
+            if (!EsNombreValido(Nombres))
+                return "Ingresa nombres válidos.";
+            if (!EsNombreValido(Apellidos))
+                return "Ingresa apellidos válidos.";
+        }
+        if (string.IsNullOrWhiteSpace(Email) || Email.Length > 254 || !MailAddress.TryCreate(Email, out _))
+            return "Ingresa un correo válido.";
+        if (Direccion.Length is < 5 or > 100)
+            return "La dirección debe tener entre 5 y 100 caracteres.";
+        if (!string.IsNullOrWhiteSpace(Celular))
+        {
+            var digitos = Celular.Count(char.IsDigit);
+            if (digitos is < 7 or > 15)
+                return "El celular debe tener entre 7 y 15 dígitos.";
+        }
+        if (string.IsNullOrWhiteSpace(Identificacion) || !ValidarIdentificacion())
+            return "La identificación no es válida.";
+        if (!System.Text.RegularExpressions.Regex.IsMatch(Password, @"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\da-zA-Z]).{8,}$"))
+            return "La clave debe tener mínimo 8 caracteres, mayúscula, minúscula, número y carácter especial.";
+        if (!string.Equals(Password, ConfirmarPassword, StringComparison.Ordinal))
+            return "La confirmación de la clave no coincide.";
+        return null;
+    }
+
+    private bool ValidarIdentificacion()
+    {
+        if (PermiteAlfanumerico(TipoDocumento))
+            return Identificacion.Length is >= 3 and <= 20 && Identificacion.All(char.IsLetterOrDigit);
+        if (TipoDocumento == "RUC")
+            return Identificacion.Length == 13 && Identificacion.EndsWith("001", StringComparison.Ordinal) && ValidarCedula(Identificacion[..10]);
+        return Identificacion.Length == 10 && ValidarCedula(Identificacion);
+    }
+
+    private static bool ValidarCedula(string cedula)
+    {
+        if (cedula.Length != 10 || !cedula.All(char.IsDigit))
+            return false;
+        var provincia = int.Parse(cedula[..2]);
+        var tercerDigito = int.Parse(cedula[2].ToString());
+        if (provincia is < 1 or > 24 || tercerDigito > 5)
+            return false;
+        var coeficientes = new[] { 2, 1, 2, 1, 2, 1, 2, 1, 2 };
+        var suma = 0;
+        for (var i = 0; i < coeficientes.Length; i++)
+        {
+            var valor = int.Parse(cedula[i].ToString()) * coeficientes[i];
+            suma += valor > 9 ? valor - 9 : valor;
+        }
+        return (10 - suma % 10) % 10 == int.Parse(cedula[9].ToString());
+    }
+
+    private static bool EsNombreValido(string valor) =>
+        valor.Length >= 2 && System.Text.RegularExpressions.Regex.IsMatch(valor, @"^[a-zA-ZÀ-ÿ\s]{2,}$");
+
+    private static bool PermiteAlfanumerico(string tipoDocumento) =>
+        tipoDocumento is "PASAPORTE" or "EXTERIOR";
+}
+
+public sealed class AliadoUsuarioAsignacionRow
+{
+    public int IdUsuario { get; init; }
+    public string Nombre { get; init; } = string.Empty;
+    public string? Identificacion { get; init; }
+    public string? Correo { get; init; }
+    public int? IdVendedorActual { get; init; }
+    public string? AliadoActual { get; init; }
+}
+
 public sealed class AliadoUsuarioAdminRow
 {
     public int IdUsuario { get; init; }
@@ -2686,6 +3187,12 @@ public sealed class AliadoUsuarioAdminRow
     public bool Bloqueado { get; init; }
     public bool ClaveTemporal { get; init; }
     public string? Identificacion { get; init; }
+    public int TipoCliente { get; init; }
+    public string TipoDocumento { get; init; } = "CEDULA";
+    public string? RazonSocial { get; init; }
+    public string? NombreComercial { get; init; }
+    public string? Celular { get; init; }
+    public string? Direccion { get; init; }
     public DateTime? FechaNacimiento { get; init; }
     public DateTime? FechaCreacion { get; init; }
     public decimal? PorcentajeComision { get; init; }

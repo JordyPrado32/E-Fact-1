@@ -1,7 +1,9 @@
 @page "/aliados/clientes"
 @page "/aliados/clientes/{Id:int}"
 @using MiniExcelLibs
+@using System.ComponentModel.DataAnnotations
 @implements IAsyncDisposable
+@inject IWebHostEnvironment Env
 
 <PageTitle>Mis clientes | Portal de Aliados</PageTitle>
 
@@ -67,21 +69,22 @@ else
         </section>
 
         <section class="ally-panel clients-list-card">
-            <div class="clients-list-heading">
-                <div class="clients-list-title"><span class="clients-list-icon"><i class="ri-user-line"></i></span><div><span class="ally-eyebrow">LISTADO DE CLIENTES</span><h3>Clientes atribuidos a tu canal</h3></div></div>
-                <div class="clients-toolbar" aria-label="Herramientas de clientes"><label class="clients-search"><i class="ri-search-line"></i><input @bind="busqueda" @bind:event="oninput" @bind:after="ActualizarBusqueda" placeholder="Buscar por nombre, RUC o contacto..." /></label><button class="clients-action-card ally-excel-button" type="button" @onclick="ExportarExcelAsync" disabled="@(!clientesFiltrados.Any())"><span class="clients-action-icon"><i class="ri-download-2-line"></i></span><span><strong>Exportar clientes</strong><small>Archivo Excel</small></span></button></div>
+                <div class="clients-list-heading">
+                <div class="clients-list-title"><span class="clients-list-icon"><i class="ri-user-line"></i></span><div><span class="ally-eyebrow">LISTADO DE CLIENTES</span><h3>@(esAdministrador ? "Todos los clientes asociados" : "Clientes atribuidos a tu canal")</h3></div></div>
+                    <div class="clients-toolbar" aria-label="Herramientas de clientes"><label class="clients-search"><i class="ri-search-line"></i><input @bind="busqueda" @bind:event="oninput" @bind:after="ActualizarBusqueda" list="clientes-sugerencias" placeholder="Buscar por nombre, RUC o contacto..." /></label><datalist id="clientes-sugerencias">@foreach (var sugerencia in clientes.Take(8)) { <option value="@sugerencia.Nombre">@sugerencia.Identificacion</option> }</datalist><button class="clients-action-card clients-create-account" type="button" @onclick="AbrirCrearCuentaModal"><span class="clients-action-icon"><i class="ri-user-add-line"></i></span><span><strong>Crear cliente</strong><small>Nuevo cliente</small></span></button><button class="clients-action-card ally-excel-button" type="button" @onclick="ExportarExcelAsync" disabled="@(!clientesFiltrados.Any())"><span class="clients-action-icon"><i class="ri-download-2-line"></i></span><span><strong>Exportar clientes</strong><small>Archivo Excel</small></span></button></div>
             </div>
             @if (ClientesAgrupados.Count == 0) { <div class="ally-empty">No hay clientes atribuidos a tu canal.</div> }
             else
             {
                 <div class="ally-table-wrap">
                     <table class="ally-table clients-table">
-                        <thead><tr><th>Cliente</th><th>Contacto</th><th>Identificación</th><th>Última compra</th><th>Total compras</th><th>Vencimiento</th><th>Acción</th></tr></thead>
+                        <thead><tr><th>Cliente</th>@if (esAdministrador) { <th>Aliado asociado</th> }<th>Contacto</th><th>Identificación</th><th>Última compra</th><th>Total compras</th><th>Vencimiento</th><th>Acción</th></tr></thead>
                         <tbody>
                             @foreach (var cliente in ClientesPaginados)
                             {
                                 <tr @key="cliente.IdCliente">
                                     <td><div class="clients-name-cell"><span class="clients-avatar">@Iniciales(cliente.Nombre)</span><div><strong>@cliente.Nombre</strong></div></div></td>
+                                    @if (esAdministrador) { <td><span class="clients-ally-name">@(cliente.Aliado ?? "Sin aliado")</span></td> }
                                     <td><span class="clients-contact"><i class="ri-phone-line"></i> @(cliente.Telefono ?? "Sin teléfono")</span><small class="clients-email"><i class="ri-mail-line"></i> @(cliente.Email ?? "Sin correo")</small></td>
                                     <td><span class="clients-id">@(cliente.Identificacion ?? "Sin identificación")</span></td>
                                     <td><span class="clients-date"><i class="ri-calendar-line"></i>@(cliente.UltimaCompra?.ToString("dd/MM/yyyy") ?? "-")</span></td>
@@ -147,6 +150,68 @@ else
     </div>
 }
 
+@if (mostrarCrearCuentaModal)
+{
+    <div class="ally-modal-backdrop clients-create-backdrop" @onclick="CerrarCrearCuentaModal">
+        <section class="ally-modal clients-create-modal" role="dialog" aria-modal="true" aria-labelledby="crear-cliente-title" @onclick:stopPropagation="true">
+            <header class="clients-detail-header clients-create-header">
+                <div><span class="ally-label">NUEVA CUENTA</span><h2 id="crear-cliente-title">Crear cuenta de cliente</h2><span class="clients-detail-id">@(esAdministrador ? "Selecciona el aliado que recibirá las comisiones." : "El cliente quedará asociado a tu canal.")</span></div>
+                <button class="clients-modal-close" type="button" @onclick="CerrarCrearCuentaModal" aria-label="Cerrar formulario"><i class="ri-close-line"></i></button>
+            </header>
+            <EditForm Model="cuentaCliente" OnValidSubmit="CrearCuentaClienteAsync" FormName="crear-cuenta-cliente-form">
+                <DataAnnotationsValidator />
+                <div class="clients-create-body">
+                    <ValidationSummary class="clients-validation-summary" />
+                    <div class="clients-create-grid">
+                        @if (esAdministrador)
+                        {
+                            <label class="clients-create-wide">Aliado asociado
+                                <input class="clients-ally-search" @bind="busquedaAliado" @bind:event="oninput" list="aliados-sugerencias" placeholder="Escribe para buscar un aliado..." />
+                                <datalist id="aliados-sugerencias">@foreach (var aliado in AliadosFiltrados.Take(8)) { <option value="@aliado.Nombre">@aliado.CodigoReferencia</option> }</datalist>
+                                <select @bind="aliadoSeleccionadoId">
+                                    <option value="">Selecciona el aliado asociado</option>
+                                    @foreach (var aliado in AliadosFiltrados)
+                                    {
+                                        <option value="@aliado.IdVendedor">@aliado.Nombre</option>
+                                    }
+                                </select>
+                            </label>
+                        }
+                        <div class="clients-profile-picker clients-create-wide"><div class="clients-profile-preview">@if (!string.IsNullOrWhiteSpace(cuentaCliente.AvatarUrl)) { <img src="@ResolverAvatar(cuentaCliente.AvatarUrl)" alt="Foto de perfil seleccionada" /> } else { <i class="ri-user-3-line"></i> }</div><div><strong>Foto de perfil</strong><small>Selecciona un avatar para la cuenta del cliente.</small><button type="button" class="clients-avatar-toggle" @onclick="() => mostrarSelectorAvatar = !mostrarSelectorAvatar"><i class="ri-image-add-line"></i> @(mostrarSelectorAvatar ? "Ocultar avatares" : "Seleccionar foto")</button></div></div>
+                        @if (mostrarSelectorAvatar)
+                        {
+                            <div class="clients-avatar-options clients-create-wide">@foreach (var avatar in avatarFiles) { var url = $"images/Avatars/{avatar}"; <button type="button" class="clients-avatar-option @(string.Equals(ResolverAvatar(cuentaCliente.AvatarUrl), ResolverAvatar(url), StringComparison.OrdinalIgnoreCase) ? "selected" : string.Empty)" @onclick="() => SeleccionarAvatar(url)" title="Seleccionar avatar"><img src="@ResolverAvatar(url)" alt="Avatar disponible" /></button> }</div>
+                        }
+                        <label>Tipo de cliente<InputSelect @bind-Value="cuentaCliente.TipoCliente" @bind-Value:after="CambiarTipoCliente"><option value="1">Persona natural</option><option value="2">Empresa</option></InputSelect></label>
+                        <label>Tipo de documento<InputSelect @bind-Value="cuentaCliente.TipoDocumento" @bind-Value:after="NormalizarIdentificacionCuenta"><option value="CEDULA" disabled="@(cuentaCliente.TipoCliente == 2)">Cédula</option><option value="RUC">RUC</option><option value="EXTERIOR">Identificación del exterior</option><option value="PASAPORTE">Pasaporte</option></InputSelect></label>
+                        <label>Identificación<input @bind="IdentificacionCuentaInput" @bind:event="oninput" maxlength="20" inputmode="numeric" placeholder="Ingresa el número de identificación" /><ValidationMessage For="@(() => cuentaCliente.Identificacion)" /></label>
+                        @if (cuentaCliente.TipoCliente == 2)
+                        {
+                            <label class="clients-create-wide">Nombre comercial<InputText @bind-Value="cuentaCliente.NombreComercial" maxlength="150" placeholder="Ej. Comercial La Esperanza" /><ValidationMessage For="@(() => cuentaCliente.NombreComercial)" /></label>
+                        }
+                        else
+                        {
+                            <label>Nombres<InputText @bind-Value="cuentaCliente.Nombres" autocomplete="given-name" placeholder="Ingresa los nombres" /><ValidationMessage For="@(() => cuentaCliente.Nombres)" /></label>
+                            <label>Apellidos<InputText @bind-Value="cuentaCliente.Apellidos" autocomplete="family-name" placeholder="Ingresa los apellidos" /><ValidationMessage For="@(() => cuentaCliente.Apellidos)" /></label>
+                        }
+                        <label>Celular<input @bind="CelularCuentaInput" @bind:event="oninput" inputmode="tel" autocomplete="tel" placeholder="Ej. 0991234567" /><ValidationMessage For="@(() => cuentaCliente.Celular)" /></label>
+                        <label class="clients-create-wide">Correo electrónico<InputText @bind-Value="cuentaCliente.Email" type="email" autocomplete="email" placeholder="cliente@correo.com" /><ValidationMessage For="@(() => cuentaCliente.Email)" /></label>
+                        <label class="clients-create-wide">Dirección<InputText @bind-Value="cuentaCliente.Direccion" maxlength="100" placeholder="Calle, número y referencia" /><ValidationMessage For="@(() => cuentaCliente.Direccion)" /></label>
+                        <label>Clave inicial<InputText @bind-Value="cuentaCliente.Password" type="password" autocomplete="new-password" placeholder="Mínimo 8 caracteres" /><ValidationMessage For="@(() => cuentaCliente.Password)" /></label>
+                        <label>Confirmar clave<InputText @bind-Value="cuentaCliente.ConfirmarPassword" type="password" autocomplete="new-password" placeholder="Repite la clave" /><ValidationMessage For="@(() => cuentaCliente.ConfirmarPassword)" /></label>
+                    </div>
+                    <div class="clients-create-note"><i class="ri-information-line"></i><span>La clave inicial será temporal. El cliente deberá cambiarla obligatoriamente en su primer ingreso.</span></div>
+                    @if (!string.IsNullOrWhiteSpace(errorCrearCuenta))
+                    {
+                        <div class="clients-create-error">@errorCrearCuenta</div>
+                    }
+                </div>
+                <footer class="clients-detail-footer"><button class="clients-contact-button secondary" type="button" @onclick="CerrarCrearCuentaModal">Cancelar</button><button class="clients-contact-button primary" type="submit" disabled="@creandoCuenta">@(creandoCuenta ? "Creando..." : "Crear cliente")</button></footer>
+            </EditForm>
+        </section>
+    </div>
+}
+
 @code {
     [Parameter] public int? Id { get; set; }
     private string busqueda = string.Empty;
@@ -157,6 +222,18 @@ else
     private int usuarioAliadoId;
     private bool cargando = true;
     private bool graficoPendiente;
+    private bool mostrarCrearCuentaModal;
+    private bool creandoCuenta;
+    private bool esAdministrador;
+    private string? errorCrearCuenta;
+    private ClienteCuentaForm cuentaCliente = new();
+    private List<AliadoAdminRow> aliadosDisponibles = new();
+    private string busquedaAliado = string.Empty;
+    private int? aliadoSeleccionadoId;
+    private List<string> avatarFiles = new();
+    private bool mostrarSelectorAvatar;
+    private IEnumerable<AliadoAdminRow> AliadosFiltrados => aliadosDisponibles.Where(x => x.Activo && x.UsuarioActivo &&
+        (string.IsNullOrWhiteSpace(busquedaAliado) || x.Nombre.Contains(busquedaAliado, StringComparison.OrdinalIgnoreCase)));
     private List<AliadoClienteDto> clientesFiltrados => clientes.Where(x =>
         string.IsNullOrWhiteSpace(busqueda) || $"{x.Nombre} {x.Identificacion} {x.Email}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)).ToList();
     private List<ClienteListadoResumen> ClientesAgrupados => clientesFiltrados
@@ -166,7 +243,8 @@ else
             var ultima = g.OrderByDescending(x => x.FechaCompra).First();
             var contacto = g.FirstOrDefault(x => EsCorreoDisponible(x.Email)) ?? ultima;
             var telefono = g.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.Telefono))?.Telefono;
-            return new ClienteListadoResumen(ultima.IdCliente, ultima.Nombre, ultima.Identificacion, EsCorreoDisponible(contacto.Email) ? contacto.Email : null, telefono, ultima.FechaCompra, g.Max(x => x.TotalCompras), ultima.FechaVencimiento);
+            var aliado = g.Select(x => x.Aliado).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+            return new ClienteListadoResumen(ultima.IdCliente, ultima.Nombre, aliado, ultima.Identificacion, EsCorreoDisponible(contacto.Email) ? contacto.Email : null, telefono, ultima.FechaCompra, g.Max(x => x.TotalCompras), ultima.FechaVencimiento);
         })
         .OrderBy(x => x.Nombre)
         .ToList();
@@ -199,6 +277,18 @@ else
     [Inject] private IJSRuntime JS { get; set; } = null!;
     [Inject] private SweetAlertService AlertService { get; set; } = null!;
 
+    private string IdentificacionCuentaInput
+    {
+        get => cuentaCliente.Identificacion;
+        set => cuentaCliente.Identificacion = SanitizarIdentificacion(value, cuentaCliente.TipoDocumento);
+    }
+
+    private string CelularCuentaInput
+    {
+        get => cuentaCliente.Celular;
+        set => cuentaCliente.Celular = (value ?? string.Empty).Trim();
+    }
+
     private void ActualizarBusqueda() { pagina = 1; graficoPendiente = true; }
     private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
     private async Task AbrirDetalleModalAsync(int idCliente)
@@ -216,6 +306,114 @@ else
         }
     }
     private void CerrarDetalleModal() => detalleModal = null;
+
+    private async Task AbrirCrearCuentaModal()
+    {
+        cuentaCliente = new ClienteCuentaForm();
+        errorCrearCuenta = null;
+        busquedaAliado = string.Empty;
+        aliadoSeleccionadoId = null;
+        CargarAvatares();
+        mostrarSelectorAvatar = false;
+        if (esAdministrador && aliadosDisponibles.Count == 0)
+            aliadosDisponibles = (await AliadoService.ListarAliadosAsync()).ToList();
+        mostrarCrearCuentaModal = true;
+    }
+
+    private void CerrarCrearCuentaModal()
+    {
+        if (!creandoCuenta)
+            mostrarCrearCuentaModal = false;
+    }
+
+    private void CambiarTipoCliente()
+    {
+        if (cuentaCliente.TipoCliente == 2)
+        {
+            cuentaCliente.Nombres = string.Empty;
+            cuentaCliente.Apellidos = string.Empty;
+            cuentaCliente.TipoDocumento = "RUC";
+        }
+        else
+        {
+            cuentaCliente.RazonSocial = string.Empty;
+            cuentaCliente.TipoDocumento = "CEDULA";
+        }
+        NormalizarIdentificacionCuenta();
+    }
+
+    private void NormalizarIdentificacionCuenta()
+    {
+        cuentaCliente.Identificacion = SanitizarIdentificacion(cuentaCliente.Identificacion, cuentaCliente.TipoDocumento);
+    }
+
+    private async Task CrearCuentaClienteAsync()
+    {
+        if (creandoCuenta)
+            return;
+
+        creandoCuenta = true;
+        errorCrearCuenta = null;
+        try
+        {
+            if (esAdministrador && aliadoSeleccionadoId is not > 0)
+            {
+                errorCrearCuenta = "Selecciona el aliado al que se asociará el cliente.";
+                return;
+            }
+
+            var registro = new AliadoClienteRegistroDto
+            {
+                Nombres = cuentaCliente.Nombres,
+                Apellidos = cuentaCliente.Apellidos,
+                RazonSocial = cuentaCliente.TipoCliente == 2 ? cuentaCliente.NombreComercial : cuentaCliente.RazonSocial,
+                Email = cuentaCliente.Email,
+                Direccion = cuentaCliente.Direccion,
+                Celular = cuentaCliente.Celular,
+                TipoDocumento = cuentaCliente.TipoDocumento,
+                Identificacion = cuentaCliente.Identificacion,
+                Password = cuentaCliente.Password,
+                ConfirmarPassword = cuentaCliente.ConfirmarPassword,
+                TipoCliente = cuentaCliente.TipoCliente,
+                AvatarUrl = cuentaCliente.AvatarUrl,
+                IdVendedorDestino = esAdministrador ? aliadoSeleccionadoId : null
+            };
+            var resultado = await AliadoService.CrearCuentaClienteAliadoAsync(usuarioAliadoId, registro);
+            if (!resultado.Success)
+            {
+                errorCrearCuenta = resultado.Message;
+                return;
+            }
+
+            mostrarCrearCuentaModal = false;
+            await OnParametersSetAsync();
+            await AlertService.ShowSuccessAsync(resultado.Message, "Cuenta creada");
+        }
+        finally
+        {
+            creandoCuenta = false;
+        }
+    }
+
+    private static string SanitizarIdentificacion(string? valor, string tipoDocumento)
+    {
+        var raw = valor ?? string.Empty;
+        var limpio = tipoDocumento is "PASAPORTE" or "EXTERIOR"
+            ? new string(raw.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant()
+            : new string(raw.Where(char.IsDigit).ToArray());
+        return limpio.Length > 20 ? limpio[..20] : limpio;
+    }
+
+    private void CargarAvatares()
+    {
+        var ruta = Path.Combine(Env.WebRootPath, "images", "Avatars");
+        avatarFiles = Directory.Exists(ruta)
+            ? Directory.GetFiles(ruta).Select(Path.GetFileName).Where(x => x is not null && (x.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || x.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || x.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))).OrderBy(x => x).ToList()!
+            : new List<string>();
+    }
+
+    private void SeleccionarAvatar(string nombre) { cuentaCliente.AvatarUrl = $"images/Avatars/{nombre}"; mostrarSelectorAvatar = false; }
+    private static string ResolverAvatar(string? ruta) => string.IsNullOrWhiteSpace(ruta) ? string.Empty : "/" + ruta.Trim().Replace('\\', '/').TrimStart('/');
     private async Task ExportarExcelAsync()
     {
         var data = clientesFiltrados.Select(x => new
@@ -268,6 +466,8 @@ else
             return;
         }
         usuarioAliadoId = id;
+        var contexto = await AliadoService.ObtenerContextoAsync(id);
+        esAdministrador = contexto?.EsAdministrador == true;
         if (Id.HasValue)
             detalle = await AliadoService.ObtenerClienteAsync(id, Id.Value);
         else
@@ -291,5 +491,52 @@ else
     }
 
     private sealed record ClienteComprasResumen(string Nombre, int Compras);
-    private sealed record ClienteListadoResumen(int IdCliente, string Nombre, string? Identificacion, string? Email, string? Telefono, DateTime? UltimaCompra, int TotalCompras, DateTime? FechaVencimiento);
+    private sealed record ClienteListadoResumen(int IdCliente, string Nombre, string? Aliado, string? Identificacion, string? Email, string? Telefono, DateTime? UltimaCompra, int TotalCompras, DateTime? FechaVencimiento);
+
+    private sealed class ClienteCuentaForm : IValidatableObject
+    {
+        [Required(ErrorMessage = "El correo es obligatorio")]
+        [EmailAddress(ErrorMessage = "Ingresa un correo válido")]
+        public string Email { get; set; } = string.Empty;
+        [Required(ErrorMessage = "La dirección es obligatoria")]
+        [StringLength(100, MinimumLength = 5, ErrorMessage = "La dirección debe tener entre 5 y 100 caracteres")]
+        public string Direccion { get; set; } = string.Empty;
+        [Required(ErrorMessage = "El tipo de documento es obligatorio")]
+        public string TipoDocumento { get; set; } = "CEDULA";
+        [Required(ErrorMessage = "La identificación es obligatoria")]
+        public string Identificacion { get; set; } = string.Empty;
+        [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\da-zA-Z]).{8,}$", ErrorMessage = "La clave requiere 8 caracteres, mayúscula, minúscula, número y carácter especial")]
+        public string Password { get; set; } = string.Empty;
+        public string ConfirmarPassword { get; set; } = string.Empty;
+        [Range(1, 2, ErrorMessage = "Selecciona un tipo de cliente")]
+        public int TipoCliente { get; set; } = 1;
+        public string Nombres { get; set; } = string.Empty;
+        public string Apellidos { get; set; } = string.Empty;
+        public string RazonSocial { get; set; } = string.Empty;
+        public string NombreComercial { get; set; } = string.Empty;
+        public string? AvatarUrl { get; set; }
+        public string Celular { get; set; } = string.Empty;
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            var registro = new AliadoClienteRegistroDto
+            {
+                Nombres = Nombres,
+                Apellidos = Apellidos,
+                RazonSocial = TipoCliente == 2 ? NombreComercial : RazonSocial,
+                Email = Email,
+                Direccion = Direccion,
+                Celular = Celular,
+                TipoDocumento = TipoDocumento,
+                Identificacion = Identificacion,
+                Password = Password,
+                ConfirmarPassword = ConfirmarPassword,
+                TipoCliente = TipoCliente
+            };
+            registro.Normalizar();
+            var error = registro.Validar();
+            if (error is not null)
+                yield return new ValidationResult(error);
+        }
+    }
 }

@@ -34,6 +34,7 @@ public class LiquidacionCompraPreviewDto
     public string TipoIdentificacionProveedorNombre { get; set; } = "";
     public string IdentificacionProveedor { get; set; } = "";
     public string RazonSocialProveedor { get; set; } = "";
+    public string NombreComercialProveedor { get; set; } = "";
     public string DireccionProveedor { get; set; } = "";
     public string TelefonoFijoProveedor { get; set; } = "";
     public string TelefonoProveedor { get; set; } = "";

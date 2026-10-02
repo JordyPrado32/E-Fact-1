@@ -157,6 +157,9 @@ public class LiquidacionCompraXmlGenerator
         if (!string.IsNullOrWhiteSpace(preview.EmailProveedor))
             campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "EmailProveedor"), preview.EmailProveedor.Trim()));
 
+        if (!string.IsNullOrWhiteSpace(preview.NombreComercialProveedor))
+            campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "NombreComercialProveedor"), preview.NombreComercialProveedor.Trim()));
+
         campos.Add(new XElement("campoAdicional", new XAttribute("nombre", "OrigenRegistro"), "REGISTRO MANUAL"));
 
         if (!campos.Any())

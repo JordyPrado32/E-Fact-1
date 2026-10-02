@@ -534,6 +534,7 @@ public class LiquidacionCompraService
             TipoIdentificacionProveedorNombre = preview.TipoIdentificacionProveedorNombre,
             IdentificacionProveedor = preview.IdentificacionProveedor,
             RazonSocialProveedor = preview.RazonSocialProveedor,
+            NombreComercialProveedor = preview.NombreComercialProveedor,
             DireccionProveedor = preview.DireccionProveedor,
             TelefonoFijoProveedor = preview.TelefonoFijoProveedor,
             TelefonoProveedor = preview.TelefonoProveedor,
@@ -783,10 +784,10 @@ public class LiquidacionCompraService
             return liquidacion.CodLiquidacionCompra.Value;
         }
 
-        var aliado = await context.Usuarios.AsNoTracking().FirstOrDefaultAsync(x => x.IdVendedor == liquidacion.IdVendedor && x.Estado == true, cancellationToken)
+        var aliado = await ObtenerUsuarioAliadoAsync(context, liquidacion.IdVendedor, cancellationToken)
             ?? throw new InvalidOperationException("No se encontró la cuenta del aliado.");
-        if (string.IsNullOrWhiteSpace(aliado.Identificacion) || string.IsNullOrWhiteSpace(aliado.DireccionEmpresa))
-            throw new InvalidOperationException("El aliado debe tener identificación y dirección fiscal para emitir su liquidación de compra.");
+        if (string.IsNullOrWhiteSpace(aliado.Identificacion) || string.IsNullOrWhiteSpace(aliado.DireccionEmpresa) || string.IsNullOrWhiteSpace(aliado.Celular))
+            throw new InvalidOperationException("El aliado debe tener identificación, dirección fiscal y teléfono para emitir su liquidación de compra.");
 
         var emisor = await _emisorSistemaService.GetEmisorSistemaAsync()
             ?? throw new InvalidOperationException("Configura primero el emisor maestro.");
@@ -794,9 +795,14 @@ public class LiquidacionCompraService
             throw new InvalidOperationException("El emisor maestro no tiene una cuenta propietaria válida.");
 
         var preview = await CrearPreviewManualAsync(emisor.IdUsuario);
-        preview.TipoIdentificacionProveedor = aliado.Identificacion.Trim().Length == 13 ? "04" : aliado.Identificacion.Trim().Length == 10 ? "05" : "06";
+        preview.TipoIdentificacionProveedor = aliado.IdTipoIdentificacion == 2 ? "04" : aliado.IdTipoIdentificacion == 3 ? "06" : "05";
         preview.IdentificacionProveedor = aliado.Identificacion.Trim();
-        preview.RazonSocialProveedor = aliado.NombreCompleto;
+        preview.RazonSocialProveedor = (aliado.TipoCliente == 2 && !string.IsNullOrWhiteSpace(aliado.Nombres)
+            ? aliado.Nombres
+            : aliado.NombreCompleto).Trim();
+        preview.NombreComercialProveedor = string.IsNullOrWhiteSpace(aliado.NombreEmpresa)
+            ? preview.RazonSocialProveedor
+            : aliado.NombreEmpresa.Trim();
         preview.DireccionProveedor = aliado.DireccionEmpresa.Trim();
         preview.EmailProveedor = aliado.Email?.Trim() ?? string.Empty;
         preview.TelefonoProveedor = aliado.Celular?.Trim() ?? string.Empty;
@@ -928,6 +934,27 @@ public class LiquidacionCompraService
             .ToListAsync();
 
         var codigosCompra = data.Select(x => x.Compra.CodFactura).ToList();
+        var aliadosPorCompra = await (
+            from liquidacion in context.AliadoLiquidaciones.AsNoTracking()
+            join aliado in context.Usuarios.AsNoTracking() on liquidacion.IdVendedor equals aliado.IdVendedor
+            where liquidacion.CodLiquidacionCompra.HasValue &&
+                  codigosCompra.Contains(liquidacion.CodLiquidacionCompra.Value) &&
+                  aliado.Estado == true &&
+                  (context.TipoUsuario.Any(t => t.IdTipoUsuario == aliado.IdTipoUsuario && t.NombreTipo == AliadoPortalService.RoleName) ||
+                   context.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == aliado.IdUsuario &&
+                       context.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == AliadoPortalService.RoleName)))
+            select new
+            {
+                CodFactura = liquidacion.CodLiquidacionCompra!.Value,
+                aliado.Nombres,
+                aliado.Apellidos,
+                aliado.NombreEmpresa,
+                aliado.Identificacion
+            }).ToListAsync();
+        var aliadoPorCompra = aliadosPorCompra
+            .GroupBy(x => x.CodFactura)
+            .ToDictionary(x => x.Key, x => x.First());
+
         var comprasConRetencionDetalle = await context.ComprasRetValor
             .AsNoTracking()
             .Where(x => x.IdCompra.HasValue && codigosCompra.Contains(x.IdCompra.Value))
@@ -947,31 +974,39 @@ public class LiquidacionCompraService
             .GroupBy(x => x.IdCompra)
             .ToDictionary(x => x.Key, x => x.Select(item => item.NumRetencion).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "");
 
-        return data.Select(x => new LiquidacionCompraListDto
+        return data.Select(x =>
         {
-            CodFactura = x.Compra.CodFactura,
-            Serie = x.Compra.Serie ?? "",
-            Secuencial = x.Compra.NumFactura ?? "",
-            FechaEmision = x.Compra.FchAutorizacion ?? x.Compra.FechaRegistro,
-            Proveedor = ObtenerNombreClienteLiquidacion(x.Proveedor),
-            IdentificacionProveedor = x.Proveedor?.Numeroidentificacion ?? "",
-            EstadoSri = x.Compra.EstadoEnvioSRI ?? "",
-            Autorizado = x.Compra.Autorizado ?? "",
-            NumeroAutorizacion = x.Compra.NumAutorizacion ?? "",
-            MensajeSri = x.Compra.Mensaje ?? "",
-            TotalSinImpuestos = x.Compra.Subtotal ?? 0m,
-            IvaTotal = x.Compra.Iva ?? 0m,
-            ImporteTotal = x.Compra.ValorTotal ?? 0m,
-            ClaveAcceso = x.Compra.CodClave ?? "",
-            XmlUrl = ConstruirLiquidacionXmlUrl(x.Compra.CodClave),
-            PdfUrl = ConstruirLiquidacionPdfUrl(x.Compra.CodClave),
-            TieneRetencion = x.Compra.TieneRetencion == true ||
-                !string.IsNullOrWhiteSpace(x.Compra.NumRetencion) ||
-                comprasConRetencionSet.Contains(x.Compra.CodFactura) ||
-                retencionesCabeceraSet.Contains(x.Compra.CodFactura),
-            NumeroRetencion = string.IsNullOrWhiteSpace(x.Compra.NumRetencion)
-                ? numerosRetencion.GetValueOrDefault(x.Compra.CodFactura, "")
-                : x.Compra.NumRetencion
+            aliadoPorCompra.TryGetValue(x.Compra.CodFactura, out var aliado);
+            return new LiquidacionCompraListDto
+            {
+                CodFactura = x.Compra.CodFactura,
+                Serie = x.Compra.Serie ?? "",
+                Secuencial = x.Compra.NumFactura ?? "",
+                FechaEmision = x.Compra.FchAutorizacion ?? x.Compra.FechaRegistro,
+                Proveedor = aliado == null
+                    ? ObtenerNombreClienteLiquidacion(x.Proveedor)
+                    : (string.IsNullOrWhiteSpace(aliado.NombreEmpresa)
+                        ? $"{aliado.Nombres} {aliado.Apellidos}".Trim()
+                        : aliado.NombreEmpresa),
+                IdentificacionProveedor = aliado?.Identificacion ?? x.Proveedor?.Numeroidentificacion ?? "",
+                EstadoSri = x.Compra.EstadoEnvioSRI ?? "",
+                Autorizado = x.Compra.Autorizado ?? "",
+                NumeroAutorizacion = x.Compra.NumAutorizacion ?? "",
+                MensajeSri = x.Compra.Mensaje ?? "",
+                TotalSinImpuestos = x.Compra.Subtotal ?? 0m,
+                IvaTotal = x.Compra.Iva ?? 0m,
+                ImporteTotal = x.Compra.ValorTotal ?? 0m,
+                ClaveAcceso = x.Compra.CodClave ?? "",
+                XmlUrl = ConstruirLiquidacionXmlUrl(x.Compra.CodClave),
+                PdfUrl = ConstruirLiquidacionPdfUrl(x.Compra.CodClave),
+                TieneRetencion = x.Compra.TieneRetencion == true ||
+                    !string.IsNullOrWhiteSpace(x.Compra.NumRetencion) ||
+                    comprasConRetencionSet.Contains(x.Compra.CodFactura) ||
+                    retencionesCabeceraSet.Contains(x.Compra.CodFactura),
+                NumeroRetencion = string.IsNullOrWhiteSpace(x.Compra.NumRetencion)
+                    ? numerosRetencion.GetValueOrDefault(x.Compra.CodFactura, "")
+                    : x.Compra.NumRetencion
+            };
         }).ToList();
     }
 
@@ -1518,6 +1553,10 @@ public class LiquidacionCompraService
             ? await context.Clientes.AsNoTracking().FirstOrDefaultAsync(x => x.Codcliente == compra.CodClientes.Value)
             : null;
 
+        var aliado = await ObtenerAliadoDeCompraAsync(context, compra.CodFactura);
+        if (aliado != null)
+            proveedor = ConvertirUsuarioAliadoACliente(aliado);
+
         var emisor = compra.CodEmisor.HasValue
             ? await context.Emisores.AsNoTracking().FirstOrDefaultAsync(x => x.Codigo == compra.CodEmisor.Value)
             : null;
@@ -1539,6 +1578,46 @@ public class LiquidacionCompraService
             Preview = preview,
             XmlUrl = ConstruirLiquidacionXmlUrl(preview.ClaveAcceso),
             PdfUrl = ConstruirLiquidacionPdfUrl(preview.ClaveAcceso)
+        };
+    }
+
+    private static async Task<Usuario?> ObtenerAliadoDeCompraAsync(AppDbContext context, int codFactura)
+    {
+        var liquidacion = await context.AliadoLiquidaciones.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.CodLiquidacionCompra == codFactura);
+        return liquidacion == null
+            ? null
+            : await ObtenerUsuarioAliadoAsync(context, liquidacion.IdVendedor);
+    }
+
+    private static Task<Usuario?> ObtenerUsuarioAliadoAsync(
+        AppDbContext context,
+        int idVendedor,
+        CancellationToken cancellationToken = default)
+        => context.Usuarios.AsNoTracking()
+            .Where(x => x.IdVendedor == idVendedor && x.Estado == true &&
+                (context.TipoUsuario.Any(t => t.IdTipoUsuario == x.IdTipoUsuario && t.NombreTipo == AliadoPortalService.RoleName) ||
+                 context.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario &&
+                     context.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == AliadoPortalService.RoleName))))
+            .OrderBy(x => x.IdUsuario)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    private static Cliente ConvertirUsuarioAliadoACliente(Usuario aliado)
+    {
+        var razonSocial = aliado.TipoCliente == 2
+            ? aliado.Nombres
+            : aliado.NombreCompleto;
+        return new Cliente
+        {
+            Numeroidentificacion = aliado.Identificacion,
+            Tipoidentificacion = aliado.IdTipoIdentificacion == 2 ? "04" : aliado.IdTipoIdentificacion == 3 ? "06" : "05",
+            Nombrerazonsocial = razonSocial,
+            Nombrecomercial = string.IsNullOrWhiteSpace(aliado.NombreEmpresa) ? razonSocial : aliado.NombreEmpresa,
+            Nombres = aliado.Nombres,
+            Apellidos = aliado.Apellidos,
+            Direccion = aliado.DireccionEmpresa,
+            Celular = aliado.Celular,
+            Correo = aliado.Email
         };
     }
 
@@ -1610,6 +1689,7 @@ public class LiquidacionCompraService
             TipoIdentificacionProveedor = proveedor?.Tipoidentificacion ?? "05",
             IdentificacionProveedor = proveedor?.Numeroidentificacion ?? "",
             RazonSocialProveedor = ObtenerNombreClienteLiquidacion(proveedor),
+            NombreComercialProveedor = proveedor?.Nombrecomercial ?? "",
             DireccionProveedor = proveedor?.Direccion ?? "",
             TelefonoFijoProveedor = proveedor?.Telefonoconvencional ?? "",
             TelefonoProveedor = proveedor?.Celular ?? "",
@@ -2022,7 +2102,7 @@ public class LiquidacionCompraService
                 Numeroidentificacion = identificacion,
                 Tipoidentificacion = preview.TipoIdentificacionProveedor,
                 Nombrerazonsocial = preview.RazonSocialProveedor,
-                Nombrecomercial = preview.RazonSocialProveedor,
+                Nombrecomercial = string.IsNullOrWhiteSpace(preview.NombreComercialProveedor) ? preview.RazonSocialProveedor : preview.NombreComercialProveedor,
                 Nombres = preview.RazonSocialProveedor,
                 Apellidos = ".",
                 Direccion = NormalizarTextoVacio(preview.DireccionProveedor),
@@ -2063,9 +2143,10 @@ public class LiquidacionCompraService
                 cambio = true;
             }
 
-            if (cliente.Nombrecomercial != preview.RazonSocialProveedor)
+            var nombreComercial = string.IsNullOrWhiteSpace(preview.NombreComercialProveedor) ? preview.RazonSocialProveedor : preview.NombreComercialProveedor;
+            if (cliente.Nombrecomercial != nombreComercial)
             {
-                cliente.Nombrecomercial = preview.RazonSocialProveedor;
+                cliente.Nombrecomercial = nombreComercial;
                 cambio = true;
             }
 
@@ -2175,7 +2256,7 @@ public class LiquidacionCompraService
             {
                 ruc = identificacion,
                 nombre = preview.RazonSocialProveedor,
-                nombreComercial = preview.RazonSocialProveedor,
+                nombreComercial = string.IsNullOrWhiteSpace(preview.NombreComercialProveedor) ? preview.RazonSocialProveedor : preview.NombreComercialProveedor,
                 direccion = NormalizarTextoVacio(preview.DireccionProveedor),
                 telefono = LimpiarTelefono(ObtenerTelefonoFijo(preview)),
                 telefonoMovil = LimpiarTelefono(ObtenerTelefonoMovil(preview)),
@@ -2209,9 +2290,10 @@ public class LiquidacionCompraService
                 cambio = true;
             }
 
-            if (proveedor.nombreComercial != preview.RazonSocialProveedor)
+            var nombreComercial = string.IsNullOrWhiteSpace(preview.NombreComercialProveedor) ? preview.RazonSocialProveedor : preview.NombreComercialProveedor;
+            if (proveedor.nombreComercial != nombreComercial)
             {
-                proveedor.nombreComercial = preview.RazonSocialProveedor;
+                proveedor.nombreComercial = nombreComercial;
                 cambio = true;
             }
         }

@@ -35,7 +35,7 @@
             <div class="ally-table-wrap"><table class="ally-table liquidations-table"><thead><tr><th>Aliado</th><th>Período</th><th>Fecha</th><th>Movimientos</th><th>Total</th><th>Referencia</th><th>Estado de pago</th><th>Documentos</th><th></th></tr></thead><tbody>
             @foreach (var item in LiquidacionesPaginadas)
             {
-                <tr @key="item.IdLiquidacion"><td>@(string.IsNullOrWhiteSpace(item.Aliado) ? "-" : item.Aliado)</td><td><strong>@item.Periodo</strong></td><td>@item.Fecha.ToString("dd/MM/yyyy")</td><td>@item.CantidadComisiones comisión(es)</td><td>$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @EstadoLiquidacionCss(item.Estado)">@EstadoLiquidacionTexto(item.Estado)</span></td><td><div class="liquidation-document-actions">@if (!string.IsNullOrWhiteSpace(item.CodClave)) { <a class="ally-document-link xml" href="@XmlUrl(item)" target="_blank" rel="noopener" download title="Descargar XML autorizado por el SRI">XML</a><a class="ally-document-link pdf" href="@PdfUrl(item)" target="_blank" rel="noopener" download title="Descargar PDF autorizado por el SRI">PDF</a> }@if (!string.IsNullOrWhiteSpace(item.ComprobantePagoUrl)) { <button type="button" class="ally-table-action" @onclick="() => AbrirComprobante(item)" title="Ver comprobante de pago"><i class="ri-attachment-2"></i></button> }</div></td><td><button type="button" class="ally-table-action" @onclick="() => VerDetalleAsync(item)">Ver detalle</button></td></tr>
+                <tr @key="item.IdLiquidacion"><td>@(string.IsNullOrWhiteSpace(item.Aliado) ? "-" : item.Aliado)</td><td><strong>@item.Periodo</strong></td><td>@item.Fecha.ToString("dd/MM/yyyy")</td><td>@item.CantidadComisiones comisión(es)</td><td>$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @EstadoLiquidacionCss(item.Estado)">@EstadoLiquidacionTexto(item.Estado)</span></td><td><div class="liquidation-document-actions">@if (item.CodLiquidacionCompra is > 0) { <button type="button" class="ally-document-link xml" @onclick="() => AbrirXmlAsync(item)" title="Descargar XML autorizado por el SRI">XML</button><button type="button" class="ally-document-link pdf" @onclick="() => AbrirPdfAsync(item)" title="Descargar PDF autorizado por el SRI">PDF</button> }@if (!string.IsNullOrWhiteSpace(item.ComprobantePagoUrl)) { <button type="button" class="ally-table-action" @onclick="() => AbrirComprobante(item)" title="Ver comprobante de pago"><i class="ri-attachment-2"></i></button> }</div></td><td><button type="button" class="ally-table-action" @onclick="() => VerDetalleAsync(item)">Ver detalle</button></td></tr>
             }
             </tbody></table></div>
             <div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
@@ -124,8 +124,6 @@
     private void CerrarDetalle() => liquidacionSeleccionada = null;
     private void AbrirComprobante(AliadoLiquidacionDto item) => comprobanteSeleccionado = item;
     private void CerrarComprobante() => comprobanteSeleccionado = null;
-    private static string XmlUrl(AliadoLiquidacionDto item) => $"/comprobantes/liquidaciones/LIQ_{item.CodClave}.xml";
-    private static string PdfUrl(AliadoLiquidacionDto item) => $"/comprobantes/liquidaciones/LIQ_{item.CodClave}.pdf";
     private static bool EsPdf(string? url) => url?.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) == true;
     private IEnumerable<string> PeriodosDisponibles => liquidaciones.Select(x => x.Periodo).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderByDescending(x => x);
     private IEnumerable<string> AliadosDisponibles => liquidaciones.Select(x => x.Aliado).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
@@ -134,6 +132,46 @@
     private static string EstadoPagoCss(AliadoComisionMovimientoDto item) => item.EstadoPago == "Pagada" ? "success" : item.EstadoPago == "Anulada" ? "danger" : "warning";
     private static string EstadoLiquidacionTexto(string estado) => estado == "Pagada" ? "Pagada" : estado == "Anulada" ? "Anulada" : "Pendiente de pago";
     private static string EstadoLiquidacionCss(string estado) => estado == "Pagada" ? "success" : estado == "Anulada" ? "danger" : "warning";
+
+    private int currentUserId;
+
+    private async Task AbrirXmlAsync(AliadoLiquidacionDto item)
+    {
+        try
+        {
+            var url = await AliadoService.AsegurarXmlLiquidacionAsync(currentUserId, item.IdLiquidacion);
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la liquidación.");
+                return;
+            }
+
+            await JS.InvokeVoidAsync("open", $"{url}?v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}", "_blank");
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowWarningAsync($"No se pudo preparar el XML: {ex.Message}");
+        }
+    }
+
+    private async Task AbrirPdfAsync(AliadoLiquidacionDto item)
+    {
+        try
+        {
+            var url = await AliadoService.AsegurarPdfLiquidacionAsync(currentUserId, item.IdLiquidacion);
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                await AlertService.ShowWarningAsync("No se pudo generar o ubicar el PDF de la liquidación.");
+                return;
+            }
+
+            await JS.InvokeVoidAsync("open", $"{url}?v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}", "_blank");
+        }
+        catch (Exception ex)
+        {
+            await AlertService.ShowWarningAsync($"No se pudo preparar el PDF: {ex.Message}");
+        }
+    }
 
     private async Task VerDetalleAsync(AliadoLiquidacionDto liquidacion)
     {
@@ -166,7 +204,10 @@
     {
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
         if (int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id))
+        {
+            currentUserId = id;
             liquidaciones = (await AliadoService.ObtenerLiquidacionesAsync(id)).ToList();
+        }
         cargando = false;
     }
 }

@@ -311,6 +311,10 @@ public sealed class LiquidacionCompraPdfService : ILiquidacionCompraPdfService
                     .FontSize(10.8f)
                     .SemiBold();
 
+                if (!string.IsNullOrWhiteSpace(preview.NombreComercialProveedor) &&
+                    !string.Equals(preview.NombreComercialProveedor.Trim(), preview.RazonSocialProveedor.Trim(), StringComparison.OrdinalIgnoreCase))
+                    column.Item().Element(item => ComponerParDato(item, "Nombre comercial", FormatearTextoCasing(preview.NombreComercialProveedor)));
+
                 column.Item().Element(item => ComponerParDato(item, "Identificación", preview.IdentificacionProveedor));
 
                 if (!string.IsNullOrWhiteSpace(preview.TipoIdentificacionProveedorNombre))
