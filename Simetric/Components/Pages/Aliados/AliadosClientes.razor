@@ -1,6 +1,7 @@
 @page "/aliados/clientes"
 @page "/aliados/clientes/{Id:int}"
 @using MiniExcelLibs
+@implements IAsyncDisposable
 
 <PageTitle>Mis clientes | Portal de Aliados</PageTitle>
 
@@ -44,63 +45,47 @@ else if (detalle is not null)
 else
 {
     <div class="ally-page ally-clients-page">
-        <section class="clients-toolbar" aria-label="Herramientas de clientes">
-            <button class="clients-action-card" type="button" @onclick="ExportarExcelAsync" disabled="@(!clientesFiltrados.Any())">
-                <span class="clients-action-icon"><i class="ri-file-excel-2-line"></i></span>
-                <span><strong>Exportar clientes</strong><small>Descargar archivo Excel</small></span>
-            </button>
-            <label class="clients-search">
-                <i class="ri-search-line"></i>
-                <input @bind="busqueda" @bind:event="oninput" @bind:after="ReiniciarPagina" placeholder="Buscar por nombre, RUC o correo" />
-            </label>
-            <div class="clients-filter-title"><i class="ri-filter-3-line"></i><span>Filtros</span></div>
+        <section class="clients-kpis" aria-label="Resumen de clientes">
+            <article class="clients-kpi rose"><span><i class="ri-user-heart-line"></i></span><div><small>Clientes activos</small><strong>@ClientesActivos</strong><em>Clientes únicos</em></div></article>
+            <article class="clients-kpi purple"><span><i class="ri-shopping-cart-2-line"></i></span><div><small>Compras realizadas</small><strong>@ComprasRealizadas</strong><em>Adquisiciones registradas</em></div></article>
+            <article class="clients-kpi blue"><span><i class="ri-file-list-3-line"></i></span><div><small>Compras E-FACT</small><strong>@ComprasEFact</strong><em>Facturación electrónica</em></div></article>
+            <article class="clients-kpi green"><span><i class="ri-quill-pen-line"></i></span><div><small>Compras E-RÚBRICA</small><strong>@ComprasERubrica</strong><em>Firma electrónica</em></div></article>
+            <article class="clients-kpi amber"><span><i class="ri-calendar-event-line"></i></span><div><small>Próximos a vencer</small><strong>@ClientesProximosVencer</strong><em>En los siguientes 30 días</em></div></article>
         </section>
 
-        <section class="clients-filter-bar" aria-label="Filtros del listado">
-            <div class="clients-filter-spacer"></div>
-            <label class="clients-filter-field">
-                <span>ESTADO</span>
-                <select @bind="filtroEstado" @bind:after="ReiniciarPagina">
-                    <option value="">Todos</option>
-                    <option value="Activo">Activos</option>
-                    <option value="Vencido">Vencidos</option>
-                    <option value="Pendiente">Pendientes</option>
-                </select>
-            </label>
-            <label class="clients-filter-field clients-records-field">
-                <span>REGISTROS</span>
-                <select @bind="tamanoPagina" @bind:after="ReiniciarPagina">
-                    <option value="10">10</option>
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                </select>
-            </label>
-            <button class="clients-filter-button" type="button" @onclick="LimpiarFiltros">
-                <i class="ri-eraser-line"></i> Limpiar filtros
-            </button>
+        <section class="clients-insights">
+            <article class="ally-panel clients-chart-card" aria-labelledby="clients-chart-title">
+                <div class="clients-chart-heading"><div><span class="ally-eyebrow">COMPORTAMIENTO DE COMPRA</span><h3 id="clients-chart-title">Clientes con más compras</h3><p>Compara la cantidad de adquisiciones registradas por cliente.</p></div></div>
+                <div class="clients-chart-container"><canvas id="ally-clients-purchases-chart"></canvas></div>
+            </article>
+            <aside class="ally-panel clients-ranking" aria-label="Distribución de compras por servicio">
+                <div class="clients-ranking-heading"><i class="ri-pie-chart-2-line"></i><div><span class="ally-eyebrow">SERVICIOS</span><h3>Distribución de compras</h3></div></div>
+                <div class="clients-service-summary efact"><span><img src="/images/LogoNumerica.svg" alt="E-FACT" /></span><div><strong>E-FACT</strong><small>Facturación electrónica</small><span class="clients-ranking-bar"><i style="width:@PorcentajeServicio(ComprasEFact)%"></i></span></div><b>@ComprasEFact</b></div>
+                <div class="clients-service-summary erubrica"><span><img src="/images/services/n-erubrica.png" alt="E-RÚBRICA" /></span><div><strong>E-RÚBRICA</strong><small>Firma electrónica</small><span class="clients-ranking-bar"><i style="width:@PorcentajeServicio(ComprasERubrica)%"></i></span></div><b>@ComprasERubrica</b></div>
+                <div class="clients-service-total"><span>Total registrado</span><strong>@ComprasRealizadas compras</strong></div>
+            </aside>
         </section>
 
         <section class="ally-panel clients-list-card">
             <div class="clients-list-heading">
-                <div><span class="ally-eyebrow">LISTADO ACTIVO</span><h3>Clientes atribuidos a tu canal</h3></div>
-                <div class="clients-heading-meta"><span class="clients-count">@clientesFiltrados.Count registros</span><span class="ally-readonly">Solo lectura</span></div>
+                <div class="clients-list-title"><span class="clients-list-icon"><i class="ri-user-line"></i></span><div><span class="ally-eyebrow">LISTADO DE CLIENTES</span><h3>Clientes atribuidos a tu canal</h3></div></div>
+                <div class="clients-toolbar" aria-label="Herramientas de clientes"><label class="clients-search"><i class="ri-search-line"></i><input @bind="busqueda" @bind:event="oninput" @bind:after="ActualizarBusqueda" placeholder="Buscar por nombre, RUC o contacto..." /></label><button class="clients-action-card ally-excel-button" type="button" @onclick="ExportarExcelAsync" disabled="@(!clientesFiltrados.Any())"><span class="clients-action-icon"><i class="ri-download-2-line"></i></span><span><strong>Exportar clientes</strong><small>Archivo Excel</small></span></button></div>
             </div>
-            @if (clientesFiltrados.Count == 0) { <div class="ally-empty">No hay clientes atribuidos a tu canal.</div> }
+            @if (ClientesAgrupados.Count == 0) { <div class="ally-empty">No hay clientes atribuidos a tu canal.</div> }
             else
             {
                 <div class="ally-table-wrap">
                     <table class="ally-table clients-table">
-                        <thead><tr><th>Cliente</th><th>Contacto</th><th>Identificación</th><th>Producto</th><th>Servicio</th><th>Compra</th><th>Vencimiento</th><th>Acción</th></tr></thead>
+                        <thead><tr><th>Cliente</th><th>Contacto</th><th>Identificación</th><th>Última compra</th><th>Total compras</th><th>Vencimiento</th><th>Acción</th></tr></thead>
                         <tbody>
                             @foreach (var cliente in ClientesPaginados)
                             {
                                 <tr @key="cliente.IdCliente">
-                                    <td><strong>@cliente.Nombre</strong><small class="clients-email"><i class="ri-mail-line"></i> @(cliente.Email ?? "Sin correo")</small></td>
-                                    <td><span class="clients-contact"><i class="ri-phone-line"></i> @(cliente.Telefono ?? "Sin teléfono")</span></td>
+                                    <td><div class="clients-name-cell"><span class="clients-avatar">@Iniciales(cliente.Nombre)</span><div><strong>@cliente.Nombre</strong></div></div></td>
+                                    <td><span class="clients-contact"><i class="ri-phone-line"></i> @(cliente.Telefono ?? "Sin teléfono")</span><small class="clients-email"><i class="ri-mail-line"></i> @(cliente.Email ?? "Sin correo")</small></td>
                                     <td><span class="clients-id">@(cliente.Identificacion ?? "Sin identificación")</span></td>
-                                    <td><strong class="clients-product">@(cliente.Producto ?? "Sin compras")</strong></td>
-                                    <td><span class="ally-badge @ServicioCss(cliente.Servicio)">@cliente.Servicio</span></td>
-                                    <td>@(cliente.FechaCompra?.ToString("dd/MM/yyyy") ?? "-")</td>
+                                    <td><span class="clients-date"><i class="ri-calendar-line"></i>@(cliente.UltimaCompra?.ToString("dd/MM/yyyy") ?? "-")</span></td>
+                                    <td><span class="clients-purchases-count">@cliente.TotalCompras</span></td>
                                     <td>@(cliente.FechaVencimiento?.ToString("dd/MM/yyyy") ?? "-")</td>
                                     <td><button class="clients-view-action" type="button" @onclick="() => AbrirDetalleModalAsync(cliente.IdCliente)" disabled="@(clienteDetalleCargando == cliente.IdCliente)" title="Ver detalle" aria-label="@($"Ver detalle de {cliente.Nombre}")"><i class="@(clienteDetalleCargando == cliente.IdCliente ? "ri-loader-4-line clients-spin" : "ri-eye-line")"></i></button></td>
                                 </tr>
@@ -108,7 +93,7 @@ else
                         </tbody>
                     </table>
                 </div>
-                <div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
+                <div class="clients-table-footer"><span>Mostrando @((pagina - 1) * tamanoPagina + 1) a @Math.Min(pagina * tamanoPagina, ClientesAgrupados.Count) de @ClientesAgrupados.Count clientes</span><div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><strong>@pagina</strong><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div></div>
             }
         </section>
 
@@ -165,27 +150,56 @@ else
 @code {
     [Parameter] public int? Id { get; set; }
     private string busqueda = string.Empty;
-    private string filtroEstado = string.Empty;
     private List<AliadoClienteDto> clientes = new();
     private AliadoClienteDetalleDto? detalle;
     private AliadoClienteDetalleDto? detalleModal;
     private int? clienteDetalleCargando;
     private int usuarioAliadoId;
     private bool cargando = true;
+    private bool graficoPendiente;
     private List<AliadoClienteDto> clientesFiltrados => clientes.Where(x =>
-        (string.IsNullOrWhiteSpace(busqueda) || $"{x.Nombre} {x.Identificacion} {x.Email}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrWhiteSpace(filtroEstado) || string.Equals(x.Estado ?? "Activo", filtroEstado, StringComparison.OrdinalIgnoreCase))).ToList();
-    private IEnumerable<AliadoClienteDto> ClientesPaginados => clientesFiltrados.Skip((pagina - 1) * tamanoPagina).Take(tamanoPagina);
+        string.IsNullOrWhiteSpace(busqueda) || $"{x.Nombre} {x.Identificacion} {x.Email}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)).ToList();
+    private List<ClienteListadoResumen> ClientesAgrupados => clientesFiltrados
+        .GroupBy(ClienteClave)
+        .Select(g =>
+        {
+            var ultima = g.OrderByDescending(x => x.FechaCompra).First();
+            var contacto = g.FirstOrDefault(x => EsCorreoDisponible(x.Email)) ?? ultima;
+            var telefono = g.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.Telefono))?.Telefono;
+            return new ClienteListadoResumen(ultima.IdCliente, ultima.Nombre, ultima.Identificacion, EsCorreoDisponible(contacto.Email) ? contacto.Email : null, telefono, ultima.FechaCompra, g.Max(x => x.TotalCompras), ultima.FechaVencimiento);
+        })
+        .OrderBy(x => x.Nombre)
+        .ToList();
+    private IEnumerable<ClienteListadoResumen> ClientesPaginados => ClientesAgrupados.Skip((pagina - 1) * tamanoPagina).Take(tamanoPagina);
     private int pagina = 1;
     private int tamanoPagina = 10;
-    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(clientesFiltrados.Count / (double)tamanoPagina));
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(ClientesAgrupados.Count / (double)tamanoPagina));
+    private IEnumerable<IGrouping<string, AliadoClienteDto>> ClientesUnicos => clientesFiltrados.GroupBy(ClienteClave);
+    private int ClientesActivos => clientes.Where(x => !string.Equals(x.Estado, "Vencido", StringComparison.OrdinalIgnoreCase)).GroupBy(ClienteClave).Count();
+    private int ComprasRealizadas => ClientesUnicos.Sum(g => g.Max(x => x.TotalCompras));
+    private int ComprasEFact => ClientesUnicos.Sum(g => g.Max(x => x.ComprasEFact));
+    private int ComprasERubrica => ClientesUnicos.Sum(g => g.Max(x => x.ComprasERubrica));
+    private int ClientesProximosVencer => clientes.Where(x => x.FechaVencimiento?.Date >= DateTime.Today && x.FechaVencimiento?.Date <= DateTime.Today.AddDays(30)).GroupBy(ClienteClave).Count();
+    private List<ClienteComprasResumen> ComprasPorCliente => clientesFiltrados
+        .GroupBy(ClienteClave)
+        .Select(g => new ClienteComprasResumen(g.First().Nombre, g.Max(x => x.TotalCompras)))
+        .OrderByDescending(x => x.Compras)
+        .ThenBy(x => x.Nombre)
+        .Take(8)
+        .ToList();
+    private static string ClienteClave(AliadoClienteDto cliente) => !string.IsNullOrWhiteSpace(cliente.Identificacion)
+        ? $"identificacion:{cliente.Identificacion.Trim()}"
+        : $"cliente:{cliente.IdCliente}";
+    private static bool EsCorreoDisponible(string? correo) => !string.IsNullOrWhiteSpace(correo) &&
+        !correo.EndsWith("@deleted.local", StringComparison.OrdinalIgnoreCase);
+    private int PorcentajeServicio(int cantidad) => ComprasRealizadas == 0 ? 0 : (int)Math.Round(cantidad * 100d / ComprasRealizadas);
 
     [Inject] private AliadoPortalService AliadoService { get; set; } = null!;
     [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = null!;
     [Inject] private IJSRuntime JS { get; set; } = null!;
     [Inject] private SweetAlertService AlertService { get; set; } = null!;
 
-    private void ReiniciarPagina() => pagina = 1;
+    private void ActualizarBusqueda() { pagina = 1; graficoPendiente = true; }
     private void CambiarPagina(int delta) => pagina = Math.Clamp(pagina + delta, 1, TotalPaginas);
     private async Task AbrirDetalleModalAsync(int idCliente)
     {
@@ -202,20 +216,13 @@ else
         }
     }
     private void CerrarDetalleModal() => detalleModal = null;
-    private void LimpiarFiltros()
-    {
-        busqueda = string.Empty;
-        filtroEstado = string.Empty;
-        pagina = 1;
-    }
-
     private async Task ExportarExcelAsync()
     {
         var data = clientesFiltrados.Select(x => new
         {
             Cliente = x.Nombre,
             Identificacion = x.Identificacion ?? string.Empty,
-            Correo = x.Email ?? string.Empty,
+            Correo = EsCorreoDisponible(x.Email) ? x.Email : string.Empty,
             Telefono = x.Telefono ?? string.Empty,
             Producto = x.Producto ?? string.Empty,
             x.Servicio,
@@ -244,6 +251,11 @@ else
     };
 
     private static string ServicioCss(string servicio) => servicio == "E-RÚBRICA" ? "service-erubrica" : "service-efact";
+    private static string Iniciales(string nombre)
+    {
+        var partes = nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Concat(partes.Take(2).Select(x => char.ToUpperInvariant(x[0])));
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -261,6 +273,23 @@ else
         else
             clientes = (await AliadoService.ObtenerClientesAsync(id)).ToList();
         pagina = 1;
+        graficoPendiente = !Id.HasValue;
         cargando = false;
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!graficoPendiente || cargando || Id.HasValue) return;
+        graficoPendiente = false;
+        var datos = ComprasPorCliente;
+        await JS.InvokeVoidAsync("aliadosClientesChart.render", new { labels = datos.Select(x => x.Nombre), values = datos.Select(x => x.Compras) });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("aliadosClientesChart.destroy"); } catch { }
+    }
+
+    private sealed record ClienteComprasResumen(string Nombre, int Compras);
+    private sealed record ClienteListadoResumen(int IdCliente, string Nombre, string? Identificacion, string? Email, string? Telefono, DateTime? UltimaCompra, int TotalCompras, DateTime? FechaVencimiento);
 }

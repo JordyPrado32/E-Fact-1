@@ -23,6 +23,7 @@ public interface IEmailService
     Task EnviarCredencialesBackOfficeAsync(string emailDestino, string nombreUsuario, string perfil, string loginUrl, string usuario, string contrasenaTemporal);
     Task EnviarCuentaCreadaAsync(string emailDestino, string? nombreUsuario, string? claveTemporal = null);
     Task EnviarAvisoRenovacionAliadoAsync(string emailDestino, string nombreAliado, string cliente, string producto, DateTime fechaVencimiento, int diasRestantes);
+    Task EnviarAvisoRenovacionClienteAsync(string emailDestino, string nombreCliente, string servicio, int? documentosDisponibles, DateTime? fechaVencimiento, int? diasRestantes);
     Task EnviarFacturaAsync(
         string numeroFactura,
         IEnumerable<string> destinatarios,
@@ -371,6 +372,42 @@ public class EmailService : IEmailService
         }.ToMessageBody();
         await SendMessageAsync(mensaje);
     }
+
+    public async Task EnviarAvisoRenovacionClienteAsync(
+        string emailDestino,
+        string nombreCliente,
+        string servicio,
+        int? documentosDisponibles,
+        DateTime? fechaVencimiento,
+        int? diasRestantes)
+    {
+        if (string.IsNullOrWhiteSpace(emailDestino))
+            return;
+
+        var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Cliente" : nombreCliente.Trim());
+        var servicioSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(servicio) ? "tu servicio" : servicio);
+        var detalle = string.Equals(servicio, "E-RÚBRICA", StringComparison.OrdinalIgnoreCase)
+            ? $"Tu firma electrónica vence {TextoVencimiento(diasRestantes)}{(fechaVencimiento.HasValue ? $" ({fechaVencimiento:dd/MM/yyyy})" : string.Empty)}."
+            : $"Tu cuenta tiene {Math.Max(documentosDisponibles ?? 0, 0)} documentos disponibles.";
+
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
+        mensaje.Subject = $"Aviso de renovación {servicio} | E-FACT";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {clienteSeguro}</h2><p>Te contactamos para recordarte que tu servicio <strong>{servicioSeguro}</strong> requiere atención.</p><p>{detalle}</p><p>Comunícate con nuestro equipo para renovar o recargar tu servicio.</p></div>"
+        }.ToMessageBody();
+        await SendMessageAsync(mensaje);
+    }
+
+    private static string TextoVencimiento(int? diasRestantes) => diasRestantes switch
+    {
+        null => "próximamente",
+        < 0 => $"venció hace {Math.Abs(diasRestantes.Value)} día(s)",
+        0 => "hoy",
+        _ => $"en {diasRestantes} día(s)"
+    };
 
     public async Task EnviarClaveTemporal(string emailDestino, string claveTemporal, int minutosExpira, string motivo)
     {

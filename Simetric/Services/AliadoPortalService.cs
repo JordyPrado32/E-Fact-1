@@ -362,22 +362,32 @@ public sealed class AliadoPortalService
             return Array.Empty<AliadoClienteDto>();
 
         await using var db = await _dbFactory.CreateDbContextAsync();
+        var vendedorIds = contexto.EsAdministrador
+            ? await db.VendedoresBackOffice.AsNoTracking().Where(x => !x.EsSistema).Select(x => x.IdVendedor).ToListAsync()
+            : null;
         var clientes = await db.Clientes
             .AsNoTracking()
-            .Where(x => x.Idvendedor == contexto.IdVendedor && x.Estado != false && x.Usuario != userId)
+            .Where(x => x.Estado != false && x.Usuario != userId &&
+                        (contexto.EsAdministrador
+                            ? x.Idvendedor.HasValue && vendedorIds!.Contains(x.Idvendedor.Value)
+                            : x.Idvendedor == contexto.IdVendedor))
             .Select(x => new AliadoClienteDto
             {
                 IdCliente = x.Codcliente,
+                IdUsuario = x.Usuario,
+                Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.Nombre).FirstOrDefault(),
                 Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
                 Nombre = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.TipoCliente == 2 ? (u.NombreEmpresa ?? u.Nombres) : (u.Nombres + " " + u.Apellidos)).FirstOrDefault()
                     ?? x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
                 Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo,
-                Telefono = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Celular).FirstOrDefault() ?? x.Celular ?? x.Telefonoconvencional
+                Telefono = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Celular).FirstOrDefault() ?? x.Celular ?? x.Telefonoconvencional,
+                SaldoDocumentos = x.UsuarioNavegacion == null ? 0 : x.UsuarioNavegacion.SaldoDocumentos
             })
             .OrderBy(x => x.Nombre)
             .ToListAsync();
 
         var facturas = await ObtenerFacturasAsync(contexto.IdVendedor);
+        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
         var ultimaPorCliente = facturas
             .Where(x => x.IdCliente.HasValue)
             .GroupBy(x => x.IdCliente!.Value)
@@ -389,15 +399,54 @@ public sealed class AliadoPortalService
 
         foreach (var cliente in clientes)
         {
-            if (!ultimaPorCliente.TryGetValue(cliente.IdCliente, out var factura) &&
-                (string.IsNullOrWhiteSpace(cliente.Identificacion) ||
-                 !ultimaPorIdentificacion.TryGetValue(NormalizarIdentificacionCliente(cliente.Identificacion), out factura)))
+            var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
+            var compras = facturas
+                .Where(x => x.IdCliente == cliente.IdCliente ||
+                            (!string.IsNullOrWhiteSpace(identificacion) &&
+                             string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(x => x.Fecha)
+                .ToList();
+            if (compras.Count == 0)
                 continue;
 
+            var factura = compras[0];
             cliente.Producto = factura.Producto;
+            cliente.IdFactura = factura.IdFactura;
             cliente.FechaCompra = factura.Fecha;
             cliente.FechaVencimiento = factura.FechaVencimiento;
             cliente.Estado = factura.Estado;
+            cliente.TotalCompras = compras.Count;
+            cliente.ComprasEFact = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-FACT");
+            cliente.ComprasERubrica = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA");
+        }
+
+        var usuarioIds = clientes.Where(x => x.IdUsuario.HasValue).Select(x => x.IdUsuario!.Value).Distinct().ToList();
+        var firmas = await db.Set<UsuSolicitudFirma>()
+            .AsNoTracking()
+            .Where(x => usuarioIds.Contains(x.SolIdUsuarioCliente) && (x.SolIdEstadoNumerica == 3 || x.SolActivo))
+            .Select(x => new
+            {
+                x.SolIdUsuarioCliente,
+                FechaBase = x.SolFechaAprobacion ?? x.SolFechaSolicitud,
+                x.SolVigencia
+            })
+            .ToListAsync();
+        var firmaPorUsuario = firmas
+            .GroupBy(x => x.SolIdUsuarioCliente)
+            .ToDictionary(
+                x => x.Key,
+                x => CalcularEstadoFirma(x.OrderByDescending(y => y.FechaBase).First().FechaBase, x.OrderByDescending(y => y.FechaBase).First().SolVigencia));
+
+        foreach (var cliente in clientes)
+        {
+            if (cliente.IdUsuario.HasValue && firmaPorUsuario.TryGetValue(cliente.IdUsuario.Value, out var firma))
+            {
+                cliente.FechaVencimientoFirmaElectronica = firma.FechaVencimiento;
+                cliente.DiasFirmaElectronica = (firma.FechaVencimiento.Date - DateTime.Today).Days;
+            }
+
+            cliente.NivelAlerta = ObtenerNivelAlerta(cliente);
+            cliente.Alerta = ObtenerDescripcionAlerta(cliente);
         }
 
         return clientes;
@@ -428,6 +477,23 @@ public sealed class AliadoPortalService
         if (cliente is null)
             return null;
 
+        if (!EsCorreoDisponible(cliente.Email) && !string.IsNullOrWhiteSpace(cliente.Identificacion))
+        {
+            var contactos = await db.Clientes
+                .AsNoTracking()
+                .Where(x => x.Idvendedor == contexto.IdVendedor && x.Estado != false && x.Usuario != userId)
+                .Select(x => new
+                {
+                    Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
+                    Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo
+                })
+                .ToListAsync();
+            cliente.Email = contactos
+                .Where(x => string.Equals(NormalizarIdentificacionCliente(x.Identificacion), NormalizarIdentificacionCliente(cliente.Identificacion), StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Email)
+                .FirstOrDefault(EsCorreoDisponible);
+        }
+
         var identificacionCliente = NormalizarIdentificacionCliente(cliente.Identificacion);
         var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor))
             .Where(x => x.IdCliente == idCliente ||
@@ -456,12 +522,10 @@ public sealed class AliadoPortalService
             return Array.Empty<AliadoRenovacionDto>();
 
         await using var db = await _dbFactory.CreateDbContextAsync();
-        var vendedorIds = contexto.EsAdministrador
-            ? await db.VendedoresBackOffice.AsNoTracking().Where(x => !x.EsSistema).Select(x => x.IdVendedor).ToListAsync()
-            : null;
-        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
-        MarcarComprasRepetidas(facturas);
-        var ids = facturas.Select(x => x.IdFactura).ToList();
+        var clientes = (await ObtenerClientesAsync(userId))
+            .Where(x => !string.IsNullOrWhiteSpace(x.NivelAlerta))
+            .ToList();
+        var ids = clientes.Select(x => x.IdFactura).Where(x => x > 0).Distinct().ToList();
         var gestiones = await db.AliadoRenovacionGestiones
             .AsNoTracking()
             .Where(x => (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor) && ids.Contains(x.IdFactura))
@@ -469,32 +533,11 @@ public sealed class AliadoPortalService
             .Select(x => x.OrderByDescending(y => y.FechaGestion).First())
             .ToDictionaryAsync(x => x.IdFactura);
 
-        var resultado = facturas
-            .Where(x => EsRenovacionVisible(x, DateTime.Today, -30, 90))
-            .OrderBy(x => x.FechaVencimiento)
-            .Select(x => ToRenovacion(x, gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null, contexto.EsAdministrador ? x.PorcentajeBase : contexto.PorcentajeBase))
-            .ToList();
-
-        var facturasPorSaldo = facturas
-            .Where(x => !x.FechaVencimiento.HasValue && x.IdCliente.HasValue && x.Autorizado && EsPagoConfirmado(x.EstadoPago))
-            .GroupBy(x => x.IdCliente!.Value)
-            .Select(x => x.OrderByDescending(y => y.Fecha).First())
-            .ToList();
-        var clienteIds = facturasPorSaldo.Select(x => x.IdCliente!.Value).ToList();
-        var saldos = await db.Clientes.AsNoTracking()
-            .Where(x => clienteIds.Contains(x.Codcliente) && x.Usuario.HasValue)
-            .Select(x => new { x.Codcliente, Saldo = x.UsuarioNavegacion!.SaldoDocumentos })
-            .ToDictionaryAsync(x => x.Codcliente, x => x.Saldo);
-        resultado.AddRange(facturasPorSaldo
-            .Where(x => saldos.ContainsKey(x.IdCliente!.Value))
-            .Select(x => ToRenovacionPorSaldo(
-                x,
-                gestiones.TryGetValue(x.IdFactura, out var gestion) ? gestion : null,
-                 contexto.EsAdministrador ? x.PorcentajeBase : contexto.PorcentajeBase,
-                saldos[x.IdCliente!.Value])));
-        resultado = resultado
-            .OrderBy(x => x.EsPorSaldo ? 1 : 0)
-            .ThenBy(x => x.EsPorSaldo ? x.SaldoDocumentos : x.DiasRestantes)
+        var resultado = clientes
+            .Select(cliente => ToRenovacionCliente(cliente, gestiones.TryGetValue(cliente.IdFactura, out var gestion) ? gestion : null))
+            .OrderBy(x => x.NivelAlerta == "danger" ? 0 : 1)
+            .ThenBy(x => x.DiasFirmaElectronica ?? int.MaxValue)
+            .ThenBy(x => x.SaldoDocumentos)
             .ToList();
 
         if (!string.IsNullOrWhiteSpace(filtro))
@@ -502,6 +545,70 @@ public sealed class AliadoPortalService
 
         return resultado;
     }
+
+    private static string? ObtenerNivelAlerta(AliadoClienteDto cliente)
+    {
+        var alertaRoja = cliente.Servicio == "E-FACT" && cliente.SaldoDocumentos <= 0 ||
+                         cliente.DiasFirmaElectronica is <= 7;
+        if (alertaRoja)
+            return "danger";
+
+        var alertaAmarilla = cliente.Servicio == "E-FACT" && cliente.SaldoDocumentos <= 5 ||
+                             cliente.DiasFirmaElectronica is > 7 and <= 15;
+        return alertaAmarilla ? "warning" : null;
+    }
+
+    private static string ObtenerDescripcionAlerta(AliadoClienteDto cliente)
+    {
+        var alertas = new List<string>();
+        if (cliente.Servicio == "E-FACT" && cliente.SaldoDocumentos <= 5)
+            alertas.Add($"{cliente.SaldoDocumentos} documentos");
+        if (cliente.DiasFirmaElectronica.HasValue && cliente.DiasFirmaElectronica.Value <= 15)
+            alertas.Add($"{cliente.DiasFirmaElectronica.Value} días E-RÚBRICA");
+        return string.Join(" · ", alertas);
+    }
+
+    private static FirmaClienteEstado CalcularEstadoFirma(DateTime fechaBase, string? vigencia)
+    {
+        var texto = vigencia?.ToLowerInvariant() ?? string.Empty;
+        var fechaVencimiento = texto.Contains("7") && texto.Contains("dia")
+            ? fechaBase.AddDays(7)
+            : texto.Contains("30") || texto.Contains("mes")
+                ? fechaBase.AddDays(30)
+                : texto.Contains("2") ? fechaBase.AddYears(2)
+                : texto.Contains("3") ? fechaBase.AddYears(3)
+                : texto.Contains("4") ? fechaBase.AddYears(4)
+                : texto.Contains("5") ? fechaBase.AddYears(5)
+                : fechaBase.AddYears(1);
+        return new FirmaClienteEstado(fechaVencimiento);
+    }
+
+    private static AliadoRenovacionDto ToRenovacionCliente(AliadoClienteDto cliente, AliadoRenovacionGestion? gestion) => new()
+    {
+        IdFactura = cliente.IdFactura,
+        IdCliente = cliente.IdCliente,
+        Aliado = cliente.Aliado ?? string.Empty,
+        Cliente = cliente.Nombre,
+        Producto = cliente.Producto ?? cliente.Servicio,
+        FechaVencimiento = cliente.FechaVencimientoFirmaElectronica ?? DateTime.Today,
+        DiasRestantes = cliente.DiasFirmaElectronica ?? 0,
+        EstadoGestion = gestion?.Resultado ?? "Pendiente",
+        UltimaGestion = gestion?.FechaGestion,
+        Observacion = gestion?.Observacion,
+        ProximoSeguimiento = gestion?.ProximoSeguimiento,
+        EsPorSaldo = cliente.Servicio == "E-FACT",
+        SaldoDocumentos = cliente.SaldoDocumentos,
+        Email = cliente.Email,
+        Telefono = cliente.Telefono,
+        Identificacion = cliente.Identificacion,
+        Servicio = cliente.Servicio,
+        DiasFirmaElectronica = cliente.DiasFirmaElectronica,
+        FechaVencimientoFirmaElectronica = cliente.FechaVencimientoFirmaElectronica,
+        NivelAlerta = cliente.NivelAlerta ?? "warning",
+        Alerta = cliente.Alerta
+    };
+
+    private sealed record FirmaClienteEstado(DateTime FechaVencimiento);
 
     public async Task<(bool Success, string Message)> RegistrarGestionAsync(int userId, int idFactura, string resultado, string? observacion, DateTime? proximoSeguimiento)
     {
@@ -2054,6 +2161,10 @@ public sealed class AliadoPortalService
             ? string.Empty
             : new string(identificacion.Where(char.IsLetterOrDigit).ToArray());
 
+    private static bool EsCorreoDisponible(string? correo)
+        => !string.IsNullOrWhiteSpace(correo) &&
+           !correo.EndsWith("@deleted.local", StringComparison.OrdinalIgnoreCase);
+
     private static async Task<string> GenerarCodigoAsync(AppDbContext db, string nombre)
     {
         var baseCodigo = new string(nombre.ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray());
@@ -2313,10 +2424,14 @@ public sealed class AliadoEnlaceRegistroDto
 public class AliadoClienteDto
 {
     public int IdCliente { get; init; }
+    public int? IdUsuario { get; init; }
+    public int IdFactura { get; set; }
+    public string? Aliado { get; init; }
     public string? Identificacion { get; init; }
     public string Nombre { get; init; } = string.Empty;
-    public string? Email { get; init; }
+    public string? Email { get; set; }
     public string? Telefono { get; init; }
+    public int SaldoDocumentos { get; set; }
     public string? Producto { get; set; }
     public DateTime? FechaCompra { get; set; }
     public DateTime? FechaVencimiento { get; set; }
@@ -2359,6 +2474,14 @@ public sealed class AliadoRenovacionDto
     public bool EsPorSaldo { get; init; }
     public bool EsCompraRepetida { get; init; }
     public int SaldoDocumentos { get; init; }
+    public string? Email { get; init; }
+    public string? Telefono { get; init; }
+    public string? Identificacion { get; init; }
+    public string Servicio { get; init; } = "E-FACT";
+    public int? DiasFirmaElectronica { get; init; }
+    public DateTime? FechaVencimientoFirmaElectronica { get; init; }
+    public string NivelAlerta { get; init; } = "warning";
+    public string Alerta { get; init; } = string.Empty;
 }
 
 public sealed class AliadoComisionesDto
