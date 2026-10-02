@@ -102,28 +102,28 @@ namespace Simetric.Data
         public override int SaveChanges()
         {
             PrepararCatalogo();
-            NormalizarUsuarios();
+            NormalizarTextosIngresados();
             return base.SaveChanges();
         }
 
         public override int SaveChanges(bool acceptAllChangesOnSuccess)
         {
             PrepararCatalogo();
-            NormalizarUsuarios();
+            NormalizarTextosIngresados();
             return base.SaveChanges(acceptAllChangesOnSuccess);
         }
 
         public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
             PrepararCatalogo();
-            NormalizarUsuarios();
+            NormalizarTextosIngresados();
             return base.SaveChangesAsync(cancellationToken);
         }
 
         public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
         {
             PrepararCatalogo();
-            NormalizarUsuarios();
+            NormalizarTextosIngresados();
             return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
         }
 
@@ -141,19 +141,32 @@ namespace Simetric.Data
             }
         }
 
-        private void NormalizarUsuarios()
+        private void NormalizarTextosIngresados()
         {
             var cultura = CultureInfo.GetCultureInfo("es-EC");
 
-            foreach (var entry in ChangeTracker.Entries<Usuario>()
+            foreach (var entry in ChangeTracker.Entries()
                 .Where(entry => entry.State is EntityState.Added or EntityState.Modified))
             {
-                entry.Entity.Nombres = NormalizarTextoMayusculas(entry.Entity.Nombres, cultura);
-                entry.Entity.Apellidos = NormalizarTextoMayusculas(entry.Entity.Apellidos, cultura);
+                foreach (var property in entry.Properties.Where(x => x.Metadata.ClrType == typeof(string)))
+                {
+                    if (property.CurrentValue is string value && EsTextoDescriptivo(property.Metadata.Name))
+                        property.CurrentValue = NormalizarTextoTitulo(value, cultura);
+                }
             }
         }
 
-        private static string NormalizarTextoMayusculas(string? value, CultureInfo culture)
+        private static bool EsTextoDescriptivo(string nombrePropiedad)
+        {
+            return nombrePropiedad is "Nombres" or "Apellidos" or "Nombre" or "NombreComercial" or "Nombrerazonsocial" or "RazonSocial" or "Direccion"
+                || nombrePropiedad.Contains("Descripcion", StringComparison.OrdinalIgnoreCase)
+                || nombrePropiedad.Contains("Observacion", StringComparison.OrdinalIgnoreCase)
+                || nombrePropiedad.Contains("Detalle", StringComparison.OrdinalIgnoreCase)
+                || nombrePropiedad.Contains("Motivo", StringComparison.OrdinalIgnoreCase)
+                || nombrePropiedad.Contains("Referencia", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizarTextoTitulo(string? value, CultureInfo culture)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
@@ -163,7 +176,10 @@ namespace Simetric.Data
             var compactado = string.Join(" ", value
                 .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-            return compactado.ToUpper(culture);
+            if (!compactado.Any(char.IsLetter) || compactado != compactado.ToUpper(culture))
+                return compactado;
+
+            return culture.TextInfo.ToTitleCase(compactado.ToLower(culture));
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)

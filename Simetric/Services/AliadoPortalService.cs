@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Simetric.Components.Helpers;
 using Simetric.Data;
+using Simetric.DTOs;
 using Simetric.Models;
 using System.Data;
 using System.Net.Mail;
 using System.Security.Claims;
+using System.Text.Json;
 
 namespace Simetric.Services;
 
@@ -381,10 +383,15 @@ public sealed class AliadoPortalService
                     ?? x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
                 Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo,
                 Telefono = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Celular).FirstOrDefault() ?? x.Celular ?? x.Telefonoconvencional,
-                SaldoDocumentos = x.UsuarioNavegacion == null ? 0 : x.UsuarioNavegacion.SaldoDocumentos
+                 SaldoDocumentos = x.UsuarioNavegacion == null ? 0 : x.UsuarioNavegacion.SaldoDocumentos,
+                 FechaUltimaRecargaDocumentos = x.UsuarioNavegacion == null ? null : x.UsuarioNavegacion.FechaUltimaRecargaDocumentos,
+                 HistorialComprasDocumentosJson = x.UsuarioNavegacion == null ? null : x.UsuarioNavegacion.HistorialComprasDocumentosJson
             })
             .OrderBy(x => x.Nombre)
             .ToListAsync();
+
+        foreach (var cliente in clientes.Where(x => x.SaldoDocumentos <= 0 && !TieneRecargaDocumentos(x)))
+            cliente.SaldoDocumentos = 0;
 
         var correosPorIdentificacion = clientes
             .Where(x => !string.IsNullOrWhiteSpace(x.Identificacion) && EsCorreoDisponible(x.Email))
@@ -554,6 +561,27 @@ public sealed class AliadoPortalService
         var alertaAmarilla = cliente.Servicio == "E-FACT" && cliente.SaldoDocumentos <= 5 ||
                              cliente.DiasFirmaElectronica is > 7 and <= 15;
         return alertaAmarilla ? "warning" : null;
+    }
+
+    private static bool TieneRecargaDocumentos(AliadoClienteDto cliente)
+    {
+        if (cliente.FechaUltimaRecargaDocumentos.HasValue || string.IsNullOrWhiteSpace(cliente.HistorialComprasDocumentosJson))
+            return cliente.FechaUltimaRecargaDocumentos.HasValue;
+
+        try
+        {
+            var historial = JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(
+                cliente.HistorialComprasDocumentosJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return historial?.Any(x => x.SaldoAplicado ||
+                (x.Estado?.Contains("aprob", StringComparison.OrdinalIgnoreCase) == true) ||
+                (x.Estado?.Contains("autoriz", StringComparison.OrdinalIgnoreCase) == true) ||
+                (x.Estado?.Contains("pag", StringComparison.OrdinalIgnoreCase) == true)) == true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string ObtenerDescripcionAlerta(AliadoClienteDto cliente)
@@ -2080,7 +2108,7 @@ public sealed class AliadoPortalService
             Estado = true,
             ClaveTemporal = true,
             FechaCreacion = DateTime.Now,
-            SaldoDocumentos = 5,
+            SaldoDocumentos = 0,
             TipoCliente = registro.TipoCliente,
             IdVendedor = idVendedor,
             estadoAsociado = true
@@ -2879,6 +2907,8 @@ public class AliadoClienteDto
     public string? Email { get; set; }
     public string? Telefono { get; init; }
     public int SaldoDocumentos { get; set; }
+    public DateTime? FechaUltimaRecargaDocumentos { get; init; }
+    public string? HistorialComprasDocumentosJson { get; init; }
     public string? Producto { get; set; }
     public DateTime? FechaCompra { get; set; }
     public DateTime? FechaVencimiento { get; set; }

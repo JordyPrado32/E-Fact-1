@@ -386,19 +386,46 @@ public class EmailService : IEmailService
 
         var clienteSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(nombreCliente) ? "Cliente" : nombreCliente.Trim());
         var servicioSeguro = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(servicio) ? "tu servicio" : servicio);
-        var detalle = string.Equals(servicio, "E-RÚBRICA", StringComparison.OrdinalIgnoreCase)
-            ? $"Tu firma electrónica vence {TextoVencimiento(diasRestantes)}{(fechaVencimiento.HasValue ? $" ({fechaVencimiento:dd/MM/yyyy})" : string.Empty)}."
-            : $"Tu cuenta tiene {Math.Max(documentosDisponibles ?? 0, 0)} documentos disponibles.";
+        var esFirma = string.Equals(servicio, "E-RÚBRICA", StringComparison.OrdinalIgnoreCase);
+        var detalle = esFirma
+            ? ConstruirDetalleFirma(fechaVencimiento, diasRestantes)
+            : ConstruirDetalleDocumentos(documentosDisponibles);
+        var accion = esFirma
+            ? "Renueva tu firma electrónica en E-RÚBRICA antes de que caduque."
+            : "Recarga tus documentos E-FACT antes de agotarlos para continuar facturando.";
 
         var mensaje = new MimeMessage();
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
         mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
-        mensaje.Subject = $"Aviso de renovación {servicio} | E-FACT";
+        mensaje.Subject = $"Acción requerida: renovación {servicio} | E-FACT";
         mensaje.Body = new BodyBuilder
         {
-            HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {clienteSeguro}</h2><p>Te contactamos para recordarte que tu servicio <strong>{servicioSeguro}</strong> requiere atención.</p><p>{detalle}</p><p>Comunícate con nuestro equipo para renovar o recargar tu servicio.</p></div>"
+            HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {clienteSeguro}</h2><p>Te escribimos para avisarte que tu servicio <strong>{servicioSeguro}</strong> requiere atención.</p><p>{detalle}</p><p><strong>Acción recomendada:</strong> {accion}</p><p>Ingresa a E-FACT o comunícate con nuestro equipo para completar la renovación.</p></div>"
         }.ToMessageBody();
         await SendMessageAsync(mensaje);
+    }
+
+    private static string ConstruirDetalleDocumentos(int? documentosDisponibles)
+    {
+        var documentos = Math.Max(documentosDisponibles ?? 0, 0);
+        return documentos switch
+        {
+            0 => "Ya no tienes documentos disponibles. Si se acaban, no podrás emitir nuevas facturas.",
+            1 => "Te queda 1 documento disponible. Cuando se acabe, no podrás emitir nuevas facturas.",
+            _ => $"Te quedan {documentos} documentos disponibles. Cuando se acaben, no podrás emitir nuevas facturas."
+        };
+    }
+
+    private static string ConstruirDetalleFirma(DateTime? fechaVencimiento, int? diasRestantes)
+    {
+        var fecha = fechaVencimiento.HasValue ? $" ({fechaVencimiento:dd/MM/yyyy})" : string.Empty;
+        return diasRestantes switch
+        {
+            null => $"Tu firma electrónica va a caducar pronto{fecha}.",
+            <= 0 => $"Tu firma electrónica ya caducó{fecha}.",
+            1 => $"Tu firma electrónica caducará mañana{fecha}.",
+            _ => $"Tu firma electrónica caducará en {diasRestantes} días{fecha}."
+        };
     }
 
     private static string TextoVencimiento(int? diasRestantes) => diasRestantes switch
