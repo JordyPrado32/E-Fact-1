@@ -21,6 +21,8 @@ IF OBJECT_ID(N'[dbo].[EMPRESA]', N'U') IS NULL
 BEGIN
     CREATE TABLE [dbo].[EMPRESA] (
         [idEmpresa] INT NOT NULL,
+        [IdTitular] INT NULL,
+        [MenusJson] NVARCHAR(MAX) NULL,
         [nombre] NVARCHAR(200) NOT NULL,
         [ruc] NVARCHAR(20) NULL,
         [estado] BIT NOT NULL CONSTRAINT [DF_EMPRESA_estado] DEFAULT (1),
@@ -35,6 +37,7 @@ BEGIN
     CREATE TABLE [dbo].[SUCURSAL] (
         [idSucursal] INT NOT NULL,
         [idEmpresa] INT NOT NULL,
+        [MenusJson] NVARCHAR(MAX) NULL,
         [nombre] NVARCHAR(200) NOT NULL,
         [codigo] NVARCHAR(20) NULL,
         [direccion] NVARCHAR(300) NULL,
@@ -52,6 +55,9 @@ BEGIN
         [id_usuario] INT NOT NULL,
         [id_empresa] INT NOT NULL,
         [id_sucursal] INT NULL,
+        [IdPerfil] INT NULL,
+        [EsAdminSucursal] BIT NOT NULL CONSTRAINT [DF_ECONTAX_USUARIO_CONTEXTO_EsAdminSucursal] DEFAULT (0),
+        [MenusJson] NVARCHAR(MAX) NULL,
         [estado] BIT NOT NULL CONSTRAINT [DF_ECONTAX_USUARIO_CONTEXTO_estado] DEFAULT (1),
         [fecha_creacion] DATETIME2 NOT NULL CONSTRAINT [DF_ECONTAX_USUARIO_CONTEXTO_fecha_creacion] DEFAULT (SYSUTCDATETIME()),
         [fecha_actualizacion] DATETIME2 NULL,
@@ -61,6 +67,19 @@ BEGIN
         CONSTRAINT [FK_ECONTAX_USUARIO_CONTEXTO_SUCURSAL] FOREIGN KEY ([id_empresa], [id_sucursal]) REFERENCES [dbo].[SUCURSAL]([idEmpresa], [idSucursal])
     );
 END;
+
+IF COL_LENGTH('dbo.EMPRESA', 'IdTitular') IS NULL
+    ALTER TABLE [dbo].[EMPRESA] ADD [IdTitular] INT NULL;
+IF COL_LENGTH('dbo.EMPRESA', 'MenusJson') IS NULL
+    ALTER TABLE [dbo].[EMPRESA] ADD [MenusJson] NVARCHAR(MAX) NULL;
+IF COL_LENGTH('dbo.SUCURSAL', 'MenusJson') IS NULL
+    ALTER TABLE [dbo].[SUCURSAL] ADD [MenusJson] NVARCHAR(MAX) NULL;
+IF COL_LENGTH('dbo.ECONTAX_USUARIO_CONTEXTO', 'IdPerfil') IS NULL
+    ALTER TABLE [dbo].[ECONTAX_USUARIO_CONTEXTO] ADD [IdPerfil] INT NULL;
+IF COL_LENGTH('dbo.ECONTAX_USUARIO_CONTEXTO', 'EsAdminSucursal') IS NULL
+    ALTER TABLE [dbo].[ECONTAX_USUARIO_CONTEXTO] ADD [EsAdminSucursal] BIT NOT NULL CONSTRAINT [DF_ECONTAX_USUARIO_CONTEXTO_EsAdminSucursal] DEFAULT (0);
+IF COL_LENGTH('dbo.ECONTAX_USUARIO_CONTEXTO', 'MenusJson') IS NULL
+    ALTER TABLE [dbo].[ECONTAX_USUARIO_CONTEXTO] ADD [MenusJson] NVARCHAR(MAX) NULL;
 
 IF COL_LENGTH('dbo.CLIENTES', 'IDEMPRESA') IS NULL
     ALTER TABLE [dbo].[CLIENTES] ADD [IDEMPRESA] INT NULL;
@@ -140,6 +159,22 @@ BEGIN
     END;
 END;
 
+UPDATE emp
+SET [nombre] = COALESCE(NULLIF(LTRIM(RTRIM(emp.[nombre])), ''), NULLIF(LTRIM(RTRIM(em.[razonSocial])), ''), CONCAT('Empresa ', emp.[idEmpresa])),
+    [ruc] = COALESCE(NULLIF(LTRIM(RTRIM(emp.[ruc])), ''), NULLIF(LTRIM(RTRIM(em.[RUC])), '')),
+    [IdTitular] = COALESCE(emp.[IdTitular], em.[id_usuario])
+FROM [dbo].[EMPRESA] emp
+OUTER APPLY (
+    SELECT TOP (1) e.[razonSocial], e.[RUC], e.[id_usuario]
+    FROM [dbo].[EMISOR] e
+    WHERE e.[idEmpresa] = emp.[idEmpresa]
+      AND ISNULL(e.[ESTADO], 0) = 1
+      AND e.[id_usuario] IS NOT NULL
+    ORDER BY e.[codigo]
+) em
+WHERE em.[id_usuario] IS NOT NULL
+  AND (NULLIF(LTRIM(RTRIM(emp.[nombre])), '') IS NULL OR NULLIF(LTRIM(RTRIM(emp.[ruc])), '') IS NULL OR emp.[IdTitular] IS NULL);
+
 INSERT INTO [dbo].[EMPRESA] ([idEmpresa], [nombre], [ruc], [estado])
 SELECT DISTINCT
     e.[idEmpresa],
@@ -148,6 +183,7 @@ SELECT DISTINCT
     1
 FROM [dbo].[EMISOR] e
 WHERE e.[idEmpresa] IS NOT NULL
+  AND ISNULL(e.[ESTADO], 0) = 1
   AND NOT EXISTS (
       SELECT 1 FROM [dbo].[EMPRESA] emp WHERE emp.[idEmpresa] = e.[idEmpresa]
   )
@@ -160,6 +196,7 @@ SELECT DISTINCT
     1
 FROM [dbo].[CAJA] c
 WHERE c.[idEmpresa] IS NOT NULL
+  AND EXISTS (SELECT 1 FROM [dbo].[EMISOR] e WHERE e.[idEmpresa] = c.[idEmpresa] AND ISNULL(e.[ESTADO], 0) = 1)
   AND NOT EXISTS (
       SELECT 1 FROM [dbo].[EMPRESA] emp WHERE emp.[idEmpresa] = c.[idEmpresa]
   );
@@ -169,6 +206,19 @@ BEGIN
     INSERT INTO [dbo].[EMPRESA] ([idEmpresa], [nombre], [estado])
     VALUES (1, 'Empresa principal', 1);
 END;
+
+UPDATE emp
+SET [IdTitular] = em.[id_usuario]
+FROM [dbo].[EMPRESA] emp
+OUTER APPLY (
+    SELECT TOP (1) e.[id_usuario]
+    FROM [dbo].[EMISOR] e
+    WHERE e.[idEmpresa] = emp.[idEmpresa]
+      AND ISNULL(e.[ESTADO], 0) = 1
+      AND e.[id_usuario] IS NOT NULL
+    ORDER BY e.[codigo]
+) em
+WHERE emp.[IdTitular] IS NULL AND em.[id_usuario] IS NOT NULL;
 
 INSERT INTO [dbo].[SUCURSAL] ([idSucursal], [idEmpresa], [nombre], [codigo], [direccion], [estado])
 SELECT DISTINCT
@@ -203,13 +253,10 @@ WHERE c.[idEmpresa] IS NOT NULL
   )
 GROUP BY c.[idEmpresa], c.[idSucursal];
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[SUCURSAL])
-BEGIN
-    INSERT INTO [dbo].[SUCURSAL] ([idSucursal], [idEmpresa], [nombre], [codigo], [estado])
-    SELECT TOP (1) 1, [idEmpresa], 'Matriz', '001', 1
-    FROM [dbo].[EMPRESA]
-    ORDER BY [idEmpresa];
-END;
+INSERT INTO [dbo].[SUCURSAL] ([idSucursal], [idEmpresa], [nombre], [codigo], [estado])
+SELECT 1, emp.[idEmpresa], 'Matriz', '001', 1
+FROM [dbo].[EMPRESA] emp
+WHERE NOT EXISTS (SELECT 1 FROM [dbo].[SUCURSAL] suc WHERE suc.[idEmpresa] = emp.[idEmpresa]);
 
 INSERT INTO [dbo].[ECONTAX_USUARIO_CONTEXTO] ([id_usuario], [id_empresa], [id_sucursal], [estado])
 SELECT

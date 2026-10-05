@@ -29,6 +29,10 @@ public sealed class LoginDestinationService
             return "/login";
         }
 
+        if (!string.IsNullOrWhiteSpace(returnUrl) && IsLocalUrl(returnUrl) &&
+            returnUrl.StartsWith("/invitaciones/e-contax?", StringComparison.OrdinalIgnoreCase))
+            return returnUrl;
+
         var effectiveRoleId = roleId;
         if (!effectiveRoleId.HasValue)
         {

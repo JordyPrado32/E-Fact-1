@@ -8,6 +8,9 @@ public sealed class EContaxEmpresa
     [Key]
     public int IdEmpresa { get; set; }
 
+    public int? IdTitular { get; set; }
+    public string? MenusJson { get; set; }
+
     public string Nombre { get; set; } = string.Empty;
 
     public string? Ruc { get; set; }

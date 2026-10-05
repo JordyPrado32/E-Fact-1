@@ -44,6 +44,12 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         if (restrictedResult is not null)
             return restrictedResult;
 
+        if (string.Equals(state.Scope, "erubrica", StringComparison.OrdinalIgnoreCase))
+        {
+            var planes = await TryHandleESignPlansCommandAsync(state, NormalizarMensaje(mensaje), cancellationToken);
+            if (planes is not null) return planes;
+        }
+
         var diagnostics = GetDiagnostics();
         var apiKey = ResolveApiKey();
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -153,7 +159,9 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                     model = ResolveModel(),
                     messages,
                     tools = ToolDefinitions.BuildTools(),
-                    tool_choice = "auto",
+                    tool_choice = !toolExecuted && Regex.IsMatch(NormalizarMensaje(mensaje), @"\b(clientes?|productos?|formas? de pago)\b")
+                        ? "required"
+                        : "auto",
                     temperature = 0.05,
                     max_tokens = 400
                 }),
@@ -630,6 +638,10 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
         if (IsRestrictedAdminQuery(normalized))
             return true;
+
+        if (Regex.IsMatch(normalized, @"\bcliente\b") &&
+            ContainsAny(normalized, "agrega", "seleccion", "cambia", "cambiar", "asigna", "añade", "anade"))
+            return false;
 
         if (ContainsAny(normalized, "cancela", "cancelar", "me equivoque", "me equivoqué"))
             return true;
@@ -1334,7 +1346,8 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         CancellationToken cancellationToken)
     {
         if (!ContainsAny(normalized, "planes", "precios", "vigencias", "cuanto cuesta", "cuánto cuesta", "tarifas") ||
-            !ContainsAny(normalized, "certificado", "firma", "e-rubrica", "erubrica"))
+            (!string.Equals(state.Scope, "erubrica", StringComparison.OrdinalIgnoreCase) &&
+             !ContainsAny(normalized, "certificado", "firma", "e-rubrica", "erubrica")))
             return null;
 
         var result = await _toolDispatcher.DispatchAsync(ToolDefinitions.ConsultarESignPlanes, "{}", state, cancellationToken);

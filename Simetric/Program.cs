@@ -80,6 +80,7 @@ builder.Services.AddScoped<EfactSharedDataService>();
 builder.Services.AddScoped<EContaxSharedDataService>();
 builder.Services.AddScoped<EContaxTenantService>();
 builder.Services.AddScoped<EContaxOrganizacionService>();
+builder.Services.AddScoped<EContaxSeguridadService>();
 builder.Services.AddScoped<EContaxCatalogService>();
 builder.Services.AddScoped<EDeclaraSharedDataService>();
 builder.Services.AddScoped<ContribuyenteEdeclaraService>();

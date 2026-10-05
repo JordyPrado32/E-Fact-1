@@ -8,6 +8,8 @@ public sealed class EContaxSucursal
 
     public int IdEmpresa { get; set; }
 
+    public string? MenusJson { get; set; }
+
     public string Nombre { get; set; } = string.Empty;
 
     public string? Codigo { get; set; }

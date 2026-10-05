@@ -82,6 +82,8 @@ namespace Simetric.Data
         public DbSet<AliadoComision> AliadoComisiones { get; set; }
         public DbSet<AliadoComisionParametro> AliadoComisionParametros { get; set; }
         public DbSet<AliadoRenovacionNotificacion> AliadoRenovacionNotificaciones { get; set; }
+        public DbSet<AliadoLiquidacionFactura> AliadoLiquidacionFacturas { get; set; }
+        public DbSet<AliadoLiquidacionNotificacion> AliadoLiquidacionNotificaciones { get; set; }
         public DbSet<AliadoPortalConfiguracion> AliadoPortalConfiguraciones { get; set; }
         public DbSet<AliadoPortalRol> AliadoPortalRoles { get; set; }
         public DbSet<AliadoPortalMenu> AliadoPortalMenus { get; set; }
@@ -93,6 +95,8 @@ namespace Simetric.Data
         public DbSet<EContaxEmpresa> EContaxEmpresas { get; set; }
         public DbSet<EContaxSucursal> EContaxSucursales { get; set; }
         public DbSet<EContaxUsuarioContexto> EContaxUsuariosContexto { get; set; }
+        public DbSet<EContaxPerfil> EContaxPerfiles { get; set; }
+        public DbSet<EContaxInvitacion> EContaxInvitaciones { get; set; }
         public DbSet<EdeclareTarjeta> EdeclareTarjetas { get; set; }
         public DbSet<EsignTarjeta> EsignTarjetas { get; set; }
         public DbSet<EsignFirmaValidacionApiLog> EsignFirmaValidacionApiLogs { get; set; }

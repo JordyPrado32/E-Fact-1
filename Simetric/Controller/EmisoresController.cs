@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.Models;
@@ -72,7 +72,7 @@ namespace Simetric.Controllers
         }
 
         [HttpGet("{id:int}/firma/estado")]
-        public async Task<IActionResult> GetEstadoFirma(int id, [FromQuery] int? idUsuario)
+        public async Task<IActionResult> GetEstadoFirma(int id, [FromQuery] int? idUsuario, [FromQuery] bool paraFacturacion = true)
         {
             if (idUsuario == null || idUsuario <= 0)
                 return BadRequest("Id de usuario requerido.");
@@ -93,7 +93,7 @@ namespace Simetric.Controllers
 
             var resultado = await _emisorCertificadoValidator.ValidarConApiAsync(
                 emisor,
-                HttpContext.RequestAborted);
+                HttpContext.RequestAborted, paraFacturacion);
 
             var estadoVigencia = resultado.IsValid
                 ? "VIGENTE"
@@ -240,9 +240,12 @@ namespace Simetric.Controllers
             var coincideCuenta = emisor is null ||
                 string.IsNullOrWhiteSpace(identificacion) ||
                 CoincideIdentificacionFirma(identificacion, emisor.Ruc);
-            var esValida = detalle.EsValida && coincideCuenta;
+            var aptaParaFacturar = EmisorCertificadoValidator.EsAptaParaFacturar(detalle);
+            var esValida = detalle.EsValida && aptaParaFacturar && coincideCuenta;
             var mensaje = !detalle.EsValida
                 ? "El archivo o la clave no son validos, o la firma no esta vigente."
+                : !aptaParaFacturar
+                    ? EmisorCertificadoValidator.MensajeFirmaNoAptaParaFacturar
                 : !coincideCuenta
                     ? $"La firma es valida, pero no corresponde al RUC {emisor!.Ruc} de la cuenta."
                     : "La firma y la clave son correctas. El archivo no fue guardado.";
@@ -313,7 +316,7 @@ namespace Simetric.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> Create([FromBody] Emisor model)
+        public async Task<IActionResult> Create([FromBody] Emisor model, [FromQuery] bool paraFacturacion = true)
         {
             if (model == null)
                 return BadRequest("Datos inválidos.");
@@ -337,7 +340,7 @@ namespace Simetric.Controllers
 
             var validacionCertificado = await _emisorCertificadoValidator.ValidarConApiAsync(
                 model,
-                HttpContext.RequestAborted);
+                HttpContext.RequestAborted, paraFacturacion);
             if (!validacionCertificado.IsValid && validacionCertificado.TieneConfiguracion)
                 return BadRequest(validacionCertificado.Message);
 
@@ -369,7 +372,7 @@ namespace Simetric.Controllers
         }
 
         [HttpPut("{id:int}")]
-        public async Task<IActionResult> Update(int id, [FromBody] Emisor model)
+        public async Task<IActionResult> Update(int id, [FromBody] Emisor model, [FromQuery] bool paraFacturacion = true)
         {
             if (model == null)
                 return BadRequest("Datos inválidos.");
@@ -447,7 +450,7 @@ namespace Simetric.Controllers
                 var validacionCertificado = certificadoModificado
                     ? await _emisorCertificadoValidator.ValidarConApiAsync(
                         emisorDb,
-                        HttpContext.RequestAborted)
+                        HttpContext.RequestAborted, paraFacturacion)
                     : _emisorCertificadoValidator.Validar(emisorDb);
                 if (!validacionCertificado.IsValid && validacionCertificado.TieneConfiguracion)
                     return BadRequest(validacionCertificado.Message);

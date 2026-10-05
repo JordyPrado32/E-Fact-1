@@ -32,6 +32,7 @@ public sealed class AliadoPortalService
     private readonly IEmailService _emailService;
     private readonly LiquidacionCompraService _liquidacionCompraService;
     private readonly AliadoComisionGenerationService _aliadoComisionGenerationService;
+    private readonly ILogger<AliadoPortalService> _logger;
 
     public AliadoPortalService(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -39,7 +40,8 @@ public sealed class AliadoPortalService
         AuditService auditService,
         IEmailService emailService,
         LiquidacionCompraService liquidacionCompraService,
-        AliadoComisionGenerationService aliadoComisionGenerationService)
+        AliadoComisionGenerationService aliadoComisionGenerationService,
+        ILogger<AliadoPortalService> logger)
     {
         _dbFactory = dbFactory;
         _vendedorService = vendedorService;
@@ -47,6 +49,7 @@ public sealed class AliadoPortalService
         _emailService = emailService;
         _liquidacionCompraService = liquidacionCompraService;
         _aliadoComisionGenerationService = aliadoComisionGenerationService;
+        _logger = logger;
     }
 
     public async Task EnsureSchemaAsync()
@@ -840,6 +843,7 @@ public sealed class AliadoPortalService
         comision.IdUsuarioAprobacion = actorId;
         await db.SaveChangesAsync();
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "APROBAR", new { IdComision = idComision, Estado = estadoAnterior }, comision, new { Modulo = "PortalAliados", Entidad = "Comision" });
+        await NotificarEstadoComisionAsync(db, comision.IdVendedor, comision.Periodo ?? comision.FechaGeneracion.ToString("yyyy-MM"), comision.Valor, "Pendiente de pago");
         return (true, "Comisión aprobada correctamente.");
     }
 
@@ -867,6 +871,7 @@ public sealed class AliadoPortalService
         var ahora = DateTime.Now;
         var liquidacionesPagadas = new List<int>();
         var cantidadLiquidada = 0;
+        var comisionesNotificadas = new List<AliadoComision>();
         var executionStrategy = db.Database.CreateExecutionStrategy();
 
         try
@@ -876,6 +881,7 @@ public sealed class AliadoPortalService
             liquidacionesPagadas.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
             var comisiones = await db.AliadoComisiones.Where(x => ids.Contains(x.IdComision)).ToListAsync();
+            comisionesNotificadas = comisiones;
             if (comisiones.Count != ids.Length)
                 throw new InvalidOperationException("Una o más comisiones seleccionadas no existen.");
             if (comisiones.Any(x => !string.Equals(x.Estado, AliadoComisionEstado.Aprobada.ToString(), StringComparison.OrdinalIgnoreCase)))
@@ -956,6 +962,8 @@ public sealed class AliadoPortalService
             return (false, ex.Message);
         }
         await _auditService.TryRegistrarAuditoriaAsync(actorId, "PAGAR", null, new { IdsComision = ids, ReferenciaPago = referenciaPago }, new { Modulo = "PortalAliados", Entidad = "Liquidacion" });
+        foreach (var grupo in comisionesNotificadas.GroupBy(x => new { x.IdVendedor, Periodo = x.Periodo ?? x.FechaGeneracion.ToString("yyyy-MM") }))
+            await NotificarEstadoComisionAsync(db, grupo.Key.IdVendedor, grupo.Key.Periodo, grupo.Sum(x => x.Valor), "Pagada");
         var erroresLiquidacionCompra = new List<string>();
         foreach (var idLiquidacion in liquidacionesPagadas.Distinct())
         {
@@ -1372,6 +1380,58 @@ public sealed class AliadoPortalService
         };
     }
 
+    public async Task<IReadOnlyList<string>> ObtenerAvisosComisionesAsync(int userId)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var contexto = await ObtenerContextoAsync(userId);
+        var esBackOffice = contexto is null && await EsAdministradorInternoAsync(db, userId);
+        if (contexto is null && !esBackOffice) return Array.Empty<string>();
+        var inicioMes = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var desdePagos = DateTime.Today.AddDays(-90);
+        var grupos = await db.AliadoComisiones.AsNoTracking()
+            .Where(c => (esBackOffice || contexto!.EsAdministrador || c.IdVendedor == contexto.IdVendedor) &&
+                (((c.Estado == "Generada" || c.Estado == "Pendiente" || c.Estado == "Aprobada") && c.FechaGeneracion < inicioMes) ||
+                 (c.Estado == "Pagada" && c.FechaPago >= desdePagos)))
+            .Join(db.VendedoresBackOffice.AsNoTracking().Where(v => !v.EsSistema), c => c.IdVendedor, v => v.IdVendedor, (c, v) => new { c, v.Nombre })
+            .GroupBy(x => new { x.Nombre, x.c.IdVendedor, x.c.Periodo, x.c.Estado })
+            .Select(g => new { g.Key.Nombre, g.Key.Periodo, g.Key.Estado, Total = g.Sum(x => x.c.Valor), Fecha = g.Max(x => x.c.FechaPago ?? x.c.FechaGeneracion) })
+            .OrderByDescending(x => x.Fecha).ToListAsync();
+        return grupos.Select(g => $"{g.Nombre} · {g.Periodo} · {g.Total:N2}: " + (g.Estado switch
+        {
+            "Pagada" => "Comisiones pagadas.",
+            "Aprobada" => "Comisiones aprobadas. Pendiente de pago.",
+            _ => "Mes cerrado. Comisiones pendientes de aprobación."
+        })).ToList();
+    }
+
+    private async Task NotificarEstadoComisionAsync(AppDbContext db, int idVendedor, string periodo, decimal total, string estado)
+    {
+        var aliado = await db.Usuarios.AsNoTracking()
+            .Where(x => x.Estado == true && x.IdVendedor == idVendedor &&
+                db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario && db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName)))
+            .Select(x => new { x.Email, Nombre = (x.Nombres ?? "") + " " + (x.Apellidos ?? "") })
+            .FirstOrDefaultAsync();
+        var administradores = await db.Usuarios.AsNoTracking()
+            .Where(x => x.Estado == true && !string.IsNullOrWhiteSpace(x.Email) &&
+                (x.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId || x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId ||
+                 db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario && db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == AdminRoleName))))
+            .Select(x => x.Email!)
+            .Distinct()
+            .ToListAsync();
+
+        try
+        {
+            if (aliado is not null && !string.IsNullOrWhiteSpace(aliado.Email))
+                await _emailService.EnviarAvisoComisionAliadoAsync(aliado.Email, aliado.Nombre.Trim(), periodo, total, estado);
+            foreach (var email in administradores)
+                await _emailService.EnviarAvisoComisionBackOfficeAsync(email, periodo, total, estado, aliado?.Nombre.Trim() ?? $"Aliado {idVendedor}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo enviar el aviso de comisión del aliado {IdVendedor}, período {Periodo}.", idVendedor, periodo);
+        }
+    }
+
     public async Task<IReadOnlyList<AliadoAdminRow>> ListarAliadosAsync()
     {
         await EnsureSchemaAsync();
@@ -1389,6 +1449,10 @@ public sealed class AliadoPortalService
             {
                 IdVendedor = x.IdVendedor,
                 Nombre = x.Nombre,
+                BancoPago = x.BancoPago,
+                TipoCuentaPago = x.TipoCuentaPago,
+                NumeroCuentaPago = x.NumeroCuentaPago,
+                TitularCuentaPago = x.TitularCuentaPago,
                 CodigoReferencia = x.CodigoReferencia,
                 Activo = x.Activo,
                 PorcentajeBase = x.PorcentajeBase,
@@ -1982,9 +2046,11 @@ public sealed class AliadoPortalService
         bool esAdministradorPortal = false, string? apellidos = null, string? identificacion = null,
         DateTime? fechaNacimiento = null, string? avatarUrl = null, int tipoCliente = 1,
         string? razonSocial = null, string? nombreComercial = null, string? tipoDocumento = null,
-        string? celular = null, string? direccion = null, bool validarDatosFiscales = false)
+        string? celular = null, string? direccion = null, bool validarDatosFiscales = false, AliadoCuentaBancaria? cuentaBancaria = null)
     {
         await EnsureSchemaAsync();
+        if (!esAdministradorPortal && cuentaBancaria?.EsValida != true)
+            return (false, "Registra banco, tipo, número de cuenta y titular válidos para pagar las comisiones.");
         tipoDocumento = (tipoDocumento ?? "CEDULA").Trim().ToUpperInvariant();
         razonSocial = razonSocial?.Trim();
         nombreComercial = nombreComercial?.Trim();
@@ -2041,6 +2107,10 @@ public sealed class AliadoPortalService
             {
                 Nombre = (tipoCliente == 2 ? nombreComercial : $"{nombre} {apellidos}")?.Trim() ?? nombre,
                 CodigoReferencia = codigo,
+                BancoPago = cuentaBancaria!.NombreBanco,
+                TipoCuentaPago = cuentaBancaria.Tipo,
+                NumeroCuentaPago = cuentaBancaria.Numero,
+                TitularCuentaPago = cuentaBancaria.Titular.Trim(),
                 Activo = true,
                 EsSistema = false,
                 PorcentajeBase = porcentajeBase,
@@ -2328,6 +2398,14 @@ public sealed class AliadoPortalService
                 ObservacionPago = x.ObservacionPago,
                 ComprobantePagoUrl = x.ComprobantePagoUrl,
                 IdUsuarioPago = x.IdUsuarioPago,
+                FacturaEstado = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.Estado).FirstOrDefault(),
+                FacturaUrl = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.ArchivoUrl).FirstOrDefault(),
+                FacturaNombre = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.NombreArchivo).FirstOrDefault(),
+                FacturaObservacion = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.Observacion).FirstOrDefault(),
+                EmisorRazonSocial = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.RazonSocial).FirstOrDefault(),
+                EmisorRuc = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Ruc).FirstOrDefault(),
+                EmisorDireccion = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.DireccionMatriz ?? e.Direccion).FirstOrDefault(),
+                EmisorEmail = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Email).FirstOrDefault(),
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.IdLiquidacion)
             })
             .ToListAsync();
@@ -2339,6 +2417,81 @@ public sealed class AliadoPortalService
         return documento is null
             ? null
             : await _liquidacionCompraService.AsegurarXmlLiquidacionUsuarioAsync(documento.Value.CodFactura, documento.Value.IdUsuario);
+    }
+
+    public async Task<(bool Success, string Message)> RegistrarFacturaLiquidacionAsync(int userId, int idLiquidacion, string archivoUrl, string nombreArchivo, string tipoArchivo)
+    {
+        await EnsureSchemaAsync();
+        var contexto = await ObtenerContextoAsync(userId);
+        if (contexto is null || idLiquidacion <= 0 || string.IsNullOrWhiteSpace(archivoUrl))
+            return (false, "No tienes acceso a esta liquidación.");
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var liquidacion = await db.AliadoLiquidaciones.FirstOrDefaultAsync(x => x.IdLiquidacion == idLiquidacion && (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor));
+        if (liquidacion is null) return (false, "La liquidación no existe.");
+        if (liquidacion.Estado != "Pendiente") return (false, "La liquidación ya no admite cambios.");
+        db.AliadoLiquidacionFacturas.Add(new AliadoLiquidacionFactura
+        {
+            IdLiquidacion = idLiquidacion,
+            ArchivoUrl = archivoUrl.Trim(),
+            NombreArchivo = string.IsNullOrWhiteSpace(nombreArchivo) ? "Factura" : nombreArchivo.Trim(),
+            TipoArchivo = tipoArchivo.Trim(),
+            Estado = "Pendiente",
+            IdUsuarioRegistro = userId,
+            FechaRegistro = DateTime.Now
+        });
+        await db.SaveChangesAsync();
+        return (true, "Factura cargada. Quedó pendiente de revisión.");
+    }
+
+    public async Task<(bool Success, string Message)> RevisarFacturaLiquidacionAsync(int actorId, int idLiquidacion, bool aprobar, string? observacion)
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (!await EsAdministradorPortalAsync(db, actorId)) return (false, "No tienes permisos para revisar facturas.");
+        var factura = await db.AliadoLiquidacionFacturas.Where(x => x.IdLiquidacion == idLiquidacion).OrderByDescending(x => x.IdRevision).FirstOrDefaultAsync();
+        if (factura is null) return (false, "El aliado aún no ha cargado la factura.");
+        factura.Estado = aprobar ? "Aprobada" : "RequiereCorreccion";
+        factura.Observacion = string.IsNullOrWhiteSpace(observacion) ? (aprobar ? null : "Revisa la factura y vuelve a cargarla.") : observacion.Trim();
+        factura.FechaRevision = DateTime.Now;
+        factura.IdUsuarioRevision = actorId;
+        await db.SaveChangesAsync();
+        return (true, aprobar ? "Factura aprobada." : "Se solicitó corregir la factura.");
+    }
+
+    public async Task<IReadOnlyList<AliadoLiquidacionFactura>> ObtenerHistorialFacturaLiquidacionAsync(int userId, int idLiquidacion)
+    {
+        var contexto = await ObtenerContextoAsync(userId);
+        if (contexto is null) return Array.Empty<AliadoLiquidacionFactura>();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var pertenece = await db.AliadoLiquidaciones.AsNoTracking().AnyAsync(x => x.IdLiquidacion == idLiquidacion && (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor));
+        return pertenece ? await db.AliadoLiquidacionFacturas.AsNoTracking().Where(x => x.IdLiquidacion == idLiquidacion).OrderByDescending(x => x.IdRevision).ToListAsync() : Array.Empty<AliadoLiquidacionFactura>();
+    }
+
+    public async Task<IReadOnlyList<AliadoFacturaLiquidacionAviso>> ObtenerAvisosFacturaLiquidacionAsync()
+    {
+        await EnsureSchemaAsync();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var inicioMes = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var pendientes = await db.AliadoLiquidaciones.AsNoTracking()
+            .Where(x => x.Estado == "Pendiente" && x.Fecha < inicioMes && !db.AliadoLiquidacionNotificaciones.Any(n => n.IdLiquidacion == x.IdLiquidacion && n.Tipo == "FacturaMes"))
+            .Join(db.VendedoresBackOffice.AsNoTracking(), l => l.IdVendedor, v => v.IdVendedor, (l, v) => new { l, v.Nombre })
+            .Select(x => new AliadoFacturaLiquidacionAviso
+            {
+                IdLiquidacion = x.l.IdLiquidacion,
+                IdVendedor = x.l.IdVendedor,
+                Periodo = x.l.Periodo,
+                Total = x.l.Total,
+                NombreAliado = x.Nombre,
+                Email = db.Usuarios.Where(u => u.IdVendedor == x.l.IdVendedor && u.Estado == true).Select(u => u.Email).FirstOrDefault(),
+                EmisorRazonSocial = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.RazonSocial).FirstOrDefault() ?? "Numerica Software S.A.S.",
+                EmisorRuc = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Ruc).FirstOrDefault(),
+                EmisorDireccion = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.DireccionMatriz ?? e.Direccion).FirstOrDefault(),
+                EmisorEmail = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Email).FirstOrDefault()
+            }).ToListAsync();
+        foreach (var aviso in pendientes)
+            db.AliadoLiquidacionNotificaciones.Add(new AliadoLiquidacionNotificacion { IdLiquidacion = aviso.IdLiquidacion, Tipo = "FacturaMes", FechaEnvio = DateTime.Now });
+        if (pendientes.Count > 0) await db.SaveChangesAsync();
+        return pendientes;
     }
 
     public async Task<string?> AsegurarPdfLiquidacionAsync(int userId, int idLiquidacion)
@@ -2408,6 +2561,14 @@ public sealed class AliadoPortalService
                 IdUsuarioPago = x.l.IdUsuarioPago,
                 ObservacionPago = x.l.ObservacionPago,
                 ComprobantePagoUrl = x.l.ComprobantePagoUrl,
+                FacturaEstado = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.Estado).FirstOrDefault(),
+                FacturaUrl = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.ArchivoUrl).FirstOrDefault(),
+                FacturaNombre = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.NombreArchivo).FirstOrDefault(),
+                FacturaObservacion = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.Observacion).FirstOrDefault(),
+                EmisorRazonSocial = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.RazonSocial).FirstOrDefault(),
+                EmisorRuc = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Ruc).FirstOrDefault(),
+                EmisorDireccion = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.DireccionMatriz ?? e.Direccion).FirstOrDefault(),
+                EmisorEmail = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Email).FirstOrDefault(),
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.l.IdLiquidacion)
             }).ToListAsync();
     }
@@ -2469,6 +2630,8 @@ public sealed class AliadoPortalService
         await EnsureSchemaAsync();
         await _aliadoComisionGenerationService.SincronizarPortalAsync();
     }
+
+    public Task CerrarPeriodosComisionesAsync() => _aliadoComisionGenerationService.CerrarPeriodosAsync();
 
     public async Task<IReadOnlyList<AliadoRenovacionNotificacionDto>> ObtenerNotificacionesRenovacionAsync()
     {
@@ -2533,9 +2696,6 @@ public sealed class AliadoPortalService
 
     private Task SincronizarComisionesAsync(int idVendedor)
         => _aliadoComisionGenerationService.SincronizarAsync(idVendedor);
-
-    private Task CerrarPeriodosComisionesAsync()
-        => _aliadoComisionGenerationService.CerrarPeriodosAsync();
 
     private async Task<AliadoComisionResumen> ObtenerResumenComisionesAsync(int idVendedor)
     {
@@ -2900,6 +3060,14 @@ BEGIN
 END
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ALIADO_RENOVACION_NOTIFICACION' AND object_id = OBJECT_ID(N'dbo.ALIADO_RENOVACION_NOTIFICACION'))
     CREATE UNIQUE INDEX UX_ALIADO_RENOVACION_NOTIFICACION ON dbo.ALIADO_RENOVACION_NOTIFICACION (IdVendedor, IdFactura, Tipo);
+IF OBJECT_ID(N'dbo.ALIADO_LIQUIDACION_FACTURA', N'U') IS NULL
+    CREATE TABLE dbo.ALIADO_LIQUIDACION_FACTURA (IdRevision INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdLiquidacion INT NOT NULL, ArchivoUrl NVARCHAR(300) NOT NULL, NombreArchivo NVARCHAR(180) NOT NULL, TipoArchivo NVARCHAR(80) NOT NULL, Estado NVARCHAR(30) NOT NULL, Observacion NVARCHAR(500) NULL, FechaRegistro DATETIME2 NOT NULL, IdUsuarioRegistro INT NOT NULL, FechaRevision DATETIME2 NULL, IdUsuarioRevision INT NULL);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ALIADO_LIQUIDACION_FACTURA_LIQ' AND object_id = OBJECT_ID(N'dbo.ALIADO_LIQUIDACION_FACTURA'))
+    CREATE INDEX IX_ALIADO_LIQUIDACION_FACTURA_LIQ ON dbo.ALIADO_LIQUIDACION_FACTURA(IdLiquidacion, IdRevision DESC);
+IF OBJECT_ID(N'dbo.ALIADO_LIQUIDACION_NOTIFICACION', N'U') IS NULL
+    CREATE TABLE dbo.ALIADO_LIQUIDACION_NOTIFICACION (IdNotificacion INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdLiquidacion INT NOT NULL, Tipo NVARCHAR(40) NOT NULL, FechaEnvio DATETIME2 NOT NULL);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ALIADO_LIQUIDACION_NOTIFICACION' AND object_id = OBJECT_ID(N'dbo.ALIADO_LIQUIDACION_NOTIFICACION'))
+    CREATE UNIQUE INDEX UX_ALIADO_LIQUIDACION_NOTIFICACION ON dbo.ALIADO_LIQUIDACION_NOTIFICACION(IdLiquidacion, Tipo);
 """;
     }
 }
@@ -3114,10 +3282,32 @@ public class AliadoLiquidacionDto
     public string? ComprobantePagoUrl { get; init; }
     public int? IdUsuarioPago { get; init; }
     public int CantidadComisiones { get; init; }
+    public string? FacturaEstado { get; init; }
+    public string? FacturaUrl { get; init; }
+    public string? FacturaNombre { get; init; }
+    public string? FacturaObservacion { get; init; }
+    public string? EmisorRazonSocial { get; init; }
+    public string? EmisorRuc { get; init; }
+    public string? EmisorDireccion { get; init; }
+    public string? EmisorEmail { get; init; }
 }
 
 public sealed class AliadoAdminLiquidacionRow : AliadoLiquidacionDto
 {
+}
+
+public sealed class AliadoFacturaLiquidacionAviso
+{
+    public int IdLiquidacion { get; init; }
+    public int IdVendedor { get; init; }
+    public string Periodo { get; init; } = string.Empty;
+    public decimal Total { get; init; }
+    public string NombreAliado { get; init; } = string.Empty;
+    public string? Email { get; init; }
+    public string EmisorRazonSocial { get; init; } = string.Empty;
+    public string? EmisorRuc { get; init; }
+    public string? EmisorDireccion { get; init; }
+    public string? EmisorEmail { get; init; }
 }
 
 public sealed class AliadoRenovacionNotificacionDto
@@ -3135,6 +3325,10 @@ public sealed class AliadoRenovacionNotificacionDto
 
 public sealed class AliadoAdminRow
 {
+    public string? BancoPago { get; init; }
+    public string? TipoCuentaPago { get; init; }
+    public string? NumeroCuentaPago { get; init; }
+    public string? TitularCuentaPago { get; init; }
     public int IdVendedor { get; init; }
     public int? IdUsuario { get; init; }
     public string Nombre { get; init; } = string.Empty;

@@ -157,7 +157,7 @@ public sealed class EmisionControlService
             return;
         }
 
-        var validacionFirma = await _emisorCertificadoValidator.ValidarConApiAsync(emisor);
+        var validacionFirma = await _emisorCertificadoValidator.ValidarConApiAsync(emisor, paraFacturacion: true);
         if (!validacionFirma.IsValid)
         {
             throw new EmisionBloqueadaException(

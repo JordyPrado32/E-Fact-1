@@ -77,6 +77,8 @@ public sealed class ToolDispatcher
 
             return toolName switch
             {
+            ToolDefinitions.ConsultarFormasPago => await _tools.ConsultarFormasPagoAsync(cancellationToken),
+            ToolDefinitions.SeleccionarCliente => await _tools.SeleccionarClienteAsync(state, GetInt(root, "clienteId") ?? 0, cancellationToken),
             ToolDefinitions.BuscarCliente => await _tools.BuscarClienteAsync(state, GetString(root, "query") ?? string.Empty, cancellationToken),
             ToolDefinitions.BuscarProducto => await _tools.BuscarProductoAsync(state, GetString(root, "query") ?? string.Empty, cancellationToken),
             ToolDefinitions.CrearCliente => await _tools.CrearClienteAsync(state, new ClienteCreateRequestDto

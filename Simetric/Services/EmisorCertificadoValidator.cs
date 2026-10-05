@@ -52,7 +52,8 @@ public sealed class EmisorCertificadoValidator
 
     public async Task<CertificadoEmisorValidationResult> ValidarConApiAsync(
         Emisor? emisor,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool paraFacturacion = false)
     {
         var validacionConfiguracion = Validar(emisor);
         if (!validacionConfiguracion.IsValid)
@@ -104,6 +105,17 @@ public sealed class EmisorCertificadoValidator
                 apiHttpStatusCode: apiResult.HttpStatusCode,
                 apiSuccess: apiResult.Success);
 
+        if (paraFacturacion && !EsAptaParaFacturar(info))
+            return CertificadoEmisorValidationResult.Fail(
+                MensajeFirmaNoAptaParaFacturar,
+                fechaExpiracion: info.FechaExpiracion?.LocalDateTime,
+                identificacionExtraida: FirstFilled(info.Ruc, info.Cedula),
+                nombreTitular: info.NombreTitular,
+                estadoVigencia: info.EstadoVigencia,
+                apiResponseJson: apiResult.RawJson,
+                apiHttpStatusCode: apiResult.HttpStatusCode,
+                apiSuccess: apiResult.Success);
+
         if (info.FechaExpiracion is null)
             return CertificadoEmisorValidationResult.Fail(
                 "El servicio no devolvio la fecha de expiracion de la firma.",
@@ -114,7 +126,7 @@ public sealed class EmisorCertificadoValidator
                 apiHttpStatusCode: apiResult.HttpStatusCode,
                 apiSuccess: apiResult.Success);
 
-        var identificaciones = new[] { info.Ruc, info.Cedula }
+        var identificaciones = (paraFacturacion ? new[] { info.Ruc } : new[] { info.Ruc, info.Cedula })
             .Where(valor => !string.IsNullOrWhiteSpace(valor))
             .Select(valor => NormalizarDigitos(valor))
             .Where(valor => !string.IsNullOrWhiteSpace(valor))
@@ -180,6 +192,12 @@ public sealed class EmisorCertificadoValidator
 
         return await _firmaInfoApiService.ConsultarAsync(rutaParaApi, clave, cancellationToken);
     }
+
+    public const string MensajeFirmaNoAptaParaFacturar =
+        "Esta firma no es válida para facturar: el certificado debe contener un RUC de 13 dígitos. Las firmas con cédula pueden utilizarse en E-Rúbrica.";
+
+    public static bool EsAptaParaFacturar(FirmaInfoApiResponse info) =>
+        NormalizarDigitos(info.Ruc)?.Length == 13;
 
     private static int CalcularDiasRestantes(DateTime fechaExpiracion) =>
         (fechaExpiracion.Date - DateTime.Today).Days;

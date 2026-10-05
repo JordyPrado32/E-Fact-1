@@ -2,6 +2,8 @@ namespace Simetric.Modules.AsistenteIAFacturacion.Tools;
 
 public static class ToolDefinitions
 {
+    public const string ConsultarFormasPago = "ConsultarFormasPago";
+    public const string SeleccionarCliente = "SeleccionarCliente";
     public const string BuscarCliente = "BuscarCliente";
     public const string BuscarProducto = "BuscarProducto";
     public const string CrearCliente = "CrearCliente";
@@ -39,10 +41,13 @@ public static class ToolDefinitions
 
     private static readonly object[] CachedTools =
     [
-        Function(BuscarCliente, "Busca clientes reales en el sistema por nombre, razón social o identificación.",
-            Properties(("query", "string", "Texto a buscar del cliente.", true))),
-        Function(BuscarProducto, "Busca productos reales en el sistema por nombre o código.",
-            Properties(("query", "string", "Texto a buscar del producto.", true))),
+        Function(BuscarCliente, "Busca clientes reales de la cuenta. Con query vacío lista hasta 30 clientes; una búsqueda no selecciona al cliente en la factura.",
+            Properties(("query", "string", "Nombre o identificación; vacío para listar clientes.", false))),
+        Function(BuscarProducto, "Busca productos reales de la cuenta. Con query vacío lista hasta 30 productos.",
+            Properties(("query", "string", "Nombre o código; vacío para listar productos.", false))),
+        Function(ConsultarFormasPago, "Lista las formas de pago reales disponibles sin modificar la factura.", Properties()),
+        Function(SeleccionarCliente, "Asigna un cliente existente a la factura conservando los productos y la forma de pago.",
+            Properties(("clienteId", "integer", "Identificador real obtenido al buscar el cliente.", true))),
         Function(CrearCliente, "Crea un cliente nuevo cuando no existe y el usuario ya proporcionó todos los datos requeridos.",
             Properties(
                 ("nombreCompleto", "string", "Nombre completo del cliente cuando es persona natural.", false),

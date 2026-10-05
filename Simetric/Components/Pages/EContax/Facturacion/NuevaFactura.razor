@@ -16,6 +16,7 @@
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject IJSRuntime JS
+@inject EContaxTenantService TenantService
 
 <PageTitle>Facturacion | Numerica E-Contax</PageTitle>
 
@@ -60,6 +61,13 @@
                 </div>
 
                 <div class="docs-form-toolbar">
+                    @if (esJefeEmpresa)
+                    {
+                        <select class="form-select" style="min-width:190px" value="@sucursalActual" @onchange="CambiarSucursalAsync">
+                            @foreach (var sucursal in sucursales)
+                            { <option value="@sucursal.IdSucursal">@sucursal.Nombre</option> }
+                        </select>
+                    }
                     <button type="button" class="n-btn n-btn-secondary" @onclick="LimpiarFormularioAsync" disabled="@isSaving">
                         <i class="bi bi-arrow-clockwise me-2"></i> Limpiar pantalla
                     </button>
@@ -806,6 +814,9 @@
     private string textoBusquedaCliente = string.Empty;
     private string? productoAviso;
     private int currentUserId;
+    private bool esJefeEmpresa;
+    private int sucursalActual;
+    private List<Simetric.DTOs.EContax.EContaxSucursalDto> sucursales = new();
     private decimal cantidadProducto = 1m;
     private decimal precioProducto;
     private decimal descuentoProductoValor;
@@ -856,6 +867,11 @@
             }
 
             currentUserId = ObtenerIdUsuario(user);
+            var contexto = await TenantService.GetContextAsync(currentUserId);
+            esJefeEmpresa = contexto.EsJefeEmpresa;
+            sucursalActual = contexto.IdSucursal ?? 0;
+            if (esJefeEmpresa)
+                sucursales = await TenantService.GetSucursalesEmpresaAsync(contexto.IdEmpresa);
             InicializarModelos();
             await CargarCatalogosAsync();
         }
@@ -903,6 +919,15 @@
             factura.Codemisor = emisores.First().Codigo;
             await AplicarSecuenciaInicialAsync();
         }
+    }
+
+    private async Task CambiarSucursalAsync(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var sucursalId) || sucursalId <= 0)
+            return;
+        await TenantService.CambiarSucursalJefeAsync(currentUserId, sucursalId);
+        sucursalActual = sucursalId;
+        await CargarCatalogosAsync();
     }
 
     private void InicializarModelos()

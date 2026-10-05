@@ -59,6 +59,7 @@ public sealed class AppAccessService
         await EnsureSchemaAsync();
 
         await using var context = await _dbFactory.CreateDbContextAsync();
+        isSuperAdmin |= await EsSuperAdminAsync(context, userId);
         var services = await context.AppServicios
             .AsNoTracking()
             .Where(x => x.Estado)
@@ -82,7 +83,7 @@ public sealed class AppAccessService
                 RequiereSuscripcion = service.RequiereSuscripcion,
                 TieneAcceso = access.HasAccess,
                 EsSuperAdministrador = access.IsSuperAdmin,
-                TieneSuscripcionActiva = access.HasActiveSubscription,
+                TieneSuscripcionActiva = access.HasActiveSubscription || access.IsSuperAdmin,
                 FechaFinSuscripcion = access.SubscriptionEndDate,
                 Icono = service.Icono,
                 ColorHex = string.IsNullOrWhiteSpace(service.ColorHex) ? "#0d6efd" : service.ColorHex,
@@ -109,6 +110,7 @@ public sealed class AppAccessService
         await EnsureSchemaAsync();
 
         await using var context = await _dbFactory.CreateDbContextAsync();
+        isSuperAdmin |= await EsSuperAdminAsync(context, userId);
         var normalizedKey = serviceKey.Trim().ToLowerInvariant();
         var service = await context.AppServicios
             .AsNoTracking()
@@ -235,6 +237,10 @@ public sealed class AppAccessService
                     ? $"/servicios/{service.Clave}"
                     : service.RutaAcceso;
 
+    private static Task<bool> EsSuperAdminAsync(AppDbContext context, int userId) =>
+        context.Usuarios.AsNoTracking().AnyAsync(x => x.IdUsuario == userId &&
+            x.IdTipoUsuario == int.Parse(AdminRoleId));
+
     private async Task<AppServiceAccessDecision> EvaluateAccessAsync(
         AppDbContext context,
         int userId,
@@ -297,6 +303,22 @@ public sealed class AppAccessService
                 DenialReason = "Acceso restringido al rol Aliado Comercial.",
                 StatusText = "No autorizado"
             };
+        }
+
+        if (!isSuperAdmin && string.Equals(service.Clave, EContaxServiceKey, StringComparison.OrdinalIgnoreCase))
+        {
+            var miembro = await context.EContaxUsuariosContexto.AsNoTracking()
+                .Include(x => x.Empresa).Include(x => x.Sucursal).FirstOrDefaultAsync(x => x.IdUsuario == userId);
+            if (miembro is not null)
+            {
+                if (!miembro.Estado || miembro.Empresa?.Estado != true ||
+                    (miembro.Empresa.IdTitular != userId && miembro.Sucursal?.Estado != true))
+                    return new() { HasAccess = false, StatusText = "Sin vínculo activo", DenialReason = "La cuenta no tiene empresa y sucursal activas." };
+                if (miembro.Empresa.IdTitular == userId || miembro.EsAdminSucursal)
+                    return new() { HasAccess = true, HasActiveSubscription = true, StatusText = "Acceso por administración de E-Contax" };
+                userId = miembro.Empresa.IdTitular ?? 0;
+                isSuperAdmin = false;
+            }
         }
 
         if (!service.RequiereSuscripcion || IsFreeServiceKey(service.Clave))

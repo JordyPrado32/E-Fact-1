@@ -8,8 +8,9 @@ namespace Simetric.Controllers.EContax;
 
 [ApiController]
 [Route("api/e-contax/productos")]
-public sealed class EContaxProductosController : ControllerBase
+public sealed class EContaxProductosController : EContaxApiControllerBase
 {
+    protected override string RutaPermiso => EContaxRoutes.Productos;
     private readonly AppDbContext _db;
     private readonly EContaxCatalogService _catalogService;
     private readonly EContaxTenantService _tenantService;

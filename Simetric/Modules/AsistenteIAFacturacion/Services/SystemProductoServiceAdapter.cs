@@ -22,9 +22,6 @@ public sealed class SystemProductoServiceAdapter : IProductoService
 
     public async Task<IReadOnlyList<ProductoDto>> BuscarAsync(int userId, string query, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(query))
-            return Array.Empty<ProductoDto>();
-
         await using var context = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var ownerId = await ResolveOwnerIdAsync(context, userId, cancellationToken);
         if (ownerId <= 0)
@@ -39,6 +36,10 @@ public sealed class SystemProductoServiceAdapter : IProductoService
             .Where(p => p.Idusuario == ownerId && (p.Estado == null || p.Estado == true));
 
         var productos = new List<Models.Producto>();
+        if (string.IsNullOrWhiteSpace(query))
+            return (await baseQuery.OrderBy(p => p.Codigo).Take(30).ToListAsync(cancellationToken))
+                .Select(p => Map(p, tarifaMap)).ToList();
+
         foreach (var term in searchTerms)
         {
             productos.AddRange(await baseQuery
@@ -49,6 +50,8 @@ public sealed class SystemProductoServiceAdapter : IProductoService
                     EF.Functions.Like((p.Tipocompravena ?? string.Empty).ToLower(), $"%{term}%") ||
                     EF.Functions.Like((p.TipoProductoNavigation!.Descripcion ?? string.Empty).ToLower(), $"%{term}%") ||
                     EF.Functions.Like((p.IdsubtipoNavigation!.Descripcion ?? string.Empty).ToLower(), $"%{term}%"))
+                .OrderByDescending(p => p.CodigoPrincipal == query.Trim() || p.CodAuxiliar == query.Trim())
+                .ThenBy(p => p.Codigo)
                 .Take(30)
                 .ToListAsync(cancellationToken));
         }

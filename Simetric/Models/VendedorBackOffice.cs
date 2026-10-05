@@ -34,4 +34,13 @@ public class VendedorBackOffice
 
     [Column("fechaCreacion")]
     public DateTime FechaCreacion { get; set; } = DateTime.Now;
+
+    [StringLength(120)]
+    public string? BancoPago { get; set; }
+    [StringLength(20)]
+    public string? TipoCuentaPago { get; set; }
+    [StringLength(30)]
+    public string? NumeroCuentaPago { get; set; }
+    [StringLength(120)]
+    public string? TitularCuentaPago { get; set; }
 }

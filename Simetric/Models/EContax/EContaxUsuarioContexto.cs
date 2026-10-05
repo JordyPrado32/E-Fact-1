@@ -12,6 +12,10 @@ public sealed class EContaxUsuarioContexto
 
     public int? IdSucursal { get; set; }
 
+    public int? IdPerfil { get; set; }
+    public bool EsAdminSucursal { get; set; }
+    public string? MenusJson { get; set; }
+
     public bool Estado { get; set; } = true;
 
     public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;

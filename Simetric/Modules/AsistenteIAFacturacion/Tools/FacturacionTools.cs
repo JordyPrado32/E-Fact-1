@@ -68,6 +68,31 @@ public sealed class FacturacionTools
         };
     }
 
+    public async Task<ToolResultDto> ConsultarFormasPagoAsync(CancellationToken cancellationToken)
+    {
+        var formas = await _facturacionService.ObtenerFormasPagoAsync(cancellationToken);
+        return Ok(ToolDefinitions.ConsultarFormasPago,
+            formas.Count == 0 ? "No hay formas de pago activas disponibles." : string.Join("\n", formas), formas);
+    }
+
+    public async Task<ToolResultDto> SeleccionarClienteAsync(FacturaConversationState state, int clienteId, CancellationToken cancellationToken)
+    {
+        if (state.Emitida)
+            return Fail(ToolDefinitions.SeleccionarCliente, "La factura ya fue emitida. Inicia una nueva conversación para crear otra.");
+
+        var cliente = await _clienteService.ObtenerAsync(state.UserId, clienteId, cancellationToken);
+        if (cliente is null)
+            return Fail(ToolDefinitions.SeleccionarCliente, "No encontré ese cliente en tu cuenta.");
+
+        state.Draft.Cliente = cliente;
+        state.SeleccionPendiente = null;
+        state.RequiereConfirmacion = false;
+        state.OperacionPendiente = null;
+        state.Estado = FacturaConversationStates.ClienteSeleccionado;
+        state.UltimaIntencion = "cliente_seleccionado";
+        return Ok(ToolDefinitions.SeleccionarCliente, $"Cliente seleccionado: {cliente.Nombre}.", state.Draft);
+    }
+
     public async Task<ToolResultDto> BuscarProductoAsync(FacturaConversationState state, string query, CancellationToken cancellationToken)
     {
         state.UltimaIntencion = "agregar_item";
@@ -928,7 +953,7 @@ public sealed class FacturacionTools
         var planes = await _facturacionService.ConsultarESignPlanesAsync(cancellationToken);
         var mensaje = planes.Count == 0
             ? "No encontré planes de certificados E-Rúbrica disponibles en este momento."
-            : string.Join("\n", planes.Select(x => $"{x.Nombre} ({x.Codigo}): ${x.Precio:0.00}"));
+            : string.Join("\n", planes.Select(x => $"{x.Nombre} ({x.Codigo}): ${x.Precio:0.00} + IVA"));
 
         return Ok(ToolDefinitions.ConsultarESignPlanes, mensaje, planes);
     }

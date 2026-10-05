@@ -52,7 +52,7 @@ public sealed class EContaxSharedDataService
 
         var emisoresQuery = context.Emisores
             .AsNoTracking()
-            .Where(emisor => emisor.IdUsuario == userContext.IdUsuarioTitular);
+            .Where(emisor => emisor.IdEmpresa == userContext.IdEmpresa);
 
         var totalClientes = await clientesQuery.CountAsync();
         var totalProductos = await productosQuery.CountAsync();

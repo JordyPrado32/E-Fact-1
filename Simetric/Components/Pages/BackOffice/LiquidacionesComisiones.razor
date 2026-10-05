@@ -30,16 +30,13 @@
         <div class="liquidations-filter-section">
             <div class="liquidations-filter-heading">
                 <div class="filter-heading-copy"><span class="filter-heading-icon"><i class="bi bi-funnel"></i></span><div><strong>Filtros de consulta</strong><small>Selecciona los criterios para generar el reporte de liquidaciones pagadas.</small></div></div>
-                <div class="filter-presets"><button type="button" class="btn-preset @(presetActivo == "mes" ? "active" : "")" @onclick='() => AplicarPreset("mes")'>Este mes</button><button type="button" class="btn-preset @(presetActivo == "trimestre" ? "active" : "")" @onclick='() => AplicarPreset("trimestre")'>90 días</button><button type="button" class="btn-preset @(presetActivo == "anio" ? "active" : "")" @onclick='() => AplicarPreset("anio")'>Este año</button><button type="button" class="btn-preset @(presetActivo == "todo" ? "active" : "")" @onclick='() => AplicarPreset("todo")'>Todo</button></div>
                 <button type="button" class="filter-clear-button" @onclick="LimpiarFiltros"><i class="bi bi-arrow-clockwise"></i> Limpiar filtros</button>
             </div>
             <div class="liquidations-filter-grid">
-                <label class="filter-group"><span class="filter-label">Desde</span><input type="date" class="filter-input" @bind="fechaDesde" @bind:after="AplicarFiltrosAsync" /></label>
-                <label class="filter-group"><span class="filter-label">Hasta</span><input type="date" class="filter-input" @bind="fechaHasta" @bind:after="AplicarFiltrosAsync" /></label>
                 <label class="filter-group filter-wide"><span class="filter-label">Aliado</span><select class="filter-input" @bind="filtroAliado" @bind:after="AplicarFiltrosAsync"><option value="">Todos los aliados</option>@foreach (var aliado in AliadosDisponibles) { <option value="@aliado">@aliado</option> }</select></label>
                 <label class="filter-group"><span class="filter-label">Estado de pago</span><select class="filter-input" @bind="filtroPago" @bind:after="AplicarFiltrosAsync"><option value="">Todos</option><option value="Pagada">Pagadas</option><option value="Pendiente">Pendientes</option></select></label>
                 <label class="filter-group"><span class="filter-label">Estado SRI</span><select class="filter-input" @bind="filtroSri" @bind:after="AplicarFiltrosAsync"><option value="">Todos</option><option value="Enviada">Enviadas</option><option value="Pendiente">Pendientes</option><option value="Error">Con error</option></select></label>
-                <label class="filter-group"><span class="filter-label">Período</span><select class="filter-input" @bind="filtroPeriodo" @bind:after="AplicarFiltrosAsync"><option value="">Todos los períodos</option>@foreach (var periodo in PeriodosDisponibles) { <option value="@periodo">@periodo</option> }</select></label>
+                <label class="filter-group"><span class="filter-label">Mes</span><select class="filter-input" @bind="filtroPeriodo" @bind:after="AplicarFiltrosAsync"><option value="">Todos los meses</option>@foreach (var periodo in PeriodosDisponibles) { <option value="@periodo">@EtiquetaPeriodo(periodo)</option> }</select></label>
                 <label class="filter-group filter-search"><span class="filter-label">Buscar</span><span class="search-control"><i class="bi bi-search"></i><input class="filter-input" placeholder="Aliado, período, referencia o código..." @bind="busqueda" @bind:event="oninput" @bind:after="AplicarFiltrosAsync" /></span></label>
             </div>
         </div>
@@ -106,9 +103,6 @@
     private string filtroPago = "Pagada";
     private string filtroSri = string.Empty;
     private string filtroPeriodo = string.Empty;
-    private DateTime? fechaDesde = new(DateTime.Today.Year, DateTime.Today.Month, 1);
-    private DateTime? fechaHasta = DateTime.Today;
-    private string presetActivo = "mes";
     private int pagina = 1;
     private const int TamanoPagina = 20;
 
@@ -117,13 +111,12 @@
         (string.IsNullOrWhiteSpace(filtroPago) || x.Estado.Equals(filtroPago, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrWhiteSpace(filtroSri) || EstadoSri(x).Equals(filtroSri, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrWhiteSpace(filtroPeriodo) || x.Periodo.Equals(filtroPeriodo, StringComparison.OrdinalIgnoreCase)) &&
-        (!fechaDesde.HasValue || FechaPago(x).Date >= fechaDesde.Value.Date) &&
-        (!fechaHasta.HasValue || FechaPago(x).Date <= fechaHasta.Value.Date) &&
         (string.IsNullOrWhiteSpace(busqueda) || $"{x.Aliado} {x.Periodo} {x.ReferenciaPago} {x.CodLiquidacionCompra}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)));
     private IEnumerable<AliadoAdminLiquidacionRow> LiquidacionesPaginadas => LiquidacionesVisibles.Skip((pagina - 1) * TamanoPagina).Take(TamanoPagina);
     private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(LiquidacionesVisibles.Count() / (double)TamanoPagina));
     private IEnumerable<string> AliadosDisponibles => liquidaciones.Select(x => x.Aliado).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
     private IEnumerable<string> PeriodosDisponibles => liquidaciones.Select(x => x.Periodo).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(x => x);
+    private static string EtiquetaPeriodo(string periodo) => DateTime.TryParseExact($"{periodo}-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var fecha) ? fecha.ToString("MMMM yyyy", new System.Globalization.CultureInfo("es-EC")) : periodo;
     private decimal TotalPagado => LiquidacionesVisibles.Sum(x => x.Total);
     private int AliadosConPagos => LiquidacionesVisibles.Select(x => x.Aliado).Distinct(StringComparer.OrdinalIgnoreCase).Count();
     private string EstadoSri(AliadoAdminLiquidacionRow item) => estadosSri.TryGetValue(item.IdLiquidacion, out var estado) ? estado : item.EstadoSri;
@@ -158,26 +151,10 @@
         return Task.CompletedTask;
     }
 
-    private void AplicarPreset(string preset)
-    {
-        presetActivo = preset;
-        var hoy = DateTime.Today;
-        if (preset == "mes") fechaDesde = new DateTime(hoy.Year, hoy.Month, 1);
-        else if (preset == "trimestre") fechaDesde = hoy.AddDays(-89);
-        else if (preset == "anio") fechaDesde = new DateTime(hoy.Year, 1, 1);
-        else fechaDesde = null;
-        fechaHasta = hoy;
-        pagina = 1;
-        graficosPendientes = true;
-    }
-
     private void LimpiarFiltros()
     {
         busqueda = filtroAliado = filtroSri = filtroPeriodo = string.Empty;
         filtroPago = "Pagada";
-        presetActivo = string.Empty;
-        fechaDesde = null;
-        fechaHasta = null;
         pagina = 1;
         graficosPendientes = true;
     }
@@ -233,7 +210,7 @@
         if (!graficosPendientes) return;
         graficosPendientes = false;
         var datos = LiquidacionesVisibles.ToList();
-        var referenciaFecha = fechaHasta ?? DateTime.Today;
+        var referenciaFecha = DateTime.Today;
         var meses = Enumerable.Range(0, 6).Select(offset => new DateTime(referenciaFecha.Year, referenciaFecha.Month, 1).AddMonths(offset - 5)).ToList();
         await JS.InvokeVoidAsync("liquidacionesComisionesCharts.render", new
         {

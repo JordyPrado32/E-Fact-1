@@ -17,12 +17,15 @@ using MimeKit.Utils;
 
 public interface IEmailService
 {
+    Task EnviarInvitacionEContaxAsync(string emailDestino, string empresa, string url);
     Task EnviarClaveTemporal(string emailDestino, string claveTemporal);
     Task EnviarClaveTemporal(string emailDestino, string claveTemporal, int minutosExpira, string motivo);
     Task EnviarBienvenidaVendedorBackOfficeAsync(string emailDestino, string nombreVendedor, string loginUrl, string usuario, string? codigoAcceso = null, string? setupUrl = null, int? minutosExpira = null);
     Task EnviarCredencialesBackOfficeAsync(string emailDestino, string nombreUsuario, string perfil, string loginUrl, string usuario, string contrasenaTemporal);
     Task EnviarCuentaCreadaAsync(string emailDestino, string? nombreUsuario, string? claveTemporal = null);
     Task EnviarAvisoRenovacionAliadoAsync(string emailDestino, string nombreAliado, string cliente, string producto, DateTime fechaVencimiento, int diasRestantes);
+    Task EnviarAvisoComisionAliadoAsync(string emailDestino, string nombreDestinatario, string periodo, decimal total, string estado);
+    Task EnviarAvisoComisionBackOfficeAsync(string emailDestino, string periodo, decimal total, string estado, string aliado);
     Task EnviarAvisoRenovacionClienteAsync(string emailDestino, string nombreCliente, string servicio, int? documentosDisponibles, DateTime? fechaVencimiento, int? diasRestantes);
     Task EnviarFacturaAsync(
         string numeroFactura,
@@ -370,6 +373,28 @@ public class EmailService : IEmailService
         {
             HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {nombre}</h2><p>La renovación de <strong>{clienteSeguro}</strong> ({productoSeguro}) vence <strong>{dias}</strong>.</p><p>Fecha de vencimiento: {fechaVencimiento:dd/MM/yyyy}</p><p>Ingresa al Portal de Aliados para registrar la gestión.</p></div>"
         }.ToMessageBody();
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoComisionAliadoAsync(string emailDestino, string nombreDestinatario, string periodo, decimal total, string estado)
+    {
+        if (string.IsNullOrWhiteSpace(emailDestino)) return;
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
+        mensaje.Subject = $"Comisiones {periodo}: {estado}";
+        mensaje.Body = new BodyBuilder { HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {WebUtility.HtmlEncode(nombreDestinatario)}</h2><p>Tu período de comisiones <strong>{WebUtility.HtmlEncode(periodo)}</strong> tiene un total de <strong>${total:N2}</strong>.</p><p>Estado: <strong>{WebUtility.HtmlEncode(estado)}</strong>.</p><p>Consulta el detalle en el Portal de Aliados.</p></div>" }.ToMessageBody();
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoComisionBackOfficeAsync(string emailDestino, string periodo, decimal total, string estado, string aliado)
+    {
+        if (string.IsNullOrWhiteSpace(emailDestino)) return;
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
+        mensaje.Subject = $"Portal de Aliados: {estado} · {periodo}";
+        mensaje.Body = new BodyBuilder { HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Notificación de comisiones</h2><p>El aliado <strong>{WebUtility.HtmlEncode(aliado)}</strong> tiene el período <strong>{WebUtility.HtmlEncode(periodo)}</strong> por <strong>${total:N2}</strong>.</p><p>Estado: <strong>{WebUtility.HtmlEncode(estado)}</strong>. Revisa el BackOffice para aprobar o registrar el pago.</p></div>" }.ToMessageBody();
         await SendMessageAsync(mensaje);
     }
 
@@ -2133,6 +2158,22 @@ Atentamente,
             </td>
           </tr>
         </table>";
+    }
+
+    public async Task EnviarInvitacionEContaxAsync(string emailDestino, string empresa, string url)
+    {
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
+        mensaje.Subject = "Invitación a E-Contax";
+        mensaje.Body = new BodyBuilder
+        {
+            HtmlBody = $"<p>Te invitaron a la empresa <strong>{WebUtility.HtmlEncode(empresa)}</strong> en E-Contax.</p>" +
+                $"<p><a href='{WebUtility.HtmlEncode(url)}'>Aceptar invitación e iniciar sesión</a></p>" +
+                "<p>Usa la cuenta que recibió este correo. La invitación vence en 48 horas y se utiliza una sola vez.</p>",
+            TextBody = $"Invitación a {empresa} en E-Contax. Inicia sesión con este correo: {url}. Vence en 48 horas."
+        }.ToMessageBody();
+        await SendMessageAsync(mensaje);
     }
 
     private async Task SendMessageAsync(MimeMessage mensaje)

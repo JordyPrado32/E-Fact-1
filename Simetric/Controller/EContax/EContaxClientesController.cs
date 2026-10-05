@@ -9,8 +9,9 @@ namespace Simetric.Controllers.EContax;
 
 [ApiController]
 [Route("api/e-contax/clientes")]
-public sealed class EContaxClientesController : ControllerBase
+public sealed class EContaxClientesController : EContaxApiControllerBase
 {
+    protected override string RutaPermiso => EContaxRoutes.Clientes;
     private readonly AppDbContext _context;
     private readonly EContaxCatalogService _catalogService;
     private readonly UbicacionEcuadorCatalogService _ubicacionEcuadorCatalogService;

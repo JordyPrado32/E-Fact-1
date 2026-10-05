@@ -976,27 +976,20 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         };
     }
 
-    public async Task<IReadOnlyList<ESignPlanDto>> ConsultarESignPlanesAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<ESignPlanDto>> ConsultarESignPlanesAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var productos = await _uanatacaApiService.ObtenerProductosAsync(cancellationToken);
-        var productosStakeholder = await _uanatacaApiService.ObtenerProductosStakeholderAsync(cancellationToken: cancellationToken);
-        var preciosPorProducto = productosStakeholder
-            .Where(x => x.Active && !string.IsNullOrWhiteSpace(x.ProductUuid))
-            .GroupBy(x => x.ProductUuid, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(x => x.Key, x => x.OrderBy(y => y.Price).First().Price, StringComparer.OrdinalIgnoreCase);
-
-        return productos
-            .Where(x => x.Active && preciosPorProducto.ContainsKey(x.Uuid))
-            .Select(x => new ESignPlanDto
+        IReadOnlyList<ESignPlanDto> planes = new[] { "7 DIAS", "30 DIAS", "1 ANIO", "2 ANIOS", "3 ANIOS", "4 ANIOS", "5 ANIOS" }
+            .Select(vigencia => new ESignPlanDto
             {
-                Nombre = x.Name,
-                Codigo = x.Code,
-                Precio = preciosPorProducto[x.Uuid] > 0 ? preciosPorProducto[x.Uuid] : x.Price
+                Nombre = $"Firma electrónica archivo .P12 · {vigencia.Replace("DIAS", "días").Replace("ANIOS", "años").Replace("ANIO", "año")}",
+                Codigo = vigencia,
+                Precio = ESignPricing.ObtenerSubtotal(vigencia)
             })
             .OrderBy(x => x.Precio)
             .ThenBy(x => x.Nombre)
             .ToList();
+        return Task.FromResult(planes);
     }
 
     private static bool TipoSolicitado(string tipo, params string[] opciones)

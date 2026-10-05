@@ -160,7 +160,7 @@ public sealed class EmisorSistemaService
                 existente.ClaveCertificado = emisorInput.ClaveCertificado;
 
             var validacionCertificado = certificadoModificado
-                ? await _emisorCertificadoValidator.ValidarConApiAsync(existente)
+                ? await _emisorCertificadoValidator.ValidarConApiAsync(existente, paraFacturacion: true)
                 : _emisorCertificadoValidator.Validar(existente);
             if (!validacionCertificado.IsValid && validacionCertificado.TieneConfiguracion)
                 throw new InvalidOperationException(validacionCertificado.Message);

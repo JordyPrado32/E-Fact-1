@@ -24,9 +24,6 @@ public sealed class SystemClienteServiceAdapter : IClienteService
 
     public async Task<IReadOnlyList<ClienteDto>> BuscarAsync(int userId, string query, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(query))
-            return Array.Empty<ClienteDto>();
-
         await using var context = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var ownerId = await ResolveOwnerIdAsync(context, userId, cancellationToken);
         if (ownerId <= 0)
@@ -40,6 +37,10 @@ public sealed class SystemClienteServiceAdapter : IClienteService
             .Where(c => c.Usuario == ownerId && (c.Estado == null || c.Estado == true));
 
         var clientes = new List<Models.Cliente>();
+        if (string.IsNullOrWhiteSpace(query))
+            return (await baseQuery.OrderBy(c => c.Codcliente).Take(30).ToListAsync(cancellationToken))
+                .Select(Map).ToList();
+
         foreach (var term in searchTerms)
         {
             clientes.AddRange(await baseQuery
@@ -50,6 +51,8 @@ public sealed class SystemClienteServiceAdapter : IClienteService
                     EF.Functions.Like(((c.Nombres ?? string.Empty) + " " + (c.Apellidos ?? string.Empty)).ToLower(), $"%{term}%") ||
                     EF.Functions.Like((c.Nombrerazonsocial ?? string.Empty).ToLower(), $"%{term}%") ||
                     EF.Functions.Like((c.Nombrecomercial ?? string.Empty).ToLower(), $"%{term}%"))
+                .OrderByDescending(c => c.Numeroidentificacion == query.Trim())
+                .ThenBy(c => c.Codcliente)
                 .Take(30)
                 .ToListAsync(cancellationToken));
         }

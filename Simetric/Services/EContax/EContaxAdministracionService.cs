@@ -261,6 +261,11 @@ public class EContaxAdministracionService
 
     public async Task<List<EContaxMenu>> GetEContaxMenusVisiblesPorUsuarioAsync(int idUsuario)
     {
+        return await new EContaxSeguridadService(_dbFactory, new EContaxTenantService(_dbFactory)).GetMenusAsync(idUsuario);
+    }
+
+    private async Task<List<EContaxMenu>> GetMenusLegadosAsync(int idUsuario)
+    {
         if (idUsuario <= 0)
         {
             return new List<EContaxMenu>();

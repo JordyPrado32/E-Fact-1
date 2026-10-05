@@ -566,12 +566,12 @@ public sealed class EContaxCatalogService
     private IQueryable<Cliente> BuildClientesEmpresaQuery(AppDbContext context, EContaxUserContext userContext) =>
         context.Clientes
             .ExcluirClientesExclusivosBackOffice()
-            .Where(c => c.Usuario == userContext.IdUsuarioTitular && c.Idempresa == userContext.IdEmpresa);
+            .Where(c => c.Idempresa == userContext.IdEmpresa);
 
     private IQueryable<Producto> BuildProductosPermitidosQuery(AppDbContext context, EContaxUserContext userContext, int? sucursalId)
     {
         var query = context.Productos
-            .Where(p => p.Idusuario == userContext.IdUsuarioTitular && p.Idempresa == userContext.IdEmpresa);
+            .Where(p => p.Idempresa == userContext.IdEmpresa);
 
         if (userContext.EsJefeEmpresa)
         {
@@ -817,7 +817,7 @@ public sealed class EContaxCatalogService
         {
             var categoriaOk = await context.Productotipos.AnyAsync(t =>
                 t.Idtipoproducto == model.TipoProducto &&
-                t.Idusuario == userContext.IdUsuarioTitular &&
+                t.Idempresa == userContext.IdEmpresa &&
                 t.Estado == true);
 
             if (!categoriaOk)
@@ -831,7 +831,7 @@ public sealed class EContaxCatalogService
 
             var subtipoOk = await context.Productosubtipos.AnyAsync(s =>
                 s.Idsubtipo == model.Idsubtipo &&
-                s.Idusuario == userContext.IdUsuarioTitular &&
+                s.IdtipoproductoNavigation.Idempresa == userContext.IdEmpresa &&
                 s.Idtipoproducto == model.TipoProducto &&
                 s.Estado == "A");
 
