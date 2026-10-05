@@ -624,6 +624,10 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         if (string.IsNullOrWhiteSpace(normalized))
             return false;
 
+        // El flujo de E-Rúbrica requiere conservar y validar respuestas consecutivas por voz.
+        if (string.Equals(state.Scope, "erubrica", StringComparison.OrdinalIgnoreCase))
+            return false;
+
         if (IsRestrictedAdminQuery(normalized))
             return true;
 
@@ -1401,6 +1405,12 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
     private static string NormalizarMensaje(string mensaje)
     {
         var texto = (mensaje ?? string.Empty).Trim().ToLowerInvariant();
+        texto = Regex.Replace(texto, @"\bn\.?\s*c\.?\b", "nota de credito");
+        texto = Regex.Replace(texto, @"\bn\.?\s*d\.?\b", "nota de debito");
+        texto = Regex.Replace(texto, @"\bliq\.?\b", "liquidacion");
+        texto = Regex.Replace(texto, @"\bret\.?\b", "retencion");
+        texto = Regex.Replace(texto, @"\bgr\.?\b", "guia de remision");
+        texto = Regex.Replace(texto, @"\bcot\.?\b", "cotizacion");
         return texto
             .Replace("comprobante de retenciones", "retenciones", StringComparison.Ordinal)
             .Replace("comprobantes de retencion", "retenciones", StringComparison.Ordinal)
@@ -1512,6 +1522,16 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                 Respuesta = "Te llevo al módulo de guías de remisión para completar transportista, destinatario y traslado.",
                 AccionDetectada = "navegar_guia_remision",
                 RutaSugerida = "/facturacion/guia-remision"
+            };
+        }
+
+        if (ContainsAny(normalized, "crear cotizacion", "crear cotización", "nueva cotizacion", "nueva cotización", "cotizacion", "cotización", "proforma", "presupuesto"))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "Te llevo al módulo de cotizaciones para preparar la propuesta.",
+                AccionDetectada = "navegar_cotizaciones",
+                RutaSugerida = "/cotizaciones"
             };
         }
 

@@ -14,15 +14,21 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
     private readonly IFacturaConversationStore _conversationStore;
     private readonly IOpenAIAsistenteService _openAIAsistenteService;
     private readonly ToolDispatcher _toolDispatcher;
+    private readonly IClienteService _clienteService;
+    private readonly IProductoService _productoService;
 
     public AsistenteFacturacionService(
         IFacturaConversationStore conversationStore,
         IOpenAIAsistenteService openAIAsistenteService,
-        ToolDispatcher toolDispatcher)
+        ToolDispatcher toolDispatcher,
+        IClienteService clienteService,
+        IProductoService productoService)
     {
         _conversationStore = conversationStore;
         _openAIAsistenteService = openAIAsistenteService;
         _toolDispatcher = toolDispatcher;
+        _clienteService = clienteService;
+        _productoService = productoService;
     }
 
     public async Task<ChatFacturaResponse> ProcesarAsync(int userId, ChatFacturaRequest request, CancellationToken cancellationToken = default)
@@ -248,6 +254,7 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             SeleccionPendienteTipo = state.SeleccionPendiente?.Tipo,
             SeleccionPendienteMensaje = state.SeleccionPendiente?.Mensaje,
             OpcionesSeleccion = state.SeleccionPendiente?.Opciones ?? new List<SelectionOptionDto>(),
+            Progreso = BuildProgress(state, action, message),
             DatosFaltantes = BuildMissingData(state, message)
         };
 
@@ -302,18 +309,19 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 Step("validar_producto", "Validando precio e IVA", "Comprobando los datos necesarios para facturar.", "completed"),
                 Step("crear_producto", "Preparando registro", "Solo se solicitarán los datos obligatorios que falten.", "pending")
             },
-            "agregar_item" or "producto_seleccionado" => new List<BotProgressStepDto>
+            "agregar_item" or "producto_seleccionado" or "cliente_seleccionado" or "cambiar_forma_pago" => new List<BotProgressStepDto>
             {
-                Step("buscar_producto", "Buscando producto", "Comparando nombre y código en tu catálogo.", "completed"),
-                Step("validar_item", "Validando precio e IVA", "Usando la configuración real del producto.", "completed"),
-                Step("calcular", "Calculando línea", "Actualizando cantidad, descuento y total.", "completed")
+                Step("cliente", "Cliente", state.Draft.Cliente is null ? "Falta seleccionar un cliente." : $"Cliente seleccionado: {state.Draft.Cliente.Nombre}.", state.Draft.Cliente is null ? "warning" : "completed"),
+                Step("items", "Productos", state.Draft.Items.Count == 0 ? "Falta agregar al menos un producto o servicio." : $"{state.Draft.Items.Count} producto(s) listos.", state.Draft.Items.Count == 0 ? "warning" : "completed"),
+                Step("pago", "Forma de pago", string.IsNullOrWhiteSpace(state.Draft.FormaPago) ? "Falta seleccionar la forma de pago." : $"Forma de pago: {state.Draft.FormaPago}.", string.IsNullOrWhiteSpace(state.Draft.FormaPago) ? "warning" : "completed")
             },
             "crear_factura" or "preparar_emision" or "validar_factura" => new List<BotProgressStepDto>
             {
                 Step("cliente", "Buscando cliente", state.Draft.Cliente is null ? "Falta seleccionar un cliente." : $"Cliente encontrado: {state.Draft.Cliente.Nombre}.", state.Draft.Cliente is null ? "warning" : "completed"),
                 Step("items", "Revisando productos", state.Draft.Items.Count == 0 ? "Falta agregar al menos un producto o servicio." : $"{state.Draft.Items.Count} producto(s) listos para revisar.", state.Draft.Items.Count == 0 ? "warning" : "completed"),
                 Step("totales", "Calculando factura", $"Total actual: ${state.Draft.Total:0.00}.", state.Draft.Cliente is null || state.Draft.Items.Count == 0 ? "warning" : "completed"),
-                Step("confirmacion", "Esperando confirmación", "No se emitirá nada sin tu autorización explícita.", state.RequiereConfirmacion ? "pending" : state.Draft.Cliente is null || state.Draft.Items.Count == 0 ? "warning" : "completed")
+                Step("pago", "Forma de pago", string.IsNullOrWhiteSpace(state.Draft.FormaPago) ? "Falta seleccionar la forma de pago." : $"Forma de pago: {state.Draft.FormaPago}.", string.IsNullOrWhiteSpace(state.Draft.FormaPago) ? "warning" : "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá nada sin tu autorización explícita.", state.RequiereConfirmacion ? "pending" : state.Draft.Cliente is null || state.Draft.Items.Count == 0 || string.IsNullOrWhiteSpace(state.Draft.FormaPago) ? "warning" : "completed")
             },
             "consultar_facturas" => new List<BotProgressStepDto>
             {
@@ -344,6 +352,7 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         {
             if (state.Draft.Cliente is null) missing.Add("cliente");
             if (state.Draft.Items.Count == 0) missing.Add("producto o servicio");
+            if (string.IsNullOrWhiteSpace(state.Draft.FormaPago)) missing.Add("forma de pago");
             if (state.RequiereConfirmacion) missing.Add("confirmación para emitir");
         }
 
@@ -359,20 +368,18 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
     private static BotProgressStepDto Step(string id, string label, string detail, string status)
         => new() { Id = id, Label = label, Detail = detail, Status = status };
 
-    private static Task<ChatFacturaResponse?> TryResolvePendingSelectionAsync(
+    private async Task<ChatFacturaResponse?> TryResolvePendingSelectionAsync(
         FacturaConversationState state,
         string mensaje,
         CancellationToken cancellationToken)
     {
-        _ = cancellationToken;
-
         if (state.SeleccionPendiente is null || state.SeleccionPendiente.Opciones.Count == 0)
-            return Task.FromResult<ChatFacturaResponse?>(null);
+            return null;
 
         var opcion = ResolvePendingOption(state.SeleccionPendiente, mensaje);
         if (opcion is null)
         {
-            return Task.FromResult<ChatFacturaResponse?>(new ChatFacturaResponse
+            return new ChatFacturaResponse
             {
                 SessionId = state.SessionId,
                 Respuesta = $"{state.SeleccionPendiente.Mensaje} Puedes responder con el numero, nombre o identificacion.",
@@ -384,12 +391,54 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 SeleccionPendienteTipo = state.SeleccionPendiente.Tipo,
                 SeleccionPendienteMensaje = state.SeleccionPendiente.Mensaje,
                 OpcionesSeleccion = state.SeleccionPendiente.Opciones
-            });
+            };
         }
 
-        var response = ApplyPendingOption(state, opcion);
+        var selectedOption = await GetOwnedPendingOptionAsync(state.UserId, opcion, cancellationToken);
+        if (selectedOption is null)
+        {
+            state.SeleccionPendiente.Opciones.Remove(opcion);
+            var pendingSelection = state.SeleccionPendiente!;
+            if (pendingSelection.Opciones.Count == 0)
+                state.SeleccionPendiente = null;
+
+            return new ChatFacturaResponse
+            {
+                SessionId = state.SessionId,
+                Respuesta = pendingSelection.Opciones.Count == 0
+                    ? "La opción seleccionada ya no pertenece a tu cuenta o dejó de estar disponible. Busca nuevamente el cliente o producto."
+                    : $"La opción seleccionada ya no pertenece a tu cuenta o dejó de estar disponible. {pendingSelection.Mensaje}",
+                Estado = state.Estado,
+                FacturaDraft = state.Draft,
+                RequiereConfirmacion = state.RequiereConfirmacion,
+                Emitida = state.Emitida,
+                AccionDetectada = "seleccion_no_disponible",
+                SeleccionPendienteTipo = state.SeleccionPendiente?.Tipo,
+                SeleccionPendienteMensaje = state.SeleccionPendiente?.Mensaje,
+                OpcionesSeleccion = state.SeleccionPendiente?.Opciones ?? new List<SelectionOptionDto>()
+            };
+        }
+
+        var response = ApplyPendingOption(state, selectedOption);
         state.SeleccionPendiente = null;
-        return Task.FromResult<ChatFacturaResponse?>(response);
+        return response;
+    }
+
+    private async Task<SelectionOptionDto?> GetOwnedPendingOptionAsync(int userId, SelectionOptionDto option, CancellationToken cancellationToken)
+    {
+        if (string.Equals(option.Tipo, "cliente", StringComparison.OrdinalIgnoreCase) && option.Cliente is not null)
+        {
+            var cliente = await _clienteService.ObtenerAsync(userId, option.Cliente.Id, cancellationToken);
+            return cliente is null ? null : new SelectionOptionDto { Tipo = option.Tipo, Cliente = cliente };
+        }
+
+        if (string.Equals(option.Tipo, "producto", StringComparison.OrdinalIgnoreCase) && option.Producto is not null)
+        {
+            var producto = await _productoService.ObtenerAsync(userId, option.Producto.Id, cancellationToken);
+            return producto is null ? null : new SelectionOptionDto { Tipo = option.Tipo, Producto = producto };
+        }
+
+        return null;
     }
 
     private static SelectionOptionDto? ResolvePendingOption(PendingSelectionState pending, string mensaje)
@@ -398,10 +447,31 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
         if (string.IsNullOrWhiteSpace(texto))
             return null;
 
-        if (int.TryParse(new string(texto.Where(char.IsDigit).ToArray()), out var indice))
+        if (TryParseSelectionIndex(texto, out var indice))
             return pending.Opciones.FirstOrDefault(x => x.Indice == indice);
 
         return pending.Opciones.FirstOrDefault(x => MatchesPendingOption(x, texto));
+    }
+
+    private static bool TryParseSelectionIndex(string texto, out int indice)
+    {
+        if (int.TryParse(texto, out indice))
+            return true;
+
+        var normalized = NormalizeForMatch(texto);
+        var match = System.Text.RegularExpressions.Regex.Match(normalized, @"\b(?:opcion|numero|selecciono|selecciona|elijo|elige|quiero)\s+(?<indice>\d+|uno|una|primero|primera|dos|segundo|segunda|tres|tercero|tercera|cuatro|cuarto|cuarta|cinco|quinto|quinta)\b");
+        var value = match.Success ? match.Groups["indice"].Value : normalized;
+        indice = value switch
+        {
+            "uno" or "una" or "primero" or "primera" => 1,
+            "dos" or "segundo" or "segunda" => 2,
+            "tres" or "tercero" or "tercera" => 3,
+            "cuatro" or "cuarto" or "cuarta" => 4,
+            "cinco" or "quinto" or "quinta" => 5,
+            _ when int.TryParse(value, out var numeric) => numeric,
+            _ => 0
+        };
+        return indice > 0;
     }
 
     private async Task<ChatFacturaResponse?> TryResolvePendingSelectionWithContinuationAsync(
@@ -458,7 +528,9 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 FacturaDraft = state.Draft,
                 RequiereConfirmacion = state.RequiereConfirmacion,
                 Emitida = state.Emitida,
-                AccionDetectada = "cliente_seleccionado"
+                AccionDetectada = "cliente_seleccionado",
+                Progreso = BuildProgress(state, "cliente_seleccionado", string.Empty),
+                DatosFaltantes = BuildMissingData(state, string.Empty)
             };
         }
 
@@ -499,7 +571,9 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 FacturaDraft = state.Draft,
                 RequiereConfirmacion = state.RequiereConfirmacion,
                 Emitida = state.Emitida,
-                AccionDetectada = "producto_seleccionado"
+                AccionDetectada = "producto_seleccionado",
+                Progreso = BuildProgress(state, "producto_seleccionado", string.Empty),
+                DatosFaltantes = BuildMissingData(state, string.Empty)
             };
         }
 

@@ -80,7 +80,7 @@ public static class SystemPromptFacturacion
 
         var scopeInstruction = string.Equals(state.Scope, "erubrica", StringComparison.OrdinalIgnoreCase)
             ? """
-              Este asistente está operando exclusivamente dentro de E-RÚBRICA. No crees, consultes ni emitas facturas, clientes, productos, cartera o comprobantes. Ayuda únicamente con compra o renovación de certificados, solicitudes, pagos, configuración de firma, firma de PDF, documentos y validación. Para acciones que requieran seleccionar archivos, completar formularios o confirmar un pago, guía al usuario hacia la pantalla correspondiente y no simules que la acción fue ejecutada.
+              Este asistente está operando exclusivamente dentro de E-RÚBRICA. No crees, consultes ni emitas facturas, clientes, productos, cartera o comprobantes. Ayuda únicamente con compra o renovación de certificados, solicitudes, pagos, configuración de firma, firma de PDF, documentos y validación. La persona permanece en el chat: para comprar o renovar, solicita un solo dato por vez, valida el dato antes de continuar y conserva los datos ya confirmados; no la envíes a un formulario o a otra pantalla. Solo cuando necesite seleccionar un archivo indica la acción de interfaz correspondiente para que el cargador se abra dentro del chat. Tras el adjunto, continúa la conversación. No simules que una solicitud, pago, firma o validación fue ejecutada hasta que la API lo confirme.
               """
             : string.Empty;
 

@@ -70,10 +70,8 @@ public class LogsInicioController : ControllerBase
         if (desde.HasValue) query = query.Where(x => x.FechaAcceso >= desde.Value);
         if (hasta.HasValue) query = query.Where(x => x.FechaAcceso < hasta.Value.AddDays(1));
 
-        var logs = await query.Take(5000).ToListAsync();
-        _context.LogIniciosSesiones.RemoveRange(logs);
-        await _context.SaveChangesAsync();
-        return Ok(new { eliminados = logs.Count });
+        var eliminados = await query.Take(5000).ExecuteDeleteAsync();
+        return Ok(new { eliminados });
     }
 
     private static string Clean(string? value) => (value ?? string.Empty).Trim();

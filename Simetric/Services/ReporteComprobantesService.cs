@@ -71,17 +71,6 @@ public sealed class ReporteComprobantesService
 
         if (codEmisor.HasValue)
         {
-            var facturaIdsEmisor = await context.Facturas.AsNoTracking()
-                .Where(x => x.Codemisor == codEmisor.Value)
-                .Select(x => x.Codfactura)
-                .ToListAsync();
-            var notaCreditoIdsEmisor = await context.NotaCreditos.AsNoTracking()
-                .Where(x => x.CodEmisor == codEmisor.Value)
-                .Select(x => x.Sec)
-                .ToListAsync();
-
-            facturas = facturas.Where(x => facturaIdsEmisor.Contains(x.Codfactura)).ToList();
-            notasCredito = notasCredito.Where(x => notaCreditoIdsEmisor.Contains(x.Sec)).ToList();
             notasDebito = new List<NotaDebitoListDto>();
             guias = new List<GuiaRemisionListDto>();
             retenciones = new List<RetencionGeneradaListDto>();

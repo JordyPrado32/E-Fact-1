@@ -29,6 +29,7 @@ public class ClienteService
         await using var context = await _dbFactory.CreateDbContextAsync();
 
         return await context.Clientes
+            .AsNoTracking()
             .Include(x => x.CiudadNavegacion!)
                 .ThenInclude(c => c.Provincia!)
                     .ThenInclude(p => p.Pais)
