@@ -31,12 +31,20 @@ public sealed class AliadoPortalBackgroundService : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var portal = scope.ServiceProvider.GetRequiredService<AliadoPortalService>();
+            var email = scope.ServiceProvider.GetRequiredService<IEmailService>();
             await portal.SincronizarComisionesPortalAsync();
+            await portal.CerrarPeriodosComisionesAsync();
+
+            foreach (var avisoFactura in await portal.ObtenerAvisosFacturaLiquidacionAsync())
+            {
+                stoppingToken.ThrowIfCancellationRequested();
+                if (!string.IsNullOrWhiteSpace(avisoFactura.Email))
+                    await email.EnviarAvisoFacturaLiquidacionAsync(avisoFactura.Email, avisoFactura.NombreAliado, avisoFactura.Periodo, avisoFactura.Total, avisoFactura.EmisorRazonSocial, avisoFactura.EmisorRuc, avisoFactura.EmisorDireccion, avisoFactura.EmisorEmail, avisoFactura.EmisorTelefono);
+            }
 
             if (!_configuration.GetValue("Aliados:NotificacionesRenovacionHabilitadas", true))
                 return;
 
-            var email = scope.ServiceProvider.GetRequiredService<IEmailService>();
             foreach (var aviso in await portal.ObtenerNotificacionesRenovacionAsync())
             {
                 stoppingToken.ThrowIfCancellationRequested();

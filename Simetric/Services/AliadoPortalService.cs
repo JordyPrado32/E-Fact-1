@@ -828,6 +828,8 @@ public sealed class AliadoPortalService
         var comision = await db.AliadoComisiones.FirstOrDefaultAsync(x => x.IdComision == idComision);
         if (comision is null)
             return (false, "La comisión no existe.");
+        if (!comision.IdLiquidacion.HasValue || !await db.AliadoLiquidacionFacturas.AnyAsync(x => x.IdLiquidacion == comision.IdLiquidacion && x.Estado == "Aprobada"))
+            return (false, "No se puede aprobar: el aliado debe cargar la factura y esta debe ser aprobada primero.");
         try
         {
             AliadoComisionStateMachine.Require(comision.Estado, AliadoComisionEstado.Aprobada);
@@ -886,6 +888,10 @@ public sealed class AliadoPortalService
                 throw new InvalidOperationException("Una o más comisiones seleccionadas no existen.");
             if (comisiones.Any(x => !string.Equals(x.Estado, AliadoComisionEstado.Aprobada.ToString(), StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Solo se pueden liquidar comisiones aprobadas.");
+            var liquidacionIds = comisiones.Select(x => x.IdLiquidacion).Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
+            var facturasAprobadas = await db.AliadoLiquidacionFacturas.Where(x => liquidacionIds.Contains(x.IdLiquidacion) && x.Estado == "Aprobada").Select(x => x.IdLiquidacion).Distinct().ToListAsync();
+            if (comisiones.Any(x => !x.IdLiquidacion.HasValue || !facturasAprobadas.Contains(x.IdLiquidacion.Value)))
+                throw new InvalidOperationException("Todas las comisiones deben tener una factura aprobada antes del pago.");
 
             foreach (var grupo in comisiones.GroupBy(x => new { x.IdVendedor, x.Periodo }))
             {
@@ -1152,8 +1158,8 @@ public sealed class AliadoPortalService
         if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para ajustar comisiones.");
         var comision = await db.AliadoComisiones.SingleOrDefaultAsync(x => x.IdComision == idComision);
-        if (comision is null || comision.Estado is "Pagada" or "AjustePendiente")
-            return (false, "Solo se pueden ajustar comisiones sin pagar.");
+        if (comision is null || comision.Estado is "Pagada" or "AjustePendiente" || comision.IdLiquidacion.HasValue)
+            return (false, "Las comisiones de un período cerrado son fijas y no se pueden ajustar.");
         comision.Porcentaje = porcentaje;
         comision.Valor = valor ?? decimal.Round(comision.BaseComisionable * porcentaje / 100m, 2, MidpointRounding.AwayFromZero);
         await db.SaveChangesAsync();
@@ -1169,8 +1175,8 @@ public sealed class AliadoPortalService
         if (!await EsAdministradorPortalAsync(db, actorId))
             return (false, "No tienes permisos para ajustar comisiones.");
         var comision = await db.AliadoComisiones.SingleOrDefaultAsync(x => x.IdComision == idComision);
-        if (comision is null || comision.Estado is "Pagada" or "AjustePendiente")
-            return (false, "Solo se pueden ajustar comisiones sin pagar.");
+        if (comision is null || comision.Estado is "Pagada" or "AjustePendiente" || comision.IdLiquidacion.HasValue)
+            return (false, "Las comisiones de un período cerrado son fijas y no se pueden ajustar.");
 
         comision.Valor = decimal.Round(valor, 2, MidpointRounding.AwayFromZero);
         if (comision.BaseComisionable > 0)
@@ -1396,12 +1402,19 @@ public sealed class AliadoPortalService
             .GroupBy(x => new { x.Nombre, x.c.IdVendedor, x.c.Periodo, x.c.Estado })
             .Select(g => new { g.Key.Nombre, g.Key.Periodo, g.Key.Estado, Total = g.Sum(x => x.c.Valor), Fecha = g.Max(x => x.c.FechaPago ?? x.c.FechaGeneracion) })
             .OrderByDescending(x => x.Fecha).ToListAsync();
-        return grupos.Select(g => $"{g.Nombre} · {g.Periodo} · {g.Total:N2}: " + (g.Estado switch
+        var avisos = grupos.Select(g => $"{g.Nombre} · {g.Periodo} · {g.Total:N2}: " + (g.Estado switch
         {
             "Pagada" => "Comisiones pagadas.",
             "Aprobada" => "Comisiones aprobadas. Pendiente de pago.",
             _ => "Mes cerrado. Comisiones pendientes de aprobación."
         })).ToList();
+        var liquidaciones = await db.AliadoLiquidaciones.AsNoTracking()
+            .Where(x => x.Estado == "Pendiente" && (esBackOffice || contexto!.EsAdministrador || x.IdVendedor == contexto.IdVendedor) &&
+                !db.AliadoLiquidacionFacturas.Any(f => f.IdLiquidacion == x.IdLiquidacion && f.Estado == "Aprobada"))
+            .Join(db.VendedoresBackOffice.AsNoTracking(), x => x.IdVendedor, v => v.IdVendedor, (x, v) => new { x.Periodo, x.Total, v.Nombre })
+            .ToListAsync();
+        avisos.AddRange(liquidaciones.Select(x => $"{x.Nombre} · {x.Periodo} · {x.Total:N2}: Debes subir la factura para solicitar el pago de tus liquidaciones."));
+        return avisos;
     }
 
     private async Task NotificarEstadoComisionAsync(AppDbContext db, int idVendedor, string periodo, decimal total, string estado)
@@ -2406,6 +2419,7 @@ public sealed class AliadoPortalService
                 EmisorRuc = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Ruc).FirstOrDefault(),
                 EmisorDireccion = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.DireccionMatriz ?? e.Direccion).FirstOrDefault(),
                 EmisorEmail = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Email).FirstOrDefault(),
+                EmisorTelefono = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Telefono).FirstOrDefault(),
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.IdLiquidacion)
             })
             .ToListAsync();
@@ -2471,9 +2485,9 @@ public sealed class AliadoPortalService
     {
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
-        var inicioMes = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var periodoActual = DateTime.Today.ToString("yyyy-MM");
         var pendientes = await db.AliadoLiquidaciones.AsNoTracking()
-            .Where(x => x.Estado == "Pendiente" && x.Fecha < inicioMes && !db.AliadoLiquidacionNotificaciones.Any(n => n.IdLiquidacion == x.IdLiquidacion && n.Tipo == "FacturaMes"))
+            .Where(x => x.Estado == "Pendiente" && x.Periodo != periodoActual && !db.AliadoLiquidacionNotificaciones.Any(n => n.IdLiquidacion == x.IdLiquidacion && n.Tipo == "FacturaMes"))
             .Join(db.VendedoresBackOffice.AsNoTracking(), l => l.IdVendedor, v => v.IdVendedor, (l, v) => new { l, v.Nombre })
             .Select(x => new AliadoFacturaLiquidacionAviso
             {
@@ -2486,7 +2500,8 @@ public sealed class AliadoPortalService
                 EmisorRazonSocial = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.RazonSocial).FirstOrDefault() ?? "Numerica Software S.A.S.",
                 EmisorRuc = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Ruc).FirstOrDefault(),
                 EmisorDireccion = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.DireccionMatriz ?? e.Direccion).FirstOrDefault(),
-                EmisorEmail = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Email).FirstOrDefault()
+                EmisorEmail = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Email).FirstOrDefault(),
+                EmisorTelefono = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Telefono).FirstOrDefault()
             }).ToListAsync();
         foreach (var aviso in pendientes)
             db.AliadoLiquidacionNotificaciones.Add(new AliadoLiquidacionNotificacion { IdLiquidacion = aviso.IdLiquidacion, Tipo = "FacturaMes", FechaEnvio = DateTime.Now });
@@ -2569,6 +2584,7 @@ public sealed class AliadoPortalService
                 EmisorRuc = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Ruc).FirstOrDefault(),
                 EmisorDireccion = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.DireccionMatriz ?? e.Direccion).FirstOrDefault(),
                 EmisorEmail = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Email).FirstOrDefault(),
+                EmisorTelefono = db.Emisores.Where(e => e.Estado && e.EsEmisorSistema).Select(e => e.Telefono).FirstOrDefault(),
                 CantidadComisiones = db.AliadoComisiones.Count(c => c.IdLiquidacion == x.l.IdLiquidacion)
             }).ToListAsync();
     }
@@ -2869,8 +2885,8 @@ IF OBJECT_ID(N'dbo.ALIADO_PORTAL_MENU', N'U') IS NULL CREATE TABLE dbo.ALIADO_PO
 IF OBJECT_ID(N'dbo.ALIADO_PORTAL_ROL_MENU', N'U') IS NULL CREATE TABLE dbo.ALIADO_PORTAL_ROL_MENU (IdRolMenu INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdRol INT NOT NULL, IdMenu INT NOT NULL, CONSTRAINT UX_ALIADO_PORTAL_ROL_MENU UNIQUE(IdRol, IdMenu));
 IF OBJECT_ID(N'dbo.ALIADO_PORTAL_USUARIO_ROL', N'U') IS NULL CREATE TABLE dbo.ALIADO_PORTAL_USUARIO_ROL (IdUsuarioRol INT IDENTITY(1,1) NOT NULL PRIMARY KEY, IdUsuario INT NOT NULL UNIQUE, IdRol INT NOT NULL);
 MERGE dbo.ALIADO_PORTAL_ROL AS t USING (VALUES (N'{RoleName}', N'Acceso comercial externo.'), (N'{AdminRoleName}', N'Administración interna del portal.')) s(Nombre,Descripcion) ON t.Nombre=s.Nombre WHEN NOT MATCHED THEN INSERT(Nombre,Descripcion,Activo) VALUES(s.Nombre,s.Descripcion,1);
-MERGE dbo.ALIADO_PORTAL_MENU AS t USING (VALUES (N'Inicio',N'{RootRoute}',N'ri-dashboard-3-line',1),(N'Mis clientes',N'{RootRoute}/clientes',N'ri-user-3-line',2),(N'Renovaciones',N'{RootRoute}/renovaciones',N'ri-refresh-line',3),(N'Comisiones',N'{RootRoute}/comisiones',N'ri-hand-coin-line',4),(N'Liquidaciones',N'{RootRoute}/liquidaciones',N'ri-bank-card-line',5),(N'Mi perfil',N'{RootRoute}/perfil',N'ri-user-settings-line',6),(N'Administración de aliados',N'{AdminRoute}',N'ri-admin-line',10),(N'Usuarios',N'{AdminRoute}/usuarios',N'ri-group-line',11)) s(Nombre,Ruta,Icono,Orden) ON t.Ruta=s.Ruta WHEN NOT MATCHED THEN INSERT(Nombre,Ruta,Icono,Orden,Activo) VALUES(s.Nombre,s.Ruta,s.Icono,s.Orden,1);
-INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol,IdMenu) SELECT r.IdRol,m.IdMenu FROM dbo.ALIADO_PORTAL_ROL r CROSS JOIN dbo.ALIADO_PORTAL_MENU m WHERE ((r.Nombre=N'{RoleName}' AND m.Ruta NOT IN(N'{AdminRoute}',N'{AdminRoute}/usuarios')) OR (r.Nombre=N'{AdminRoleName}' AND m.Ruta IN(N'{AdminRoute}',N'{AdminRoute}/usuarios',N'{RootRoute}/renovaciones',N'{RootRoute}/comisiones',N'{RootRoute}/liquidaciones'))) AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x WHERE x.IdRol=r.IdRol AND x.IdMenu=m.IdMenu);
+MERGE dbo.ALIADO_PORTAL_MENU AS t USING (VALUES (N'Inicio',N'{RootRoute}',N'ri-dashboard-3-line',1),(N'Mis clientes',N'{RootRoute}/clientes',N'ri-user-3-line',2),(N'Renovaciones',N'{RootRoute}/renovaciones',N'ri-refresh-line',3),(N'Comisiones',N'{RootRoute}/comisiones',N'ri-hand-coin-line',4),(N'Liquidaciones',N'{RootRoute}/liquidaciones',N'ri-bank-card-line',5),(N'Facturas para pago',N'{RootRoute}/facturas-liquidaciones',N'ri-file-upload-line',6),(N'Mi perfil',N'{RootRoute}/perfil',N'ri-user-settings-line',7),(N'Administración de aliados',N'{AdminRoute}',N'ri-admin-line',10),(N'Usuarios',N'{AdminRoute}/usuarios',N'ri-group-line',11)) s(Nombre,Ruta,Icono,Orden) ON t.Ruta=s.Ruta WHEN NOT MATCHED THEN INSERT(Nombre,Ruta,Icono,Orden,Activo) VALUES(s.Nombre,s.Ruta,s.Icono,s.Orden,1);
+INSERT dbo.ALIADO_PORTAL_ROL_MENU(IdRol,IdMenu) SELECT r.IdRol,m.IdMenu FROM dbo.ALIADO_PORTAL_ROL r CROSS JOIN dbo.ALIADO_PORTAL_MENU m WHERE ((r.Nombre=N'{RoleName}' AND m.Ruta NOT IN(N'{AdminRoute}',N'{AdminRoute}/usuarios')) OR (r.Nombre=N'{AdminRoleName}' AND m.Ruta IN(N'{AdminRoute}',N'{AdminRoute}/usuarios',N'{RootRoute}/renovaciones',N'{RootRoute}/comisiones',N'{RootRoute}/liquidaciones',N'{RootRoute}/facturas-liquidaciones'))) AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_ROL_MENU x WHERE x.IdRol=r.IdRol AND x.IdMenu=m.IdMenu);
 INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario,IdRol) SELECT u.IdUsuario,r.IdRol FROM dbo.Usuarios u INNER JOIN dbo.TIPOUSUARIO tu ON tu.IdTipoUsuario=u.IdTipoUsuario INNER JOIN dbo.ALIADO_PORTAL_ROL r ON r.Nombre=tu.NombreTipo WHERE tu.NombreTipo IN(N'{RoleName}',N'{AdminRoleName}') AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x WHERE x.IdUsuario=u.IdUsuario);
 INSERT dbo.ALIADO_PORTAL_USUARIO_ROL(IdUsuario,IdRol) SELECT u.IdUsuario,r.IdRol FROM dbo.Usuarios u CROSS JOIN dbo.ALIADO_PORTAL_ROL r WHERE u.IdTipoUsuario={BackOfficePermissionHelper.SuperAdministradorRoleId} AND r.Nombre=N'{AdminRoleName}' AND NOT EXISTS(SELECT 1 FROM dbo.ALIADO_PORTAL_USUARIO_ROL x WHERE x.IdUsuario=u.IdUsuario);
 """;
@@ -3290,6 +3306,7 @@ public class AliadoLiquidacionDto
     public string? EmisorRuc { get; init; }
     public string? EmisorDireccion { get; init; }
     public string? EmisorEmail { get; init; }
+    public string? EmisorTelefono { get; init; }
 }
 
 public sealed class AliadoAdminLiquidacionRow : AliadoLiquidacionDto
@@ -3308,6 +3325,7 @@ public sealed class AliadoFacturaLiquidacionAviso
     public string? EmisorRuc { get; init; }
     public string? EmisorDireccion { get; init; }
     public string? EmisorEmail { get; init; }
+    public string? EmisorTelefono { get; init; }
 }
 
 public sealed class AliadoRenovacionNotificacionDto

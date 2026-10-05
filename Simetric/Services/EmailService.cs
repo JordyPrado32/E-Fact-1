@@ -26,6 +26,7 @@ public interface IEmailService
     Task EnviarAvisoRenovacionAliadoAsync(string emailDestino, string nombreAliado, string cliente, string producto, DateTime fechaVencimiento, int diasRestantes);
     Task EnviarAvisoComisionAliadoAsync(string emailDestino, string nombreDestinatario, string periodo, decimal total, string estado);
     Task EnviarAvisoComisionBackOfficeAsync(string emailDestino, string periodo, decimal total, string estado, string aliado);
+    Task EnviarAvisoFacturaLiquidacionAsync(string emailDestino, string nombreAliado, string periodo, decimal total, string razonSocial, string? ruc, string? direccion, string? emailEmisor, string? telefonoEmisor);
     Task EnviarAvisoRenovacionClienteAsync(string emailDestino, string nombreCliente, string servicio, int? documentosDisponibles, DateTime? fechaVencimiento, int? diasRestantes);
     Task EnviarFacturaAsync(
         string numeroFactura,
@@ -395,6 +396,18 @@ public class EmailService : IEmailService
         mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
         mensaje.Subject = $"Portal de Aliados: {estado} · {periodo}";
         mensaje.Body = new BodyBuilder { HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Notificación de comisiones</h2><p>El aliado <strong>{WebUtility.HtmlEncode(aliado)}</strong> tiene el período <strong>{WebUtility.HtmlEncode(periodo)}</strong> por <strong>${total:N2}</strong>.</p><p>Estado: <strong>{WebUtility.HtmlEncode(estado)}</strong>. Revisa el BackOffice para aprobar o registrar el pago.</p></div>" }.ToMessageBody();
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarAvisoFacturaLiquidacionAsync(string emailDestino, string nombreAliado, string periodo, decimal total, string razonSocial, string? ruc, string? direccion, string? emailEmisor, string? telefonoEmisor)
+    {
+        if (string.IsNullOrWhiteSpace(emailDestino)) return;
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
+        mensaje.Subject = $"Factura requerida para pagar tus liquidaciones · {periodo}";
+        var receptor = WebUtility.HtmlEncode(razonSocial);
+        mensaje.Body = new BodyBuilder { HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {WebUtility.HtmlEncode(nombreAliado)}</h2><p>Debes subir una factura para solicitar el pago de tus liquidaciones del período <strong>{WebUtility.HtmlEncode(periodo)}</strong>.</p><p>Emítela a <strong>{receptor}</strong> por el valor de <strong>${total:N2}</strong>.</p><p>Datos del receptor: RUC {WebUtility.HtmlEncode(ruc ?? "No configurado")} · Dirección {WebUtility.HtmlEncode(direccion ?? "No configurada")} · Teléfono {WebUtility.HtmlEncode(telefonoEmisor ?? "No configurado")} · Correo {WebUtility.HtmlEncode(emailEmisor ?? "No configurado")}.</p><p>Carga el PDF o XML desde el Portal de Aliados. La comisión mensual es fija y no se puede editar.</p></div>" }.ToMessageBody();
         await SendMessageAsync(mensaje);
     }
 

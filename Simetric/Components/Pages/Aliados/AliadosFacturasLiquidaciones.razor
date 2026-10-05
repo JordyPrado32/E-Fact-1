@@ -1,0 +1,104 @@
+@page "/aliados/facturas-liquidaciones"
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
+@using Simetric.Services
+@inject AliadoPortalService AliadoService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment Env
+@inject SweetAlertService AlertService
+
+<PageTitle>Facturas para pago | Portal de Aliados</PageTitle>
+
+<div class="ally-page ally-invoice-page">
+    <section class="ally-invoice-hero">
+        <div><span class="ally-eyebrow">PAGO DE LIQUIDACIONES</span><h2>Factura requerida para recibir tu pago</h2><p>Al cerrar cada mes, emite una factura a Numerica Software S.A.S. por el total fijo de tus comisiones y cárgala aquí.</p></div>
+        <span class="ally-invoice-hero-icon"><i class="ri-file-upload-line"></i></span>
+    </section>
+
+    @if (cargando)
+    {
+        <AllyLoadingState Title="Cargando períodos" Description="Consultando tus liquidaciones pendientes." />
+    }
+    else
+    {
+        @if (pendientes.Count == 0)
+        {
+            <div class="ally-invoice-empty"><i class="ri-checkbox-circle-line"></i><h3>No tienes facturas pendientes</h3><p>Cuando cierre un nuevo período aparecerá aquí el valor exacto que debes facturar.</p></div>
+        }
+        else
+        {
+            <div class="ally-invoice-recipient"><div class="ally-invoice-recipient-icon"><i class="ri-building-4-line"></i></div><div><span>Factura a</span><strong>@(pendientes.First().EmisorRazonSocial ?? "Numerica Software S.A.S.")</strong><small>RUC: @(pendientes.First().EmisorRuc ?? "No configurado") · @(pendientes.First().EmisorDireccion ?? "Dirección no configurada")</small><small>Teléfono: @(pendientes.First().EmisorTelefono ?? "No configurado") · Correo: @(pendientes.First().EmisorEmail ?? "No configurado")</small></div></div>
+            <div class="ally-invoice-grid">
+                @foreach (var item in pendientes)
+                {
+                    <article class="ally-invoice-card" @key="item.IdLiquidacion">
+                        <div class="ally-invoice-card-top"><div><span class="ally-eyebrow">PERÍODO @EtiquetaPeriodo(item.Periodo)</span><h3>$ @item.Total.ToString("N2")</h3></div><span class="ally-invoice-status @(item.FacturaEstado == "RequiereCorreccion" ? "correction" : "pending")">@(item.FacturaEstado == "RequiereCorreccion" ? "Corregir factura" : "Pendiente")</span></div>
+                        <p>Este valor corresponde a @item.CantidadComisiones comisión(es) acumulada(s). El monto no se puede editar.</p>
+                        @if (!string.IsNullOrWhiteSpace(item.FacturaObservacion)) { <div class="ally-invoice-note"><i class="ri-error-warning-line"></i>@item.FacturaObservacion</div> }
+                        @if (!string.IsNullOrWhiteSpace(item.FacturaUrl)) { <a class="ally-invoice-current" href="@item.FacturaUrl" target="_blank" rel="noopener"><i class="ri-file-text-line"></i> Ver factura cargada</a> }
+                        <label class="ally-invoice-upload"><i class="ri-upload-cloud-2-line"></i><strong>Subir factura corregida</strong><small>PDF o XML · máximo 10 MB</small><InputFile accept=".pdf,.xml,application/pdf,text/xml,application/xml" OnChange="e => CargarFacturaAsync(item, e)" /></label>
+                        <button class="ally-button muted ally-invoice-history" type="button" @onclick="() => VerHistorialAsync(item)"><i class="ri-history-line"></i> Ver historial</button>
+                    </article>
+                }
+            </div>
+        }
+    }
+
+    @if (historial.Count > 0)
+    {
+        <div class="ally-invoice-history-panel"><div class="ally-invoice-history-heading"><div><span class="ally-eyebrow">TRAZABILIDAD</span><h3>Historial de facturas</h3></div><button type="button" class="ally-button muted" @onclick="CerrarHistorial">Cerrar</button></div><div class="ally-invoice-history-list">@foreach (var factura in historial) { <div><a href="@factura.ArchivoUrl" target="_blank" rel="noopener">@factura.NombreArchivo</a><span>@factura.Estado</span><small>@factura.FechaRegistro.ToString("dd/MM/yyyy HH:mm")</small>@if (!string.IsNullOrWhiteSpace(factura.Observacion)) { <em>@factura.Observacion</em> }</div> }</div></div>
+    }
+</div>
+
+@code {
+    private int currentUserId;
+    private bool cargando = true;
+    private List<AliadoLiquidacionDto> pendientes = new();
+    private List<AliadoLiquidacionFactura> historial = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out currentUserId))
+            await CargarAsync();
+        cargando = false;
+    }
+
+    private async Task CargarAsync()
+    {
+        var liquidaciones = await AliadoService.ObtenerLiquidacionesAsync(currentUserId);
+        pendientes = liquidaciones.Where(x => x.Estado == "Pendiente" && x.FacturaEstado != "Aprobada").ToList();
+    }
+
+    private async Task CargarFacturaAsync(AliadoLiquidacionDto liquidacion, InputFileChangeEventArgs args)
+    {
+        var archivo = args.File;
+        var extension = Path.GetExtension(archivo.Name).ToLowerInvariant();
+        if (archivo.Size <= 0 || archivo.Size > 10 * 1024 * 1024 || extension is not ".pdf" and not ".xml")
+        {
+            await AlertService.ShowWarningAsync("La factura debe ser PDF o XML y no superar 10 MB.");
+            return;
+        }
+        var carpeta = Path.Combine(Env.WebRootPath, "comprobantes", "aliados", "facturas");
+        Directory.CreateDirectory(carpeta);
+        var nombre = $"LIQ_{liquidacion.IdLiquidacion}_{Guid.NewGuid():N}{extension}";
+        var ruta = Path.Combine(carpeta, nombre);
+        await using (var origen = archivo.OpenReadStream(10 * 1024 * 1024))
+        await using (var destino = File.Create(ruta))
+            await origen.CopyToAsync(destino);
+        var resultado = await AliadoService.RegistrarFacturaLiquidacionAsync(currentUserId, liquidacion.IdLiquidacion, $"/comprobantes/aliados/facturas/{nombre}", archivo.Name, archivo.ContentType);
+        if (!resultado.Success)
+        {
+            File.Delete(ruta);
+            await AlertService.ShowWarningAsync(resultado.Message);
+            return;
+        }
+        await CargarAsync();
+        await AlertService.ShowSuccessAsync(resultado.Message, "Factura enviada");
+    }
+
+    private async Task VerHistorialAsync(AliadoLiquidacionDto item) => historial = (await AliadoService.ObtenerHistorialFacturaLiquidacionAsync(currentUserId, item.IdLiquidacion)).ToList();
+    private void CerrarHistorial() => historial.Clear();
+    private static string EtiquetaPeriodo(string periodo) => DateTime.TryParseExact($"{periodo}-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var fecha) ? fecha.ToString("MMMM yyyy", new System.Globalization.CultureInfo("es-EC")) : periodo;
+}
