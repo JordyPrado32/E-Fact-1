@@ -14,15 +14,18 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject AliadoPortalService Portal
+@inject ILogger<SolicitudNotifications> Logger
 
 @if (panelAbierto)
 {
     <div class="solicitud-notification-backdrop" @onclick="CerrarPanel"></div>
 }
-<div class="solicitud-notification-shell" @ref="notificationShell">
+<div class="solicitud-notification-shell notification-center" @ref="notificationShell" @onkeydown='e => { if (e.Key == "Escape") CerrarPanel(); }'>
     <button type="button"
             class="solicitud-notification-trigger @(TieneAvisos ? "has-alerts" : string.Empty)"
-            aria-label="Notificaciones de solicitud"
+            aria-label="Notificaciones"
+            aria-expanded="@panelAbierto"
             @onclick="TogglePanel">
         <i class="bi bi-bell"></i>
         @if (TieneAvisos)
@@ -35,7 +38,7 @@
     {
         <div class="solicitud-notification-panel">
             <div class="solicitud-notification-head">
-                <span>Notificaciones</span>
+                <span><i class="bi bi-bell" aria-hidden="true"></i> Notificaciones</span>
                 <div>
                     <strong>@TotalAvisos aviso(s)</strong>
                     @if (TieneElementosVisibles)
@@ -50,9 +53,25 @@
                 </div>
             </div>
 
+            @if (errorComisiones is not null)
+            {
+                <p class="text-danger small" role="status">@errorComisiones</p>
+            }
             @if (TieneElementosVisibles)
             {
                 <div class="solicitud-notification-list">
+                    @foreach (var aviso in ComisionesVisibles)
+                    {
+                        <div class="solicitud-notification-item" @key="aviso">
+                            <div class="solicitud-notification-main">
+                                <span class="solicitud-notification-icon is-code"><i class="bi bi-wallet2" aria-hidden="true"></i></span>
+                                <span class="solicitud-notification-copy"><strong>Comisiones de aliados</strong><small>@aviso</small></span>
+                            </div>
+                            <button type="button" class="solicitud-notification-delete" @onclick="() => BorrarComisionAsync(aviso)" aria-label="Borrar notificación de comisiones">
+                                <i class="bi bi-x" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    }
                     @foreach (var documento in DocumentosPendientesReenvio)
                     {
                         <div class="@GetDocumentoItemClass(documento)">
@@ -203,6 +222,10 @@
 </div>
 
 @code {
+    [Parameter] public bool IncluirComisiones { get; set; }
+    private IReadOnlyList<string> avisosComisiones = Array.Empty<string>();
+    private string? errorComisiones;
+    private IEnumerable<string> ComisionesVisibles => avisosComisiones.Where(aviso => !notificacionesOcultas.Contains($"comision:{aviso}"));
     private List<SolicitudNotificacionDto> notificaciones = new();
     private List<DashboardAuthorizedDocumentDto> documentosAutorizados = new();
     private List<CompraDocumentosHistorialItem> recargasDocumentos = new();
@@ -237,9 +260,9 @@
     private IEnumerable<ReporteVentaBackOffice> SolicitudesDocumentosBackOfficeVisibles =>
         solicitudesDocumentosBackOffice.Where(solicitud => !notificacionesOcultas.Contains(GetSolicitudDocumentosBackOfficeKey(solicitud)));
     private int AutorizacionesNoVistas => DocumentosAutorizadosVisibles.Count(documento => !EsAutorizacionVista(documento)) + DocumentosPendientesReenvio.Count;
-    private int TotalAvisos => NotificacionesVisibles.Count() + RecargasDocumentosVisibles.Count() + SolicitudesDocumentosBackOfficeVisibles.Count() + AutorizacionesNoVistas;
+    private int TotalAvisos => NotificacionesVisibles.Count() + RecargasDocumentosVisibles.Count() + SolicitudesDocumentosBackOfficeVisibles.Count() + AutorizacionesNoVistas + ComisionesVisibles.Count();
     private bool TieneAvisos => TotalAvisos > 0;
-    private bool TieneElementosVisibles => DocumentosAutorizadosVisibles.Any() || DocumentosPendientesReenvio.Count > 0 || RecargasDocumentosVisibles.Any() || SolicitudesDocumentosBackOfficeVisibles.Any() || NotificacionesVisibles.Any();
+    private bool TieneElementosVisibles => DocumentosAutorizadosVisibles.Any() || DocumentosPendientesReenvio.Count > 0 || RecargasDocumentosVisibles.Any() || SolicitudesDocumentosBackOfficeVisibles.Any() || NotificacionesVisibles.Any() || ComisionesVisibles.Any();
 
     protected override async Task OnInitializedAsync()
     {
@@ -310,6 +333,20 @@
             .OrderByDescending(notificacion => notificacion.ObsFechaObservacion)
             .Take(12)
             .ToList();
+
+        if (IncluirComisiones)
+        {
+            errorComisiones = null;
+            try
+            {
+                avisosComisiones = (await Portal.ObtenerAvisosComisionesAsync(usuarioIdActual)).Distinct().ToArray();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "No se pudieron consultar las notificaciones de comisiones.");
+                errorComisiones = "No se pudieron consultar las comisiones. Abre nuevamente para reintentar.";
+            }
+        }
     }
 
     private async Task CargarRecargasDocumentosAsync()
@@ -529,8 +566,18 @@
         await PersistirNotificacionesOcultasAsync();
     }
 
+    private async Task BorrarComisionAsync(string aviso)
+    {
+        notificacionesOcultas.Add($"comision:{aviso}");
+        await PersistirNotificacionesOcultasAsync();
+    }
+
     private async Task BorrarTodoAsync()
     {
+        foreach (var aviso in ComisionesVisibles.ToList())
+        {
+            notificacionesOcultas.Add($"comision:{aviso}");
+        }
         foreach (var documento in DocumentosAutorizadosVisibles.ToList())
         {
             autorizacionesVistas.Add(documento.Clave);
