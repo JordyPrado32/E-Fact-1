@@ -1411,9 +1411,17 @@ public sealed class AliadoPortalService
         var liquidaciones = await db.AliadoLiquidaciones.AsNoTracking()
             .Where(x => x.Estado == "Pendiente" && (esBackOffice || contexto!.EsAdministrador || x.IdVendedor == contexto.IdVendedor) &&
                 !db.AliadoLiquidacionFacturas.Any(f => f.IdLiquidacion == x.IdLiquidacion && f.Estado == "Aprobada"))
-            .Join(db.VendedoresBackOffice.AsNoTracking(), x => x.IdVendedor, v => v.IdVendedor, (x, v) => new { x.Periodo, x.Total, v.Nombre })
+            .Join(db.VendedoresBackOffice.AsNoTracking(), x => x.IdVendedor, v => v.IdVendedor, (x, v) => new { x.IdLiquidacion, x.Periodo, x.Total, v.Nombre })
             .ToListAsync();
-        avisos.AddRange(liquidaciones.Select(x => $"{x.Nombre} · {x.Periodo} · {x.Total:N2}: Debes subir la factura para solicitar el pago de tus liquidaciones."));
+        var correcciones = await db.AliadoLiquidacionFacturas.AsNoTracking()
+            .Where(f => f.Estado == "RequiereCorreccion" &&
+                !db.AliadoLiquidacionFacturas.Any(n => n.IdLiquidacion == f.IdLiquidacion && n.IdRevision > f.IdRevision))
+            .Join(db.AliadoLiquidaciones.AsNoTracking().Where(l => l.Estado == "Pendiente" &&
+                (esBackOffice || contexto!.EsAdministrador || l.IdVendedor == contexto.IdVendedor)),
+                f => f.IdLiquidacion, l => l.IdLiquidacion, (f, l) => new { l.IdLiquidacion, l.Periodo, f.Observacion })
+            .ToListAsync();
+        avisos.AddRange(correcciones.Select(x => $"{x.Periodo}: Tu factura no fue aprobada. {x.Observacion} Corrígela y vuelve a cargarla en Facturas para pago."));
+        avisos.AddRange(liquidaciones.Where(x => !correcciones.Any(c => c.IdLiquidacion == x.IdLiquidacion)).Select(x => $"{x.Nombre} · {x.Periodo} · {x.Total:N2}: Debes subir la factura para solicitar el pago de tus liquidaciones."));
         return avisos;
     }
 
@@ -2508,6 +2516,31 @@ public sealed class AliadoPortalService
         factura.FechaRevision = DateTime.Now;
         factura.IdUsuarioRevision = actorId;
         await db.SaveChangesAsync();
+        if (!aprobar)
+        {
+            var liquidacion = await db.AliadoLiquidaciones.AsNoTracking().FirstAsync(x => x.IdLiquidacion == idLiquidacion);
+            var destinatarios = await db.Usuarios.AsNoTracking()
+                .Where(x => x.Estado == true && x.IdVendedor == liquidacion.IdVendedor && !string.IsNullOrWhiteSpace(x.Email) &&
+                    (db.TipoUsuario.Any(t => t.IdTipoUsuario == x.IdTipoUsuario && t.NombreTipo == RoleName) ||
+                     db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario &&
+                        db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == RoleName))))
+                .Select(x => new { x.Email, Nombre = (x.Nombres ?? "") + " " + (x.Apellidos ?? "") })
+                .ToListAsync();
+            var correoFallido = destinatarios.Count == 0;
+            foreach (var destinatario in destinatarios.DistinctBy(x => x.Email))
+            {
+                try
+                {
+                    await _emailService.EnviarCorreccionFacturaAliadoAsync(destinatario.Email!, destinatario.Nombre.Trim(), liquidacion.Periodo, factura.Observacion!);
+                }
+                catch (Exception ex)
+                {
+                    correoFallido = true;
+                    _logger.LogWarning(ex, "No se pudo enviar el aviso de corrección de la factura {IdRevision}, liquidación {IdLiquidacion}.", factura.IdRevision, idLiquidacion);
+                }
+            }
+            if (correoFallido) return (true, "Se solicitó corregir la factura y se registró el aviso en el sistema, pero no se pudo enviar el correo a todos los destinatarios.");
+        }
         return (true, aprobar ? "Factura aprobada." : "Se solicitó corregir la factura.");
     }
 

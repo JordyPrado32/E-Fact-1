@@ -12,7 +12,7 @@
 
 <div class="ally-page ally-invoice-page">
     <section class="ally-invoice-hero">
-        <div><span class="ally-eyebrow">PAGO DE LIQUIDACIONES</span><h2>Factura requerida para recibir tu pago</h2><p>Al cerrar cada mes, emite una factura a Numerica Software S.A.S. por el total fijo de tus comisiones y cárgala aquí.</p></div>
+        <div><span class="ally-eyebrow">PAGO DE LIQUIDACIONES</span><h2>Facturas para recibir tu pago</h2><p>Emite una factura por cada período disponible y cárgala en su tarjeta para solicitar tu pago.</p></div>
         <span class="ally-invoice-hero-icon"><i class="ri-file-upload-line"></i></span>
     </section>
 
@@ -28,16 +28,30 @@
         }
         else
         {
-            <div class="ally-invoice-recipient"><div class="ally-invoice-recipient-icon"><i class="ri-building-4-line"></i></div><div><span>Factura a</span><strong>@(pendientes.First().EmisorRazonSocial ?? "Numerica Software S.A.S.")</strong><small>RUC: @(pendientes.First().EmisorRuc ?? "No configurado") · @(pendientes.First().EmisorDireccion ?? "Dirección no configurada")</small><small>Teléfono: @(pendientes.First().EmisorTelefono ?? "No configurado") · Correo: @(pendientes.First().EmisorEmail ?? "No configurado")</small></div></div>
+            <div class="ally-invoice-summary"><div><small>Períodos pendientes</small><strong>@pendientes.Count</strong></div><div><small>Total pendiente</small><strong>$ @pendientes.Sum(x => x.Total).ToString("N2")</strong></div><div><small>Por corregir</small><strong>@pendientes.Count(x => x.FacturaEstado == "RequiereCorreccion")</strong></div></div>
+            <section class="ally-invoice-recipient" aria-label="Datos para emitir tu factura">
+                <div class="ally-invoice-recipient-icon"><i class="ri-building-4-line"></i></div>
+                <div class="ally-invoice-recipient-content">
+                    <span>DATOS PARA TU FACTURA</span>
+                    <strong>@(pendientes.First().EmisorRazonSocial ?? "Numerica Software S.A.S.")</strong>
+                    <dl class="ally-invoice-recipient-details">
+                        <div><dt>RUC</dt><dd>@(pendientes.First().EmisorRuc ?? "No configurado")</dd></div>
+                        <div class="ally-invoice-address"><dt>Dirección</dt><dd>@(pendientes.First().EmisorDireccion ?? "Dirección no configurada")</dd></div>
+                        <div><dt>Teléfono</dt><dd>@(pendientes.First().EmisorTelefono ?? "No configurado")</dd></div>
+                        <div><dt>Correo</dt><dd>@(pendientes.First().EmisorEmail ?? "No configurado")</dd></div>
+                    </dl>
+                </div>
+            </section>
+            <div class="ally-invoice-toolbar"><div><h3>Tus períodos</h3><small>Los más antiguos aparecen primero. Carga una factura por período.</small></div><label>Período<select @bind="periodoSeleccionado"><option value="">Todos los períodos</option>@foreach (var periodo in pendientes.Select(x => x.Periodo).Distinct()) { <option value="@periodo">@EtiquetaPeriodo(periodo)</option> }</select></label></div>
             <div class="ally-invoice-grid">
-                @foreach (var item in pendientes)
+                @foreach (var item in pendientes.Where(x => string.IsNullOrEmpty(periodoSeleccionado) || x.Periodo == periodoSeleccionado))
                 {
                     <article class="ally-invoice-card" @key="item.IdLiquidacion">
-                        <div class="ally-invoice-card-top"><div><span class="ally-eyebrow">PERÍODO @EtiquetaPeriodo(item.Periodo)</span><h3>$ @item.Total.ToString("N2")</h3></div><span class="ally-invoice-status @(item.FacturaEstado == "RequiereCorreccion" ? "correction" : "pending")">@(item.FacturaEstado == "RequiereCorreccion" ? "Corregir factura" : "Pendiente")</span></div>
-                        <p>Este valor corresponde a @item.CantidadComisiones comisión(es) acumulada(s). El monto no se puede editar.</p>
+                        <div class="ally-invoice-card-top"><div><span class="ally-eyebrow">@EtiquetaPeriodo(item.Periodo)</span><h3>$ @item.Total.ToString("N2")</h3></div><span class="ally-invoice-status @(item.FacturaEstado == "RequiereCorreccion" ? "correction" : "pending")">@(item.FacturaEstado == "RequiereCorreccion" ? "Por corregir" : item.FacturaEstado == "Pendiente" ? "En revisión" : "Por facturar")</span></div>
+                        <p>@item.CantidadComisiones @(item.CantidadComisiones == 1 ? "comisión acumulada" : "comisiones acumuladas") · Importe fijo</p>
                         @if (!string.IsNullOrWhiteSpace(item.FacturaObservacion)) { <div class="ally-invoice-note"><i class="ri-error-warning-line"></i>@item.FacturaObservacion</div> }
                         @if (!string.IsNullOrWhiteSpace(item.FacturaUrl)) { <a class="ally-invoice-current" href="@item.FacturaUrl" target="_blank" rel="noopener"><i class="ri-file-text-line"></i> Ver factura cargada</a> }
-                        <label class="ally-invoice-upload"><i class="ri-upload-cloud-2-line"></i><strong>Subir factura corregida</strong><small>PDF o XML · máximo 10 MB</small><InputFile accept=".pdf,.xml,application/pdf,text/xml,application/xml" OnChange="e => CargarFacturaAsync(item, e)" /></label>
+                        <label class="ally-invoice-upload"><i class="ri-upload-cloud-2-line"></i><strong>@(item.FacturaEstado == "RequiereCorreccion" ? "Subir factura corregida" : string.IsNullOrWhiteSpace(item.FacturaUrl) ? "Seleccionar factura" : "Reemplazar factura")</strong><small>PDF o XML · máximo 10 MB</small><InputFile aria-label="@($"Subir factura de {EtiquetaPeriodo(item.Periodo)}")" accept=".pdf,.xml,application/pdf,text/xml,application/xml" OnChange="e => CargarFacturaAsync(item, e)" /></label>
                         <button class="ally-button muted ally-invoice-history" type="button" @onclick="() => VerHistorialAsync(item)"><i class="ri-history-line"></i> Ver historial</button>
                     </article>
                 }
@@ -54,6 +68,7 @@
 @code {
     private int currentUserId;
     private bool cargando = true;
+    private string periodoSeleccionado = string.Empty;
     private List<AliadoLiquidacionDto> pendientes = new();
     private List<AliadoLiquidacionFactura> historial = new();
 
@@ -68,7 +83,8 @@
     private async Task CargarAsync()
     {
         var liquidaciones = await AliadoService.ObtenerLiquidacionesAsync(currentUserId);
-        pendientes = liquidaciones.Where(x => x.Estado == "Pendiente" && x.FacturaEstado != "Aprobada").ToList();
+        pendientes = liquidaciones.Where(x => x.Estado == "Pendiente" && x.FacturaEstado != "Aprobada").OrderBy(x => x.Periodo).ToList();
+        if (!pendientes.Any(x => x.Periodo == periodoSeleccionado)) periodoSeleccionado = string.Empty;
     }
 
     private async Task CargarFacturaAsync(AliadoLiquidacionDto liquidacion, InputFileChangeEventArgs args)

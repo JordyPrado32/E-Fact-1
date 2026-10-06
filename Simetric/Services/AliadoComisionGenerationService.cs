@@ -7,6 +7,7 @@ namespace Simetric.Services;
 
 public sealed class AliadoComisionGenerationService
 {
+    private const bool PermitirFacturaAntesDelCierreParaPruebas = true;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
     public AliadoComisionGenerationService(IDbContextFactory<AppDbContext> dbFactory)
@@ -186,7 +187,9 @@ public sealed class AliadoComisionGenerationService
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var inicioPeriodoActual = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
         var pendientes = await db.AliadoComisiones
-            .Where(x => x.Estado == "Aprobada" && x.IdLiquidacion == null && x.FechaGeneracion < inicioPeriodoActual)
+            .Where(x => (x.Estado == "Aprobada" || (PermitirFacturaAntesDelCierreParaPruebas && x.Estado == "Pendiente")) &&
+                        x.IdLiquidacion == null &&
+                        x.FechaGeneracion < (PermitirFacturaAntesDelCierreParaPruebas ? inicioPeriodoActual.AddMonths(1) : inicioPeriodoActual))
             .ToListAsync();
 
         foreach (var grupo in pendientes.GroupBy(x => new { x.IdVendedor, Periodo = x.FechaGeneracion.ToString("yyyy-MM") }))

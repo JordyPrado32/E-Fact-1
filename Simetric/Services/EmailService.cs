@@ -25,6 +25,7 @@ public interface IEmailService
     Task EnviarCuentaCreadaAsync(string emailDestino, string? nombreUsuario, string? claveTemporal = null);
     Task EnviarAvisoRenovacionAliadoAsync(string emailDestino, string nombreAliado, string cliente, string producto, DateTime fechaVencimiento, int diasRestantes);
     Task EnviarAvisoComisionAliadoAsync(string emailDestino, string nombreDestinatario, string periodo, decimal total, string estado);
+    Task EnviarCorreccionFacturaAliadoAsync(string emailDestino, string nombreAliado, string periodo, string observacion);
     Task EnviarAvisoComisionBackOfficeAsync(string emailDestino, string periodo, decimal total, string estado, string aliado);
     Task EnviarAvisoFacturaLiquidacionAsync(string emailDestino, string nombreAliado, string periodo, decimal total, string razonSocial, string? ruc, string? direccion, string? emailEmisor, string? telefonoEmisor);
     Task EnviarAvisoRenovacionClienteAsync(string emailDestino, string nombreCliente, string servicio, int? documentosDisponibles, DateTime? fechaVencimiento, int? diasRestantes);
@@ -373,6 +374,20 @@ public class EmailService : IEmailService
         mensaje.Body = new BodyBuilder
         {
             HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#17324d'><h2>Hola, {nombre}</h2><p>La renovación de <strong>{clienteSeguro}</strong> ({productoSeguro}) vence <strong>{dias}</strong>.</p><p>Fecha de vencimiento: {fechaVencimiento:dd/MM/yyyy}</p><p>Ingresa al Portal de Aliados para registrar la gestión.</p></div>"
+        }.ToMessageBody();
+        await SendMessageAsync(mensaje);
+    }
+
+    public async Task EnviarCorreccionFacturaAliadoAsync(string emailDestino, string nombreAliado, string periodo, string observacion)
+    {
+        var mensaje = new MimeMessage();
+        mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
+        mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
+        mensaje.Subject = $"Acción requerida: corrige tu factura de {periodo}";
+        mensaje.Body = new BodyBuilder
+        {
+            TextBody = $"Hola, {nombreAliado}. Tu factura del período {periodo} no fue aprobada. Motivo: {observacion}. Corrige la factura y vuelve a cargarla en Portal de Aliados > Facturas para pago.",
+            HtmlBody = $"<div style='font-family:Segoe UI,Arial,sans-serif;color:#541329'><h2>Hola, {WebUtility.HtmlEncode(nombreAliado)}</h2><p>Tu factura del período <strong>{WebUtility.HtmlEncode(periodo)}</strong> no fue aprobada.</p><p><strong>Cambio solicitado:</strong> {WebUtility.HtmlEncode(observacion)}</p><p>Corrige la factura y vuelve a cargarla en <strong>Portal de Aliados &gt; Facturas para pago</strong> para continuar con tu pago.</p></div>"
         }.ToMessageBody();
         await SendMessageAsync(mensaje);
     }
