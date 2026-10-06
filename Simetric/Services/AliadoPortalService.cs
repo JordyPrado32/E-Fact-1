@@ -2457,6 +2457,45 @@ public sealed class AliadoPortalService
         return (true, "Factura cargada. Quedó pendiente de revisión.");
     }
 
+    public async Task<AliadoCuentaBancaria?> ObtenerCuentaBancariaAsync(int userId)
+    {
+        var contexto = await ObtenerContextoAsync(userId);
+        if (contexto is null || contexto.IdVendedor <= 0) return null;
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var cuenta = await db.VendedoresBackOffice.AsNoTracking().Where(x => x.IdVendedor == contexto.IdVendedor).Select(x => new AliadoCuentaBancaria
+        {
+            Banco = x.BancoPago ?? string.Empty,
+            Tipo = x.TipoCuentaPago ?? string.Empty,
+            Numero = x.NumeroCuentaPago ?? string.Empty,
+            Titular = x.TitularCuentaPago ?? string.Empty
+        }).FirstOrDefaultAsync();
+
+        if (cuenta is not null && !string.IsNullOrWhiteSpace(cuenta.Banco) && !AliadoCuentaBancaria.Bancos.Contains(cuenta.Banco))
+        {
+            cuenta.OtroBanco = cuenta.Banco;
+            cuenta.Banco = "Otro banco o cooperativa";
+        }
+
+        return cuenta;
+    }
+
+    public async Task<(bool Success, string Message)> ActualizarCuentaBancariaAsync(int userId, AliadoCuentaBancaria cuenta)
+    {
+        var contexto = await ObtenerContextoAsync(userId);
+        if (contexto is null || contexto.IdVendedor <= 0) return (false, "No tienes una cuenta de aliado válida.");
+        if (!cuenta.EsValida) return (false, "Completa banco, tipo de cuenta, número y titular correctamente.");
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var aliado = await db.VendedoresBackOffice.FirstOrDefaultAsync(x => x.IdVendedor == contexto.IdVendedor);
+        if (aliado is null) return (false, "No se encontró tu cuenta de aliado.");
+        aliado.BancoPago = cuenta.NombreBanco;
+        aliado.TipoCuentaPago = cuenta.Tipo;
+        aliado.NumeroCuentaPago = cuenta.Numero.Trim();
+        aliado.TitularCuentaPago = cuenta.Titular.Trim();
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(userId, "MODIFICAR", null, new { aliado.IdVendedor, aliado.BancoPago, aliado.TipoCuentaPago }, new { Modulo = "PortalAliados", Entidad = "CuentaBancaria" });
+        return (true, "La cuenta bancaria fue actualizada.");
+    }
+
     public async Task<(bool Success, string Message)> RevisarFacturaLiquidacionAsync(int actorId, int idLiquidacion, bool aprobar, string? observacion)
     {
         await EnsureSchemaAsync();

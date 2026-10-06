@@ -179,6 +179,11 @@
                     </div>
                 </div>
 
+                @if (cuentaBancaria is not null)
+                {
+                    <Simetric.Components.AliadoCuentaBancariaFields Cuenta="cuentaBancaria" />
+                }
+
                 <section class="ally-profile-security">
                     <div class="ally-profile-security-head">
                         <div>
@@ -278,6 +283,7 @@
         ? "Tu cuenta"
         : string.Join(" ", new[] { cuenta.Nombres, cuenta.Apellidos }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
     private PerfilViewModel? cuenta;
+    private Simetric.Models.AliadoCuentaBancaria? cuentaBancaria;
     private readonly List<string> listaAvatares = new();
     private List<TipoIdentificacion> tiposIdentificacion = new();
     private List<Tipocliente> tiposCliente = new();
@@ -319,6 +325,9 @@
                         DireccionEmpresa = usuario.DireccionEmpresa,
                         Celular = usuario.Celular
                     };
+
+                    if (perfil is not null && perfil.IdVendedor > 0)
+                        cuentaBancaria = await AliadoService.ObtenerCuentaBancariaAsync(id) ?? new Simetric.Models.AliadoCuentaBancaria();
                 }
 
                 await using var db = await DbFactory.CreateDbContextAsync();
@@ -441,10 +450,26 @@
             cuenta.NuevaPassword = null;
             cuenta.ConfirmarPassword = null;
 
+            if (cuentaBancaria is not null && !cuentaBancaria.EsValida)
+            {
+                await AlertService.ShowErrorAsync("Completa los datos de la cuenta bancaria para recibir tus pagos.", "Cuenta bancaria incompleta");
+                return;
+            }
+
             if (!await UsuarioService.ActualizarPerfil(usuarioIdActual.Value, cuenta))
             {
                 await AlertService.ShowErrorAsync("Revisa los datos ingresados e inténtalo nuevamente.", "No se pudo actualizar");
                 return;
+            }
+
+            if (cuentaBancaria is not null)
+            {
+                var cuentaResultado = await AliadoService.ActualizarCuentaBancariaAsync(usuarioIdActual.Value, cuentaBancaria);
+                if (!cuentaResultado.Success)
+                {
+                    await AlertService.ShowErrorAsync(cuentaResultado.Message, "No se pudo guardar la cuenta bancaria");
+                    return;
+                }
             }
 
             await RefrescarSesionAsync();
