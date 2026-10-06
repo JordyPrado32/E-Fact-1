@@ -22,4 +22,7 @@ public sealed class AliadoLiquidacion
     [MaxLength(1000)] public string? ErrorSri { get; set; }
     public DateTime? FechaPago { get; set; }
     public int? IdUsuarioPago { get; set; }
+    public bool PagoConfirmadoCliente { get; set; }
+    public DateTime? FechaConfirmacionCliente { get; set; }
+    public int? IdUsuarioConfirmacionCliente { get; set; }
 }

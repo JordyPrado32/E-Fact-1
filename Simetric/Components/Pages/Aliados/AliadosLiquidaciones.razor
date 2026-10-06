@@ -41,7 +41,7 @@
             <div class="ally-table-wrap"><table class="ally-table liquidations-table"><thead><tr><th>Fecha / período</th><th>Aliado</th><th>Movimientos</th><th>Total</th><th>Referencia</th><th>Estado de pago</th><th>Documentos</th><th>Acciones</th></tr></thead><tbody>
             @foreach (var item in LiquidacionesPaginadas)
             {
-                <tr @key="item.IdLiquidacion"><td><strong>@item.Fecha.ToString("dd/MM/yyyy")</strong><small>@item.Periodo</small></td><td><strong>@(string.IsNullOrWhiteSpace(item.Aliado) ? "-" : item.Aliado)</strong><small>Liquidación de comisiones</small></td><td>@item.CantidadComisiones comisión(es)</td><td class="liquidation-value">$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @EstadoLiquidacionCss(item.Estado)">@EstadoLiquidacionTexto(item.Estado)</span></td><td><div class="liquidation-document-actions">@if (item.CodLiquidacionCompra is > 0) { <button type="button" class="ally-document-link xml" @onclick="() => AbrirXmlAsync(item)" title="Descargar XML autorizado por el SRI">XML</button><button type="button" class="ally-document-link pdf" @onclick="() => AbrirPdfAsync(item)" title="Descargar PDF autorizado por el SRI">PDF</button> }@if (!string.IsNullOrWhiteSpace(item.ComprobantePagoUrl)) { <button type="button" class="ally-table-action" @onclick="() => AbrirComprobante(item)" title="Ver comprobante de pago"><i class="ri-attachment-2"></i></button> }</div></td><td><button type="button" class="ally-table-action liquidation-detail-button" @onclick="() => VerDetalleAsync(item)"><i class="ri-eye-line"></i> Ver detalle</button></td></tr>
+                <tr @key="item.IdLiquidacion"><td><strong>@item.Fecha.ToString("dd/MM/yyyy")</strong><small>@item.Periodo</small></td><td><strong>@(string.IsNullOrWhiteSpace(item.Aliado) ? "-" : item.Aliado)</strong><small>Liquidación de comisiones</small></td><td>@item.CantidadComisiones comisión(es)</td><td class="liquidation-value">$ @item.Total.ToString("N2")</td><td>@(item.ReferenciaPago ?? "-")</td><td><span class="ally-badge @EstadoLiquidacionCss(item.Estado)">@EstadoLiquidacionTexto(item.Estado)</span></td><td><div class="liquidation-document-actions">@if (item.CodLiquidacionCompra is > 0) { <button type="button" class="ally-document-link xml" @onclick="() => AbrirXmlAsync(item)" title="Descargar XML autorizado por el SRI">XML</button><button type="button" class="ally-document-link pdf" @onclick="() => AbrirPdfAsync(item)" title="Descargar PDF autorizado por el SRI">PDF</button> }@if (!string.IsNullOrWhiteSpace(item.ComprobantePagoUrl)) { <button type="button" class="ally-table-action" @onclick="() => AbrirComprobante(item)" title="Ver comprobante de pago"><i class="ri-attachment-2"></i></button> }</div></td><td><div class="d-flex flex-column align-items-end gap-1"><button type="button" class="ally-table-action liquidation-detail-button" @onclick="() => VerDetalleAsync(item)"><i class="ri-eye-line"></i> Ver detalle</button>@if (PuedeConfirmarPago(item)) { <button type="button" class="ally-button success" @onclick="() => ConfirmarPagoAsync(item)"><i class="ri-checkbox-circle-line"></i> Confirmar pago</button> } else if (item.PagoConfirmadoCliente) { <span class="ally-badge success">Pago confirmado</span> }</div></td></tr>
             }
             </tbody></table></div>
             <div class="ally-pagination"><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(-1)" disabled="@(pagina <= 1)">Anterior</button><span>Página @pagina de @TotalPaginas</span><button class="ally-table-action" type="button" @onclick="() => CambiarPagina(1)" disabled="@(pagina >= TotalPaginas)">Siguiente</button></div>
@@ -145,6 +145,7 @@
     private static string EstadoPagoCss(AliadoComisionMovimientoDto item) => item.EstadoPago == "Pagada" ? "success" : item.EstadoPago == "Anulada" ? "danger" : "warning";
     private static string EstadoLiquidacionTexto(string estado) => estado == "Pagada" ? "Pagada" : estado == "Anulada" ? "Anulada" : "Pendiente de pago";
     private static string EstadoLiquidacionCss(string estado) => estado == "Pagada" ? "success" : estado == "Anulada" ? "danger" : "warning";
+    private static bool PuedeConfirmarPago(AliadoLiquidacionDto item) => string.Equals(item.Estado, "Pagada", StringComparison.OrdinalIgnoreCase) && !item.PagoConfirmadoCliente;
     private static string EtiquetaPeriodo(string periodo) => DateTime.TryParseExact($"{periodo}-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var fecha) ? fecha.ToString("MMMM yyyy", new System.Globalization.CultureInfo("es-EC")) : periodo;
     private sealed record ResumenPeriodo(string Periodo, int Cantidad);
 
@@ -207,6 +208,25 @@
         {
             cargandoDetalle = false;
         }
+    }
+
+    private async Task ConfirmarPagoAsync(AliadoLiquidacionDto liquidacion)
+    {
+        if (!PuedeConfirmarPago(liquidacion) || !await AlertService.ConfirmAsync(
+                "La empresa marcó esta liquidación como pagada. ¿Confirmas que recibiste el pago?",
+                "Confirmar recepción del pago",
+                "Sí, confirmar"))
+            return;
+
+        var resultado = await AliadoService.ConfirmarPagoLiquidacionAsync(currentUserId, liquidacion.IdLiquidacion);
+        if (!resultado.Success)
+        {
+            await AlertService.ShowWarningAsync(resultado.Message);
+            return;
+        }
+
+        liquidaciones = (await AliadoService.ObtenerLiquidacionesAsync(currentUserId)).ToList();
+        await AlertService.ShowSuccessAsync(resultado.Message);
     }
 
     private async Task ExportarExcelAsync()

@@ -2424,6 +2424,9 @@ public sealed class AliadoPortalService
                 ObservacionPago = x.ObservacionPago,
                 ComprobantePagoUrl = x.ComprobantePagoUrl,
                 IdUsuarioPago = x.IdUsuarioPago,
+                PagoConfirmadoCliente = x.PagoConfirmadoCliente,
+                FechaConfirmacionCliente = x.FechaConfirmacionCliente,
+                IdUsuarioConfirmacionCliente = x.IdUsuarioConfirmacionCliente,
                 FacturaEstado = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.Estado).FirstOrDefault(),
                 FacturaUrl = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.ArchivoUrl).FirstOrDefault(),
                 FacturaNombre = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.NombreArchivo).FirstOrDefault(),
@@ -2468,6 +2471,33 @@ public sealed class AliadoPortalService
         });
         await db.SaveChangesAsync();
         return (true, "Factura cargada. Quedó pendiente de revisión.");
+    }
+
+    public async Task<(bool Success, string Message)> ConfirmarPagoLiquidacionAsync(int userId, int idLiquidacion)
+    {
+        await EnsureSchemaAsync();
+        var contexto = await ObtenerContextoAsync(userId);
+        if (contexto is null || idLiquidacion <= 0)
+            return (false, "No tienes acceso a esta liquidación.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var liquidacion = await db.AliadoLiquidaciones.FirstOrDefaultAsync(x =>
+            x.IdLiquidacion == idLiquidacion &&
+            (contexto.EsAdministrador || x.IdVendedor == contexto.IdVendedor));
+        if (liquidacion is null)
+            return (false, "La liquidación no existe.");
+        if (!string.Equals(liquidacion.Estado, "Pagada", StringComparison.OrdinalIgnoreCase))
+            return (false, "Solo puedes confirmar una liquidación que la empresa ya marcó como pagada.");
+        if (liquidacion.PagoConfirmadoCliente)
+            return (true, "El pago de esta liquidación ya fue confirmado.");
+
+        liquidacion.PagoConfirmadoCliente = true;
+        liquidacion.FechaConfirmacionCliente = DateTime.Now;
+        liquidacion.IdUsuarioConfirmacionCliente = userId;
+        await db.SaveChangesAsync();
+        await _auditService.TryRegistrarAuditoriaAsync(userId, "CONFIRMAR_PAGO", idLiquidacion,
+            new { IdLiquidacion = idLiquidacion }, new { Modulo = "PortalAliados", Entidad = "Liquidacion" });
+        return (true, "Pago confirmado correctamente.");
     }
 
     public async Task<AliadoCuentaBancaria?> ObtenerCuentaBancariaAsync(int userId)
@@ -2654,6 +2684,9 @@ public sealed class AliadoPortalService
                 ObservacionPago = x.l.ObservacionPago,
                 ComprobantePagoUrl = x.l.ComprobantePagoUrl,
                 FacturaEstado = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.Estado).FirstOrDefault(),
+                PagoConfirmadoCliente = x.l.PagoConfirmadoCliente,
+                FechaConfirmacionCliente = x.l.FechaConfirmacionCliente,
+                IdUsuarioConfirmacionCliente = x.l.IdUsuarioConfirmacionCliente,
                 FacturaUrl = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.ArchivoUrl).FirstOrDefault(),
                 FacturaNombre = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.NombreArchivo).FirstOrDefault(),
                 FacturaObservacion = db.AliadoLiquidacionFacturas.Where(f => f.IdLiquidacion == x.l.IdLiquidacion).OrderByDescending(f => f.IdRevision).Select(f => f.Observacion).FirstOrDefault(),
@@ -3374,6 +3407,9 @@ public class AliadoLiquidacionDto
     public string? ObservacionPago { get; init; }
     public string? ComprobantePagoUrl { get; init; }
     public int? IdUsuarioPago { get; init; }
+    public bool PagoConfirmadoCliente { get; init; }
+    public DateTime? FechaConfirmacionCliente { get; init; }
+    public int? IdUsuarioConfirmacionCliente { get; init; }
     public int CantidadComisiones { get; init; }
     public string? FacturaEstado { get; init; }
     public string? FacturaUrl { get; init; }
