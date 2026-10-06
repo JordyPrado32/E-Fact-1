@@ -3,26 +3,32 @@
 @inject AliadoPortalService Portal
 @inject AuthenticationStateProvider Auth
 @inject ILogger<AliadoComisionesNotifications> Logger
+@inject NotificacionDescartadaService NotificacionDescartadaService
+@inject NavigationManager Navigation
 
 @if (abierto)
 {
     <div class="solicitud-notification-backdrop" @onclick="() => abierto = false"></div>
 }
-<div class="solicitud-notification-shell notification-center" @onkeydown='e => { if (e.Key == "Escape") abierto = false; }'>
-    <button type="button" class="solicitud-notification-trigger @(avisos.Count > 0 ? "has-alerts" : string.Empty)" @onclick="MostrarAsync" aria-expanded="@abierto" aria-label="Notificaciones de comisiones">
+<div class="solicitud-notification-shell notification-center ally-notification-center" @onkeydown='e => { if (e.Key == "Escape") abierto = false; }'>
+    <button type="button" class="solicitud-notification-trigger @(TotalAvisos > 0 ? "has-alerts" : string.Empty)" @onclick="MostrarAsync" aria-expanded="@abierto" aria-label="Notificaciones del Portal de Aliados">
         <i class="bi bi-bell" aria-hidden="true"></i>
-        @if (avisos.Count > 0)
+        @if (TotalAvisos > 0)
         {
-            <span class="solicitud-notification-badge">@(avisos.Count > 99 ? "99+" : avisos.Count.ToString())</span>
+            <span class="solicitud-notification-badge">@(TotalAvisos > 99 ? "99+" : TotalAvisos.ToString())</span>
         }
     </button>
     @if (abierto)
     {
         <div class="solicitud-notification-panel">
             <div class="solicitud-notification-head">
-                <span><i class="bi bi-bell" aria-hidden="true"></i> Comisiones</span>
+                <span><i class="bi bi-bell" aria-hidden="true"></i> Notificaciones</span>
                 <div>
-                    <strong>@avisos.Count aviso(s)</strong>
+                    <strong>@TotalAvisos aviso(s)</strong>
+                    @if (TotalAvisos > 0)
+                    {
+                        <button type="button" class="solicitud-notification-clear" @onclick="BorrarTodoAsync">Borrar todo</button>
+                    }
                     <button type="button" class="solicitud-notification-close" @onclick="() => abierto = false" aria-label="Cerrar notificaciones de comisiones">
                         <i class="bi bi-x-lg" aria-hidden="true"></i>
                     </button>
@@ -44,7 +50,7 @@
                         <small>@error</small>
                     </div>
                 }
-                else if (avisos.Count == 0)
+                else if (TotalAvisos == 0)
                 {
                     <div class="solicitud-notification-empty">
                         <span><i class="bi bi-bell-slash" aria-hidden="true"></i></span>
@@ -53,13 +59,40 @@
                 }
                 else
                 {
-                    @foreach (var aviso in avisos.Distinct())
+                    @foreach (var aviso in ComisionesVisibles)
                     {
-                        <div class="solicitud-notification-item" @key="aviso">
+                        <div class="solicitud-notification-item is-unread @GetEstadoClass(aviso)" @key="aviso">
                             <div class="solicitud-notification-main">
-                                <span class="solicitud-notification-icon is-code"><i class="bi bi-wallet2" aria-hidden="true"></i></span>
-                                <div class="solicitud-notification-copy"><strong>@aviso</strong></div>
+                                <span class="solicitud-notification-icon @GetIconClass(aviso)"><i class="@GetIcon(aviso)" aria-hidden="true"></i></span>
+                                <div class="solicitud-notification-copy">
+                                    <span class="solicitud-notification-title-row">
+                                        <strong>@GetTitulo(aviso)</strong>
+                                        <span class="solicitud-notification-flag @GetFlagClass(aviso)">@GetEstado(aviso)</span>
+                                    </span>
+                                    <small>@aviso</small>
+                                </div>
                             </div>
+                            <button type="button" class="solicitud-notification-delete" @onclick="() => BorrarComisionAsync(aviso)" aria-label="Borrar notificación">
+                                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    }
+                    @foreach (var renovacion in RenovacionesVisibles)
+                    {
+                        <div class="solicitud-notification-item is-unread @GetRenovacionClass(renovacion)" @key="GetRenovacionKey(renovacion)">
+                            <button type="button" class="solicitud-notification-main" @onclick="IrARenovaciones">
+                                <span class="solicitud-notification-icon @GetRenovacionIconClass(renovacion)"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span>
+                                <span class="solicitud-notification-copy">
+                                    <span class="solicitud-notification-title-row">
+                                        <strong>Renovación próxima</strong>
+                                        <span class="solicitud-notification-flag @GetRenovacionFlagClass(renovacion)">@GetRenovacionEstado(renovacion)</span>
+                                    </span>
+                                    <small>@GetRenovacionDetalle(renovacion)</small>
+                                </span>
+                            </button>
+                            <button type="button" class="solicitud-notification-delete" @onclick="() => BorrarRenovacionAsync(renovacion)" aria-label="Borrar notificación de renovación">
+                                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                            </button>
                         </div>
                     }
                 }
@@ -67,3 +100,22 @@
         </div>
     }
 </div>
+
+@code {
+    private static bool EsPago(string aviso) =>
+        aviso.Contains("pagada", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetEstadoClass(string aviso) => EsPago(aviso) ? "is-commission-paid" : "is-pending-document";
+    private static string GetIconClass(string aviso) => EsPago(aviso) ? "is-approved" : "is-pending";
+    private static string GetIcon(string aviso) => EsPago(aviso) ? "bi bi-check-circle-fill" : "bi bi-exclamation-triangle-fill";
+    private static string GetTitulo(string aviso) => EsPago(aviso) ? "Comisión pagada" : "Factura pendiente";
+    private static string GetEstado(string aviso) => EsPago(aviso) ? "Pagada" : "Pendiente";
+    private static string GetFlagClass(string aviso) => EsPago(aviso) ? "is-success" : "is-warning";
+    private static string GetRenovacionClass(AliadoRenovacionDto renovacion) => renovacion.NivelAlerta == "danger" ? "is-renewal-urgent" : "is-renewal-warning";
+    private static string GetRenovacionIconClass(AliadoRenovacionDto renovacion) => renovacion.NivelAlerta == "danger" ? "is-rejected" : "is-pending";
+    private static string GetRenovacionFlagClass(AliadoRenovacionDto renovacion) => renovacion.NivelAlerta == "danger" ? "is-danger" : "is-warning";
+    private static string GetRenovacionEstado(AliadoRenovacionDto renovacion) => renovacion.NivelAlerta == "danger" ? "Urgente" : "Próxima";
+    private static string GetRenovacionDetalle(AliadoRenovacionDto renovacion) => renovacion.EsPorSaldo
+        ? $"{renovacion.Cliente} · {renovacion.Servicio}: quedan {renovacion.SaldoDocumentos} documentos."
+        : $"{renovacion.Cliente} · {renovacion.Servicio}: vence el {renovacion.FechaVencimiento:dd/MM/yyyy}.";
+}
