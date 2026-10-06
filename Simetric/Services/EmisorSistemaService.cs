@@ -443,6 +443,196 @@ public sealed class EmisorSistemaService
         };
     }
 
+    public async Task<EmisorSistemaSecuenciaInfo?> GetSecuenciaGuiaRemisionSistemaAsync()
+    {
+        await EnsureSchemaAsync();
+
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return null;
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await GetCajaPrincipalSistemaAsync(context);
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieGuia);
+        var state = await _initialSequencePromptService.GetStateAsync(
+            emisor.IdUsuario.Value,
+            "guia-remision",
+            serieRaw,
+            emisor.Codigo);
+
+        var siguiente = state.Initialized && state.HadPreviousDocuments
+            ? _initialSequencePromptService.GetNextSequenceFromPrevious(state.PreviousSequence)
+            : string.Empty;
+
+        return new EmisorSistemaSecuenciaInfo
+        {
+            EmisorCodigo = emisor.Codigo,
+            OwnerUserId = emisor.IdUsuario.Value,
+            SerieRaw = serieRaw,
+            SerieVisual = FormatearSerieVisual(cajaSistema?.SerieGuia),
+            Inicializada = state.Initialized,
+            UltimaSecuencia = state.PreviousSequence,
+            SiguienteSecuencia = siguiente
+        };
+    }
+
+    public async Task<EmisorSistemaGuardadoResultado> GuardarSecuenciaGuiaRemisionSistemaAsync(
+        int idUsuarioBackOffice,
+        bool yaFacturoAntes,
+        string? ultimaSecuencia)
+    {
+        await EnsureSchemaAsync();
+
+        if (!await TieneAccesoBackOfficeAsync(idUsuarioBackOffice))
+            return EmisorSistemaGuardadoResultado.Error("Solo los usuarios autorizados pueden configurar la secuencia maestra de guías de remisión.");
+
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar el emisor maestro del sistema.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await context.Caja
+            .Where(c => c.Estado == true && c.EsCajaSistema == true)
+            .OrderBy(c => c.NumCaja)
+            .ThenBy(c => c.Sec)
+            .FirstOrDefaultAsync();
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieGuia);
+        if (string.IsNullOrWhiteSpace(serieRaw))
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar la caja maestra del sistema para definir la serie de guías de remisión.");
+
+        string secuenciaNormalizada = string.Empty;
+        if (yaFacturoAntes && !_initialSequencePromptService.TryNormalizeSequence(ultimaSecuencia, out secuenciaNormalizada))
+            return EmisorSistemaGuardadoResultado.Error("La secuencia indicada no es valida. Debe estar entre 000000001 y 999999999.");
+
+        await _initialSequencePromptService.SaveStateAsync(
+            emisor.IdUsuario.Value,
+            "guia-remision",
+            serieRaw,
+            new InitialSequencePromptState
+            {
+                Initialized = true,
+                HadPreviousDocuments = yaFacturoAntes,
+                PreviousSequence = secuenciaNormalizada
+            },
+            emisor.Codigo);
+
+        var estadoGuardado = await _initialSequencePromptService.GetStateAsync(
+            emisor.IdUsuario.Value,
+            "guia-remision",
+            serieRaw,
+            emisor.Codigo);
+        var secuenciaEsperada = yaFacturoAntes ? secuenciaNormalizada : string.Empty;
+        if (estadoGuardado.Initialized != true ||
+            estadoGuardado.HadPreviousDocuments != yaFacturoAntes ||
+            !string.Equals(estadoGuardado.PreviousSequence, secuenciaEsperada, StringComparison.Ordinal))
+        {
+            return EmisorSistemaGuardadoResultado.Error(
+                "No se pudo confirmar el guardado de la secuencia maestra de guías de remisión. Verifica la serie configurada e intenta nuevamente.");
+        }
+
+        return EmisorSistemaGuardadoResultado.Ok(emisor) with
+        {
+            Message = yaFacturoAntes
+                ? $"Secuencia maestra de guías de remisión guardada correctamente. La siguiente saldra desde {_initialSequencePromptService.GetNextSequenceFromPrevious(secuenciaNormalizada)}."
+                : "Secuencia maestra de guías de remisión inicializada correctamente desde 000000001."
+        };
+    }
+
+    public async Task<EmisorSistemaSecuenciaInfo?> GetSecuenciaNotaDebitoSistemaAsync()
+    {
+        await EnsureSchemaAsync();
+
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return null;
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await GetCajaPrincipalSistemaAsync(context);
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieDebitos);
+        var state = await _initialSequencePromptService.GetStateAsync(
+            emisor.IdUsuario.Value,
+            "nota-debito",
+            serieRaw,
+            emisor.Codigo);
+
+        var siguiente = state.Initialized && state.HadPreviousDocuments
+            ? _initialSequencePromptService.GetNextSequenceFromPrevious(state.PreviousSequence)
+            : string.Empty;
+
+        return new EmisorSistemaSecuenciaInfo
+        {
+            EmisorCodigo = emisor.Codigo,
+            OwnerUserId = emisor.IdUsuario.Value,
+            SerieRaw = serieRaw,
+            SerieVisual = FormatearSerieVisual(cajaSistema?.SerieDebitos),
+            Inicializada = state.Initialized,
+            UltimaSecuencia = state.PreviousSequence,
+            SiguienteSecuencia = siguiente
+        };
+    }
+
+    public async Task<EmisorSistemaGuardadoResultado> GuardarSecuenciaNotaDebitoSistemaAsync(
+        int idUsuarioBackOffice,
+        bool yaFacturoAntes,
+        string? ultimaSecuencia)
+    {
+        await EnsureSchemaAsync();
+
+        if (!await TieneAccesoBackOfficeAsync(idUsuarioBackOffice))
+            return EmisorSistemaGuardadoResultado.Error("Solo los usuarios autorizados pueden configurar la secuencia maestra de notas de débito.");
+
+        var emisor = await GetEmisorSistemaAsync();
+        if (emisor?.IdUsuario is not > 0 || emisor.Codigo <= 0)
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar el emisor maestro del sistema.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var cajaSistema = await context.Caja
+            .Where(c => c.Estado == true && c.EsCajaSistema == true)
+            .OrderBy(c => c.NumCaja)
+            .ThenBy(c => c.Sec)
+            .FirstOrDefaultAsync();
+        var serieRaw = NormalizarSerieCaja(cajaSistema?.SerieDebitos);
+        if (string.IsNullOrWhiteSpace(serieRaw))
+            return EmisorSistemaGuardadoResultado.Error("Primero debes configurar la caja maestra del sistema para definir la serie de notas de débito.");
+
+        string secuenciaNormalizada = string.Empty;
+        if (yaFacturoAntes && !_initialSequencePromptService.TryNormalizeSequence(ultimaSecuencia, out secuenciaNormalizada))
+            return EmisorSistemaGuardadoResultado.Error("La secuencia indicada no es valida. Debe estar entre 000000001 y 999999999.");
+
+        await _initialSequencePromptService.SaveStateAsync(
+            emisor.IdUsuario.Value,
+            "nota-debito",
+            serieRaw,
+            new InitialSequencePromptState
+            {
+                Initialized = true,
+                HadPreviousDocuments = yaFacturoAntes,
+                PreviousSequence = secuenciaNormalizada
+            },
+            emisor.Codigo);
+
+        var estadoGuardado = await _initialSequencePromptService.GetStateAsync(
+            emisor.IdUsuario.Value,
+            "nota-debito",
+            serieRaw,
+            emisor.Codigo);
+        var secuenciaEsperada = yaFacturoAntes ? secuenciaNormalizada : string.Empty;
+        if (estadoGuardado.Initialized != true ||
+            estadoGuardado.HadPreviousDocuments != yaFacturoAntes ||
+            !string.Equals(estadoGuardado.PreviousSequence, secuenciaEsperada, StringComparison.Ordinal))
+        {
+            return EmisorSistemaGuardadoResultado.Error(
+                "No se pudo confirmar el guardado de la secuencia maestra de notas de débito. Verifica la serie configurada e intenta nuevamente.");
+        }
+
+        return EmisorSistemaGuardadoResultado.Ok(emisor) with
+        {
+            Message = yaFacturoAntes
+                ? $"Secuencia maestra de notas de débito guardada correctamente. La siguiente saldra desde {_initialSequencePromptService.GetNextSequenceFromPrevious(secuenciaNormalizada)}."
+                : "Secuencia maestra de notas de débito inicializada correctamente desde 000000001."
+        };
+    }
+
     public async Task<EmisorSistemaSecuenciaInfo?> GetSecuenciaLiquidacionCompraSistemaAsync()
     {
         await EnsureSchemaAsync();

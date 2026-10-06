@@ -65,6 +65,7 @@ public sealed class AliadoComisionGenerationService
                 IdFactura = x.Codfactura,
                 IdCliente = x.Codclientes,
                 Producto = x.Detallefacturas.OrderBy(d => d.Codlinea).Select(d => d.Descripproducto).FirstOrDefault() ?? string.Empty,
+                Detalles = x.Detallefacturas.Select(d => new AliadoComisionDetalle(d.Descripproducto, d.Cantproducto)).ToList(),
                 FechaVencimiento = x.Fechavence,
                 Subtotal = x.Subtotal,
                 Subtotal0 = x.Subtotal0,
@@ -91,10 +92,26 @@ public sealed class AliadoComisionGenerationService
             .GroupBy(x => x.Fecha.ToString("yyyy-MM"))
             .ToDictionary(x => x.Key, x => x.Sum(y => AliadoComisionCalculationService.ObtenerBaseNeta(y.Subtotal, y.Subtotal0, y.Subtotal12)));
         var comisionesPendientes = await db.AliadoComisiones
-            .Where(x => x.IdVendedor == idVendedor && (x.Estado == "Generada" || x.Estado == "Pendiente"))
+            .Where(x => x.IdVendedor == idVendedor && (x.Estado == "Generada" || x.Estado == "Pendiente" || x.Estado == "Aprobada"))
             .ToListAsync();
         foreach (var comision in comisionesPendientes)
         {
+            if (AliadoComisionCalculationService.PuedeRecalcular(comision.Estado, comision.TipoComision, comision.IdLiquidacion, comision.FechaPago) &&
+                facturasPorId.TryGetValue(comision.IdFactura, out var venta) &&
+                venta.Detalles.Any(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA"))
+            {
+                var nuevaBase = ObtenerBaseComisionable(venta);
+                if (comision.BaseComisionable != nuevaBase)
+                {
+                    var nuevoValor = AliadoComisionCalculationService.CalcularValor(nuevaBase, comision.Porcentaje);
+                    db.Auditorias.Add(new Auditoria { Fecha = DateTime.Now, Accion = "Recalcular comisión de firma",
+                        ValoresPrevios = System.Text.Json.JsonSerializer.Serialize(new { comision.IdComision, comision.BaseComisionable, comision.Valor }),
+                        ValorNuevo = System.Text.Json.JsonSerializer.Serialize(new { comision.IdComision, BaseComisionable = nuevaBase, Valor = nuevoValor }),
+                        Detalles = "Comisión sobre ganancia: venta sin IVA menos costo del proveedor." });
+                    comision.BaseComisionable = nuevaBase; comision.Valor = nuevoValor;
+                }
+            }
+            if (comision.Estado == "Aprobada") continue;
             if (facturasPorId.TryGetValue(comision.IdFactura, out var factura) && factura.Autorizado && EsPagoConfirmado(factura.EstadoPago))
             {
                 AliadoComisionStateMachine.Require(comision.Estado, AliadoComisionEstado.Aprobada);
@@ -119,7 +136,7 @@ public sealed class AliadoComisionGenerationService
 
         foreach (var factura in facturas)
         {
-            var baseComisionable = AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12);
+            var baseComisionable = ObtenerBaseComisionable(factura);
             if (baseComisionable <= 0)
                 continue;
 
@@ -223,6 +240,11 @@ public sealed class AliadoComisionGenerationService
             await db.SaveChangesAsync();
         await transaction.CommitAsync();
     }
+
+    private static decimal ObtenerBaseComisionable(FacturaComisionRow factura) =>
+        AliadoComisionCalculationService.ObtenerBaseComisionable(
+            AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12),
+            factura.Detalles.Where(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA"));
 
     private static bool EsPagoConfirmado(string? estadoPago)
         => estadoPago?.Trim().ToUpperInvariant() is "PAGADA" or "PAGADO" or "CANCELADA" or "CANCELADO" or "COBRADA" or "COBRADO";

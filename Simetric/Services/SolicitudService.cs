@@ -441,7 +441,7 @@ namespace Simetric.Services
             }
         }
 
-        public async Task<List<SolicitudPagoClienteDto>> ObtenerSolicitudesClienteAsync(int usuarioClienteId)
+        public async Task<List<SolicitudPagoClienteDto>> ObtenerSolicitudesClienteAsync(int? usuarioClienteId)
         {
             if (usuarioClienteId <= 0)
             {
@@ -500,7 +500,7 @@ namespace Simetric.Services
                     ORDER BY o.OBS_FECHA_OBSERVACION DESC
                 ) ultima
                 WHERE s.SOL_ACTIVO = 1
-                  AND s.SOL_ID_USUARIO_CLIENTE = @UsuarioClienteId
+                  AND (s.SOL_ID_USUARIO_CLIENTE = @UsuarioClienteId OR (s.SOL_ID_USUARIO_CLIENTE IS NULL AND @UsuarioClienteId IS NULL))
                 ORDER BY s.SOL_FECHA_SOLICITUD DESC;
                 """;
 
@@ -514,7 +514,7 @@ namespace Simetric.Services
         }
 
         public async Task<PagoFirmaReconciliationResult> ReconciliarPagosClienteAsync(
-            int usuarioClienteId,
+            int? usuarioClienteId,
             CancellationToken cancellationToken = default)
         {
             var summary = new PagoFirmaReconciliationResult();
@@ -814,7 +814,7 @@ namespace Simetric.Services
 
         public async Task<BesSolicitudOperacionResultadoDto> SincronizarSolicitudClienteUanatacaAsync(
             int solId,
-            int usuarioClienteId,
+            int? usuarioClienteId,
             CancellationToken cancellationToken = default)
         {
             if (solId <= 0 || usuarioClienteId <= 0)
@@ -849,7 +849,8 @@ namespace Simetric.Services
 
         public async Task<PagoFirmaReconciliationResult> SincronizarSolicitudesUanatacaPendientesAsync(
             int? usuarioClienteId = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool soloSinCuenta = false)
         {
             using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
             var solicitudes = await context.UsuSolicitudFirma
@@ -857,7 +858,7 @@ namespace Simetric.Services
                 .Where(s => s.SolActivo &&
                             s.SolPagoExitoso == true &&
                             !string.IsNullOrWhiteSpace(s.SolUanatacaUuid) &&
-                            (usuarioClienteId == null || s.SolIdUsuarioCliente == usuarioClienteId))
+                            (soloSinCuenta ? s.SolIdUsuarioCliente == null : (usuarioClienteId == null || s.SolIdUsuarioCliente == usuarioClienteId)))
                 .Select(s => new { s.SolId, s.SolUanatacaStatus })
                 .ToListAsync(cancellationToken);
 
@@ -1144,7 +1145,7 @@ namespace Simetric.Services
                 .ToListAsync();
         }
 
-        public async Task<UsuSolicitudFirma?> ObtenerSolicitudRenovacionClienteAsync(int solId, int usuarioClienteId)
+        public async Task<UsuSolicitudFirma?> ObtenerSolicitudRenovacionClienteAsync(int solId, int? usuarioClienteId)
         {
             if (solId <= 0 || usuarioClienteId <= 0)
                 return null;
@@ -1290,7 +1291,7 @@ namespace Simetric.Services
             });
         }
 
-        public async Task<List<SolicitudNotificacionDto>> ObtenerNotificacionesPendientesClienteAsync(int usuarioClienteId, int take = 8)
+        public async Task<List<SolicitudNotificacionDto>> ObtenerNotificacionesPendientesClienteAsync(int? usuarioClienteId, int take = 8)
         {
             if (usuarioClienteId <= 0)
             {
@@ -1318,7 +1319,7 @@ namespace Simetric.Services
                 FROM USU_SOLICITUD_OBSERVACION o
                 INNER JOIN USU_SOLICITUD_FIRMA s ON s.SOL_ID = o.OBS_ID_SOLICITUD
                 WHERE s.SOL_ACTIVO = 1
-                  AND s.SOL_ID_USUARIO_CLIENTE = @UsuarioClienteId
+                  AND (s.SOL_ID_USUARIO_CLIENTE = @UsuarioClienteId OR (s.SOL_ID_USUARIO_CLIENTE IS NULL AND @UsuarioClienteId IS NULL))
                   AND o.OBS_ACTIVO = 1
                   AND UPPER(o.OBS_ESTADO) = 'PENDIENTE'
                   AND UPPER(o.OBS_TIPO) IN ('CODIGO', 'CAMPO')
@@ -1606,7 +1607,7 @@ namespace Simetric.Services
                 : $"{campo.Etiqueta} debe corregirse. {detalle}";
         }
 
-        public async Task<bool> ResponderObservacionAsync(int observacionId, int usuarioClienteId, string respuesta)
+        public async Task<bool> ResponderObservacionAsync(int observacionId, int? usuarioClienteId, string respuesta)
         {
             if (observacionId <= 0 || usuarioClienteId <= 0 || string.IsNullOrWhiteSpace(respuesta))
             {
@@ -1673,7 +1674,7 @@ namespace Simetric.Services
 
         public async Task<bool> ResponderObservacionDocumentoAsync(
             int observacionId,
-            int usuarioClienteId,
+            int? usuarioClienteId,
             IBrowserFile archivo)
         {
             if (observacionId <= 0 || usuarioClienteId <= 0 || archivo is null)
@@ -2631,7 +2632,7 @@ namespace Simetric.Services
         private static string? FirstNonEmpty(params string?[] values) =>
             values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
-        public async Task<UsuSolicitudFirma?> ObtenerSolicitudRechazadaClienteAsync(int solId, int usuarioClienteId)
+        public async Task<UsuSolicitudFirma?> ObtenerSolicitudRechazadaClienteAsync(int solId, int? usuarioClienteId)
         {
             if (solId <= 0 || usuarioClienteId <= 0) return null;
 
@@ -2648,7 +2649,7 @@ namespace Simetric.Services
         public async Task<bool> ActualizarSolicitudRechazadaAsync(
             UsuSolicitudFirma datos,
             IReadOnlyCollection<(string TempFileName, string Tipo)> archivos,
-            int usuarioClienteId)
+            int? usuarioClienteId)
         {
             if (datos.SolId <= 0 || usuarioClienteId <= 0) return false;
 

@@ -33,7 +33,7 @@
             {
                 <label>Transferir titularidad a</label><select class="form-select mb-3" @bind="nuevoTitular">
                     <option value="0">Selecciona un miembro</option>
-                    @foreach (var usuario in resumen.Usuarios.Where(x => x.IdUsuario != userId))
+                    @foreach (var usuario in resumen.Usuarios.Where(x => x.IdUsuario != userId && !x.Suspendido && x.Usuario?.Estado == true))
                     { <option @key="usuario.IdUsuario" value="@usuario.IdUsuario">@usuario.Usuario?.NombreCompleto — @usuario.Usuario?.Email</option> }
                 </select>
                 <label class="d-block mb-3"><input type="checkbox" @bind="confirmarTransferencia" /> Confirmo transferir la titularidad y administración de la empresa</label>
@@ -75,14 +75,21 @@
                     @foreach (var perfil in resumen.Perfiles)
                     { <option @key="perfil.IdPerfil" value="@perfil.IdPerfil">@perfil.Nombre</option> }
                 </select>
-                <label>Nombre del rol</label><input class="form-control mb-3" maxlength="200" @bind="nombrePerfil" />
-                <label>Alcance</label><select class="form-select mb-3" @bind="sucursalId">
+                @if (RolCompartido) { <p class="alert alert-info">Este rol es compartido. Solo el titular puede modificarlo.</p> }
+                <label>Nombre del rol</label><input class="form-control mb-3" maxlength="200" @bind="nombrePerfil" @bind:after="() => confirmarImpacto = false" disabled="@(ocupado || RolCompartido)" />
+                <label>Alcance</label><select class="form-select mb-3" @bind="sucursalId" disabled="@(ocupado || RolCompartido)" @bind:after="() => confirmarImpacto = false">
                     @if (resumen.Contexto.EsJefeEmpresa) { <option value="0">Todas las sucursales de la empresa</option> }
                     @foreach (var sucursal in resumen.Sucursales)
                     { <option @key="sucursal.IdSucursal" value="@sucursal.IdSucursal">@sucursal.Nombre</option> }
                 </select>
                 @MenuChecks()
-                <button class="primary-btn" disabled="@ocupado" @onclick="GuardarPerfilAsync">Guardar rol</button>
+                @if (perfilId > 0 && !RolCompartido)
+                {
+                    <p>Este cambio afecta a @UsuariosAfectados usuario(s) que heredan los permisos del rol.</p>
+                    @if (UsuariosAfectados > 0)
+                    { <label class="d-block mb-3"><input type="checkbox" @bind="confirmarImpacto" disabled="@ocupado" /> Confirmo actualizar los permisos de estos usuarios</label> }
+                }
+                <button class="primary-btn" disabled="@(ocupado || RolCompartido || (perfilId > 0 && UsuariosAfectados > 0 && !confirmarImpacto))" @onclick="GuardarPerfilAsync">Guardar rol</button>
             }
             else if (tab == "Usuarios")
             {
@@ -90,7 +97,7 @@
                 <select class="form-select mb-3" value="@usuarioEditando" @onchange="SeleccionarUsuario">
                     <option value="0">Nueva cuenta</option>
                     @foreach (var miembro in resumen.Usuarios)
-                    { <option @key="miembro.IdUsuario" value="@miembro.IdUsuario">@miembro.Usuario?.NombreCompleto — @(miembro.IdUsuario == resumen.Empresa.IdTitular ? "Titular" : miembro.EsAdminSucursal ? "Administrador sucursal" : "Empleado")</option> }
+                    { <option @key="miembro.IdUsuario" value="@miembro.IdUsuario">@miembro.Usuario?.NombreCompleto — @(miembro.IdUsuario == resumen.Empresa.IdTitular ? "Titular" : miembro.EsAdminSucursal ? "Administrador sucursal" : "Empleado") @(miembro.Suspendido ? "(Suspendido)" : "")</option> }
                 </select>
                 @if (usuarioEditando == 0)
                 {
@@ -102,10 +109,29 @@
                 @Asignacion()
                 @if (usuarioEditando > 0)
                 {
-                    <label class="d-block my-3"><input type="checkbox" @bind="permisosUnicos" /> Usar permisos individuales en lugar de los del rol</label>
+                    <label class="d-block my-3"><input type="checkbox" @bind="permisosUnicos" disabled="@(ocupado || !UsuarioEditable)" /> Usar permisos individuales en lugar de los del rol</label>
+                    <p>Los permisos individuales reemplazan los del rol y siguen limitados por la empresa y sucursal.</p>
+                    @if (adminSucursal) { <p>Los administradores de sucursal acceden a todas las acciones habilitadas en su sucursal; el rol y las excepciones individuales no limitan ese acceso.</p> }
                     @if (permisosUnicos) { @MenuChecks() }
+                    @if (resumen.Usuarios.First(x => x.IdUsuario == usuarioEditando).MenusJson is not null)
+                    { <button class="secondary-btn mb-3" disabled="@(ocupado || !UsuarioEditable)" @onclick="RestablecerRolAsync">Restablecer permisos del rol</button> }
                 }
-                <button class="primary-btn" disabled="@ocupado" @onclick="GuardarUsuarioAsync">@(usuarioEditando == 0 ? "Crear cuenta" : "Guardar asignación")</button>
+                <button class="primary-btn" disabled="@(ocupado || !UsuarioEditable)" @onclick="GuardarUsuarioAsync">@(usuarioEditando == 0 ? "Crear cuenta" : "Guardar asignación")</button>
+                @if (usuarioEditando > 0)
+                {
+                    var miembro = resumen.Usuarios.First(x => x.IdUsuario == usuarioEditando);
+                    @if (usuarioEditando != userId && usuarioEditando != resumen.Empresa.IdTitular && (resumen.Contexto.EsJefeEmpresa || !miembro.EsAdminSucursal))
+                    { <button class="btn btn-outline-danger ms-2" disabled="@ocupado" @onclick="() => CambiarSuspensionAsync(!miembro.Suspendido)">@(miembro.Suspendido ? "Reactivar acceso" : "Suspender acceso")</button> }
+                    <h4 class="mt-4">Acceso efectivo guardado</h4>
+                    <p>Esta vista muestra la asignación guardada. Guarda los cambios para actualizarla.</p>
+                    <div class="table-responsive"><table class="table"><thead><tr><th>Menú</th><th>Acciones permitidas</th><th>Origen o limitación</th></tr></thead><tbody>
+                    @foreach (var menu in resumen.CatalogoMenus.Where(x => x.UrlMenu is not null))
+                    {
+                        var permitidas = accesoEfectivo.GetValueOrDefault(menu.IdMenu);
+                        <tr @key="menu.IdMenu"><td>@menu.NombreMenu</td><td>@(permitidas == 0 ? "Sin acceso" : string.Join(", ", AccionesEditables.Where(x => permitidas.HasFlag(x))))</td><td>@MotivoAcceso(menu)</td></tr>
+                    }
+                    </tbody></table></div>
+                }
             }
             else if (tab == "Invitaciones")
             {
@@ -121,6 +147,17 @@
                 }
                 </tbody></table>
             }
+            else if (tab == "Historial")
+            {
+                <h3>Historial de roles y permisos</h3><p>Últimos 100 cambios visibles para tu ámbito. Fechas en UTC.</p>
+                <div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Responsable</th><th>Cambio</th><th>Detalle</th></tr></thead><tbody>
+                @foreach (var cambio in historial)
+                {
+                    <tr @key="cambio.IdAuditoria"><td>@cambio.Fecha.ToString("dd/MM/yyyy HH:mm")</td><td>@(cambio.Usuario?.NombreCompleto ?? $"Usuario {cambio.IdUsuario}")</td><td>@cambio.Detalles</td>
+                        <td><details><summary>Ver antes y después</summary><p>Antes: @TextoCambio(cambio.ValoresPrevios)</p><p>Después: @TextoCambio(cambio.ValorNuevo)</p></details></td></tr>
+                }
+                </tbody></table></div>
+            }
         }
         </section>
     }
@@ -128,21 +165,42 @@
 
 @code {
     private RenderFragment MenuChecks() => @<div class="my-3">
-        @foreach (var menu in resumen!.Menus)
+        <p>@seleccion.Count menú(s) seleccionado(s). Habilita «Ver» antes de conceder otras acciones.</p>
+        @foreach (var grupo in GruposMenus)
         {
-            <label @key="menu.IdMenu" class="d-block mb-2"><input type="checkbox" checked="@seleccion.Contains(menu.IdMenu)" disabled="@(tab == "Sucursales" && !resumen.Contexto.EsJefeEmpresa)" @onchange="e => ToggleMenu(menu.IdMenu, e.Value is true)" /> @menu.NombreMenu</label>
+            var editables = grupo.Where(x => MenuDisponible(x.IdMenu)).ToList();
+            var bloqueado = ocupado || RolCompartido || (tab == "Usuarios" && !UsuarioEditable) || (tab == "Sucursales" && !resumen!.Contexto.EsJefeEmpresa);
+            <fieldset @key="grupo.Key" class="border rounded p-3 mb-3" disabled="@bloqueado">
+                <legend class="fs-6">@grupo.Key — @grupo.Count(x => seleccion.Contains(x.IdMenu))/@grupo.Count()</legend>
+                <label class="d-block mb-2"><input type="checkbox" checked="@(editables.Count > 0 && editables.All(x => seleccion.Contains(x.IdMenu)))" disabled="@(editables.Count == 0)" @onchange="e => ToggleGrupo(editables, e.Value is true)" /> Seleccionar grupo</label>
+                @foreach (var menu in grupo)
+                {
+                    var disponible = MenuDisponible(menu.IdMenu);
+                    <div @key="menu.IdMenu" class="mb-3">
+                        <label><input type="checkbox" checked="@seleccion.Contains(menu.IdMenu)" disabled="@(!disponible)" @onchange="e => ToggleMenu(menu.IdMenu, e.Value is true)" /> @menu.NombreMenu</label>
+                        @if (!disponible) { <small class="d-block text-muted">@(RolCompartido ? "Rol compartido de solo lectura" : "No habilitado en la empresa, sucursal o tu ámbito")</small> }
+                        @if (tab != "Sucursales")
+                        {
+                            <div class="d-flex flex-wrap gap-3 mt-1">
+                            @foreach (var accion in AccionesEditables)
+                            { <label @key="accion"><input type="checkbox" checked="@(seleccion.Contains(menu.IdMenu) && acciones.GetValueOrDefault(menu.IdMenu).HasFlag(accion))" disabled="@(!disponible || (accion != EContaxAccion.Ver && !seleccion.Contains(menu.IdMenu)))" @onchange="e => ToggleAccion(menu.IdMenu, accion, e.Value is true)" /> @accion</label> }
+                            </div>
+                        }
+                    </div>
+                }
+            </fieldset>
         }
     </div>;
     private RenderFragment Asignacion() => @<div>
-        <label>Sucursal</label><select class="form-select mb-3" @bind="sucursalId"><option value="0">Selecciona una sucursal</option>
+        <label>Sucursal</label><select class="form-select mb-3" @bind="sucursalId" @bind:after="CambiarSucursalAsignada" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))"><option value="0">Selecciona una sucursal</option>
             @foreach (var sucursal in resumen!.Sucursales)
             { <option @key="sucursal.IdSucursal" value="@sucursal.IdSucursal">@sucursal.Nombre</option> }
         </select>
-        <label>Rol</label><select class="form-select mb-3" @bind="perfilAsignado"><option value="0">Selecciona un rol</option>
+        <label>Rol</label><select class="form-select mb-3" @bind="perfilAsignado" @bind:after="CambiarPerfilAsignado" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))"><option value="0">Selecciona un rol</option>
             @foreach (var perfil in resumen.Perfiles.Where(x => x.IdSucursal == null || x.IdSucursal == sucursalId))
             { <option @key="perfil.IdPerfil" value="@perfil.IdPerfil">@perfil.Nombre</option> }
         </select>
         @if (resumen.Contexto.EsJefeEmpresa)
-        { <label class="d-block mb-3"><input type="checkbox" @bind="adminSucursal" /> Administrador de sucursal</label> }
+        { <label class="d-block mb-3"><input type="checkbox" @bind="adminSucursal" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))" /> Administrador de sucursal</label> }
     </div>;
 }

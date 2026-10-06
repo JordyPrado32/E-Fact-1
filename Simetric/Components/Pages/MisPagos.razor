@@ -1,4 +1,6 @@
 @page "/solicitud/pagos"
+@page "/backoffice/mis-firmas"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
 @page "/e-rubrica/solicitudes"
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
@@ -6,6 +8,7 @@
 @using Simetric.Services
 @using System.Security.Claims
 @using Microsoft.JSInterop
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<Simetric.Data.AppDbContext> DbFactory
 @inject SolicitudService SolicitudService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject SelectedAppServiceStateService SelectedAppServiceState
@@ -14,7 +17,7 @@
 
 <PageTitle>Historial de firmas | Numerica E-Rúbrica</PageTitle>
 
-<div class="mis-pagos-shell" data-tour="pagos.page">
+<div class="mis-pagos-shell @(EsBackOffice ? "backoffice-firmas" : string.Empty)" data-tour="pagos.page">
     <section class="mis-pagos-panel">
         <div class="mis-pagos-head" data-tour="pagos.header">
             <div>
@@ -125,7 +128,7 @@
                 </div>
                 <h4>Aun no tienes pagos registrados</h4>
                 <p>Cuando generes una solicitud de firma, el pago aparecera aqui.</p>
-                        <a class="mis-pagos-primary" href="@(DemoMode ? "/demo/erubrica?vista=solicitud" : "/solicitud/nueva")">Nueva solicitud</a>
+                        <a class="mis-pagos-primary" href="@(DemoMode ? "/demo/erubrica?vista=solicitud" : RutaNuevaFirma)">Nueva solicitud</a>
             </div>
         }
         else
@@ -234,7 +237,7 @@
                                         else if (sol.SolIdEstadoNumerica == 4)
                                         {
                                             <small>Rechazada. Corrige los datos o archivos indicados y vuelve a enviar la solicitud.</small>
-                                            <a class="mis-pagos-status-refresh" href="/solicitud/nueva?editar=@sol.SolId">
+                                            <a class="mis-pagos-status-refresh" href="@($"{RutaNuevaFirma}?editar={sol.SolId}")">
                                                 <i class="bi bi-pencil-square"></i> Editar solicitud
                                             </a>
                                         }
@@ -328,7 +331,7 @@
             }
 
             <div class="mis-pagos-actions" data-tour="pagos.action">
-                <a class="mis-pagos-primary" href="@(DemoMode ? "/demo/erubrica?vista=solicitud" : "/solicitud/nueva")">Nueva solicitud</a>
+                <a class="mis-pagos-primary" href="@(DemoMode ? "/demo/erubrica?vista=solicitud" : RutaNuevaFirma)">Nueva solicitud</a>
 
             </div>
         }
@@ -687,6 +690,9 @@
 </style>
 
 @code {
+    private bool EsBackOffice => BackOfficeRoutes.IsBackOfficePath(NavManager, NavManager.Uri);
+    private int? UsuarioSolicitudId => EsBackOffice ? null : usuarioIdActual;
+    private string RutaNuevaFirma => EsBackOffice ? BackOfficeRoutes.ComprarFirma : "/solicitud/nueva";
     [Parameter] public bool DemoMode { get; set; }
 
     private const decimal Iva = 0.15m;
@@ -777,7 +783,7 @@
     {
         var usarDatos = await JS.InvokeAsync<bool>("confirm",
             "Tu firma está próxima a vencer. ¿Deseas usar los mismos datos de la solicitud anterior?\n\nAceptar: reutilizar datos y documentos.\nCancelar: crear una solicitud nueva.");
-        NavManager.NavigateTo($"/solicitud/nueva?renovar={solId}&usarDatos={usarDatos.ToString().ToLowerInvariant()}");
+        NavManager.NavigateTo($"{RutaNuevaFirma}?renovar={solId}&usarDatos={usarDatos.ToString().ToLowerInvariant()}");
     }
     private string Busqueda
     {
@@ -828,6 +834,11 @@
             }
 
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            if (EsBackOffice && !await BackOfficePermissionHelper.PuedeComprarFirmasAsync(authState.User, DbFactory))
+            {
+                NavManager.NavigateTo("/portal-servicios");
+                return;
+            }
             var usuarioId = ObtenerUsuarioId(authState.User);
             usuarioIdActual = usuarioId;
 
@@ -838,8 +849,8 @@
                 return;
             }
 
-            var reconciliation = await SolicitudService.ReconciliarPagosClienteAsync(usuarioId);
-            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioId));
+            var reconciliation = await SolicitudService.ReconciliarPagosClienteAsync(UsuarioSolicitudId);
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(UsuarioSolicitudId));
 
             if (reconciliation.SentToUanataca > 0)
             {
@@ -888,9 +899,9 @@
 
         try
         {
-            var lote = await SolicitudService.SincronizarSolicitudesUanatacaPendientesAsync(usuarioIdActual);
+            var lote = await SolicitudService.SincronizarSolicitudesUanatacaPendientesAsync(UsuarioSolicitudId, soloSinCuenta: EsBackOffice);
 
-            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(UsuarioSolicitudId));
             PaginaActual = Math.Min(PaginaActual, TotalPaginas);
 
             mensajeSincronizacion = lote.Consulted == 0
@@ -922,7 +933,7 @@
         {
             var resultado = await SolicitudService.SincronizarSolicitudClienteUanatacaAsync(
                 solId,
-                usuarioIdActual);
+                UsuarioSolicitudId);
 
             if (!resultado.Success)
             {
@@ -931,7 +942,7 @@
             }
 
             solicitudes = FiltrarSolicitudesDeCuenta(
-                await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
+                await SolicitudService.ObtenerSolicitudesClienteAsync(UsuarioSolicitudId));
             PaginaActual = Math.Min(PaginaActual, TotalPaginas);
             mensajeSincronizacion = $"Estado actualizado: {resultado.ProviderStatusText ?? resultado.ProviderStatus ?? "registrada"}.";
         }
@@ -955,7 +966,7 @@
     }
 
     private List<SolicitudPagoClienteDto> FiltrarSolicitudesDeCuenta(IEnumerable<SolicitudPagoClienteDto> items) =>
-        items.Where(item => item.SolIdUsuarioCliente == usuarioIdActual).ToList();
+        items.Where(item => item.SolIdUsuarioCliente == UsuarioSolicitudId).ToList();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -963,7 +974,7 @@
         {
             if (!DemoMode)
             {
-                await SelectedAppServiceState.SetCurrentServiceKeyAsync("e-sign");
+                await SelectedAppServiceState.SetCurrentServiceKeyAsync(EsBackOffice ? BackOfficeRoutes.ServiceKey : "e-sign");
             }
         }
     }
@@ -1111,7 +1122,7 @@
             return;
         }
 
-        notificacionesPendientes = await SolicitudService.ObtenerNotificacionesPendientesClienteAsync(usuarioIdActual, 20);
+        notificacionesPendientes = await SolicitudService.ObtenerNotificacionesPendientesClienteAsync(UsuarioSolicitudId, 20);
 
         foreach (var notificacion in notificacionesPendientes)
         {
@@ -1227,7 +1238,7 @@
 
         try
         {
-            var ok = await SolicitudService.ResponderObservacionAsync(observacionId, usuarioIdActual, respuesta);
+            var ok = await SolicitudService.ResponderObservacionAsync(observacionId, UsuarioSolicitudId, respuesta);
             if (!ok)
             {
                 errorRespuesta = "No se pudo enviar la respuesta. Revisa que la notificacion siga pendiente.";
@@ -1235,7 +1246,7 @@
             }
 
             respuestasSoporte.Remove(observacionId);
-            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(UsuarioSolicitudId));
             PaginaActual = Math.Min(PaginaActual, TotalPaginas);
             await CargarNotificacionesAsync();
             if (solicitudAvisoSeleccionadaId is int solIdSeleccionado &&
@@ -1271,7 +1282,7 @@
         {
             var ok = await SolicitudService.ResponderObservacionDocumentoAsync(
                 notificacion.ObsId,
-                usuarioIdActual,
+                UsuarioSolicitudId,
                 archivo);
 
             if (!ok)
@@ -1283,7 +1294,7 @@
             archivosSoporte.Remove(notificacion.ObsId);
             erroresArchivosSoporte.Remove(notificacion.ObsId);
             respuestasSoporte.Remove(notificacion.ObsId);
-            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(usuarioIdActual));
+            solicitudes = FiltrarSolicitudesDeCuenta(await SolicitudService.ObtenerSolicitudesClienteAsync(UsuarioSolicitudId));
             PaginaActual = Math.Min(PaginaActual, TotalPaginas);
             await CargarNotificacionesAsync();
             if (solicitudAvisoSeleccionadaId is int solIdSeleccionado &&

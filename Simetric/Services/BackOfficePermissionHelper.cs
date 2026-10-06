@@ -63,6 +63,19 @@ public static class BackOfficePermissionHelper
         idTipoUsuario == SuperAdministradorRoleId ||
         (idTipoUsuario == BackOfficeRoleId && tipoCliente == AdministradorBackOfficeTipoCliente);
 
+    public static async Task<bool> PuedeComprarFirmasAsync(
+        ClaimsPrincipal user,
+        IDbContextFactory<AppDbContext> dbFactory)
+    {
+        if (user.Identity?.IsAuthenticated != true ||
+            !int.TryParse(user.FindFirst("IdUsuario")?.Value, out var idUsuario))
+            return false;
+
+        await using var context = await dbFactory.CreateDbContextAsync();
+        return await context.Usuarios.AsNoTracking().AnyAsync(usuario =>
+            usuario.IdUsuario == idUsuario && usuario.Estado == true &&
+            (usuario.IdTipoUsuario == BackOfficeRoleId || usuario.IdTipoUsuario == SuperAdministradorRoleId));
+    }
     public static async Task<bool> PuedeAccederERubricaAsync(
         ClaimsPrincipal user,
         IDbContextFactory<AppDbContext> dbFactory)

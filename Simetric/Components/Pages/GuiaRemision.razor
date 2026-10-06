@@ -1,4 +1,7 @@
 @page "/facturacion/guia-remision"
+@page "/backoffice/guia-remision"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@inject EmisorSistemaService EmisorSistemaService
 @using Microsoft.AspNetCore.Components.Authorization
 @implements IDisposable
 @using Microsoft.AspNetCore.Components.Forms
@@ -24,7 +27,7 @@
 
 <PageTitle>Guia de Remision | Numerica e-fact</PageTitle>
 
-<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern compact-guia-page docs-unified-page" data-tour="guia.page">
+<div class="container-fluid py-3 px-3 px-md-4 bg-light-modern compact-guia-page docs-unified-page @(EsBackOffice ? "backoffice-documento" : string.Empty)" data-tour="guia.page">
     <DocumentoEmisionToast Message="@mensajeRapidoEmision"
                            IsError="@mensajeRapidoEsError"
                            PdfUrl="@documentoGeneradoPdfUrl"
@@ -725,6 +728,11 @@
 }
 
 @code {
+    private bool EsBackOffice => BackOfficeRoutes.IsBackOfficePath(NavigationManager, NavigationManager.Uri);
+    private int usuarioBackOfficeId;
+    private EmisorModel? emisorMaestro;
+    private int? CodigoEmisorBackOffice => EsBackOffice ? emisorMaestro?.Codigo : null;
+    private int UsuarioCatalogo => EsBackOffice ? usuarioBackOfficeId : currentUserId;
     [Parameter] public int? UsuarioId { get; set; }
     [Parameter] public GuiaRemisionPrefillDto? Prefill { get; set; }
 
@@ -831,6 +839,22 @@
         currentUserId = UsuarioId.GetValueOrDefault() > 0
             ? UsuarioId!.Value
             : int.TryParse(userClaim, out var id) ? id : 0;
+        if (EsBackOffice)
+        {
+            usuarioBackOfficeId = currentUserId;
+            if (!await EmisorSistemaService.TieneAccesoBackOfficeAsync(usuarioBackOfficeId))
+            {
+                NavigationManager.NavigateTo("/portal-servicios");
+                return;
+            }
+            emisorMaestro = await EmisorSistemaService.GetEmisorSistemaAsync();
+            if (emisorMaestro?.IdUsuario is not > 0)
+            {
+                NavigationManager.NavigateTo(BackOfficeRoutes.Facturacion);
+                return;
+            }
+            currentUserId = emisorMaestro.IdUsuario.Value;
+        }
         await CargarEstadoEmisionAsync();
 
         identificaciones = (await IdentificacionService.GetAllActiveAsync())
@@ -839,13 +863,13 @@
                 !string.Equals((x.IdeDescripcion ?? string.Empty).Trim(), "CONSUMIDOR FINAL", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        seriesDocumento = await FacturacionService.GetSeriesFacturaHabilitadasAsync(currentUserId);
+        seriesDocumento = EsBackOffice ? new() : await FacturacionService.GetSeriesFacturaHabilitadasAsync(currentUserId);
 
         var caja = await FacturacionService.GetCajaUsuarioAsync(currentUserId);
         sinCaja = caja == null || string.IsNullOrWhiteSpace(caja.SerieGuia);
 
         ReiniciarModelos();
-        emisorPredeterminado = (await FacturacionService.GetEmisoresActivosAsync(currentUserId)).FirstOrDefault();
+        emisorPredeterminado = EsBackOffice ? emisorMaestro : (await FacturacionService.GetEmisoresActivosAsync(currentUserId)).FirstOrDefault();
         emisor = emisorPredeterminado;
         if (emisor != null && string.IsNullOrWhiteSpace(guia.DireccionPartida))
             guia.DireccionPartida = emisor.DirEstablecimiento ?? emisor.DireccionMatriz;
@@ -856,7 +880,7 @@
             return;
         }
 
-        serieGuiaVisual = await GuiaRemisionService.GetSerieGuiaVisualAsync(currentUserId);
+        serieGuiaVisual = EsBackOffice ? (await EmisorSistemaService.GetSecuenciaGuiaRemisionSistemaAsync())?.SerieVisual ?? string.Empty : await GuiaRemisionService.GetSerieGuiaVisualAsync(currentUserId);
         serieGuiaRawActual = serieGuiaVisual.Replace("-", string.Empty).Trim();
 
         await RecargarSecuencialAsync();
@@ -967,7 +991,7 @@
         {
             try
             {
-                var dto = await FacturacionService.GetFacturaPorNumeroUsuarioAsync(numFacturaBuscar.Trim(), currentUserId);
+                var dto = await FacturacionService.GetFacturaPorNumeroUsuarioAsync(numFacturaBuscar.Trim(), currentUserId, codEmisor: CodigoEmisorBackOffice);
                 if (dto?.Factura != null)
                 {
                     AplicarFacturaReferencia(dto);
@@ -1110,7 +1134,7 @@
         try
         {
             transportistaModal.Placa = (transportistaModal.Placa ?? string.Empty).Trim().ToUpperInvariant();
-            var guardado = await GuiaRemisionService.GuardarTransportistaAsync(transportistaModal);
+            var guardado = await GuiaRemisionService.GuardarTransportistaAsync(transportistaModal, CodigoEmisorBackOffice);
             SeleccionarTransportista(guardado);
             mostrarModalTransportista = false;
             errorTransportistaModal = null;
@@ -1247,7 +1271,7 @@
         productosCatalogoPorDetalle.Remove(detalle);
 
         var filtro = detalle.Descripcion.Trim();
-        sugerenciasProductosDetalle = await FacturacionService.BuscarProductosFiltroAsync(currentUserId, filtro);
+        sugerenciasProductosDetalle = await FacturacionService.BuscarProductosFiltroAsync(UsuarioCatalogo, filtro, EsBackOffice);
 
         var coincidenciaExacta = sugerenciasProductosDetalle.FirstOrDefault(producto =>
             string.Equals(producto.Descripcion?.Trim(), filtro, StringComparison.OrdinalIgnoreCase) ||
@@ -1455,7 +1479,7 @@
 
         try
         {
-            secuencialGuiaAutomatico = await GuiaRemisionService.GetNextGuiaRemisionNumeroAsync(currentUserId, serieGuiaRawActual);
+            secuencialGuiaAutomatico = await GuiaRemisionService.GetNextGuiaRemisionNumeroAsync(currentUserId, serieGuiaRawActual, CodigoEmisorBackOffice);
             await AplicarConfiguracionSecuenciaInicialAsync();
         }
         catch (Exception ex)
@@ -1471,7 +1495,8 @@
             string.Equals(serieGuiaRawActual, serieRaw, StringComparison.Ordinal))
             return;
 
-        await FacturacionService.SavePreferredSeriesForAllDocumentsAsync(currentUserId, serieRaw);
+        if (!EsBackOffice)
+            await FacturacionService.SavePreferredSeriesForAllDocumentsAsync(currentUserId, serieRaw);
         serieGuiaRawActual = serieRaw;
         serieGuiaVisual = FormatearSerie(serieRaw);
         await RecargarSecuencialAsync();
@@ -1479,10 +1504,15 @@
 
     private async Task AplicarConfiguracionSecuenciaInicialAsync()
     {
-        var estado = await InitialSequencePromptService.GetStateAsync(currentUserId, "guia-remision", serieGuiaRawActual);
+        var estado = await InitialSequencePromptService.GetStateAsync(currentUserId, "guia-remision", serieGuiaRawActual, emisor?.Codigo);
 
         if (!estado.Initialized)
         {
+            if (EsBackOffice)
+            {
+                estadoCarga = "Configura la secuencia en el emisor maestro.";
+                return;
+            }
             mostrarModalSecuenciaInicial = true;
             secuencialGuiaVisual = string.Empty;
             return;
@@ -1533,7 +1563,7 @@
             PreviousSequence = usuarioYaEmitioAntes.Value ? secuenciaNormalizada : string.Empty
         };
 
-        await InitialSequencePromptService.SaveStateAsync(currentUserId, "guia-remision", serieGuiaRawActual, estado);
+        await InitialSequencePromptService.SaveStateAsync(currentUserId, "guia-remision", serieGuiaRawActual, estado, emisor?.Codigo);
 
         secuenciaAnteriorManual = secuenciaNormalizada;
         mostrarModalSecuenciaInicial = false;
@@ -1566,7 +1596,7 @@
 
         try
         {
-            listaFacturas = await FacturacionService.BuscarFacturasAutocompleteAsync(numFacturaBuscar, currentUserId);
+            listaFacturas = await FacturacionService.BuscarFacturasAutocompleteAsync(numFacturaBuscar, currentUserId, CodigoEmisorBackOffice);
             mostrarListaFacturas = listaFacturas.Any();
             estadoCarga = listaFacturas.Any()
                 ? $"{listaFacturas.Count} coincidencia(s) encontrada(s)"
@@ -1633,7 +1663,7 @@
         try
         {
             estadoCarga = "Buscando factura...";
-            var dto = await FacturacionService.GetFacturaPorNumeroUsuarioAsync(numFacturaBuscar.Trim(), currentUserId);
+            var dto = await FacturacionService.GetFacturaPorNumeroUsuarioAsync(numFacturaBuscar.Trim(), currentUserId, codEmisor: CodigoEmisorBackOffice);
 
             if (dto?.Factura == null)
             {
@@ -1664,7 +1694,7 @@
         {
             var encontrado = await GuiaRemisionService.GetTransportistaPorIdentificacionAsync(
                 currentUserId,
-                transportista.NumeroIdentificacion);
+                transportista.NumeroIdentificacion, CodigoEmisorBackOffice);
             if (encontrado != null)
             {
                 transportista = encontrado;
@@ -1696,7 +1726,7 @@
         {
             sugerenciasTransportista = await GuiaRemisionService.BuscarTransportistasAsync(
                 currentUserId,
-                textoBusquedaTransportista.Trim());
+                textoBusquedaTransportista.Trim(), CodigoEmisorBackOffice);
             mostrarSugerenciasTransportista = sugerenciasTransportista.Any();
         }
         catch (Exception ex)
@@ -1762,7 +1792,7 @@
             mostrarSugerenciasCliente = false;
             return;
         }
-        sugerenciasCliente = await FacturacionService.BuscarClientesFiltroAsync(currentUserId, textoBusquedaCliente.Trim());
+        sugerenciasCliente = await FacturacionService.BuscarClientesFiltroAsync(UsuarioCatalogo, textoBusquedaCliente.Trim(), EsBackOffice);
         mostrarSugerenciasCliente = sugerenciasCliente.Any();
     }
 
@@ -1971,7 +2001,7 @@
 
     private async Task CargarEstadoEmisionAsync()
     {
-        emisionEstado = await EmisionControlService.ObtenerEstadoAsync(currentUserId);
+        emisionEstado = EsBackOffice ? new EmisionEstado { PuedeEmitir = true } : await EmisionControlService.ObtenerEstadoAsync(currentUserId);
     }
 
     private static bool EsCorreoValido(string correo)

@@ -1,4 +1,6 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Components.Authorization;
+using System.Security.Claims;
 using System.Data;
 using Simetric.Data;
 using Simetric.Models;
@@ -10,11 +12,31 @@ public class EContaxAdministracionService
 {
     private readonly AppDbContext _context;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly AuthenticationStateProvider _auth;
+    private readonly EContaxSeguridadService _seguridad;
 
-    public EContaxAdministracionService(AppDbContext context, IDbContextFactory<AppDbContext> dbFactory)
+    public EContaxAdministracionService(AppDbContext context, IDbContextFactory<AppDbContext> dbFactory, AuthenticationStateProvider auth, EContaxSeguridadService seguridad)
     {
         _context = context;
         _dbFactory = dbFactory;
+        _auth = auth;
+        _seguridad = seguridad;
+    }
+
+    private async Task ExigirAccionAsync(string ruta, EContaxAccion accion)
+    {
+        if (!await PuedeAccionAsync(ruta, accion))
+            throw new InvalidOperationException($"No tienes permiso para {accion.ToString().ToLowerInvariant()} en esta función de E-Contax.");
+    }
+
+    private async Task<bool> PuedeAccionAsync(string ruta, EContaxAccion accion)
+    {
+        var user = (await _auth.GetAuthenticationStateAsync()).User;
+        if (user.Identity?.IsAuthenticated != true || !int.TryParse(user.FindFirst("IdUsuario")?.Value ??
+            user.FindFirstValue(ClaimTypes.NameIdentifier), out var id))
+            throw new InvalidOperationException("Sesión no válida.");
+        return user.FindFirst("IdTipoUsuario")?.Value == AppAccessService.AdminRoleId ||
+            await _seguridad.PuedeAccederRutaAsync(id, ruta, accion);
     }
 
     public async Task<List<EContaxRol>> GetEContaxRolesAsync(bool includeInactivos = false)
@@ -632,6 +654,7 @@ public class EContaxAdministracionService
 
     public async Task<bool> GuardarFormaPagoAsync(FormasPago modelo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionFormasPago, modelo.Id == 0 ? EContaxAccion.Crear : EContaxAccion.Editar);
         try
         {
             var codigo = (modelo.Codigo ?? string.Empty).Trim();
@@ -709,6 +732,7 @@ public class EContaxAdministracionService
 
     public async Task<bool> DesactivarFormaPagoAsync(int id)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionFormasPago, EContaxAccion.Eliminar);
         try
         {
             var item = await _context.FormasPago.FindAsync(id);
@@ -747,6 +771,7 @@ public class EContaxAdministracionService
 
     public async Task<bool> GuardarIdentificacionAsync(Identificacion modelo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionIdentificaciones, modelo.IdeSec == 0 ? EContaxAccion.Crear : EContaxAccion.Editar);
         try
         {
             var codigo = (modelo.IdeCodigo ?? string.Empty).Trim();
@@ -814,6 +839,7 @@ public class EContaxAdministracionService
 
     public async Task<bool> DesactivarIdentificacionAsync(int id)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionIdentificaciones, EContaxAccion.Eliminar);
         try
         {
             var item = await _context.Identificacion.FindAsync(id);
@@ -863,6 +889,7 @@ public class EContaxAdministracionService
 
     public async Task SaveCodigoAsync(Codigosimpuesto modelo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionImpuestos, EContaxAccion.Crear);
         modelo.Codigo = (modelo.Codigo ?? string.Empty).Trim().ToUpperInvariant();
         modelo.Descripcion = (modelo.Descripcion ?? string.Empty).Trim();
         modelo.Estado = "A";
@@ -873,6 +900,7 @@ public class EContaxAdministracionService
 
     public async Task UpdateCodigoAsync(Codigosimpuesto modelo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionImpuestos, EContaxAccion.Editar);
         var codigo = (modelo.Codigo ?? string.Empty).Trim().ToUpperInvariant();
         var actual = await _context.Codigoimpuestos.FirstOrDefaultAsync(item => item.Codigo == codigo);
 
@@ -886,6 +914,7 @@ public class EContaxAdministracionService
 
     public async Task SoftDeleteCodigoImpuestoAsync(string codigo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionImpuestos, EContaxAccion.Eliminar);
         codigo = (codigo ?? string.Empty).Trim().ToUpperInvariant();
         var item = await _context.Codigoimpuestos.FirstOrDefaultAsync(x => x.Codigo == codigo);
 
@@ -929,6 +958,7 @@ public class EContaxAdministracionService
 
     public async Task SaveIvaAsync(Porcentajeiva modelo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionImpuestos, EContaxAccion.Crear);
         modelo.Codigo = (modelo.Codigo ?? string.Empty).Trim();
         modelo.Descripcion = (modelo.Descripcion ?? string.Empty).Trim();
         modelo.Valor = (modelo.Valor ?? string.Empty).Trim();
@@ -940,6 +970,7 @@ public class EContaxAdministracionService
 
     public async Task UpdateIvaAsync(Porcentajeiva modelo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionImpuestos, EContaxAccion.Editar);
         var codigo = (modelo.Codigo ?? string.Empty).Trim();
         var actual = await _context.Porcentajeivas.FirstOrDefaultAsync(item => item.Codigo == codigo);
 
@@ -955,6 +986,7 @@ public class EContaxAdministracionService
 
     public async Task SoftDeletePorcentajeIvaAsync(string codigo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionImpuestos, EContaxAccion.Eliminar);
         codigo = (codigo ?? string.Empty).Trim();
         var item = await _context.Porcentajeivas.FirstOrDefaultAsync(x => x.Codigo == codigo);
 
@@ -976,6 +1008,7 @@ public class EContaxAdministracionService
 
     public async Task GuardarRetencionIvaAsync(RetencionIva modelo, bool isEdit)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionRetenciones, isEdit ? EContaxAccion.Editar : EContaxAccion.Crear);
         ValidarRetencionNumero(modelo.Codigo, modelo.Descripcion);
         await using var context = await _dbFactory.CreateDbContextAsync();
 
@@ -999,6 +1032,7 @@ public class EContaxAdministracionService
 
     public async Task EliminarRetencionIvaAsync(int codigo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionRetenciones, EContaxAccion.Eliminar);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var item = await context.RetencionIva.FindAsync(codigo);
         if (item is null)
@@ -1021,6 +1055,7 @@ public class EContaxAdministracionService
 
     public async Task GuardarRetencionIsdAsync(RetencionIsd modelo, bool isEdit)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionRetenciones, isEdit ? EContaxAccion.Editar : EContaxAccion.Crear);
         ValidarRetencionNumero(modelo.Codigo, modelo.Descripcion);
         await using var context = await _dbFactory.CreateDbContextAsync();
 
@@ -1044,6 +1079,7 @@ public class EContaxAdministracionService
 
     public async Task EliminarRetencionIsdAsync(int codigo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionRetenciones, EContaxAccion.Eliminar);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var item = await context.RetencionIsd.FindAsync(codigo);
         if (item is null)
@@ -1066,6 +1102,7 @@ public class EContaxAdministracionService
 
     public async Task GuardarRetencionRentaAsync(RetencionRenta modelo, bool isEdit)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionRetenciones, isEdit ? EContaxAccion.Editar : EContaxAccion.Crear);
         ValidarRetencionTexto(modelo.Codigo, modelo.Descripcion);
         modelo.Estado ??= true;
         await using var context = await _dbFactory.CreateDbContextAsync();
@@ -1090,6 +1127,7 @@ public class EContaxAdministracionService
 
     public async Task EliminarRetencionRentaAsync(string codigo)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionRetenciones, EContaxAccion.Eliminar);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var item = await context.RetencionRenta.FindAsync(codigo);
         if (item is null)
@@ -1114,7 +1152,8 @@ public class EContaxAdministracionService
 
     public async Task<(List<LogIniciosSesion> Items, int Total)> GetLogsInicioAsync(DateTime? fechaDesde, DateTime? fechaHasta, int page, int pageSize)
     {
-        await PurgarLogsFueraDeMesActualAsync(DateTime.Now);
+        if (await PuedeAccionAsync(EContaxRoutes.AdministracionLogsInicio, EContaxAccion.Eliminar))
+            await PurgarLogsFueraDeMesActualAsync(DateTime.Now);
 
         var query = _context.LogIniciosSesiones
             .AsNoTracking()
@@ -1142,6 +1181,7 @@ public class EContaxAdministracionService
 
     public async Task<bool> EliminarLogInicioAsync(int id)
     {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionLogsInicio, EContaxAccion.Eliminar);
         var item = await _context.LogIniciosSesiones.FindAsync(id);
 
         if (item is null)
@@ -1151,13 +1191,19 @@ public class EContaxAdministracionService
         return await _context.SaveChangesAsync() > 0;
     }
 
-    public async Task<int> EliminarTodosLogsInicioAsync() =>
-        await _context.LogIniciosSesiones.ExecuteDeleteAsync();
+    public async Task<int> EliminarTodosLogsInicioAsync()
+    {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionLogsInicio, EContaxAccion.Eliminar);
+        return await _context.LogIniciosSesiones.ExecuteDeleteAsync();
+    }
 
-    public async Task<int> EliminarLogsInicioPeriodoAsync(DateTime inicio, DateTime fin) =>
-        await _context.LogIniciosSesiones
+    public async Task<int> EliminarLogsInicioPeriodoAsync(DateTime inicio, DateTime fin)
+    {
+        await ExigirAccionAsync(EContaxRoutes.AdministracionLogsInicio, EContaxAccion.Eliminar);
+        return await _context.LogIniciosSesiones
             .Where(item => item.FechaAcceso >= inicio && item.FechaAcceso < fin)
             .ExecuteDeleteAsync();
+    }
 
     private async Task<int> PurgarLogsFueraDeMesActualAsync(DateTime fechaReferencia)
     {

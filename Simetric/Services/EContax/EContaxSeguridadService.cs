@@ -18,11 +18,16 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
 
     private static string Serializar(IEnumerable<int> menus) => JsonSerializer.Serialize(menus.Distinct().Order());
 
+    public static Dictionary<int, EContaxAccion> LeerAcciones(string? json) => EContaxPermisos.LeerAcciones(json);
+
+    public static EContaxAccion AccionesDe(string? json, int menuId) => EContaxPermisos.AccionesDe(json, menuId);
+
     public async Task<List<EContaxMenu>> GetMenusAsync(int userId)
     {
         await using var db = await factory.CreateDbContextAsync();
         var miembro = await db.EContaxUsuariosContexto.AsNoTracking().FirstOrDefaultAsync(x => x.IdUsuario == userId);
-        if (miembro is null || !miembro.Estado) return new();
+        if (miembro is null || !miembro.Estado || miembro.Suspendido ||
+            !await db.Usuarios.AnyAsync(x => x.IdUsuario == userId && x.Estado == true)) return new();
         var empresa = await db.EContaxEmpresas.AsNoTracking().SingleAsync(x => x.IdEmpresa == miembro.IdEmpresa);
         if (!empresa.Estado) return new();
         var menus = await db.EContaxMenus.AsNoTracking().Where(x => x.EstadoMenu == 1).ToListAsync();
@@ -41,6 +46,12 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                     (x.IdSucursal == null || x.IdSucursal == miembro.IdSucursal));
                 if (perfil is null) return new();
                 permitidos.IntersectWith(LeerMenus(miembro.MenusJson ?? perfil.MenusJson));
+                var accionesJson = miembro.MenusJson is null ? perfil.AccionesJson : miembro.AccionesJson;
+                if (accionesJson is not null)
+                {
+                    var acciones = LeerAcciones(accionesJson);
+                    permitidos.RemoveWhere(id => EContaxPermisos.Normalizar(acciones.GetValueOrDefault(id)) == 0);
+                }
             }
         }
         // Los padres se incluyen para navegar, sin habilitar sus rutas por herencia.
@@ -62,21 +73,23 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
     public async Task<bool> PuedeAdministrarAsync(int userId)
     {
         await using var db = await factory.CreateDbContextAsync();
-        return await db.EContaxUsuariosContexto.AnyAsync(x => x.IdUsuario == userId && x.Estado &&
+        return await db.EContaxUsuariosContexto.AnyAsync(x => x.IdUsuario == userId && x.Estado && !x.Suspendido &&
             x.Usuario != null && x.Usuario.Estado == true && x.Empresa != null && x.Empresa.Estado &&
             (x.Empresa.IdTitular == userId || (x.EsAdminSucursal && x.Sucursal != null && x.Sucursal.Estado)));
     }
 
-    public async Task<bool> PuedeAccederRutaAsync(int userId, string path)
+    public async Task<bool> PuedeAccederRutaAsync(int userId, string path, EContaxAccion accion = EContaxAccion.Ver)
     {
+        if (accion == 0 || (accion & ~EContaxAccion.Todas) != 0) return false;
         await using var db = await factory.CreateDbContextAsync();
-        if (!await db.EContaxUsuariosContexto.AnyAsync(x => x.IdUsuario == userId && x.Estado &&
+        if (!await db.EContaxUsuariosContexto.AnyAsync(x => x.IdUsuario == userId && x.Estado && !x.Suspendido &&
             x.Usuario != null && x.Usuario.Estado == true && x.Empresa != null && x.Empresa.Estado &&
             (x.Empresa.IdTitular == userId || (x.Sucursal != null && x.Sucursal.Estado)))) return false;
         path = path.Split('?', '#')[0].TrimEnd('/');
         if (path is EContaxRoutes.Root or EContaxRoutes.DashboardAlias or EContaxRoutes.Profile or EContaxRoutes.Soporte)
-            return true;
-        if (path is "/e-contax/administracion/roles" or "/e-contax/administracion/usuarios") return true;
+            return accion == EContaxAccion.Ver;
+        if (path is "/e-contax/administracion/roles" or "/e-contax/administracion/usuarios")
+            return accion == EContaxAccion.Ver || await PuedeAdministrarAsync(userId);
         var rutas = await db.EContaxMenus.AsNoTracking().Where(x => x.EstadoMenu == 1 && x.UrlMenu != null)
             .Select(x => x.UrlMenu!).ToListAsync();
         var coincidente = rutas.Select(x => x.Split('?', '#')[0].TrimEnd('/'))
@@ -84,8 +97,37 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                 (x != EContaxRoutes.Root && path.StartsWith(x + "/", StringComparison.OrdinalIgnoreCase)))
             .OrderByDescending(x => x.Length).FirstOrDefault();
         if (coincidente is null) return false;
-        return (await GetMenusAsync(userId)).Any(x => x.UrlMenu != null &&
+        var menu = (await GetMenusAsync(userId)).FirstOrDefault(x => x.UrlMenu != null &&
             x.UrlMenu.Split('?', '#')[0].TrimEnd('/').Equals(coincidente, StringComparison.OrdinalIgnoreCase));
+        return menu is not null && (await GetAccionesUsuarioAsync(userId)).GetValueOrDefault(menu.IdMenu).HasFlag(accion);
+    }
+
+    public async Task<Dictionary<int, EContaxAccion>> GetAccionesUsuarioAsync(int userId)
+    {
+        var menus = await GetMenusAsync(userId);
+        await using var db = await factory.CreateDbContextAsync();
+        var miembro = await db.EContaxUsuariosContexto.AsNoTracking().Include(x => x.Empresa)
+            .FirstOrDefaultAsync(x => x.IdUsuario == userId);
+        if (miembro is null) return new();
+        string? json = null;
+        if (miembro.Empresa?.IdTitular != userId && !miembro.EsAdminSucursal)
+            json = miembro.MenusJson is not null ? miembro.AccionesJson :
+                await db.EContaxPerfiles.Where(x => x.IdPerfil == miembro.IdPerfil).Select(x => x.AccionesJson).FirstOrDefaultAsync();
+        var acciones = LeerAcciones(json);
+        return menus.Where(x => x.UrlMenu is not null).ToDictionary(x => x.IdMenu,
+            x => json is null ? EContaxAccion.Todas : EContaxPermisos.Normalizar(acciones.GetValueOrDefault(x.IdMenu)));
+    }
+
+    public async Task ExigirAccionAsync(int userId, string ruta, EContaxAccion accion)
+    {
+        if (!await PuedeAccederRutaAsync(userId, ruta, accion))
+            throw new InvalidOperationException($"No tienes permiso para {accion.ToString().ToLowerInvariant()} en esta función de E-Contax.");
+    }
+
+    public async Task<EContaxAccion> GetAccionesRutaAsync(int userId, string ruta)
+    {
+        var menu = (await GetMenusAsync(userId)).FirstOrDefault(x => string.Equals(x.UrlMenu?.TrimEnd('/'), ruta.TrimEnd('/'), StringComparison.OrdinalIgnoreCase));
+        return menu is null ? 0 : (await GetAccionesUsuarioAsync(userId)).GetValueOrDefault(menu.IdMenu);
     }
 
     public async Task<EContaxSeguridadResumen> GetResumenAsync(int userId)
@@ -109,8 +151,31 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             Invitaciones = esAdmin ? await db.EContaxInvitaciones.AsNoTracking().Where(x => x.IdEmpresa == actor.IdEmpresa &&
                 (actor.EsJefeEmpresa || x.IdSucursal == actor.IdSucursal) && !x.Cancelada && x.Aceptada == null && x.Vence > DateTime.UtcNow)
                 .OrderByDescending(x => x.IdInvitacion).ToListAsync() : new(),
-            Menus = esAdmin ? await GetMenusAsync(userId) : new()
+            Menus = esAdmin ? await GetMenusAsync(userId) : new(),
+            CatalogoMenus = esAdmin ? await db.EContaxMenus.AsNoTracking().Where(x => x.EstadoMenu == 1)
+                .OrderBy(x => x.OrdenMenu).ThenBy(x => x.NombreMenu).ToListAsync() : new()
         };
+    }
+
+    public async Task<List<Auditoria>> GetHistorialAsync(int actorId)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        var actor = await tenant.GetContextAsync(db, actorId);
+        await ValidarAdminAsync(db, actorId, actor.IdSucursal);
+        var prefijo = $"E-Contax/seguridad/{actor.IdEmpresa}/";
+        if (!actor.EsJefeEmpresa) prefijo += $"{actor.IdSucursal}/";
+        return await db.Auditorias.AsNoTracking().Include(x => x.Usuario)
+            .Where(x => x.Accion != null && x.Accion.StartsWith(prefijo))
+            .OrderByDescending(x => x.IdAuditoria).Take(100).ToListAsync();
+    }
+
+    private static void RegistrarCambio(AppDbContext db, int actorId, int empresaId, int? sucursalId,
+        string accion, object? antes, object? despues)
+    {
+        db.Auditorias.Add(new Auditoria { IdUsuario = actorId, Fecha = DateTime.UtcNow,
+            Accion = $"E-Contax/seguridad/{empresaId}/{sucursalId ?? 0}/{accion}",
+            ValoresPrevios = antes is null ? null : JsonSerializer.Serialize(antes),
+            ValorNuevo = despues is null ? null : JsonSerializer.Serialize(despues), Detalles = accion });
     }
 
     private async Task<EContaxUserContext> ValidarAdminAsync(AppDbContext db, int actorId, int? sucursalId = null)
@@ -142,11 +207,44 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
         return Serializar(solicitados);
     }
 
-    public async Task GuardarPerfilAsync(int actorId, int perfilId, string nombre, int? sucursalId, IEnumerable<int> menus)
+    private async Task ValidarAccionesAsync(int actorId, string menusJson, string? accionesJson)
+    {
+        var menus = LeerMenus(menusJson);
+        var acciones = LeerAcciones(accionesJson);
+        if (acciones.Keys.Any(id => !menus.Contains(id)) ||
+            (accionesJson is not null && menus.Any(id => !acciones.GetValueOrDefault(id).HasFlag(EContaxAccion.Ver))) ||
+            acciones.Values.Any(x => (x & ~EContaxAccion.Todas) != 0))
+            throw new InvalidOperationException("Los permisos por acción deben pertenecer a un menú habilitado y permitir consultar.");
+        var disponibles = await GetAccionesUsuarioAsync(actorId);
+        if (menus.Any(id => (AccionesDe(accionesJson, id) & ~disponibles.GetValueOrDefault(id)) != 0))
+            throw new InvalidOperationException("No puedes conceder acciones que no tienes habilitadas.");
+    }
+
+    public async Task CambiarSuspensionAsync(int actorId, int userId, bool suspendido)
+    {
+        await MutarAsync(async db =>
+        {
+            var miembro = await db.EContaxUsuariosContexto.SingleAsync(x => x.IdUsuario == userId && x.Estado);
+            var actor = await ValidarAdminAsync(db, actorId, miembro.IdSucursal);
+            if (miembro.IdEmpresa != actor.IdEmpresa || userId == actor.IdUsuarioTitular || userId == actorId ||
+                (!actor.EsJefeEmpresa && miembro.EsAdminSucursal))
+                throw new InvalidOperationException("No puedes suspender al titular, tu propia cuenta ni administradores de otra jerarquía.");
+            if (!suspendido)
+                await ValidarPerfilAsync(db, actor.IdEmpresa, miembro.IdSucursal ?? 0, miembro.IdPerfil ?? 0);
+            RegistrarCambio(db, actorId, actor.IdEmpresa, miembro.IdSucursal, suspendido ? "Suspender usuario" : "Reactivar usuario",
+                new { miembro.IdUsuario, miembro.Suspendido }, new { IdUsuario = userId, Suspendido = suspendido });
+            miembro.Suspendido = suspendido; miembro.FechaActualizacion = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        });
+    }
+
+    public async Task GuardarPerfilAsync(int actorId, int perfilId, string nombre, int? sucursalId, IEnumerable<int> menus,
+        string? accionesJson = null)
     {
         nombre = nombre.Trim();
         if (nombre.Length is < 1 or > 200) throw new InvalidOperationException("El nombre del rol debe tener entre 1 y 200 caracteres.");
         var json = await ValidarMenusAsync(actorId, menus);
+        await ValidarAccionesAsync(actorId, json, accionesJson);
         await MutarAsync(async db =>
         {
             var actor = await ValidarAdminAsync(db, actorId, sucursalId);
@@ -154,7 +252,13 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                 : await db.EContaxPerfiles.SingleAsync(x => x.IdPerfil == perfilId && x.IdEmpresa == actor.IdEmpresa);
             if (!actor.EsJefeEmpresa && perfil.IdSucursal != actor.IdSucursal)
                 throw new InvalidOperationException("Solo el administrador de empresa puede modificar roles compartidos.");
-            perfil.Nombre = nombre; perfil.MenusJson = json; perfil.IdSucursal = sucursalId;
+            if (sucursalId is > 0 && await db.EContaxUsuariosContexto.AnyAsync(x => x.IdPerfil == perfilId && x.Estado &&
+                x.IdEmpresa == actor.IdEmpresa && x.IdSucursal != sucursalId))
+                throw new InvalidOperationException("El rol está asignado en otras sucursales. Reasigna esos usuarios antes de limitar su alcance.");
+            RegistrarCambio(db, actorId, actor.IdEmpresa, perfilId == 0 || perfil.IdSucursal == sucursalId ? sucursalId : null, "Guardar rol",
+                perfilId == 0 ? null : new { perfil.IdPerfil, perfil.Nombre, perfil.MenusJson, perfil.AccionesJson, perfil.IdSucursal },
+                new { IdPerfil = perfilId, Nombre = nombre, MenusJson = json, AccionesJson = accionesJson, IdSucursal = sucursalId });
+            perfil.Nombre = nombre; perfil.MenusJson = json; perfil.IdSucursal = sucursalId; perfil.AccionesJson = accionesJson;
             if (perfilId == 0) db.EContaxPerfiles.Add(perfil);
             await db.SaveChangesAsync();
         });
@@ -168,14 +272,18 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             var actor = await ValidarAdminAsync(db, actorId, sucursalId);
             if (!actor.EsJefeEmpresa) throw new InvalidOperationException("Solo el titular puede habilitar menús por sucursal.");
             var sucursal = await db.EContaxSucursales.SingleAsync(x => x.IdEmpresa == actor.IdEmpresa && x.IdSucursal == sucursalId);
+            RegistrarCambio(db, actorId, actor.IdEmpresa, sucursalId, "Permisos de sucursal",
+                new { sucursal.MenusJson }, new { MenusJson = json });
             sucursal.MenusJson = json;
             await db.SaveChangesAsync();
         });
     }
 
-    public async Task GuardarUsuarioAsync(int actorId, int userId, int sucursalId, int perfilId, bool admin, string? menusJson)
+    public async Task GuardarUsuarioAsync(int actorId, int userId, int sucursalId, int perfilId, bool admin, string? menusJson,
+        string? accionesJson = null)
     {
         var json = menusJson is null ? null : await ValidarMenusAsync(actorId, LeerMenus(menusJson));
+        if (json is not null) await ValidarAccionesAsync(actorId, json, accionesJson);
         await MutarAsync(async db =>
         {
             var actor = await ValidarAdminAsync(db, actorId, sucursalId);
@@ -184,8 +292,11 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             if (userId == actor.IdUsuarioTitular) throw new InvalidOperationException("Transfiere la titularidad para cambiar al propietario.");
             if (!actor.EsJefeEmpresa && (miembro.IdSucursal != actor.IdSucursal || miembro.EsAdminSucursal || admin))
                 throw new InvalidOperationException("No puedes modificar administradores ni usuarios de otra sucursal.");
+            RegistrarCambio(db, actorId, actor.IdEmpresa, miembro.IdSucursal == sucursalId ? sucursalId : null, "Asignación de usuario",
+                new { miembro.IdUsuario, miembro.IdSucursal, miembro.IdPerfil, miembro.EsAdminSucursal, miembro.MenusJson, miembro.AccionesJson },
+                new { IdUsuario = userId, IdSucursal = sucursalId, IdPerfil = perfilId, EsAdminSucursal = admin, MenusJson = json, AccionesJson = accionesJson });
             miembro.IdSucursal = sucursalId; miembro.IdPerfil = perfilId; miembro.EsAdminSucursal = admin;
-            miembro.MenusJson = json; miembro.FechaActualizacion = DateTime.UtcNow;
+            miembro.MenusJson = json; miembro.AccionesJson = json is null ? null : accionesJson; miembro.FechaActualizacion = DateTime.UtcNow;
             await db.SaveChangesAsync();
         });
     }
@@ -211,6 +322,8 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             await db.SaveChangesAsync();
             db.EContaxUsuariosContexto.Add(new() { IdUsuario = usuario.IdUsuario, IdEmpresa = actor.IdEmpresa,
                 IdSucursal = sucursalId, IdPerfil = perfilId, EsAdminSucursal = admin });
+            RegistrarCambio(db, actorId, actor.IdEmpresa, sucursalId, "Crear cuenta de empleado", null,
+                new { usuario.IdUsuario, IdSucursal = sucursalId, IdPerfil = perfilId, EsAdminSucursal = admin });
             await db.SaveChangesAsync();
         });
     }
@@ -230,6 +343,8 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                 throw new InvalidOperationException("Esta cuenta ya tiene una invitación pendiente.");
             db.EContaxInvitaciones.Add(new() { IdEmpresa = actor.IdEmpresa, IdSucursal = sucursalId, IdPerfil = perfilId,
                 IdInvitador = actorId, Email = email, EsAdminSucursal = admin, TokenHash = Hash(token), Vence = DateTime.UtcNow.AddDays(2) });
+            RegistrarCambio(db, actorId, actor.IdEmpresa, sucursalId, "Invitar empleado", null,
+                new { Correo = email, IdSucursal = sucursalId, IdPerfil = perfilId, EsAdminSucursal = admin });
             await db.SaveChangesAsync();
         });
         return token;
@@ -242,6 +357,8 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             var invitacion = await db.EContaxInvitaciones.SingleAsync(x => x.IdInvitacion == invitacionId);
             var actor = await ValidarAdminAsync(db, actorId, invitacion.IdSucursal);
             if (actor.IdEmpresa != invitacion.IdEmpresa) throw new InvalidOperationException("Invitación de otra empresa.");
+            RegistrarCambio(db, actorId, actor.IdEmpresa, invitacion.IdSucursal, "Cancelar invitación",
+                new { Correo = invitacion.Email }, null);
             invitacion.Cancelada = true;
             await db.SaveChangesAsync();
         });
@@ -265,10 +382,13 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             await ValidarPerfilAsync(db, invitacion.IdEmpresa, invitacion.IdSucursal, invitacion.IdPerfil);
             var miembro = await db.EContaxUsuariosContexto.SingleOrDefaultAsync(x => x.IdUsuario == userId);
             if (miembro?.Estado == true) throw new InvalidOperationException("Abandona tu empresa actual antes de aceptar una invitación.");
+            RegistrarCambio(db, userId, invitacion.IdEmpresa, invitacion.IdSucursal, "Aceptar invitación", null,
+                new { IdUsuario = userId, invitacion.IdSucursal, invitacion.IdPerfil, invitacion.EsAdminSucursal });
             if (miembro is null) { miembro = new() { IdUsuario = userId }; db.EContaxUsuariosContexto.Add(miembro); }
             miembro.IdEmpresa = invitacion.IdEmpresa; miembro.IdSucursal = invitacion.IdSucursal;
             miembro.IdPerfil = invitacion.IdPerfil; miembro.EsAdminSucursal = invitacion.EsAdminSucursal;
-            miembro.MenusJson = null; miembro.Estado = true; miembro.FechaActualizacion = DateTime.UtcNow;
+            miembro.MenusJson = null; miembro.AccionesJson = null; miembro.Suspendido = false;
+            miembro.Estado = true; miembro.FechaActualizacion = DateTime.UtcNow;
             invitacion.Aceptada = DateTime.UtcNow;
             await db.SaveChangesAsync();
         });
@@ -281,8 +401,11 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             var miembro = await db.EContaxUsuariosContexto.SingleAsync(x => x.IdUsuario == userId && x.Estado);
             var empresa = await db.EContaxEmpresas.SingleAsync(x => x.IdEmpresa == miembro.IdEmpresa);
             if (empresa.IdTitular == userId) throw new InvalidOperationException("Transfiere primero la titularidad a otro miembro de la empresa.");
+            RegistrarCambio(db, userId, miembro.IdEmpresa, miembro.IdSucursal, "Abandonar empresa",
+                new { miembro.IdUsuario, miembro.IdSucursal, miembro.IdPerfil }, null);
             miembro.Estado = false; miembro.IdSucursal = null; miembro.IdPerfil = null;
-            miembro.EsAdminSucursal = false; miembro.MenusJson = null; miembro.FechaActualizacion = DateTime.UtcNow;
+            miembro.EsAdminSucursal = false; miembro.MenusJson = null; miembro.AccionesJson = null;
+            miembro.FechaActualizacion = DateTime.UtcNow;
             foreach (var invitacion in await db.EContaxInvitaciones.Where(x => x.IdInvitador == userId && x.Aceptada == null).ToListAsync())
                 invitacion.Cancelada = true;
             await db.SaveChangesAsync();
@@ -295,8 +418,12 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
         {
             var actor = await ValidarAdminAsync(db, actorId);
             if (!actor.EsJefeEmpresa || actorId == nuevoTitular) throw new InvalidOperationException("Selecciona otro miembro para transferir la titularidad.");
-            var nuevo = await db.EContaxUsuariosContexto.SingleAsync(x => x.IdUsuario == nuevoTitular && x.IdEmpresa == actor.IdEmpresa && x.Estado);
+            var nuevo = await db.EContaxUsuariosContexto.SingleOrDefaultAsync(x => x.IdUsuario == nuevoTitular &&
+                x.IdEmpresa == actor.IdEmpresa && x.Estado && !x.Suspendido && x.Usuario != null && x.Usuario.Estado == true);
+            if (nuevo is null) throw new InvalidOperationException("Selecciona un miembro activo para recibir la titularidad.");
             var empresa = await db.EContaxEmpresas.SingleAsync(x => x.IdEmpresa == actor.IdEmpresa);
+            RegistrarCambio(db, actorId, actor.IdEmpresa, null, "Transferir titularidad",
+                new { empresa.IdTitular }, new { IdTitular = nuevoTitular });
             empresa.IdTitular = nuevoTitular;
             // El anterior titular conserva administración de su sucursal hasta abandonar.
             var anterior = await db.EContaxUsuariosContexto.SingleAsync(x => x.IdUsuario == actorId);
@@ -332,4 +459,5 @@ public sealed class EContaxSeguridadResumen
     public List<EContaxUsuarioContexto> Usuarios { get; set; } = new();
     public List<EContaxInvitacion> Invitaciones { get; set; } = new();
     public List<EContaxMenu> Menus { get; set; } = new();
+    public List<EContaxMenu> CatalogoMenus { get; set; } = new();
 }

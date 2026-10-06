@@ -120,7 +120,7 @@ public class NotaDebitoService
         public decimal Valor { get; set; }
     }
 
-    public async Task<List<FacturaBusquedaDto>> BuscarFacturasAutocompleteAsync(string texto, int idUsuario)
+    public async Task<List<FacturaBusquedaDto>> BuscarFacturasAutocompleteAsync(string texto, int idUsuario, int? codEmisor = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
 
@@ -132,7 +132,7 @@ public class NotaDebitoService
             from f in db.Facturas.AsNoTracking()
             join c in db.Clientes.AsNoTracking() on f.Codclientes equals c.Codcliente into cliJoin
             from c in cliJoin.DefaultIfEmpty()
-            where f.Idusuario == idUsuario &&
+            where f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor.Value) &&
                   f.Estado == true &&
                   f.Numfactura != null &&
                   f.Numfactura.Contains(texto)
@@ -182,7 +182,7 @@ public class NotaDebitoService
             .ToListAsync();
     }
 
-    public async Task<int> ResolverClienteParaNotaDebitoAsync(int idUsuario, Cliente clienteEntrada)
+    public async Task<int> ResolverClienteParaNotaDebitoAsync(int idUsuario, Cliente clienteEntrada, bool backOffice = false)
     {
         if (idUsuario <= 0)
             throw new InvalidOperationException("No se pudo identificar el usuario para asociar el cliente.");
@@ -203,7 +203,9 @@ public class NotaDebitoService
 
         await using var db = await _dbFactory.CreateDbContextAsync();
 
-        var ownerId = await db.Usuarios
+        if (backOffice)
+            db.CatalogoEmisorId = EmisorSistemaService.CodigoEmisorBackOffice;
+        var ownerId = backOffice ? idUsuario : await db.Usuarios
             .AsNoTracking()
             .Where(u => u.IdUsuario == idUsuario)
             .Select(u => u.idJefe ?? u.IdUsuario)
@@ -294,7 +296,8 @@ public class NotaDebitoService
         if (notaDebito.Usuario is not > 0)
             throw new Exception("No se pudo identificar el usuario para asignar la serie de la nota de débito.");
 
-        await _emisionControlService.AsegurarPuedeEmitirAsync(notaDebito.Usuario.Value);
+        if (notaDebito.CodEmisor != EmisorSistemaService.CodigoEmisorBackOffice)
+            await _emisionControlService.AsegurarPuedeEmitirAsync(notaDebito.Usuario.Value);
 
         var resolucion = await ResolverSerieNotaDebitoAsync(notaDebito.Usuario.Value, notaDebito.Serie);
         notaDebito.Serie = resolucion.SerieRaw;
@@ -312,6 +315,7 @@ public class NotaDebitoService
         return await strategy.ExecuteAsync(async () =>
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
+            db.CatalogoEmisorId = notaDebito.CodEmisor == EmisorSistemaService.CodigoEmisorBackOffice ? notaDebito.CodEmisor : null;
             await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
 
             try
@@ -321,6 +325,21 @@ public class NotaDebitoService
                     .FirstOrDefaultAsync(e => e.Codigo == notaDebito.CodEmisor);
 
                 ValidarEmisorSri(emisor);
+                if (emisor?.EsEmisorSistema == true)
+                {
+                    if (emisor.IdUsuario != notaDebito.Usuario)
+                        throw new InvalidOperationException("La nota debe pertenecer al emisor maestro.");
+                    var state = await _initialSequencePromptService.GetStateAsync(notaDebito.Usuario.Value, "nota-debito", notaDebito.Serie, emisor.Codigo);
+                    if (!state.Initialized)
+                        throw new InvalidOperationException("Configura la secuencia de notas de débito en el emisor maestro.");
+                    var serieMaestra = LimpiarSerie(notaDebito.Serie);
+                    var emitidas = await db.NotaDebitos.AsNoTracking()
+                        .Where(n => n.CodEmisor == emisor.Codigo && n.Serie != null && n.Serie.Replace("-", string.Empty) == serieMaestra)
+                        .Select(n => n.NumNotaDebito).ToListAsync();
+                    notaDebito.NumNotaDebito = _initialSequencePromptService.ResolveFirstAvailableSequence(emitidas, state, preserveConfiguredStart: true);
+                    if (string.IsNullOrWhiteSpace(notaDebito.NumNotaDebito))
+                        throw new InvalidOperationException("La secuencia maestra de notas de débito está agotada.");
+                }
                 notaDebito.Ambiente = 2;
 
                 var serie = LimpiarSerie(notaDebito.Serie);
@@ -338,7 +357,7 @@ public class NotaDebitoService
                 {
                     var facturaOriginal = await db.Facturas.AsNoTracking().FirstOrDefaultAsync(f =>
                         f.Codfactura == notaDebito.IdDocModificado.Value &&
-                        f.Idusuario == notaDebito.Usuario.Value);
+                        f.Idusuario == notaDebito.Usuario.Value && f.Codemisor == notaDebito.CodEmisor);
                     if (facturaOriginal == null)
                         throw new InvalidOperationException("La factura modificada no existe o no pertenece al usuario actual.");
                     if (!DocumentoAutorizacionHelper.EstaAutorizado(facturaOriginal.Autorizado, facturaOriginal.Estadoenviosri))
@@ -420,7 +439,8 @@ public class NotaDebitoService
                     }
                 }
 
-                await _emisionControlService.ConsumirDocumentoAsync(db, notaDebito.Usuario.Value);
+                if (notaDebito.CodEmisor != EmisorSistemaService.CodigoEmisorBackOffice)
+                    await _emisionControlService.ConsumirDocumentoAsync(db, notaDebito.Usuario.Value);
                 await tx.CommitAsync();
 
                 return notaDebito.Sec;
@@ -433,10 +453,11 @@ public class NotaDebitoService
         });
     }
 
-    public async Task<List<NotaDebitoListDto>> ListarNotasDebitoUsuarioAsync(int idUsuario)
+    public async Task<List<NotaDebitoListDto>> ListarNotasDebitoUsuarioAsync(int idUsuario, int? codEmisor = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
 
+        db.CatalogoEmisorId = codEmisor == EmisorSistemaService.CodigoEmisorBackOffice ? codEmisor : null;
         var data = await (
             from nd in db.NotaDebitos.AsNoTracking()
             join c in db.Clientes.AsNoTracking()
@@ -455,8 +476,7 @@ public class NotaDebitoService
                 on c.Tipoidentificacion equals ti.IdeCodigo into tipoJoin
             from ti in tipoJoin.DefaultIfEmpty()
 
-            where nd.Usuario == idUsuario &&
-                  (e == null || e.EsEmisorSistema != true) &&
+            where (codEmisor.HasValue ? nd.CodEmisor == codEmisor.Value : (nd.Usuario == idUsuario && (e == null || e.EsEmisorSistema != true))) &&
                   (nd.Estado == null || nd.Estado != "I")
             orderby nd.Sec descending
             select new
@@ -517,13 +537,13 @@ public class NotaDebitoService
         int sec,
         int? idUsuario = null,
         bool intentarEnviarCorreo = true,
-        IEnumerable<string?>? correosExtra = null)
+        IEnumerable<string?>? correosExtra = null, int? codEmisor = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         var nota = await db.NotaDebitos.FirstOrDefaultAsync(n => n.Sec == sec);
         if (nota == null)
             return CrearErrorSri("No se encontro la nota de debito para enviar al SRI.");
-        if (idUsuario.HasValue && nota.Usuario != idUsuario.Value)
+        if (codEmisor.HasValue ? nota.CodEmisor != codEmisor.Value : (idUsuario.HasValue && nota.Usuario != idUsuario.Value))
             return CrearErrorSri("La nota de debito no pertenece al usuario actual.");
         if (!EstadoActivo(nota.Estado))
             return CrearErrorSri("La nota de debito esta anulada y ya no puede reenviarse al SRI.");
@@ -598,12 +618,12 @@ public class NotaDebitoService
         return respuesta;
     }
 
-    public async Task<NotaDebitoDetalleViewDto?> GetNotaDebitoDetalleUsuarioAsync(int sec, int idUsuario)
+    public async Task<NotaDebitoDetalleViewDto?> GetNotaDebitoDetalleUsuarioAsync(int sec, int idUsuario, int? codEmisor = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         var existe = await db.NotaDebitos
             .AsNoTracking()
-            .AnyAsync(x => x.Sec == sec && x.Usuario == idUsuario);
+            .AnyAsync(x => x.Sec == sec && (codEmisor.HasValue ? x.CodEmisor == codEmisor.Value : x.Usuario == idUsuario));
 
         if (!existe)
             return null;
@@ -611,9 +631,9 @@ public class NotaDebitoService
         return await GetNotaDebitoDetalleAsync(sec);
     }
 
-    public async Task<string?> AsegurarXmlNotaDebitoUsuarioAsync(int sec, int idUsuario)
+    public async Task<string?> AsegurarXmlNotaDebitoUsuarioAsync(int sec, int idUsuario, int? codEmisor = null)
     {
-        var detalle = await GetNotaDebitoDetalleUsuarioAsync(sec, idUsuario);
+        var detalle = await GetNotaDebitoDetalleUsuarioAsync(sec, idUsuario, codEmisor);
         if (detalle?.NotaDebito == null || string.IsNullOrWhiteSpace(detalle.Emisor?.Ruc))
             return null;
 
@@ -627,9 +647,9 @@ public class NotaDebitoService
         return ConstruirXmlUrl(detalle.NotaDebito.NumNotaDebito ?? string.Empty, detalle.Emisor.Ruc ?? string.Empty);
     }
 
-    public async Task<string?> AsegurarPdfNotaDebitoUsuarioAsync(int sec, int idUsuario, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+    public async Task<string?> AsegurarPdfNotaDebitoUsuarioAsync(int sec, int idUsuario, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4, int? codEmisor = null)
     {
-        var detalle = await GetNotaDebitoDetalleUsuarioAsync(sec, idUsuario);
+        var detalle = await GetNotaDebitoDetalleUsuarioAsync(sec, idUsuario, codEmisor);
         if (detalle?.NotaDebito == null || string.IsNullOrWhiteSpace(detalle.Emisor?.Ruc))
             return null;
 
@@ -835,7 +855,7 @@ public class NotaDebitoService
             .ToList();
     }
 
-    public async Task<bool> AnularNotaDebitoDirectoAsync(int sec, int? idUsuario = null)
+    public async Task<bool> AnularNotaDebitoDirectoAsync(int sec, int? idUsuario = null, int? codEmisor = null)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();
 
@@ -843,7 +863,7 @@ public class NotaDebitoService
         {
             var nota = await context.NotaDebitos.FirstOrDefaultAsync(n =>
                 n.Sec == sec &&
-                (!idUsuario.HasValue || n.Usuario == idUsuario.Value));
+                (codEmisor.HasValue ? n.CodEmisor == codEmisor.Value : (!idUsuario.HasValue || n.Usuario == idUsuario.Value)));
 
             if (nota == null)
                 return false;
@@ -862,6 +882,7 @@ public class NotaDebitoService
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
 
+        db.CatalogoEmisorId = await db.NotaDebitos.Where(n => n.Sec == sec && n.CodEmisor == EmisorSistemaService.CodigoEmisorBackOffice).Select(n => n.CodEmisor).FirstOrDefaultAsync();
         var rawData = await (
             from nd in db.NotaDebitos.AsNoTracking()
             join c in db.Clientes.AsNoTracking()

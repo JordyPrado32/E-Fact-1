@@ -727,7 +727,7 @@ public sealed class ESignMobileController : ControllerBase
             usuario?.estadoAsociado == true && usuario.idJefe is > 0 ? usuario.idJefe.Value : userId
         }.Distinct().ToArray();
         var solicitudes = await db.UsuSolicitudFirma.AsNoTracking()
-            .Where(item => idsCuenta.Contains(item.SolIdUsuarioCliente) && item.SolActivo && item.SolPagoExitoso == true)
+            .Where(item => item.SolIdUsuarioCliente.HasValue && idsCuenta.Contains(item.SolIdUsuarioCliente.Value) && item.SolActivo && item.SolPagoExitoso == true)
             .Select(item => new { item.SolFechaSolicitud, item.SolFechaPago, item.SolFechaAprobacion, item.SolVigencia })
             .ToListAsync(cancellationToken);
 

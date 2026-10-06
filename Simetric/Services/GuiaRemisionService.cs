@@ -46,9 +46,9 @@ namespace Simetric.Services
         private async Task<CajaSerieResolucion> ResolverSerieGuiaAsync(int userId, string? serieRaw = null)
         {
             if (!string.IsNullOrWhiteSpace(serieRaw))
-                return await _cajaSerieResolver.ResolverAsync(userId, serieRaw);
+                return await _cajaSerieResolver.ResolverGuiaAsync(userId, serieRaw);
 
-            var resolucionBase = await _cajaSerieResolver.ResolverAsync(userId);
+            var resolucionBase = await _cajaSerieResolver.ResolverGuiaAsync(userId);
             var seriePreferida = await _initialSequencePromptService.GetPreferredSeriesKeyAsync(
                 userId,
                 "guia-remision",
@@ -57,7 +57,7 @@ namespace Simetric.Services
             if (!string.IsNullOrWhiteSpace(seriePreferida) &&
                 !string.Equals(seriePreferida, resolucionBase.SerieRaw, StringComparison.Ordinal))
             {
-                return await _cajaSerieResolver.ResolverAsync(userId, seriePreferida);
+                return await _cajaSerieResolver.ResolverGuiaAsync(userId, seriePreferida);
             }
 
             return resolucionBase;
@@ -96,7 +96,7 @@ namespace Simetric.Services
             return usuariosCuenta;
         }
 
-        public async Task<Transportista?> GetTransportistaPorIdentificacionAsync(int idUsuario, string numeroIdentificacion)
+        public async Task<Transportista?> GetTransportistaPorIdentificacionAsync(int idUsuario, string numeroIdentificacion, int? codEmisor = null)
         {
             numeroIdentificacion = (numeroIdentificacion ?? string.Empty).Trim();
             if (idUsuario <= 0 || string.IsNullOrWhiteSpace(numeroIdentificacion)) return null;
@@ -105,13 +105,13 @@ namespace Simetric.Services
             var usuariosCuenta = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
             return await context.Transportistas.AsNoTracking()
                 .Where(t => context.GuiasRemision.Any(g =>
-                    g.IdTranportista == t.Codigo &&
+                    g.IdTranportista == t.Codigo && (!codEmisor.HasValue || g.CodEmisor == codEmisor) &&
                     g.IdUsuario.HasValue &&
                     usuariosCuenta.Contains(g.IdUsuario.Value)))
                 .FirstOrDefaultAsync(t => t.NumeroIdentificacion == numeroIdentificacion);
         }
 
-        public async Task<List<Transportista>> BuscarTransportistasAsync(int idUsuario, string filtro)
+        public async Task<List<Transportista>> BuscarTransportistasAsync(int idUsuario, string filtro, int? codEmisor = null)
         {
             filtro = (filtro ?? string.Empty).Trim().ToLowerInvariant();
             if (idUsuario <= 0 || string.IsNullOrWhiteSpace(filtro)) return new List<Transportista>();
@@ -120,7 +120,7 @@ namespace Simetric.Services
             var usuariosCuenta = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
             return await context.Transportistas.AsNoTracking()
                 .Where(t => context.GuiasRemision.Any(g =>
-                    g.IdTranportista == t.Codigo &&
+                    g.IdTranportista == t.Codigo && (!codEmisor.HasValue || g.CodEmisor == codEmisor) &&
                     g.IdUsuario.HasValue &&
                     usuariosCuenta.Contains(g.IdUsuario.Value)))
                 .Where(t => (t.NumeroIdentificacion ?? "").Contains(filtro) || (t.RazonSocial ?? "").ToLower().Contains(filtro))
@@ -236,7 +236,7 @@ namespace Simetric.Services
                 .ToList();
         }
 
-        public async Task<Transportista> GuardarTransportistaAsync(Transportista transportistaData)
+        public async Task<Transportista> GuardarTransportistaAsync(Transportista transportistaData, int? codEmisor = null)
         {
             if (transportistaData == null) throw new Exception("Debes ingresar la informacion del transportista.");
             var ident = Limpiar(transportistaData.NumeroIdentificacion);
@@ -248,7 +248,7 @@ namespace Simetric.Services
                 ident);
 
             await using var context = await _dbFactory.CreateDbContextAsync();
-            var transportistaDb = await context.Transportistas.FirstOrDefaultAsync(t => t.NumeroIdentificacion == ident) ?? new Transportista();
+            var transportistaDb = await context.Transportistas.FirstOrDefaultAsync(t => t.NumeroIdentificacion == ident && (codEmisor != EmisorSistemaService.CodigoEmisorBackOffice || (context.GuiasRemision.Any(g => g.IdTranportista == t.Codigo && g.CodEmisor == codEmisor) || !context.GuiasRemision.Any(g => g.IdTranportista == t.Codigo)))) ?? new Transportista();
             if (transportistaDb.Codigo == 0)
                 context.Transportistas.Add(transportistaDb);
 
@@ -266,22 +266,23 @@ namespace Simetric.Services
             return transportistaDb;
         }
 
-        public async Task<string> GetNextGuiaRemisionNumeroAsync(int idUsuario, string? serieRaw = null)
+        public async Task<string> GetNextGuiaRemisionNumeroAsync(int idUsuario, string? serieRaw = null, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
             var resolucion = await ResolverSerieGuiaAsync(idUsuario, serieRaw);
             var caja = await context.Caja.AsNoTracking()
                 .FirstOrDefaultAsync(c =>
                     c.Estado == true &&
-                    c.IdUsuario == resolucion.IdUsuario &&
+                    c.Sec == resolucion.CajaSec &&
                     c.NumCaja == resolucion.NumeroCaja);
 
             if (caja == null) throw new Exception("No existe una caja activa para el usuario.");
             var serieNorm = NormalizarSerie(resolucion.SerieVisual);
             if (string.IsNullOrWhiteSpace(serieNorm)) throw new Exception("La caja activa no tiene configurada la serie de guia.");
 
-            var siguiente = await ObtenerSiguienteSecuencialInternoAsync(context, idUsuario, serieNorm);
-            return siguiente.ToString().PadLeft(9, '0');
+            var siguiente = await ObtenerSiguienteSecuencialInternoAsync(context, idUsuario, serieNorm, codEmisor);
+            var state = await _initialSequencePromptService.GetStateAsync(idUsuario, "guia-remision", serieNorm, codEmisor);
+            return _initialSequencePromptService.ResolveNextSequence(siguiente.ToString("D9"), state, codEmisor == EmisorSistemaService.CodigoEmisorBackOffice);
         }
 
         public async Task<GuiaRemisionGuardadoResultadoDto> GuardarGuiaRemisionCompletaAsync(
@@ -318,7 +319,7 @@ namespace Simetric.Services
                 try
                 {
                     var facturaDb = codfactura.GetValueOrDefault() > 0
-                        ? await context.Facturas.FirstOrDefaultAsync(f => f.Codfactura == codfactura.Value && f.Idusuario == idUsuario)
+                        ? await context.Facturas.FirstOrDefaultAsync(f => f.Codfactura == codfactura.Value && f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor))
                         : null;
                     if (codfactura.GetValueOrDefault() > 0 && facturaDb == null)
                         throw new Exception("La factura seleccionada no existe o no pertenece al usuario actual.");
@@ -356,7 +357,7 @@ namespace Simetric.Services
                     var resolucion = await ResolverSerieGuiaAsync(idUsuario, guiaData.Serie);
                     var caja = await context.Caja.FirstOrDefaultAsync(c =>
                         c.Estado == true &&
-                        c.IdUsuario == resolucion.IdUsuario &&
+                        c.Sec == resolucion.CajaSec &&
                         c.NumCaja == resolucion.NumeroCaja);
                     if (caja == null) throw new Exception("No existe una caja activa para el usuario.");
 
@@ -371,22 +372,47 @@ namespace Simetric.Services
                     }
                     else if (string.IsNullOrWhiteSpace(secuencial))
                     {
-                        var siguiente = await ObtenerSiguienteSecuencialInternoAsync(context, idUsuario, serieNorm);
+                        var siguiente = await ObtenerSiguienteSecuencialInternoAsync(context, idUsuario, serieNorm, codEmisor);
                         secuencial = siguiente.ToString().PadLeft(9, '0');
                     }
 
                     if (secuencial.Length != 9)
                         throw new Exception("El secuencial de la guia debe tener 9 digitos.");
 
+                    var codigoEmisor = facturaDb?.Codemisor.GetValueOrDefault() > 0
+                        ? facturaDb.Codemisor
+                        : codEmisor;
+                    var emisorDb = codigoEmisor.GetValueOrDefault() > 0
+                        ? await context.Emisores.AsNoTracking().FirstOrDefaultAsync(e => e.Codigo == codigoEmisor.Value)
+                        : null;
+                    if (emisorDb == null)
+                        throw new Exception("Debes configurar un emisor activo para generar la guia.");
+                    if (string.IsNullOrWhiteSpace(emisorDb.Ruc)) throw new Exception("El emisor asociado no tiene RUC configurado.");
+                    ValidarEmisorSri(emisorDb);
+                    if (emisorDb.EsEmisorSistema)
+                    {
+                        if (emisorDb.IdUsuario != idUsuario)
+                            throw new InvalidOperationException("La guía debe pertenecer al emisor maestro.");
+                        var state = await _initialSequencePromptService.GetStateAsync(idUsuario, "guia-remision", serieNorm, emisorDb.Codigo);
+                        if (!state.Initialized)
+                            throw new InvalidOperationException("Configura la secuencia de guías en el emisor maestro.");
+                        if (!TryDescomponerNumeroGuia(facturaDb?.Guiaremision, out _, out _))
+                        {
+                            var next = await ObtenerSiguienteSecuencialInternoAsync(context, idUsuario, serieNorm, emisorDb.Codigo);
+                            secuencial = _initialSequencePromptService.ResolveNextSequence(next.ToString("D9"), state, preserveConfiguredStart: true);
+                            if (string.IsNullOrWhiteSpace(secuencial))
+                                throw new InvalidOperationException("La secuencia maestra de guías está agotada.");
+                        }
+                    }
                     var numeroCompleto = $"{FormatearSerie(serieNorm)}-{secuencial}";
                     var existeNumero = await context.GuiasRemision.AsNoTracking().AnyAsync(g =>
-                        g.IdUsuario == idUsuario &&
+                        g.IdUsuario == idUsuario && (!codEmisor.HasValue || g.CodEmisor == codEmisor) &&
                         ((g.Serie ?? string.Empty).Replace("-", string.Empty).Trim()) == serieNorm &&
                         (g.NumGuiaRemision ?? string.Empty) == secuencial);
                     if (existeNumero) throw new Exception($"La guia {numeroCompleto} ya existe.");
 
                     var reservas = await context.Facturas.AsNoTracking()
-                        .Where(f => f.Idusuario == idUsuario &&
+                        .Where(f => f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor) &&
                                     (!codfactura.HasValue || f.Codfactura != codfactura.Value) &&
                                     f.Guiaremision != null)
                         .Select(f => f.Guiaremision).ToListAsync();
@@ -394,7 +420,7 @@ namespace Simetric.Services
                         throw new Exception($"La guia {numeroCompleto} ya esta reservada en otra factura.");
 
                     var ident = transportistaData.NumeroIdentificacion.Trim();
-                    var transportistaDb = await context.Transportistas.FirstOrDefaultAsync(t => t.NumeroIdentificacion == ident) ?? new Transportista();
+                    var transportistaDb = await context.Transportistas.FirstOrDefaultAsync(t => t.NumeroIdentificacion == ident && (codEmisor != EmisorSistemaService.CodigoEmisorBackOffice || (context.GuiasRemision.Any(g => g.IdTranportista == t.Codigo && g.CodEmisor == codEmisor) || !context.GuiasRemision.Any(g => g.IdTranportista == t.Codigo)))) ?? new Transportista();
                     if (transportistaDb.Codigo == 0) context.Transportistas.Add(transportistaDb);
 
                     transportistaDb.RazonSocial = Limpiar(transportistaData.RazonSocial);
@@ -408,16 +434,6 @@ namespace Simetric.Services
                     transportistaDb.Telefono = Limpiar(transportistaData.Telefono);
                     await context.SaveChangesAsync();
 
-                    var codigoEmisor = facturaDb?.Codemisor.GetValueOrDefault() > 0
-                        ? facturaDb.Codemisor
-                        : codEmisor;
-                    var emisorDb = codigoEmisor.GetValueOrDefault() > 0
-                        ? await context.Emisores.AsNoTracking().FirstOrDefaultAsync(e => e.Codigo == codigoEmisor.Value)
-                        : null;
-                    if (emisorDb == null)
-                        throw new Exception("Debes configurar un emisor activo para generar la guia.");
-                    if (string.IsNullOrWhiteSpace(emisorDb.Ruc)) throw new Exception("El emisor asociado no tiene RUC configurado.");
-                    ValidarEmisorSri(emisorDb);
                     const int ambiente = 2;
                     var fechaEmision = (guiaData.Fecha ?? DateTime.Today).Date;
                     var tipoEmision = string.IsNullOrWhiteSpace(emisorDb.TipoEmision) ? "1" : emisorDb.TipoEmision.Trim();
@@ -447,6 +463,7 @@ namespace Simetric.Services
                         IdUsuario = idUsuario,
                         Serie = serieNorm,
                         Ambiente = ambiente,
+                        CodEmisor = emisorDb.Codigo,
                         Codfactura = facturaDb?.Codfactura,
                         DireccionPartida = Limpiar(guiaData.DireccionPartida)
                     };
@@ -518,7 +535,8 @@ namespace Simetric.Services
                     try
                     {
                         await using var postCommitContext = await _dbFactory.CreateDbContextAsync();
-                        await _emisionControlService.ConsumirDocumentoValidadoAsync(postCommitContext, idUsuario);
+                        if (codEmisor != EmisorSistemaService.CodigoEmisorBackOffice)
+                            await _emisionControlService.ConsumirDocumentoValidadoAsync(postCommitContext, idUsuario);
                     }
                     catch (Exception ex)
                     {
@@ -553,14 +571,15 @@ namespace Simetric.Services
         public async Task<mensajeSRI> EmitirGuiaRemisionSriAsync(
             int sec,
             int? idUsuario = null,
-            bool intentarEnviarCorreo = true)
+            bool intentarEnviarCorreo = true,
+            int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
             var guia = await context.GuiasRemision.FirstOrDefaultAsync(g => g.Sec == sec);
             if (guia == null)
                 return CrearErrorSri("No se encontro la guia de remision para enviar al SRI.");
 
-            if (idUsuario.HasValue && guia.IdUsuario != idUsuario.Value)
+            if (codEmisor.HasValue ? guia.CodEmisor != codEmisor.Value : (idUsuario.HasValue && guia.IdUsuario != idUsuario.Value))
                 return CrearErrorSri("La guia de remision no pertenece al usuario actual.");
             if (GuiaRemisionEstaAnulada(guia.EstadoSRI))
                 return CrearErrorSri("La guia de remision esta anulada y ya no puede reenviarse al SRI.");
@@ -650,7 +669,7 @@ namespace Simetric.Services
             return respuesta;
         }
 
-        public async Task<List<GuiaRemisionListDto>> ListarGuiasRemisionUsuarioAsync(int idUsuario)
+        public async Task<List<GuiaRemisionListDto>> ListarGuiasRemisionUsuarioAsync(int idUsuario, int? codEmisor = null)
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
 
@@ -673,7 +692,7 @@ namespace Simetric.Services
                 from e in emiJoin.DefaultIfEmpty()
 
                 where g.IdUsuario == idUsuario &&
-                      (e == null || e.EsEmisorSistema != true) &&
+                      (codEmisor.HasValue ? g.CodEmisor == codEmisor.Value : (g.CodEmisor != EmisorSistemaService.CodigoEmisorBackOffice && (e == null || e.EsEmisorSistema != true))) &&
                       (g.EstadoSRI == null || g.EstadoSRI != "ANULADA")
                 orderby g.Sec descending
                 select new
@@ -753,40 +772,40 @@ namespace Simetric.Services
             }).ToList();
         }
 
-        public async Task<GuiaRemisionDetalleViewDto?> GetGuiaRemisionDetalleUsuarioAsync(int sec, int idUsuario)
+        public async Task<GuiaRemisionDetalleViewDto?> GetGuiaRemisionDetalleUsuarioAsync(int sec, int idUsuario, int? codEmisor = null)
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
-            var existe = await db.GuiasRemision.AsNoTracking().AnyAsync(x => x.Sec == sec && x.IdUsuario == idUsuario);
+            var existe = await db.GuiasRemision.AsNoTracking().AnyAsync(x => x.Sec == sec && (codEmisor.HasValue ? x.CodEmisor == codEmisor.Value : x.IdUsuario == idUsuario));
             if (!existe)
                 return null;
 
             return await GetGuiaRemisionDetalleAsync(sec);
         }
 
-        public async Task<string?> AsegurarXmlGuiaRemisionUsuarioAsync(int sec, int idUsuario)
+        public async Task<string?> AsegurarXmlGuiaRemisionUsuarioAsync(int sec, int idUsuario, int? codEmisor = null)
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
-            var existe = await db.GuiasRemision.AsNoTracking().AnyAsync(x => x.Sec == sec && x.IdUsuario == idUsuario);
+            var existe = await db.GuiasRemision.AsNoTracking().AnyAsync(x => x.Sec == sec && (codEmisor.HasValue ? x.CodEmisor == codEmisor.Value : x.IdUsuario == idUsuario));
             if (!existe)
                 return null;
 
             return await AsegurarXmlGuiaRemisionAsync(sec);
         }
 
-        public async Task<string?> AsegurarPdfGuiaRemisionUsuarioAsync(int sec, int idUsuario, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
+        public async Task<string?> AsegurarPdfGuiaRemisionUsuarioAsync(int sec, int idUsuario, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4, int? codEmisor = null)
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
-            var existe = await db.GuiasRemision.AsNoTracking().AnyAsync(x => x.Sec == sec && x.IdUsuario == idUsuario);
+            var existe = await db.GuiasRemision.AsNoTracking().AnyAsync(x => x.Sec == sec && (codEmisor.HasValue ? x.CodEmisor == codEmisor.Value : x.IdUsuario == idUsuario));
             if (!existe)
                 return null;
 
             return await AsegurarPdfGuiaRemisionAsync(sec, formato);
         }
 
-        private static async Task<long> ObtenerSiguienteSecuencialInternoAsync(AppDbContext context, int idUsuario, string serieNorm)
+        private static async Task<long> ObtenerSiguienteSecuencialInternoAsync(AppDbContext context, int idUsuario, string serieNorm, int? codEmisor = null)
         {
             var maximo = 0L;
-            var existentes = await context.GuiasRemision.AsNoTracking().Where(g => g.IdUsuario == idUsuario)
+            var existentes = await context.GuiasRemision.AsNoTracking().Where(g => g.IdUsuario == idUsuario && (!codEmisor.HasValue || g.CodEmisor == codEmisor))
                 .Select(g => new { g.Serie, g.NumGuiaRemision }).ToListAsync();
             foreach (var item in existentes)
             {
@@ -798,7 +817,7 @@ namespace Simetric.Services
                 if (long.TryParse(secuencial, out var num) && num > maximo) maximo = num;
             }
 
-            var reservas = await context.Facturas.AsNoTracking().Where(f => f.Idusuario == idUsuario && f.Guiaremision != null)
+            var reservas = await context.Facturas.AsNoTracking().Where(f => f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor) && f.Guiaremision != null)
                 .Select(f => f.Guiaremision).ToListAsync();
             foreach (var item in reservas)
             {
@@ -845,7 +864,7 @@ namespace Simetric.Services
             if (raw == null)
                 return null;
 
-            var emisor = raw.Emisor ?? await ResolverEmisorGuiaAsync(db, raw.Guia, raw.Factura);
+            var emisor = await ResolverEmisorGuiaAsync(db, raw.Guia, raw.Factura);
 
             var detalles = await db.DetallesGuiaRemision.AsNoTracking()
                 .Where(d => d.IdGuiaRemision == sec)
@@ -913,7 +932,7 @@ namespace Simetric.Services
             if (raw?.Guia == null || raw.Destinatario == null || raw.Transportista == null)
                 return null;
 
-            var emisor = raw.Emisor ?? await ResolverEmisorGuiaAsync(db, raw.Guia, null);
+            var emisor = await ResolverEmisorGuiaAsync(db, raw.Guia, null);
             if (emisor == null || string.IsNullOrWhiteSpace(emisor.Ruc))
                 return null;
 
@@ -995,6 +1014,7 @@ namespace Simetric.Services
             await using var context = await _dbFactory.CreateDbContextAsync();
 
             Cliente? cliente = null;
+            context.CatalogoEmisorId = detalle.Guia.CodEmisor == EmisorSistemaService.CodigoEmisorBackOffice ? detalle.Guia.CodEmisor : null;
             if (detalle.Factura?.Codclientes is > 0)
             {
                 cliente = await context.Clientes
@@ -1156,7 +1176,7 @@ namespace Simetric.Services
                 .ToList();
         }
 
-        public async Task<bool> AnularGuiaRemisionDirectoAsync(int sec, int? idUsuario = null)
+        public async Task<bool> AnularGuiaRemisionDirectoAsync(int sec, int? idUsuario = null, int? codEmisor = null)
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
 
@@ -1164,7 +1184,7 @@ namespace Simetric.Services
             {
                 var guia = await context.GuiasRemision.FirstOrDefaultAsync(g =>
                     g.Sec == sec &&
-                    (!idUsuario.HasValue || g.IdUsuario == idUsuario.Value));
+                    (codEmisor.HasValue ? g.CodEmisor == codEmisor.Value : (!idUsuario.HasValue || g.IdUsuario == idUsuario.Value)));
 
                 if (guia == null)
                     return false;
@@ -1442,6 +1462,9 @@ namespace Simetric.Services
             GuiaRemision guia,
             Factura? factura)
         {
+            if (guia.CodEmisor is > 0)
+                return await context.Emisores.AsNoTracking().FirstOrDefaultAsync(e => e.Codigo == guia.CodEmisor.Value);
+
             if (factura?.Codemisor is > 0)
             {
                 var emisorFactura = await context.Emisores.AsNoTracking()

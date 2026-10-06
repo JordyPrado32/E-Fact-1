@@ -30,14 +30,15 @@ public sealed class CompraDocumentosFacturacionService
     }
 
     public async Task<CompraDocumentosFacturaResultado> EmitirFacturaAsync(
-        int idUsuario,
+        int? idUsuario,
         CompraDocumentosHistorialItem compra,
         string? reference,
         string? authorizationCode,
         bool esTransferenciaBackOffice = false,
-        bool usarIdComoMarcador = false)
+        bool usarIdComoMarcador = false,
+        Cliente? titularFirma = null)
     {
-        if (idUsuario <= 0)
+        if (titularFirma is null && idUsuario is not > 0)
             return CompraDocumentosFacturaResultado.Error("No se pudo identificar al usuario titular de la compra.");
 
         if (compra == null || string.IsNullOrWhiteSpace(compra.Id))
@@ -49,7 +50,7 @@ public sealed class CompraDocumentosFacturacionService
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.IdUsuario == idUsuario);
 
-        if (usuario == null)
+        if (usuario == null && titularFirma is null)
             return CompraDocumentosFacturaResultado.Error("No se encontró el usuario titular para emitir la factura.");
 
         var secuenciaSistema = await _emisorSistemaService.GetSecuenciaFacturaSistemaAsync();
@@ -99,16 +100,16 @@ public sealed class CompraDocumentosFacturacionService
 
         if (facturaExistente == null)
         {
-            var cliente = await ConstruirClienteDesdeUsuarioAsync(
+            var cliente = titularFirma ?? await ConstruirClienteDesdeUsuarioAsync(
                 context,
-                usuario,
+                usuario!,
                 emisorOwnerId,
                 esTransferenciaBackOffice);
             var detalleConfigurado = await ResolverDetalleCompraAsync(context, emisorOwnerId, compra);
             var factura = ConstruirFactura(
                 emisorOwnerId,
                 secuenciaSistema.EmisorCodigo,
-                usuario.IdVendedor,
+                usuario?.IdVendedor,
                 secuenciaSistema.SerieRaw,
                 compra,
                 marker,
@@ -256,7 +257,19 @@ public sealed class CompraDocumentosFacturacionService
             compra,
             reference,
             authorizationCode,
-            usarIdComoMarcador: true);
+            usarIdComoMarcador: true,
+            titularFirma: solicitud.SolIdUsuarioCliente is null ? new Cliente
+            {
+                Nombres = solicitud.SolNombres,
+                Apellidos = $"{solicitud.SolPrimerApellido} {solicitud.SolSegundoApellido}".Trim(),
+                Tipoidentificacion = solicitud.SolTipoPersona == "JURIDICA" ? "04" : solicitud.SolTipoIdentificacion == "PASAPORTE" ? "06" : solicitud.SolIdentificacion.Length == 13 ? "04" : "05",
+                Numeroidentificacion = solicitud.SolTipoPersona == "JURIDICA" ? solicitud.SolNroRuc : solicitud.SolIdentificacion,
+                Nombrerazonsocial = solicitud.SolTipoPersona == "JURIDICA" ? solicitud.SolCompanyName : null,
+                Correo = solicitud.SolCorreo1,
+                Celular = solicitud.SolTelefono1,
+                Direccion = solicitud.SolDireccion,
+                Estado = true
+            } : null);
     }
 
     private static Factura ConstruirFactura(

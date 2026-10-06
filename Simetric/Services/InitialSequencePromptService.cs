@@ -445,7 +445,7 @@ WHERE [titularUserId] = @titularUserId
         return (number + 1).ToString("D9", CultureInfo.InvariantCulture);
     }
 
-    public string ResolveNextSequence(string? automaticNext, InitialSequencePromptState state)
+    public string ResolveNextSequence(string? automaticNext, InitialSequencePromptState state, bool preserveConfiguredStart = false)
     {
         long nextNumber = 0;
 
@@ -453,6 +453,10 @@ WHERE [titularUserId] = @titularUserId
         {
             nextNumber = automaticNumber;
         }
+
+        if (preserveConfiguredStart && state.Initialized && state.HadPreviousDocuments &&
+            TryGetSequenceNumber(state.PreviousSequence, out var configuredPrevious))
+            nextNumber = Math.Max(nextNumber, configuredPrevious + 1);
 
         if (nextNumber <= 0 &&
             state.Initialized &&
@@ -465,13 +469,13 @@ WHERE [titularUserId] = @titularUserId
         if (nextNumber <= 0 && state.Initialized && state.HadPreviousDocuments == false)
             nextNumber = 1;
 
-        if (nextNumber <= 0)
+        if (nextNumber <= 0 || (preserveConfiguredStart && nextNumber > 999999999))
             return string.Empty;
 
         return nextNumber.ToString("D9", CultureInfo.InvariantCulture);
     }
 
-    public string ResolveFirstAvailableSequence(IEnumerable<string?> issuedSequences, InitialSequencePromptState state)
+    public string ResolveFirstAvailableSequence(IEnumerable<string?> issuedSequences, InitialSequencePromptState state, bool preserveConfiguredStart = false)
     {
         var issued = new HashSet<long>();
         foreach (var sequence in issuedSequences)
@@ -491,7 +495,7 @@ WHERE [titularUserId] = @titularUserId
             next = previous + 1;
         }
 
-        if (issued.Count > 0 && issued.Max() + 1 < next)
+        if (!preserveConfiguredStart && issued.Count > 0 && issued.Max() + 1 < next)
             next = issued.Max() + 1;
 
         while (issued.Contains(next) && next <= 999999999)

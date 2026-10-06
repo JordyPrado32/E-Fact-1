@@ -15,6 +15,8 @@ public sealed class EContaxUsuarioContexto
     public int? IdPerfil { get; set; }
     public bool EsAdminSucursal { get; set; }
     public string? MenusJson { get; set; }
+    public string? AccionesJson { get; set; }
+    public bool Suspendido { get; set; }
 
     public bool Estado { get; set; } = true;
 

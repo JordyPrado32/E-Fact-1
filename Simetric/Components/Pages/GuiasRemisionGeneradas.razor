@@ -1,3 +1,5 @@
+@page "/backoffice/mis-guias"
+@inject EmisorSistemaService EmisorSistemaService
 @page "/facturacion/guias-remision-generadas"
 @page "/demo/guias-remision-generadas"
 @using Microsoft.AspNetCore.Components.Authorization
@@ -25,7 +27,7 @@
     var pendientes = guiasFiltradas.Count - autorizadas - noAutorizadas;
 }
 
-<div class="facturas-shell" data-tour="grgen.page">
+<div class="facturas-shell @(EsBackOffice ? "backoffice-documento" : string.Empty)" data-tour="grgen.page">
     @if (idDocumentoMenuAbierto.HasValue)
     {
         <div class="row-menu-backdrop" @onclick="CerrarMenus"></div>
@@ -607,6 +609,8 @@
 }
 
 @code {
+    private bool EsBackOffice => BackOfficeRoutes.IsBackOfficePath(NavManager, NavManager.Uri);
+    private int? CodigoEmisorBackOffice => EsBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : null;
     private int? idDocumentoMenuAbierto;
 
     private void ToggleMenu(int id)
@@ -769,6 +773,21 @@
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
             var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
             currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+        if (EsBackOffice)
+        {
+            if (!await EmisorSistemaService.TieneAccesoBackOfficeAsync(currentUserId))
+            {
+                NavManager.NavigateTo("/portal-servicios");
+                return;
+            }
+            var maestro = await EmisorSistemaService.GetEmisorSistemaAsync();
+            if (maestro?.IdUsuario is not > 0)
+            {
+                NavManager.NavigateTo(BackOfficeRoutes.Facturacion);
+                return;
+            }
+            currentUserId = maestro.IdUsuario.Value;
+        }
 
             if (currentUserId <= 0)
             {
@@ -776,7 +795,7 @@
                 return;
             }
 
-            guias = await GuiaRemisionService.ListarGuiasRemisionUsuarioAsync(currentUserId);
+            guias = await GuiaRemisionService.ListarGuiasRemisionUsuarioAsync(currentUserId, CodigoEmisorBackOffice);
             paginaActual = 1;
         }
         catch
@@ -880,7 +899,7 @@
         }
         else
         {
-            guiaSeleccionada = await GuiaRemisionService.GetGuiaRemisionDetalleUsuarioAsync(sec, currentUserId);
+            guiaSeleccionada = await GuiaRemisionService.GetGuiaRemisionDetalleUsuarioAsync(sec, currentUserId, CodigoEmisorBackOffice);
         }
 
         if (guiaSeleccionada != null)
@@ -895,7 +914,7 @@
             return;
         }
 
-        var xmlUrl = await GuiaRemisionService.AsegurarXmlGuiaRemisionUsuarioAsync(sec, currentUserId);
+        var xmlUrl = await GuiaRemisionService.AsegurarXmlGuiaRemisionUsuarioAsync(sec, currentUserId, CodigoEmisorBackOffice);
         if (string.IsNullOrWhiteSpace(xmlUrl))
         {
             await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la guia.");
@@ -913,7 +932,7 @@
             return;
         }
 
-        var pdfUrl = await GuiaRemisionService.AsegurarPdfGuiaRemisionUsuarioAsync(sec, currentUserId, formato);
+        var pdfUrl = await GuiaRemisionService.AsegurarPdfGuiaRemisionUsuarioAsync(sec, currentUserId, formato, CodigoEmisorBackOffice);
         if (string.IsNullOrWhiteSpace(pdfUrl))
         {
             await AlertService.ShowWarningAsync($"No se pudo generar o ubicar el PDF {formato.ObtenerEtiqueta()} de la guia.");
@@ -931,7 +950,7 @@
         guiaEmitiendoSri = sec;
         try
         {
-            var respuesta = await GuiaRemisionService.EmitirGuiaRemisionSriAsync(sec, currentUserId);
+            var respuesta = await GuiaRemisionService.EmitirGuiaRemisionSriAsync(sec, currentUserId, codEmisor: CodigoEmisorBackOffice);
             var autorizada = string.Equals(
                 respuesta.estado,
                 DocumentoAutorizacionHelper.EstadoAutorizado,
@@ -1073,7 +1092,7 @@
         try
         {
             procesandoAnulacion = true;
-            var exito = await GuiaRemisionService.AnularGuiaRemisionDirectoAsync(guia.Sec, currentUserId);
+            var exito = await GuiaRemisionService.AnularGuiaRemisionDirectoAsync(guia.Sec, currentUserId, CodigoEmisorBackOffice);
 
             if (exito)
             {

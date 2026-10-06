@@ -4,6 +4,8 @@
 @using Simetric.DTOs
 @using Simetric.Models
 @using Simetric.Services
+@using Simetric.Services.ESign
+@using Simetric.Extensions
 @using System.Security.Claims
 @using System.Text.Json
 @implements IAsyncDisposable
@@ -16,6 +18,7 @@
 @inject IJSRuntime JS
 @inject AliadoPortalService Portal
 @inject ILogger<SolicitudNotifications> Logger
+@inject SelectedAppServiceStateService SelectedAppServiceState
 
 @if (panelAbierto)
 {
@@ -457,7 +460,7 @@
         autorizacionesVistas.Add(documento.Clave);
         await PersistirAutorizacionesVistasAsync();
         panelAbierto = false;
-        Navigation.NavigateTo(documento.Ruta);
+        await NavegarANotificacionAsync(documento.Ruta);
     }
 
     private async Task InicializarAutorizacionesVistasAsync()
@@ -616,34 +619,34 @@
         if (EsDestinoSoporte(notificacion))
         {
             await SolicitudService.MarcarRespuestaSoporteVistaAsync(notificacion.ObsId, usuarioIdActual);
-            Navigation.NavigateTo($"/soporte/solicitud/{notificacion.SolId}");
+            await NavegarANotificacionAsync($"/soporte/solicitud/{notificacion.SolId}");
             return;
         }
 
         if (EsDestinoFirma(notificacion))
         {
             await SolicitudService.MarcarEntregaFirmaVistaAsync(notificacion.ObsId, usuarioIdActual);
-            Navigation.NavigateTo($"/solicitud/pagos?firma={notificacion.SolId}");
+            await NavegarANotificacionAsync($"/solicitud/pagos?firma={notificacion.SolId}");
             return;
         }
 
-        Navigation.NavigateTo("/solicitud/pagos");
+        await NavegarANotificacionAsync("/solicitud/pagos");
     }
 
-    private void IrARecargaDocumentos(CompraDocumentosHistorialItem recarga)
+    private async Task IrARecargaDocumentos(CompraDocumentosHistorialItem recarga)
     {
         notificacionesOcultas.Add(GetRecargaDocumentosKey(recarga));
-        _ = PersistirNotificacionesOcultasAsync();
+        await PersistirNotificacionesOcultasAsync();
         panelAbierto = false;
-        Navigation.NavigateTo("/compra-documentos");
+        await NavegarANotificacionAsync("/compra-documentos");
     }
 
-    private void IrASolicitudDocumentosBackOffice(ReporteVentaBackOffice solicitud)
+    private async Task IrASolicitudDocumentosBackOffice(ReporteVentaBackOffice solicitud)
     {
         notificacionesOcultas.Add(GetSolicitudDocumentosBackOfficeKey(solicitud));
-        _ = PersistirNotificacionesOcultasAsync();
+        await PersistirNotificacionesOcultasAsync();
         panelAbierto = false;
-        Navigation.NavigateTo("/backoffice/cobros");
+        await NavegarANotificacionAsync(BackOfficeRoutes.Cobros);
     }
 
     private async Task IrADocumentosPendientesAsync()
@@ -653,7 +656,20 @@
 
         await PersistirAutorizacionesVistasAsync();
         panelAbierto = false;
-        Navigation.NavigateTo("/reportes/documentos?autorizacion=PENDIENTES");
+        await NavegarANotificacionAsync("/reportes/documentos?autorizacion=PENDIENTES");
+    }
+
+    private async Task NavegarANotificacionAsync(string ruta)
+    {
+        var destino = Navigation.ToAbsoluteUri(ruta).ToString();
+        var servicio = BackOfficeRoutes.IsBackOfficePath(Navigation, destino)
+            ? BackOfficeRoutes.ServiceKey
+            : ESignRoutes.IsESignPath(Navigation, destino)
+                ? ESignRoutes.ServiceKey
+                : AppAccessService.FreeServiceKey;
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(servicio, usuarioIdActual);
+        Navigation.NavigateToIfNeeded(ruta);
     }
 
     private string GetBadgeText() =>

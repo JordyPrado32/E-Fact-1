@@ -1,9 +1,10 @@
-using System.Data;
+﻿using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.DTOs;
 using Simetric.DTOs.EContax;
 using Simetric.Models;
+using Simetric.Models.EContax;
 using Simetric.Services;
 
 namespace Simetric.Services.EContax;
@@ -13,13 +14,15 @@ public sealed class EContaxCatalogService
     private const string ConsumidorFinalIdentificacion = "9999999999999";
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly EContaxTenantService _tenantService;
+    private readonly EContaxSeguridadService _seguridad;
 
     public EContaxCatalogService(
         IDbContextFactory<AppDbContext> dbFactory,
-        EContaxTenantService tenantService)
+        EContaxTenantService tenantService, EContaxSeguridadService seguridad)
     {
         _dbFactory = dbFactory;
         _tenantService = tenantService;
+        _seguridad = seguridad;
     }
 
     public async Task<List<EContaxClienteDto>> GetClientesAsync(int userId, bool incluirInactivos = false)
@@ -115,6 +118,7 @@ public sealed class EContaxCatalogService
 
     public async Task<int> CrearClienteAsync(int userId, EContaxClienteUpsertDto dto)
     {
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Clientes, EContaxAccion.Crear);
         await using var strategyContext = await _dbFactory.CreateDbContextAsync();
         var strategy = strategyContext.Database.CreateExecutionStrategy();
 
@@ -164,6 +168,7 @@ public sealed class EContaxCatalogService
 
     public async Task ActualizarClienteAsync(int userId, int codCliente, EContaxClienteUpsertDto dto)
     {
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Clientes, EContaxAccion.Editar);
         await using var strategyContext = await _dbFactory.CreateDbContextAsync();
         var strategy = strategyContext.Database.CreateExecutionStrategy();
 
@@ -214,6 +219,7 @@ public sealed class EContaxCatalogService
 
     public async Task SetEstadoClienteAsync(int userId, int codCliente, bool estado)
     {
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Clientes, estado ? EContaxAccion.Editar : EContaxAccion.Eliminar);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
         var cliente = await BuildClientesEmpresaQuery(context, userContext)
@@ -343,6 +349,7 @@ public sealed class EContaxCatalogService
         var clienteDb = await BuildClientesEmpresaQuery(context, userContext)
             .FirstOrDefaultAsync(c => c.Numeroidentificacion == identificacion);
 
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Clientes, clienteDb is null ? EContaxAccion.Crear : EContaxAccion.Editar);
         if (clienteDb is null)
         {
             context.Clientes.Add(clienteData);
@@ -480,6 +487,7 @@ public sealed class EContaxCatalogService
 
     public async Task<int> CrearProductoAsync(int userId, EContaxProductoUpsertDto model)
     {
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Productos, EContaxAccion.Crear);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
         var targetSucursalId = await _tenantService.ResolveTargetSucursalAsync(userContext, model.Idsucursal);
@@ -513,6 +521,7 @@ public sealed class EContaxCatalogService
 
     public async Task ActualizarProductoAsync(int userId, int codigo, EContaxProductoUpsertDto model)
     {
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Productos, EContaxAccion.Editar);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
         var producto = await BuildProductosPermitidosQuery(context, userContext, null)
@@ -544,13 +553,18 @@ public sealed class EContaxCatalogService
         producto.Idsucursal = targetSucursalId;
 
         if (model.Estado is not null)
+        {
+            if (model.Estado == false && producto.Estado != false)
+                await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Productos, EContaxAccion.Eliminar);
             producto.Estado = model.Estado;
+        }
 
         await context.SaveChangesAsync();
     }
 
     public async Task DesactivarProductoAsync(int userId, int codigo)
     {
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Productos, EContaxAccion.Eliminar);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
         var producto = await BuildProductosPermitidosQuery(context, userContext, null)

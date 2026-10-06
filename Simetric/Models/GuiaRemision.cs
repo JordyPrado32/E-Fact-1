@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Simetric.Models
@@ -58,6 +58,9 @@ namespace Simetric.Models
 
         [Column("ambiente")]
         public int? Ambiente { get; set; }
+
+        [Column("codEmisor")]
+        public int? CodEmisor { get; set; }
 
         [Column("codfactura")]
         public int? Codfactura { get; set; }

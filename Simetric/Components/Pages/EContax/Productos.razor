@@ -1,3 +1,4 @@
+﻿@using Simetric.Models.EContax
 @page "/e-contax/productos"
 @using System.ComponentModel.DataAnnotations
 @using System.Globalization
@@ -10,6 +11,7 @@
 @using Simetric.Services
 @using Simetric.Services.EContax
 @inject HttpClient Http
+@inject EContaxSeguridadService SeguridadEContax
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IJSRuntime JS
 @inject ProductCategoryService CategoryService
@@ -137,7 +139,7 @@
                     <span>Refrescar</span>
                 </button>
 
-                <button type="button" class="secondary-btn toolbar-secondary-btn" @onclick="ExportarProductosCsvAsync">
+                <button type="button" class="secondary-btn toolbar-secondary-btn" @onclick="ExportarProductosCsvAsync" disabled="@(!accionesPermitidas.HasFlag(EContaxAccion.Exportar))">
                     <i class="bi bi-download"></i>
                     <span>Exportar todos</span>
                 </button>
@@ -244,11 +246,11 @@
                                             <button type="button"
                                                     class="action-btn action-edit"
                                                     @onclick="() => Editar(p.Codigo)"
-                                                    disabled="@(isSaving || (editando && model.Codigo == p.Codigo))"
+                                                    disabled="@(isSaving || !accionesPermitidas.HasFlag(EContaxAccion.Editar) || (editando && model.Codigo == p.Codigo))"
                                                     title="@(editando && model.Codigo == p.Codigo ? "Editando" : "Editar")">
                                                 <i class="bi bi-pencil-square"></i>
                                             </button>
-                                            <button type="button" class="action-btn action-delete" @onclick="() => ConfirmarEliminar(p)" disabled="@isSaving" title="Desactivar">
+                                            <button type="button" class="action-btn action-delete" @onclick="() => ConfirmarEliminar(p)" disabled="@(isSaving || !accionesPermitidas.HasFlag(EContaxAccion.Eliminar))" title="Desactivar">
                                                 <i class="bi bi-trash"></i>
                                             </button>
                                         </div>
@@ -597,7 +599,7 @@
 
                         <div class="d-grid gap-2 d-md-flex justify-content-md-end pt-3 border-top mt-4">
                             <button class="secondary-btn" type="button" @onclick="Nuevo" disabled="@isSaving">Limpiar</button>
-                            <button class="primary-btn" type="submit" disabled="@isSaving">
+                            <button class="primary-btn" type="submit" disabled="@(isSaving || !accionesPermitidas.HasFlag(editando ? EContaxAccion.Editar : EContaxAccion.Crear))">
                                 <i class="bi bi-save me-1"></i> @(isSaving ? "Guardando..." : (editando ? "Guardar Cambios" : "Crear Registro"))
                             </button>
                         </div>
@@ -614,6 +616,7 @@
     public int? SucursalId { get; set; }
 
     private int usuarioLogueadoId = 0;
+    private EContaxAccion accionesPermitidas;
     private string PageBrandTitle => IsEContaxPath(NavManager.Uri) ? "Numerica E-Contax" : "Numerica e-fact";
     private int? filtroTipo = null;
     private int? filtroSubtipo = null;
@@ -991,6 +994,7 @@
         }
 
         usuarioLogueadoId = ObtenerIdUsuario(user);
+        accionesPermitidas = await SeguridadEContax.GetAccionesRutaAsync(usuarioLogueadoId, EContaxRoutes.Productos);
 
         if (usuarioLogueadoId <= 0)
         {
@@ -1160,6 +1164,11 @@
 
     private async Task ExportarProductosCsvAsync()
     {
+        if (!await SeguridadEContax.PuedeAccederRutaAsync(usuarioLogueadoId, EContaxRoutes.Productos, EContaxAccion.Exportar))
+        {
+            mensaje = "No tienes permiso para exportar productos.";
+            return;
+        }
         var productosExportar = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/e-contax/productos?userId={usuarioLogueadoId}") ?? productos;
 
         if (productosExportar.Count == 0)

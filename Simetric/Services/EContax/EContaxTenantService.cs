@@ -49,6 +49,8 @@ public sealed class EContaxTenantService
             .FirstOrDefaultAsync(x => x.IdUsuario == userId);
         if (asignacion is not null)
         {
+            if (asignacion.Suspendido)
+                throw new InvalidOperationException("Tu acceso a esta empresa de E-Contax está suspendido.");
             if (!asignacion.Estado)
                 throw new InvalidOperationException("La cuenta no está vinculada a una empresa de E-Contax.");
             var empresa = await context.EContaxEmpresas

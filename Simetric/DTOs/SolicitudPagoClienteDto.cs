@@ -3,7 +3,7 @@ namespace Simetric.DTOs;
 public sealed class SolicitudPagoClienteDto
 {
     public int SolId { get; set; }
-    public int SolIdUsuarioCliente { get; set; }
+    public int? SolIdUsuarioCliente { get; set; }
     public int SolIdEstadoNumerica { get; set; }
     public string? EstadoSolicitud { get; set; }
     public string SolNombres { get; set; } = string.Empty;

@@ -3369,7 +3369,9 @@ IF @resultado < 0
                 .ToListAsync();
 
             var estadoSecuencia = await _initialSequencePromptService.GetStateAsync(idUsuario, "nota-debito", serieNd, codEmisor);
-            var siguiente = _initialSequencePromptService.ResolveFirstAvailableSequence(list, estadoSecuencia);
+            var siguiente = _initialSequencePromptService.ResolveFirstAvailableSequence(list, estadoSecuencia, preserveConfiguredStart: codEmisor == EmisorSistemaService.CodigoEmisorBackOffice);
+            if (codEmisor == EmisorSistemaService.CodigoEmisorBackOffice && string.IsNullOrWhiteSpace(siguiente))
+                throw new InvalidOperationException("La secuencia maestra de notas de débito está agotada.");
             return string.IsNullOrWhiteSpace(siguiente) ? "000000001" : siguiente;
         }
 

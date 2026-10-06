@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Simetric.Services.EContax;
+using Simetric.Models.EContax;
 
 namespace Simetric.Controllers.EContax;
 
@@ -20,7 +21,15 @@ public abstract class EContaxApiControllerBase : Controller
             return;
         }
         var seguridad = HttpContext.RequestServices.GetRequiredService<EContaxSeguridadService>();
-        if (!await seguridad.PuedeAccederRutaAsync(userId, RutaPermiso))
+        var accion = HttpContext.Request.Method switch
+        {
+            "POST" => EContaxAccion.Crear,
+            "DELETE" => EContaxAccion.Eliminar,
+            "PUT" or "PATCH" => HttpContext.Request.Path.Value?.EndsWith("/desactivar", StringComparison.OrdinalIgnoreCase) == true
+                ? EContaxAccion.Eliminar : EContaxAccion.Editar,
+            _ => EContaxAccion.Ver
+        };
+        if (!await seguridad.PuedeAccederRutaAsync(userId, RutaPermiso, accion))
         {
             context.Result = Forbid();
             return;

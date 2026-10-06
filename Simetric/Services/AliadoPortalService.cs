@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Simetric.Components.Helpers;
 using Simetric.Data;
 using Simetric.DTOs;
@@ -2310,6 +2310,7 @@ public sealed class AliadoPortalService
                 IdentificacionCliente = x.CodclientesNavigation == null ? null : x.CodclientesNavigation.Numeroidentificacion,
                 Cliente = x.CodclientesNavigation == null ? "Cliente" : (x.CodclientesNavigation.Nombrerazonsocial ?? x.CodclientesNavigation.Nombrecomercial ?? ((x.CodclientesNavigation.Nombres ?? "") + " " + (x.CodclientesNavigation.Apellidos ?? ""))),
                 Producto = x.Detallefacturas.OrderBy(d => d.Codlinea).Select(d => d.Descripproducto).FirstOrDefault() ?? "Servicio Numerica",
+                Detalles = x.Detallefacturas.Select(d => new AliadoComisionDetalle(d.Descripproducto, d.Cantproducto)).ToList(),
                 Plan = x.Detallefacturas.OrderBy(d => d.Codlinea).Select(d => d.Descripproducto).FirstOrDefault() ?? "Servicio",
                 Fecha = x.Fchautorizacion ?? x.Fechaentrega ?? DateTime.MinValue,
                 FechaVencimiento = x.Fechavence,
@@ -2347,7 +2348,9 @@ public sealed class AliadoPortalService
         FechaVencimiento = factura.FechaVencimiento ?? factura.Fecha,
         DiasRestantes = factura.FechaVencimiento.HasValue ? (factura.FechaVencimiento.Value.Date - DateTime.Today).Days : 0,
         Valor = factura.Total,
-        ComisionPotencial = AliadoComisionCalculationService.CalcularValor(AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12), porcentajeBase),
+        ComisionPotencial = AliadoComisionCalculationService.CalcularValor(AliadoComisionCalculationService.ObtenerBaseComisionable(
+            AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12),
+            factura.Detalles.Where(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA")), porcentajeBase),
         EstadoGestion = gestion?.Resultado ?? "Pendiente",
         UltimaGestion = gestion?.FechaGestion,
         Observacion = gestion?.Observacion,
@@ -2365,7 +2368,9 @@ public sealed class AliadoPortalService
         FechaVencimiento = DateTime.MaxValue,
         DiasRestantes = int.MaxValue,
         Valor = factura.Total,
-        ComisionPotencial = AliadoComisionCalculationService.CalcularValor(AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12), porcentajeBase),
+        ComisionPotencial = AliadoComisionCalculationService.CalcularValor(AliadoComisionCalculationService.ObtenerBaseComisionable(
+            AliadoComisionCalculationService.ObtenerBaseNeta(factura.Subtotal, factura.Subtotal0, factura.Subtotal12),
+            factura.Detalles.Where(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA")), porcentajeBase),
         EstadoGestion = gestion?.Resultado ?? "Pendiente",
         UltimaGestion = gestion?.FechaGestion,
         Observacion = gestion?.Observacion,
@@ -3593,6 +3598,7 @@ internal sealed class FacturaPortalRow
     public string? IdentificacionCliente { get; init; }
     public string Cliente { get; init; } = string.Empty;
     public string Producto { get; init; } = string.Empty;
+    public List<AliadoComisionDetalle> Detalles { get; init; } = new();
     public string Plan { get; init; } = string.Empty;
     public bool EsRenovacion { get; set; }
     public bool EsCompraRepetida { get; set; }
@@ -3617,6 +3623,7 @@ internal sealed class FacturaComisionRow
     public int IdFactura { get; init; }
     public int? IdCliente { get; init; }
     public string Producto { get; init; } = string.Empty;
+    public List<AliadoComisionDetalle> Detalles { get; init; } = new();
     public bool EsRenovacion { get; set; }
     public DateTime? FechaVencimiento { get; init; }
     public decimal? Subtotal { get; init; }

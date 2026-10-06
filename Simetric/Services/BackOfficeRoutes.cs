@@ -7,6 +7,8 @@ public static class BackOfficeRoutes
     public const string ServiceKey = "backoffice";
     public const string Root = "/backoffice";
     public const string Dashboard = "/backoffice";
+    public const string ComprarFirma = "/backoffice/comprar-firma";
+    public const string MisFirmas = "/backoffice/mis-firmas";
     public const string Clientes = "/backoffice/clientes";
     public const string UsuariosRegistrados = "/backoffice/usuarios-registrados";
     public const string Ventas = "/backoffice/ventas";

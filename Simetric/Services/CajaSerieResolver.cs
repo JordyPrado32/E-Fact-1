@@ -11,6 +11,7 @@ public interface ICajaSerieResolver
     /// que tiene asignada en la tabla CAJA.
     /// </summary>
     Task<CajaSerieResolucion> ResolverAsync(int idUsuario, string? preferredSeriesRaw = null);
+    Task<CajaSerieResolucion> ResolverGuiaAsync(int idUsuario, string? preferredSeriesRaw = null);
     Task<CajaSerieResolucion> ResolverComprasAsync(int idUsuario, string? preferredSeriesRaw = null);
     Task<CajaSerieResolucion> ResolverNotaCreditoAsync(int idUsuario, string? preferredSeriesRaw = null);
     Task<CajaSerieResolucion> ResolverNotaDebitoAsync(int idUsuario, string? preferredSeriesRaw = null);
@@ -43,6 +44,7 @@ internal enum CajaSerieDocumento
 {
     Factura,
     Compra,
+    Guia,
     NotaCredito,
     NotaDebito
 }
@@ -58,6 +60,9 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
 
     public async Task<CajaSerieResolucion> ResolverAsync(int idUsuario, string? preferredSeriesRaw = null)
         => await ResolverPorDocumentoAsync(idUsuario, preferredSeriesRaw, CajaSerieDocumento.Factura);
+
+    public async Task<CajaSerieResolucion> ResolverGuiaAsync(int idUsuario, string? preferredSeriesRaw = null)
+        => await ResolverPorDocumentoAsync(idUsuario, preferredSeriesRaw, CajaSerieDocumento.Guia);
 
     public async Task<CajaSerieResolucion> ResolverComprasAsync(int idUsuario, string? preferredSeriesRaw = null)
         => await ResolverPorDocumentoAsync(idUsuario, preferredSeriesRaw, CajaSerieDocumento.Compra);
@@ -263,6 +268,7 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
         => documento switch
         {
             CajaSerieDocumento.Compra => caja.SerieCompras,
+            CajaSerieDocumento.Guia => caja.SerieGuia,
             CajaSerieDocumento.NotaCredito => caja.SerieNotasCred,
             CajaSerieDocumento.NotaDebito => caja.SerieDebitos,
             _ => caja.SerieFactura

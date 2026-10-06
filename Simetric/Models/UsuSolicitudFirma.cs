@@ -12,7 +12,7 @@ namespace Simetric.Models
         public int SolId { get; set; }
 
         [Column("SOL_ID_USUARIO_CLIENTE")]
-        public int SolIdUsuarioCliente { get; set; }
+        public int? SolIdUsuarioCliente { get; set; }
 
         [Column("SOL_ID_ESTADO_NUMERICA")]
         public int SolIdEstadoNumerica { get; set; }

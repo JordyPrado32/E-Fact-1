@@ -27,7 +27,7 @@ public sealed class SolicitudFirmaBorradorService
                     CREATE TABLE [dbo].[ESIGN_SOLICITUD_BORRADOR]
                     (
                         [BOR_ID] UNIQUEIDENTIFIER NOT NULL CONSTRAINT [PK_ESIGN_SOLICITUD_BORRADOR] PRIMARY KEY,
-                        [BOR_ID_USUARIO] INT NOT NULL,
+                        [BOR_ID_USUARIO] INT NULL,
                         [BOR_TITULO] NVARCHAR(250) NOT NULL,
                         [BOR_DATOS_JSON] NVARCHAR(MAX) NOT NULL,
                         [BOR_FECHA_GUARDADO] DATETIME2 NOT NULL
@@ -41,7 +41,7 @@ public sealed class SolicitudFirmaBorradorService
         finally { SchemaLock.Release(); }
     }
 
-    public async Task<IReadOnlyList<SolicitudFirmaBorrador>> ObtenerAsync(int userId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SolicitudFirmaBorrador>> ObtenerAsync(int? userId, CancellationToken cancellationToken = default)
     {
         await EnsureSchemaAsync(cancellationToken);
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
@@ -49,12 +49,12 @@ public sealed class SolicitudFirmaBorradorService
             SELECT CONVERT(varchar(36), [BOR_ID]) AS [Id], [BOR_TITULO] AS [Titulo],
                    [BOR_FECHA_GUARDADO] AS [FechaGuardado], [BOR_DATOS_JSON] AS [DatosJson]
             FROM [dbo].[ESIGN_SOLICITUD_BORRADOR]
-            WHERE [BOR_ID_USUARIO] = {userId}
+            WHERE ([BOR_ID_USUARIO] = {userId} OR ([BOR_ID_USUARIO] IS NULL AND {userId} IS NULL))
             ORDER BY [BOR_FECHA_GUARDADO] DESC
             """).ToListAsync(cancellationToken);
     }
 
-    public async Task<SolicitudFirmaBorrador> GuardarAsync(int userId, string titulo, string datosJson, CancellationToken cancellationToken = default)
+    public async Task<SolicitudFirmaBorrador> GuardarAsync(int? userId, string titulo, string datosJson, CancellationToken cancellationToken = default)
     {
         await EnsureSchemaAsync(cancellationToken);
         var id = Guid.NewGuid();
@@ -66,12 +66,12 @@ public sealed class SolicitudFirmaBorradorService
             """, cancellationToken);
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             DELETE FROM [dbo].[ESIGN_SOLICITUD_BORRADOR]
-            WHERE [BOR_ID_USUARIO] = {userId} AND [BOR_ID] NOT IN
+            WHERE ([BOR_ID_USUARIO] = {userId} OR ([BOR_ID_USUARIO] IS NULL AND {userId} IS NULL)) AND [BOR_ID] NOT IN
             (
                 SELECT [BOR_ID] FROM
                 (
                     SELECT TOP (20) [BOR_ID] FROM [dbo].[ESIGN_SOLICITUD_BORRADOR]
-                    WHERE [BOR_ID_USUARIO] = {userId}
+                    WHERE ([BOR_ID_USUARIO] = {userId} OR ([BOR_ID_USUARIO] IS NULL AND {userId} IS NULL))
                     ORDER BY [BOR_FECHA_GUARDADO] DESC
                 ) AS recientes
             );
@@ -79,11 +79,11 @@ public sealed class SolicitudFirmaBorradorService
         return new SolicitudFirmaBorrador(id.ToString(), titulo.Trim(), fecha, datosJson);
     }
 
-    public async Task<bool> EliminarAsync(int userId, string id, CancellationToken cancellationToken = default)
+    public async Task<bool> EliminarAsync(int? userId, string id, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(id, out var guid)) return false;
         await EnsureSchemaAsync(cancellationToken);
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
-        return await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM [dbo].[ESIGN_SOLICITUD_BORRADOR] WHERE [BOR_ID] = {guid} AND [BOR_ID_USUARIO] = {userId};", cancellationToken) > 0;
+        return await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM [dbo].[ESIGN_SOLICITUD_BORRADOR] WHERE [BOR_ID] = {guid} AND ([BOR_ID_USUARIO] = {userId} OR ([BOR_ID_USUARIO] IS NULL AND {userId} IS NULL));", cancellationToken) > 0;
     }
 }

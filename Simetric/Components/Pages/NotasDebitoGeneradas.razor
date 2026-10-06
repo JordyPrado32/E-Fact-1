@@ -1,3 +1,5 @@
+@page "/backoffice/mis-notas-debito"
+@inject EmisorSistemaService EmisorSistemaService
 @page "/facturacion/notas-debito-generadas"
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
@@ -24,7 +26,7 @@
     var notasPendientes = notasFiltradas.Count - notasAutorizadas - notasNoAutorizadas;
 }
 
-<div class="facturas-shell" data-tour="ndgen.page">
+<div class="facturas-shell @(EsBackOffice ? "backoffice-documento" : string.Empty)" data-tour="ndgen.page">
     @if (idDocumentoMenuAbierto.HasValue)
     {
         <div class="row-menu-backdrop" @onclick="CerrarMenus"></div>
@@ -589,6 +591,8 @@
 }
 
 @code {
+    private bool EsBackOffice => BackOfficeRoutes.IsBackOfficePath(NavManager, NavManager.Uri);
+    private int? CodigoEmisorBackOffice => EsBackOffice ? EmisorSistemaService.CodigoEmisorBackOffice : null;
     private int? idDocumentoMenuAbierto;
 
     private void ToggleMenu(int id)
@@ -779,6 +783,21 @@
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var userClaim = authState.User.FindFirst("IdUsuario")?.Value;
         currentUserId = int.TryParse(userClaim, out var id) ? id : 0;
+        if (EsBackOffice)
+        {
+            if (!await EmisorSistemaService.TieneAccesoBackOfficeAsync(currentUserId))
+            {
+                NavManager.NavigateTo("/portal-servicios");
+                return;
+            }
+            var maestro = await EmisorSistemaService.GetEmisorSistemaAsync();
+            if (maestro?.IdUsuario is not > 0)
+            {
+                NavManager.NavigateTo(BackOfficeRoutes.Facturacion);
+                return;
+            }
+            currentUserId = maestro.IdUsuario.Value;
+        }
 
         if (currentUserId <= 0)
         {
@@ -786,7 +805,7 @@
             return;
         }
 
-        notas = await NotaDebitoService.ListarNotasDebitoUsuarioAsync(currentUserId);
+        notas = await NotaDebitoService.ListarNotasDebitoUsuarioAsync(currentUserId, CodigoEmisorBackOffice);
         paginaActual = 1;
         cargando = false;
     }
@@ -827,7 +846,7 @@
     private async Task VerNotaAsync(int sec)
     {
         notaSeleccionada =
-            await NotaDebitoService.GetNotaDebitoDetalleUsuarioAsync(sec, currentUserId);
+            await NotaDebitoService.GetNotaDebitoDetalleUsuarioAsync(sec, currentUserId, CodigoEmisorBackOffice);
 
         if (notaSeleccionada != null)
             mostrarModal = true;
@@ -835,7 +854,7 @@
 
     private async Task AbrirXmlAsync(int sec)
     {
-        var xmlUrl = await NotaDebitoService.AsegurarXmlNotaDebitoUsuarioAsync(sec, currentUserId);
+        var xmlUrl = await NotaDebitoService.AsegurarXmlNotaDebitoUsuarioAsync(sec, currentUserId, CodigoEmisorBackOffice);
         if (string.IsNullOrWhiteSpace(xmlUrl))
         {
             await AlertService.ShowWarningAsync("No se pudo generar o ubicar el XML de la nota de debito.");
@@ -847,7 +866,7 @@
 
     private async Task AbrirPdfAsync(int sec, FormatoImpresionDocumento formato = FormatoImpresionDocumento.A4)
     {
-        var pdfUrl = await NotaDebitoService.AsegurarPdfNotaDebitoUsuarioAsync(sec, currentUserId, formato);
+        var pdfUrl = await NotaDebitoService.AsegurarPdfNotaDebitoUsuarioAsync(sec, currentUserId, formato, CodigoEmisorBackOffice);
         if (string.IsNullOrWhiteSpace(pdfUrl))
         {
             await AlertService.ShowWarningAsync($"No se pudo generar o ubicar el PDF {formato.ObtenerEtiqueta()} de la nota de debito.");
@@ -865,7 +884,7 @@
         notaEmitiendoSri = sec;
         try
         {
-            var respuesta = await NotaDebitoService.EmitirNotaDebitoSriAsync(sec, currentUserId);
+            var respuesta = await NotaDebitoService.EmitirNotaDebitoSriAsync(sec, currentUserId, codEmisor: CodigoEmisorBackOffice);
             var autorizada = string.Equals(
                 respuesta.estado,
                 DocumentoAutorizacionHelper.EstadoAutorizado,
@@ -995,7 +1014,7 @@
         try
         {
             procesandoAnulacion = true;
-            var exito = await NotaDebitoService.AnularNotaDebitoDirectoAsync(nota.Sec, currentUserId);
+            var exito = await NotaDebitoService.AnularNotaDebitoDirectoAsync(nota.Sec, currentUserId, CodigoEmisorBackOffice);
 
             if (exito)
             {

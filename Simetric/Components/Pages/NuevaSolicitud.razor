@@ -1,4 +1,5 @@
 @page "/solicitud/nueva"
+@page "/backoffice/comprar-firma"
 @using Microsoft.AspNetCore.Authorization
 @using System.Text.Json
 @using Microsoft.AspNetCore.Components.Authorization
@@ -20,7 +21,7 @@
 
 @attribute [Authorize]
 
-<div class="solicitud-shell" data-tour="solicitud.page">
+<div class="solicitud-shell @(EsBackOffice ? "backoffice-firmas" : string.Empty)" data-tour="solicitud.page">
     <header class="solicitud-page-head" data-tour="solicitud.hero">
         <div>
             <span class="solicitud-page-kicker">Firma electrónica</span>
@@ -986,6 +987,9 @@
 }
 
 @code {
+    private bool EsBackOffice => BackOfficeRoutes.IsBackOfficePath(Navigation, Navigation.Uri);
+    private int? UsuarioSolicitudId => EsBackOffice ? null : usuarioActualId;
+    private string RutaMisFirmas => EsBackOffice ? BackOfficeRoutes.MisFirmas : "/solicitud/pagos";
     [Parameter] public bool DemoMode { get; set; }
 
     private sealed record DocumentoConfig(
@@ -1710,6 +1714,12 @@
         }
 
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (EsBackOffice && !await BackOfficePermissionHelper.PuedeComprarFirmasAsync(authState.User, DbFactory))
+        {
+            edicionNoDisponible = true;
+            Navigation.NavigateTo("/portal-servicios");
+            return;
+        }
         var idClaim = authState.User.FindFirst("IdUsuario")?.Value;
         usuarioActualId = int.TryParse(idClaim, out var parsedId) ? parsedId : 0;
         solicitud.SolFormatoFirma = "ARCHIVO_P12";
@@ -1718,7 +1728,7 @@
         solicitud.SolTipoPersona = TipoPersonaNatural;
         if (SolicitudEditarId is > 0)
         {
-            var rechazada = await SolicitudService.ObtenerSolicitudRechazadaClienteAsync(SolicitudEditarId.Value, usuarioActualId);
+            var rechazada = await SolicitudService.ObtenerSolicitudRechazadaClienteAsync(SolicitudEditarId.Value, UsuarioSolicitudId);
             if (rechazada is not null)
             {
                 modoEdicionRechazada = true;
@@ -1736,7 +1746,7 @@
         else if (SolicitudRenovarId is > 0)
         {
             esRenovacion = true;
-            var anterior = await SolicitudService.ObtenerSolicitudRenovacionClienteAsync(SolicitudRenovarId.Value, usuarioActualId);
+            var anterior = await SolicitudService.ObtenerSolicitudRenovacionClienteAsync(SolicitudRenovarId.Value, UsuarioSolicitudId);
             if (anterior is null)
             {
                 edicionNoDisponible = true;
@@ -1747,7 +1757,7 @@
                 CopiarSolicitudEditable(anterior);
                 solicitudOrigenId = anterior.SolId;
                 solicitud.SolId = 0;
-                solicitud.SolIdUsuarioCliente = usuarioActualId;
+                solicitud.SolIdUsuarioCliente = UsuarioSolicitudId;
                 solicitud.SolIdTransaccionPago = null;
                 solicitud.SolPagoExitoso = false;
                 solicitud.SolFechaSolicitud = DateTime.Now;
@@ -1770,7 +1780,7 @@
         {
             if (!DemoMode)
             {
-                await SelectedAppServiceState.SetCurrentServiceKeyAsync("e-sign");
+                await SelectedAppServiceState.SetCurrentServiceKeyAsync(EsBackOffice ? BackOfficeRoutes.ServiceKey : "e-sign");
                 borradoresGuardados = await ObtenerBorradoresGuardadosAsync();
                 tieneBorrador = borradoresGuardados.Any();
                 StateHasChanged();
@@ -1872,7 +1882,7 @@
             .ToList();
 
         if (usuarioActualId > 0)
-            await SolicitudFirmaBorradorService.EliminarAsync(usuarioActualId, borrador.Id);
+            await SolicitudFirmaBorradorService.EliminarAsync(UsuarioSolicitudId, borrador.Id);
         tieneBorrador = borradoresGuardados.Any();
         if (!tieneBorrador)
         {
@@ -1895,7 +1905,7 @@
         if (usuarioActualId <= 0)
             return new List<SolicitudFirmaDraftItem>();
 
-        var items = await SolicitudFirmaBorradorService.ObtenerAsync(usuarioActualId);
+        var items = await SolicitudFirmaBorradorService.ObtenerAsync(UsuarioSolicitudId);
         return items.Select(item =>
         {
             try
@@ -1920,7 +1930,7 @@
 
         var ultimo = borradores[0];
         await SolicitudFirmaBorradorService.GuardarAsync(
-            usuarioActualId,
+            UsuarioSolicitudId,
             ultimo.Titulo,
             JsonSerializer.Serialize(ultimo.Datos));
     }
@@ -2161,11 +2171,11 @@
             enviando = true;
             try
             {
-                solicitud.SolIdUsuarioCliente = usuarioActualId;
+                solicitud.SolIdUsuarioCliente = UsuarioSolicitudId;
                 var actualizada = await SolicitudService.ActualizarSolicitudRechazadaAsync(
                     solicitud,
                     archivosTemporales.Select(x => (x.Value.TempFileName, x.Key)).ToList(),
-                    usuarioActualId);
+                    UsuarioSolicitudId);
                 if (!actualizada)
                 {
                     mensajeGeneralFormulario = "No se pudo actualizar la solicitud rechazada. Verifica que aún esté disponible para edición.";
@@ -2179,7 +2189,7 @@
                     return;
                 }
 
-                Navigation.NavigateTo("/solicitud/pagos");
+                Navigation.NavigateTo(RutaMisFirmas);
             }
             finally
             {
@@ -2215,7 +2225,7 @@
                 return;
             }
 
-            solicitud.SolIdUsuarioCliente = usuarioActualId;
+            solicitud.SolIdUsuarioCliente = UsuarioSolicitudId;
 
             var archivosEnviar = archivosTemporales
                 .Select(x => (x.Value.TempFileName, x.Key))
@@ -2338,7 +2348,7 @@
         {
             await using var context = await DbFactory.CreateDbContextAsync();
             var solicitudDb = await context.UsuSolicitudFirma
-                .FirstOrDefaultAsync(item => item.SolId == solicitud.SolId && item.SolIdUsuarioCliente == usuarioActualId);
+                .FirstOrDefaultAsync(item => item.SolId == solicitud.SolId && item.SolIdUsuarioCliente == UsuarioSolicitudId);
             if (solicitudDb is null)
                 throw new InvalidOperationException("No se encontró la solicitud de firma registrada.");
 
@@ -2392,7 +2402,7 @@
             pagoFirmaExitoso = true;
             mensajePagoFirma = "Tu transferencia fue registrada. El equipo de Cobros la revisará y, al aprobarla, generará la factura automáticamente.";
             mostrarModalPagoFirma = false;
-            Navigation.NavigateTo("/solicitud/pagos?transferencia=registrada");
+            Navigation.NavigateTo($"{RutaMisFirmas}?transferencia=registrada");
         }
         catch (Exception ex)
         {
