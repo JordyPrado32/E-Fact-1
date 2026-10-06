@@ -9,11 +9,12 @@ Check(service.ResolveNextSequence("000000120", guide, preserveConfiguredStart: t
 Check(service.ResolveFirstAvailableSequence(new[] { "000000001", "000000002" }, debit, preserveConfiguredStart: true), "000000051");
 Check(service.ResolveFirstAvailableSequence(new[] { "000000051" }, debit, preserveConfiguredStart: true), "000000052");
 Check(service.ResolveNextSequence("000000001", guide), "000000001");
+Check(service.ResolveFirstAvailableSequence(new[] { "000000001", "000000002" }, debit), "000000003");
 
 guide.PreviousSequence = "999999999";
 Check(service.ResolveNextSequence("000000001", guide, preserveConfiguredStart: true), string.Empty);
 Check(service.ResolveFirstAvailableSequence(Array.Empty<string>(), guide, preserveConfiguredStart: true), string.Empty);
-Console.WriteLine("Secuencias maestras independientes: 7 comprobaciones correctas.");
+Console.WriteLine("Secuencias maestras independientes: 8 comprobaciones correctas.");
 
 static void Check(string actual, string expected)
 {

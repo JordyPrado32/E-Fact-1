@@ -406,7 +406,7 @@ namespace Simetric.Services
                     }
                     var numeroCompleto = $"{FormatearSerie(serieNorm)}-{secuencial}";
                     var existeNumero = await context.GuiasRemision.AsNoTracking().AnyAsync(g =>
-                        g.IdUsuario == idUsuario && (!codEmisor.HasValue || g.CodEmisor == codEmisor) &&
+                        (codEmisor == EmisorSistemaService.CodigoEmisorBackOffice ? g.CodEmisor == codEmisor : g.IdUsuario == idUsuario && (!codEmisor.HasValue || g.CodEmisor == codEmisor)) &&
                         ((g.Serie ?? string.Empty).Replace("-", string.Empty).Trim()) == serieNorm &&
                         (g.NumGuiaRemision ?? string.Empty) == secuencial);
                     if (existeNumero) throw new Exception($"La guia {numeroCompleto} ya existe.");
@@ -460,7 +460,7 @@ namespace Simetric.Services
                         IdEmpresa = caja.IdEmpresa ?? emisorDb.IdEmpresa,
                         IdSucursal = caja.IdSucursal ?? emisorDb.IdSucursal,
                         EstadoSRI = "P",
-                        IdUsuario = idUsuario,
+                        IdUsuario = emisorDb.EsEmisorSistema ? null : idUsuario,
                         Serie = serieNorm,
                         Ambiente = ambiente,
                         CodEmisor = emisorDb.Codigo,
@@ -805,7 +805,7 @@ namespace Simetric.Services
         private static async Task<long> ObtenerSiguienteSecuencialInternoAsync(AppDbContext context, int idUsuario, string serieNorm, int? codEmisor = null)
         {
             var maximo = 0L;
-            var existentes = await context.GuiasRemision.AsNoTracking().Where(g => g.IdUsuario == idUsuario && (!codEmisor.HasValue || g.CodEmisor == codEmisor))
+            var existentes = await context.GuiasRemision.AsNoTracking().Where(g => (codEmisor == EmisorSistemaService.CodigoEmisorBackOffice ? g.CodEmisor == codEmisor : g.IdUsuario == idUsuario && (!codEmisor.HasValue || g.CodEmisor == codEmisor)))
                 .Select(g => new { g.Serie, g.NumGuiaRemision }).ToListAsync();
             foreach (var item in existentes)
             {
@@ -817,7 +817,7 @@ namespace Simetric.Services
                 if (long.TryParse(secuencial, out var num) && num > maximo) maximo = num;
             }
 
-            var reservas = await context.Facturas.AsNoTracking().Where(f => f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor) && f.Guiaremision != null)
+            var reservas = await context.Facturas.AsNoTracking().Where(f => (codEmisor == EmisorSistemaService.CodigoEmisorBackOffice ? f.Codemisor == codEmisor : f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor)) && f.Guiaremision != null)
                 .Select(f => f.Guiaremision).ToListAsync();
             foreach (var item in reservas)
             {

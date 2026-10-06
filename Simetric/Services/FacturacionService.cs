@@ -3360,8 +3360,7 @@ IF @resultado < 0
                 usuariosCuenta.Add(idUsuario);
 
             var list = await context.NotaDebitos
-                .Where(n => n.Usuario.HasValue &&
-                            usuariosCuenta.Contains(n.Usuario.Value) &&
+                .Where(n => (codEmisor == EmisorSistemaService.CodigoEmisorBackOffice || (n.Usuario.HasValue && usuariosCuenta.Contains(n.Usuario.Value))) &&
                             n.Serie != null &&
                             n.Serie.Replace("-", "") == serieNd &&
                             (!codEmisor.HasValue || n.CodEmisor == codEmisor.Value))

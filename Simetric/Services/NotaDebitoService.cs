@@ -346,7 +346,7 @@ public class NotaDebitoService
                 var secuencial = LimpiarSecuencial(notaDebito.NumNotaDebito);
                 var usuariosCuenta = await ObtenerUsuariosCuentaIdsAsync(db, notaDebito.Usuario.Value);
                 var duplicada = await db.NotaDebitos.AsNoTracking().AnyAsync(n =>
-                    n.Usuario.HasValue && usuariosCuenta.Contains(n.Usuario.Value) &&
+                    (notaDebito.CodEmisor == EmisorSistemaService.CodigoEmisorBackOffice || (n.Usuario.HasValue && usuariosCuenta.Contains(n.Usuario.Value))) &&
                     n.CodEmisor == notaDebito.CodEmisor &&
                     n.Serie != null && n.Serie.Replace("-", string.Empty) == serie &&
                     n.NumNotaDebito == secuencial);
@@ -368,6 +368,8 @@ public class NotaDebitoService
                 notaDebito.Autorizado = "0";
                 notaDebito.Mensaje = DocumentoAutorizacionHelper.EstadoPendiente;
 
+                if (emisor?.EsEmisorSistema == true)
+                    notaDebito.Usuario = null;
                 db.NotaDebitos.Add(notaDebito);
                 await db.SaveChangesAsync();
 
@@ -609,7 +611,9 @@ public class NotaDebitoService
 
         if (autorizada)
         {
-            if (nota.Usuario is > 0)
+            if (nota.CodEmisor == EmisorSistemaService.CodigoEmisorBackOffice)
+                await AsegurarPdfNotaDebitoUsuarioAsync(sec, 0, codEmisor: nota.CodEmisor);
+            else if (nota.Usuario is > 0)
                 await AsegurarPdfNotaDebitoUsuarioAsync(sec, nota.Usuario.Value);
             if (intentarEnviarCorreo)
                 await IntentarEnviarNotaDebitoPorCorreoAsync(sec, rutaXml, correosExtra: correosExtra);
