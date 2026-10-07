@@ -2544,6 +2544,12 @@ public sealed class AliadoPortalService
         await EnsureSchemaAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
         if (!await EsAdministradorPortalAsync(db, actorId)) return (false, "No tienes permisos para revisar facturas.");
+        var estadoLiquidacion = await db.AliadoLiquidaciones.AsNoTracking()
+            .Where(x => x.IdLiquidacion == idLiquidacion)
+            .Select(x => x.Estado)
+            .FirstOrDefaultAsync();
+        if (string.Equals(estadoLiquidacion, "Pagada", StringComparison.OrdinalIgnoreCase) && !aprobar)
+            return (false, "No se puede desaprobar la factura porque la liquidación ya fue pagada.");
         var factura = await db.AliadoLiquidacionFacturas.Where(x => x.IdLiquidacion == idLiquidacion).OrderByDescending(x => x.IdRevision).FirstOrDefaultAsync();
         if (factura is null) return (false, "El aliado aún no ha cargado la factura.");
         factura.Estado = aprobar ? "Aprobada" : "RequiereCorreccion";
