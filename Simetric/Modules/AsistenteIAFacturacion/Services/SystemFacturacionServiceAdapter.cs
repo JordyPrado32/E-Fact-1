@@ -269,7 +269,7 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
             return new FacturaEmissionResult
             {
                 Success = true,
-                Message = $"Factura emitida y autorizada correctamente con numero {numeroFactura}.{mensajeCorreo}",
+                Message = $"Tu factura se ha autorizado correctamente. Para ver más detalles, dirígete a Mis facturas.{mensajeCorreo}",
                 NumeroFactura = numeroFactura
             };
         }

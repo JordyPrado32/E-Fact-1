@@ -69,7 +69,8 @@ public sealed class SriXmlProcessorService
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
 
-            var xmlRespuesta = await response.Content.ReadAsStringAsync(cancellationToken);
+            var xmlRespuesta = (await response.Content.ReadAsStringAsync(cancellationToken))
+                .TrimStart('\uFEFF', '\u0009', '\u000A', '\u000D', ' ');
             if (!response.IsSuccessStatusCode)
                 throw new Exception($"Respuesta de error de la API: {xmlRespuesta}");
 

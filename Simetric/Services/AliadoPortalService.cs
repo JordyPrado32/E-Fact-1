@@ -2119,61 +2119,66 @@ public sealed class AliadoPortalService
         if (!roleId.HasValue)
             return (false, $"No se encontró el rol {roleName}.");
 
-        await using var transaction = await db.Database.BeginTransactionAsync();
-        VendedorBackOffice? aliado = null;
-        if (!esAdministradorPortal)
+        var executionStrategy = db.Database.CreateExecutionStrategy();
+        var resultado = await executionStrategy.ExecuteAsync(async () =>
         {
-            var codigo = await GenerarCodigoAsync(db, nombre);
-            aliado = new VendedorBackOffice
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            VendedorBackOffice? aliado = null;
+            if (!esAdministradorPortal)
             {
-                Nombre = (tipoCliente == 2 ? nombreComercial : $"{nombre} {apellidos}")?.Trim() ?? nombre,
-                CodigoReferencia = codigo,
-                BancoPago = cuentaBancaria!.NombreBanco,
-                TipoCuentaPago = cuentaBancaria.Tipo,
-                NumeroCuentaPago = cuentaBancaria.Numero,
-                TitularCuentaPago = cuentaBancaria.Titular.Trim(),
-                Activo = true,
-                EsSistema = false,
-                PorcentajeBase = porcentajeBase,
-                IdUsuarioCreacion = actorId > 0 ? actorId : null,
-                FechaCreacion = DateTime.Now
-            };
-            db.VendedoresBackOffice.Add(aliado);
-            await db.SaveChangesAsync();
-        }
+                var codigo = await GenerarCodigoAsync(db, nombre);
+                aliado = new VendedorBackOffice
+                {
+                    Nombre = (tipoCliente == 2 ? nombreComercial : $"{nombre} {apellidos}")?.Trim() ?? nombre,
+                    CodigoReferencia = codigo,
+                    BancoPago = cuentaBancaria!.NombreBanco,
+                    TipoCuentaPago = cuentaBancaria.Tipo,
+                    NumeroCuentaPago = cuentaBancaria.Numero,
+                    TitularCuentaPago = cuentaBancaria.Titular.Trim(),
+                    Activo = true,
+                    EsSistema = false,
+                    PorcentajeBase = porcentajeBase,
+                    IdUsuarioCreacion = actorId > 0 ? actorId : null,
+                    FechaCreacion = DateTime.Now
+                };
+                db.VendedoresBackOffice.Add(aliado);
+                await db.SaveChangesAsync();
+            }
 
-        var nuevoUsuario = new Usuario
-        {
-            Nombres = nombre,
-            Apellidos = apellidos ?? string.Empty,
-            Email = email,
-            PasswordHash = SecurityHelper.HashPassword(password),
-            IdTipoUsuario = roleId,
-            IdVendedor = aliado?.IdVendedor,
-            Estado = true,
-            ClaveTemporal = true,
-            CuentaBloqueada = false,
-            AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl,
-            Identificacion = identificacion?.Trim(),
-            IdTipoIdentificacion = ObtenerIdTipoIdentificacion(tipoDocumento),
-            TipoCliente = tipoCliente,
-            NombreEmpresa = tipoCliente == 2 ? nombreComercial : string.Empty,
-            DireccionEmpresa = direccion,
-            Celular = celular,
-            FechaNacimiento = fechaNacimiento,
-            FechaCreacion = DateTime.Now,
-            estadoAsociado = true
-        };
-        db.Usuarios.Add(nuevoUsuario);
-        await db.SaveChangesAsync();
-        var idRolPortal = await db.AliadoPortalRoles
-            .Where(x => x.Nombre == roleName && x.Activo)
-            .Select(x => x.IdRol)
-            .SingleAsync();
-        db.AliadoPortalUsuariosRoles.Add(new AliadoPortalUsuarioRol { IdUsuario = nuevoUsuario.IdUsuario, IdRol = idRolPortal });
-        await db.SaveChangesAsync();
-        await transaction.CommitAsync();
-        await _auditService.TryRegistrarAuditoriaAsync(actorId, "CREAR", null, new { nuevoUsuario.IdUsuario, aliado?.IdVendedor, TipoCuenta = roleName }, new { Modulo = "PortalAliados", Entidad = "Cuenta" });
+            var nuevoUsuario = new Usuario
+            {
+                Nombres = nombre,
+                Apellidos = apellidos ?? string.Empty,
+                Email = email,
+                PasswordHash = SecurityHelper.HashPassword(password),
+                IdTipoUsuario = roleId,
+                IdVendedor = aliado?.IdVendedor,
+                Estado = true,
+                ClaveTemporal = true,
+                CuentaBloqueada = false,
+                AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl,
+                Identificacion = identificacion?.Trim(),
+                IdTipoIdentificacion = ObtenerIdTipoIdentificacion(tipoDocumento),
+                TipoCliente = tipoCliente,
+                NombreEmpresa = tipoCliente == 2 ? nombreComercial : string.Empty,
+                DireccionEmpresa = direccion,
+                Celular = celular,
+                FechaNacimiento = fechaNacimiento,
+                FechaCreacion = DateTime.Now,
+                estadoAsociado = true
+            };
+            db.Usuarios.Add(nuevoUsuario);
+            await db.SaveChangesAsync();
+            var idRolPortal = await db.AliadoPortalRoles
+                .Where(x => x.Nombre == roleName && x.Activo)
+                .Select(x => x.IdRol)
+                .SingleAsync();
+            db.AliadoPortalUsuariosRoles.Add(new AliadoPortalUsuarioRol { IdUsuario = nuevoUsuario.IdUsuario, IdRol = idRolPortal });
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (aliado, nuevoUsuario);
+        });
+        await _auditService.TryRegistrarAuditoriaAsync(actorId, "CREAR", null, new { resultado.nuevoUsuario.IdUsuario, resultado.aliado?.IdVendedor, TipoCuenta = roleName }, new { Modulo = "PortalAliados", Entidad = "Cuenta" });
         var mensaje = esAdministradorPortal
             ? "Cuenta creada correctamente con el rol Administrador Portal de Aliados."
             : "Cuenta de aliado creada correctamente con el rol Aliado Comercial.";

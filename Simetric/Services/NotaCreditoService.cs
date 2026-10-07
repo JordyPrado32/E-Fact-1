@@ -463,12 +463,12 @@ public class NotaCreditoService
         if (nc.Usuario is not > 0)
             throw new Exception("No se pudo identificar el usuario para asignar la serie de la nota de crédito.");
 
-        if (nc.IdDocModificado is not > 0)
-            throw new InvalidOperationException("La nota de crédito debe referenciar una factura válida.");
-
-        var validacion = await ValidarProductosDisponiblesAsync(nc.IdDocModificado.Value, detalles);
-        if (!validacion.Success)
-            throw new InvalidOperationException(validacion.Message);
+        if (nc.IdDocModificado is > 0)
+        {
+            var validacion = await ValidarProductosDisponiblesAsync(nc.IdDocModificado.Value, detalles);
+            if (!validacion.Success)
+                throw new InvalidOperationException(validacion.Message);
+        }
 
         foreach (var detalle in detalles)
         {
@@ -631,11 +631,15 @@ public class NotaCreditoService
         var xmlContent = GenerarXmlNotaCredito(nc, detalles, emisor, cliente);
         await GuardarXmlEnServidor(xmlContent, nc.NumNotaCredito ?? "", emisor?.Ruc ?? "");
 
-        await _aliadoPortalService.CancelarComisionesFacturaAsync(
-            nc.IdDocModificado.Value,
-            $"Nota de crédito {nc.NumNotaCredito ?? nc.Sec.ToString()}",
-            nc.Usuario);
-        if (nc.Usuario is > 0)
+        if (nc.IdDocModificado is > 0)
+        {
+            await _aliadoPortalService.CancelarComisionesFacturaAsync(
+                nc.IdDocModificado.Value,
+                $"Nota de crédito {nc.NumNotaCredito ?? nc.Sec.ToString()}",
+                nc.Usuario);
+        }
+
+        if (nc.Usuario is > 0 && nc.IdDocModificado is > 0)
             await _comisionesEDeclaraService.RevertirFacturaAsync(
                 nc.Usuario.Value,
                 nc.IdDocModificado.Value,

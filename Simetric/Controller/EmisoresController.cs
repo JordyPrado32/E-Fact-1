@@ -240,12 +240,9 @@ namespace Simetric.Controllers
             var coincideCuenta = emisor is null ||
                 string.IsNullOrWhiteSpace(identificacion) ||
                 CoincideIdentificacionFirma(identificacion, emisor.Ruc);
-            var aptaParaFacturar = EmisorCertificadoValidator.EsAptaParaFacturar(detalle);
-            var esValida = detalle.EsValida && aptaParaFacturar && coincideCuenta;
+            var esValida = detalle.EsValida && coincideCuenta;
             var mensaje = !detalle.EsValida
                 ? "El archivo o la clave no son validos, o la firma no esta vigente."
-                : !aptaParaFacturar
-                    ? EmisorCertificadoValidator.MensajeFirmaNoAptaParaFacturar
                 : !coincideCuenta
                     ? $"La firma es valida, pero no corresponde al RUC {emisor!.Ruc} de la cuenta."
                     : "La firma y la clave son correctas. El archivo no fue guardado.";

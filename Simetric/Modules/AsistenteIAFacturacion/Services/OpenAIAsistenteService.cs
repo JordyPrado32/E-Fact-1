@@ -422,7 +422,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
             foreach (Match itemMatch in Regex.Matches(
                 mensaje,
-                @"(?:(?<cantidad>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?!(?:factura|cliente|producto)\b)(?<producto>[\p{L}][\p{L}0-9\s\.\-]+?)(?=,| y | con | a\s+cr[eé]dito| al?\s+contado|$))|(?:\b(?:con|incluye)\s+)(?:(?:el|la)\s+)?(?:(?<cantidadSinCantidad>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+)?(?<productoSinCantidad>[\p{L}][\p{L}0-9\s\.\-]+?)(?=,| y | a\s+cr[eé]dito| al?\s+contado|$)",
+                @"(?:(?<cantidad>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?!(?:factura|cliente|producto)\b)(?<producto>[\p{L}][\p{L}0-9\s\.\-]+?)(?=,| y | con | a\s+cr[eé]dito| al?\s+contado|$))|(?:\b(?:con|incluye|por|de)\s+)(?:(?:el|la)\s+)?(?:(?<cantidadSinCantidad>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+)?(?<productoSinCantidad>[\p{L}][\p{L}0-9\s\.\-]+?)(?=,| y | a\s+cr[eé]dito| al?\s+contado| a\s+|$)",
                 RegexOptions.IgnoreCase))
             {
                 var productoQuery = (itemMatch.Groups["producto"].Success
@@ -437,8 +437,15 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                     state,
                     cancellationToken);
 
-                if (productSearch.Data is IReadOnlyList<ProductoDto> productos && productos.Count == 1)
+                var productos = productSearch.Data as IReadOnlyList<ProductoDto>;
+                var productoExacto = productos?.FirstOrDefault(producto =>
+                        SearchMatchHelper.Normalize(producto.Nombre) == SearchMatchHelper.Normalize(productoQuery)
+                        || (!string.IsNullOrWhiteSpace(producto.CodigoPrincipal)
+                            && SearchMatchHelper.Normalize(producto.CodigoPrincipal) == SearchMatchHelper.Normalize(productoQuery)));
+                if (productoExacto is not null || productos?.Count == 1)
                 {
+
+                    var productoSeleccionado = productoExacto ?? productos![0];
                     decimal? descuentoPct = null;
                     var discountMatch = Regex.Match(
                         mensaje,
@@ -451,7 +458,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                         ToolDefinitions.AgregarProductoAFactura,
                         JsonSerializer.Serialize(new
                         {
-                            productoId = productos[0].Id,
+                            productoId = productoSeleccionado.Id,
                             cantidad,
                             descuentoPorcentaje = descuentoPct
                         }),
@@ -696,7 +703,9 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                 "genera una factura",
                 "factura para",
                 "factura a",
-                "facturar a");
+                "facturar a")
+                || (ContainsAny(normalized, "servicios prestados", "servicio prestado")
+                    && ContainsAny(normalized, "factura", "facturar", "crear", "agrega", "incluye"));
         }
 
         return ContainsAny(
@@ -936,6 +945,35 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
         var referencia = ResolveItemReference(state, normalized);
 
+        if (ContainsAny(normalized, "quita el descuento", "quítale el descuento", "quitale el descuento", "elimina el descuento", "borra el descuento", "retira el descuento", "retírale el descuento", "retirale el descuento", "sin descuento"))
+        {
+            if (IsGlobalDiscountRequest(normalized))
+            {
+                var globalResult = await _toolDispatcher.DispatchAsync(
+                    ToolDefinitions.AplicarDescuentoGlobal,
+                    JsonSerializer.Serialize(new { porcentaje = 0m }),
+                    state,
+                    cancellationToken);
+
+                return BuildResult(globalResult, "quitar_descuento_global");
+            }
+
+            var referencias = ResolveMultipleItemReferences(state, normalized);
+            if (referencias.Count == 0 && referencia is not null)
+                referencias.Add(referencia);
+            if (referencias.Count == 0)
+            {
+                return BuildClarificationResult("¿A qué producto quieres quitarle el descuento? Puedes decir: 'quita el descuento a los productos 1 y 3' o 'a todos'.");
+            }
+
+            return await ApplyDiscountToItemsAsync(
+                state,
+                referencias,
+                0m,
+                cancellationToken,
+                referencias.Count == 1 ? "Quité el descuento del producto." : $"Quité el descuento de {referencias.Count} productos.");
+        }
+
         var ajusteCantidadMatch = Regex.Match(
             normalized,
             @"\b(?<verbo>sube(?:le)?|subir|incrementa(?:le)?|agrega(?:le)?|aumenta(?:le)?|baja(?:le)?|bajar|reduce|reducir|resta(?:le)?|disminuye(?:le)?|quita(?:le)?)\s+(?<delta>\d+(?:[.,]\d+)?|un|una|uno)\s+(?:unidad|unidades)\b",
@@ -1068,15 +1106,23 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             return BuildResult(result, "modificar_precio");
         }
 
+        var descuentoToken = @"(?:\d+(?:[.,]\d+)?|un(?:a|o)?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)";
         var descuentoMatch = Regex.Match(
             normalized,
-            @"\b(?:aplica|aplicar|pon|poner|deja|dejar|cambia|cambiar)\s+(?<descuento>\d+(?:[.,]\d+)?)\s*(?:%|por ciento|porciento)\s+de\s+descuento\b",
+            $@"\b(?:aplica(?:me|le)?|aplíca(?:me|le)?|aplicar|pon(?:me|le)?|poner|haz(?:me|le)?|hacer|da(?:me|le)?|dar|descuenta(?:me|le)?|descontar|rebaja(?:me|le)?|rebajar|deja|dejar|cambia|cambiar)\s+(?:un(?:a|o)?\s+)?(?<descuento>{descuentoToken})\s*(?:%|por ciento|porciento)(?:\s+de\s+descuento)?(?=\s|$|[,.!?])",
             RegexOptions.IgnoreCase);
+        if (!descuentoMatch.Success)
+        {
+            descuentoMatch = Regex.Match(
+                normalized,
+                $@"\b(?:aplica(?:me|le)?|aplíca(?:me|le)?|aplicar|pon(?:me|le)?|poner|haz(?:me|le)?|hacer|da(?:me|le)?|dar)\s+(?:un(?:a|o)?\s+)?descuento\s+(?:del?|de)\s+(?<descuento>{descuentoToken})\s*(?:%|por ciento|porciento)(?=\s|$|[,.!?])",
+                RegexOptions.IgnoreCase);
+        }
         if (descuentoMatch.Success)
         {
-            var descuento = ParseDecimal(descuentoMatch.Groups["descuento"].Value) ?? 0m;
+            var descuento = ParseAmountToken(descuentoMatch.Groups["descuento"].Value) ?? 0m;
 
-            if (ContainsAny(normalized, "global", "toda la factura", "factura completa", "a toda la factura"))
+            if (IsGlobalDiscountRequest(normalized))
             {
                 var globalResult = await _toolDispatcher.DispatchAsync(
                     ToolDefinitions.AplicarDescuentoGlobal,
@@ -1087,19 +1133,21 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                 return BuildResult(globalResult, "descuento_global");
             }
 
-            referencia ??= ResolveSingleItemReference(state);
-            if (referencia is null)
+            var referencias = ResolveMultipleItemReferences(state, normalized);
+            if (referencias.Count == 0 && referencia is not null)
+                referencias.Add(referencia);
+            if (referencias.Count == 0 && state.Draft.Items.Count == 1)
+                referencias.Add(state.Draft.Items[0].Id);
+            if (referencias.Count == 0)
             {
-                return BuildClarificationResult("Hay varios productos en la factura. Dime a cuál aplicar el descuento, por ejemplo: 'aplica 10 por ciento de descuento al primer producto'.");
+                return BuildClarificationResult("¿A qué productos aplico el descuento? Puedes decir: 'a todos', 'a los productos 1 y 3' o nombrarlos.");
             }
 
-            var result = await _toolDispatcher.DispatchAsync(
-                ToolDefinitions.AplicarDescuentoLinea,
-                JsonSerializer.Serialize(new { referenciaItem = referencia, porcentaje = descuento }),
+            return await ApplyDiscountToItemsAsync(
                 state,
+                referencias,
+                descuento,
                 cancellationToken);
-
-            return BuildResult(result, "descuento_linea");
         }
 
         return null;
@@ -1110,7 +1158,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         string normalized,
         CancellationToken cancellationToken)
     {
-        if (ContainsAny(normalized, "crea", "crear", "haz", "genera", "factura", "emite"))
+        if (ContainsAny(normalized, "crea", "crear", "genera", "factura", "emite"))
             return null;
 
         if (!ContainsAny(normalized, "forma de pago", "efectivo", "contado", "credito", "crédito"))
@@ -1663,6 +1711,94 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
     private static string? ResolveSingleItemReference(FacturaConversationState state)
         => state.Draft.Items.Count == 1 ? state.Draft.Items[0].Id : null;
+
+    private static bool IsGlobalDiscountRequest(string normalized)
+        => ContainsAny(normalized, "global", "toda la factura", "factura completa", "a toda la factura");
+
+    private static List<string> ResolveMultipleItemReferences(FacturaConversationState state, string normalized)
+    {
+        var referencias = new List<string>();
+
+        void Add(string? id)
+        {
+            if (!string.IsNullOrWhiteSpace(id) && !referencias.Contains(id, StringComparer.OrdinalIgnoreCase))
+                referencias.Add(id);
+        }
+
+        if (Regex.IsMatch(normalized, @"\b(?:todos?\s+los\s+(?:productos?|items?|articulos?)|todas?\s+las\s+lineas?|cada\s+(?:producto|item|linea|línea)|cada\s+uno(?:\s+de\s+los)?|(?:a|en|para)\s+todos?(?:\s+los)?|(?:a|en|para)\s+todas?(?:\s+las)?)\b", RegexOptions.IgnoreCase))
+        {
+            foreach (var item in state.Draft.Items)
+                Add(item.Id);
+
+            return referencias;
+        }
+
+        var ordinalMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["primer"] = 0,
+            ["primero"] = 0,
+            ["primera"] = 0,
+            ["segundo"] = 1,
+            ["segunda"] = 1,
+            ["tercer"] = 2,
+            ["tercero"] = 2,
+            ["tercera"] = 2,
+            ["cuarto"] = 3,
+            ["cuarta"] = 3,
+            ["quinto"] = 4,
+            ["quinta"] = 4
+        };
+
+        foreach (var pair in ordinalMap)
+        {
+            if (normalized.Contains(pair.Key, StringComparison.OrdinalIgnoreCase) && state.Draft.Items.Count > pair.Value)
+                Add(state.Draft.Items[pair.Value].Id);
+        }
+
+        foreach (Match match in Regex.Matches(normalized, @"\b(?:producto|item|linea|línea)\s+(?<indice>\d+)\b", RegexOptions.IgnoreCase))
+        {
+            if (int.TryParse(match.Groups["indice"].Value, out var indice) && indice > 0 && indice <= state.Draft.Items.Count)
+                Add(state.Draft.Items[indice - 1].Id);
+        }
+
+        foreach (var item in state.Draft.Items)
+        {
+            if ((!string.IsNullOrWhiteSpace(item.Descripcion) && normalized.Contains(item.Descripcion, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(item.CodigoPrincipal) && normalized.Contains(item.CodigoPrincipal, StringComparison.OrdinalIgnoreCase)))
+            {
+                Add(item.Id);
+            }
+        }
+
+        return referencias;
+    }
+
+    private async Task<OpenAIAsistenteResult> ApplyDiscountToItemsAsync(
+        FacturaConversationState state,
+        IEnumerable<string> referencias,
+        decimal descuento,
+        CancellationToken cancellationToken,
+        string? successMessage = null)
+    {
+        var referenciasUnicas = referencias.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (var referencia in referenciasUnicas)
+        {
+            var result = await _toolDispatcher.DispatchAsync(
+                ToolDefinitions.AplicarDescuentoLinea,
+                JsonSerializer.Serialize(new { referenciaItem = referencia, porcentaje = descuento }),
+                state,
+                cancellationToken);
+
+            if (!result.Success)
+                return BuildResult(result, "descuento_linea");
+        }
+
+        return new OpenAIAsistenteResult
+        {
+            Respuesta = successMessage ?? $"Apliqué un descuento del {descuento:0.##}% a {referenciasUnicas.Count} productos.",
+            AccionDetectada = referenciasUnicas.Count > 1 ? "descuento_lineas" : "descuento_linea"
+        };
+    }
 
     private static decimal? ParseDecimal(string input)
         => decimal.TryParse(
