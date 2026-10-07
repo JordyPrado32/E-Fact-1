@@ -41,6 +41,28 @@
         </div>
     }
 
+    @if (FacturasPendientes.Any())
+    {
+        <section class="invoice-review-card" aria-labelledby="facturas-revision-title">
+            <div class="invoice-review-heading">
+                <span><i class="ri-file-search-line"></i></span>
+                <div><span class="commissions-eyebrow">REVISIÓN DE FACTURAS</span><h2 id="facturas-revision-title">Facturas enviadas por aliados</h2><p>Valida los documentos antes de continuar con el proceso de comisión.</p></div>
+                <strong>@FacturasPendientes.Count pendiente(s)</strong>
+            </div>
+            <div class="invoice-review-list">
+                @foreach (var item in FacturasPendientes)
+                {
+                    <article class="invoice-review-item" @key="item.IdLiquidacion">
+                        <div><strong>@item.Aliado</strong><small>@item.Periodo · $ @item.Total.ToString("N2")</small></div>
+                        <a class="invoice-file-link" href="@item.FacturaUrl" target="_blank" rel="noopener"><i class="ri-file-text-line"></i><span>@(item.FacturaNombre ?? "Ver factura")</span><i class="ri-external-link-line"></i></a>
+                        <span class="invoice-review-status"><i class="ri-time-line"></i> Pendiente de revisión</span>
+                        <div class="invoice-review-actions"><button class="invoice-correction" type="button" @onclick="() => RevisarFacturaAsync(item, false)" disabled="@procesando"><i class="ri-close-circle-line"></i> Solicitar corrección</button><button class="invoice-approve" type="button" @onclick="() => RevisarFacturaAsync(item, true)" disabled="@procesando"><i class="ri-check-line"></i> Aprobar factura</button></div>
+                    </article>
+                }
+            </div>
+        </section>
+    }
+
     <section class="commissions-kpis">
         <article class="commissions-kpi purple"><span><i class="ri-time-line"></i></span><div><small>Pendientes de revisión</small><strong>@ComisionesVisibles.Count(x => x.Estado is "Generada" or "Pendiente")</strong></div></article>
         <article class="commissions-kpi blue"><span><i class="ri-file-list-3-line"></i></span><div><small>Listas para pago</small><strong>@ComisionesVisibles.Count(x => x.Estado == "Aprobada")</strong></div></article>
@@ -192,6 +214,7 @@
 @code {
     private List<AliadoAdminRow> aliados = new();
     private List<AliadoAdminComisionRow> comisiones = new();
+    private List<AliadoAdminLiquidacionRow> liquidaciones = new();
     private readonly HashSet<int> Seleccionadas = new();
     private readonly Dictionary<int, decimal> porcentajesAjuste = new();
     private readonly Dictionary<int, decimal> valoresAjuste = new();
@@ -214,6 +237,7 @@
 
     private bool cargando;
     private bool procesando;
+    private List<AliadoAdminLiquidacionRow> FacturasPendientes => liquidaciones.Where(x => !string.IsNullOrWhiteSpace(x.FacturaUrl) && x.FacturaEstado != "Aprobada").ToList();
     private bool TieneSeleccionadasAprobadas => comisiones.Any(x => Seleccionadas.Contains(x.IdComision) && x.Estado == "Aprobada");
     private static bool PuedeAjustar(AliadoAdminComisionRow item) => item.Estado is not "Pagada" and not "AjustePendiente" and not "Anulada" and not "Revertida";
     private IEnumerable<AliadoAdminComisionRow> ComisionesVisibles => comisiones.Where(x =>
@@ -244,6 +268,7 @@
         {
             aliados = (await AliadoService.ListarAliadosAsync()).ToList();
             comisiones = (await AliadoService.ObtenerComisionesAdministracionAsync(actorId)).ToList();
+            liquidaciones = (await AliadoService.ObtenerLiquidacionesAdministracionAsync(actorId)).ToList();
             foreach (var item in comisiones)
             {
                 porcentajesAjuste[item.IdComision] = item.Porcentaje;
@@ -254,6 +279,22 @@
         {
             cargando = false;
         }
+    }
+
+    private async Task RevisarFacturaAsync(AliadoAdminLiquidacionRow item, bool aprobar)
+    {
+        if (procesando) return;
+        procesando = true;
+        operacion = aprobar ? "Aprobando factura..." : "Solicitando corrección...";
+        try
+        {
+            var resultado = await AliadoService.RevisarFacturaLiquidacionAsync(actorId, item.IdLiquidacion, aprobar, aprobar ? null : "La factura no cumple los datos requeridos. Corrígela y vuelve a cargarla.");
+            exito = resultado.Success;
+            mensaje = resultado.Message;
+            if (resultado.Success)
+                liquidaciones = (await AliadoService.ObtenerLiquidacionesAdministracionAsync(actorId)).ToList();
+        }
+        finally { procesando = false; }
     }
 
     private async Task AplicarPorcentajeAsync(AliadoAdminComisionRow item)
