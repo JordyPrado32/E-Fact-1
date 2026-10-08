@@ -77,6 +77,7 @@ namespace Simetric.Data
         public DbSet<UsuarioServicioSuscripcion> UsuarioServicioSuscripciones { get; set; }
         public DbSet<ReporteVentaBackOffice> ReporteVentasBackOffice { get; set; }
         public DbSet<VendedorBackOffice> VendedoresBackOffice { get; set; }
+        public DbSet<VendedorComision> VendedorComisiones { get; set; }
         public DbSet<AliadoRenovacionGestion> AliadoRenovacionGestiones { get; set; }
         public DbSet<AliadoLiquidacion> AliadoLiquidaciones { get; set; }
         public DbSet<AliadoComision> AliadoComisiones { get; set; }
@@ -1010,6 +1011,17 @@ namespace Simetric.Data
                 entity.Property(e => e.Porcentaje).HasColumnType("decimal(9,4)");
                 entity.Property(e => e.Valor).HasColumnType("decimal(18,2)");
                 entity.HasIndex(e => new { e.IdVendedor, e.IdFactura, e.TipoComision }).IsUnique();
+            });
+
+            modelBuilder.Entity<VendedorComision>(entity =>
+            {
+                entity.ToTable("VENDEDOR_COMISION");
+                entity.HasKey(e => e.IdComision);
+                entity.Property(e => e.BaseComisionable).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.Porcentaje).HasColumnType("decimal(9,4)");
+                entity.Property(e => e.Valor).HasColumnType("decimal(18,2)");
+                entity.HasIndex(e => new { e.IdVendedor, e.IdFactura, e.TipoComision }).IsUnique();
+                entity.HasIndex(e => new { e.IdVendedor, e.Estado, e.FechaGeneracion });
             });
 
             modelBuilder.Entity<AliadoRenovacionNotificacion>(entity =>

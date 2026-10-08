@@ -1,0 +1,199 @@
+@page "/backoffice/comisiones-vendedores"
+@attribute [Authorize(Roles = "7,2")]
+@layout Simetric.Components.Layout.BackOfficeLayout
+@using System.Globalization
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@inject AuthenticationStateProvider AuthStateProvider
+@inject VendedorComisionService VendedorComisionService
+
+<PageTitle>Comisiones vendedores | BackOffice</PageTitle>
+
+<div class="vcom-page">
+    <header class="vcom-hero">
+        <div>
+            <span class="vcom-kicker"><i class="ri-hand-coin-line"></i> GESTIÓN COMERCIAL</span>
+            <h2>Comisiones vendedores</h2>
+            <p>@(esAdministrador ? "Consulta, revisa y registra el pago de las comisiones de vendedores." : "Consulta el detalle de tus comisiones y el costo aplicado a las firmas.")</p>
+        </div>
+        <button class="vcom-refresh" type="button" @onclick="CargarAsync" disabled="@cargando"><i class="ri-refresh-line"></i> Actualizar</button>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="alert @(exito ? "alert-success" : "alert-danger")">@mensaje</div>
+    }
+
+    @if (cargando)
+    {
+        <div class="vcom-loading"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Cargando comisiones...</div>
+    }
+    else
+    {
+        <div class="vcom-kpis">
+            <article><span class="vcom-kpi-icon"><i class="ri-money-dollar-circle-line"></i></span><div><small>Total comisiones</small><strong>$ @ComisionesFiltradas.Sum(x => x.Valor).ToString("N2", CultureInfo.InvariantCulture)</strong><em>@ComisionesFiltradas.Count() registros</em></div></article>
+            <article class="is-pending"><span class="vcom-kpi-icon"><i class="ri-time-line"></i></span><div><small>Pendientes</small><strong>$ @ComisionesFiltradas.Where(x => x.Estado == "Pendiente").Sum(x => x.Valor).ToString("N2", CultureInfo.InvariantCulture)</strong><em>Por pagar</em></div></article>
+            <article class="is-paid"><span class="vcom-kpi-icon"><i class="ri-checkbox-circle-line"></i></span><div><small>Pagadas</small><strong>$ @ComisionesFiltradas.Where(x => x.Estado == "Pagado").Sum(x => x.Valor).ToString("N2", CultureInfo.InvariantCulture)</strong><em>Pagos registrados</em></div></article>
+        </div>
+
+        <section class="vcom-report">
+            <div class="vcom-report-head">
+                <div><span class="vcom-section-kicker">REPORTE FILTRADO</span><h3>@(esAdministrador ? "Resumen por vendedor" : "Resumen por cliente")</h3><p>El resumen respeta los filtros seleccionados y agrupa cada compra.</p></div>
+                <strong>@ReportePorGrupo.Count() grupos · @ComisionesFiltradas.Count() compras</strong>
+            </div>
+            <div class="vcom-report-grid">
+                @foreach (var reporte in ReportePorGrupo)
+                {
+                    <article class="vcom-report-card">
+                        <div><strong>@reporte.Nombre</strong><small>@reporte.Compras compras · @reporte.Pendientes pendientes</small></div>
+                        <b>$ @reporte.Total.ToString("N2", CultureInfo.InvariantCulture)</b>
+                    </article>
+                }
+                @if (!ReportePorGrupo.Any())
+                {
+                    <span class="vcom-report-empty">No hay datos para generar el reporte con los filtros seleccionados.</span>
+                }
+            </div>
+        </section>
+
+        <section class="vcom-panel">
+            <div class="vcom-panel-head">
+                <div><span class="vcom-section-kicker">DETALLE OPERATIVO</span><h3>Listado de comisiones</h3><p>Las firmas muestran su cantidad y costo descontado de la base comisionable.</p></div>
+                <div class="vcom-filters">
+                    <label><i class="ri-search-line"></i><input placeholder="Buscar cliente, factura o producto" aria-label="Buscar comisiones" @bind="busqueda" @bind:event="oninput" /></label>
+                    @if (esAdministrador)
+                    {
+                        <select aria-label="Filtrar por vendedor" @bind="filtroVendedor"><option value="">Todos los vendedores</option>@foreach (var vendedor in VendedoresDisponibles) { <option value="@vendedor">@vendedor</option> }</select>
+                    }
+                    <select aria-label="Filtrar por estado" @bind="filtroEstado"><option value="">Todos los estados</option><option value="Pendiente">Pendientes</option><option value="Pagado">Pagadas</option></select>
+                    <select aria-label="Filtrar por tipo" @bind="filtroTipo"><option value="">Todos los tipos</option>@foreach (var tipo in TiposDisponibles) { <option value="@tipo">@tipo</option> }</select>
+                    <input class="vcom-date" type="date" aria-label="Fecha desde" @bind="fechaDesde" />
+                    <input class="vcom-date" type="date" aria-label="Fecha hasta" @bind="fechaHasta" />
+                    <button class="vcom-clear" type="button" @onclick="LimpiarFiltros"><i class="ri-filter-off-line"></i> Limpiar</button>
+                </div>
+            </div>
+            <div class="vcom-table-wrap">
+                <table class="vcom-table">
+                    <thead><tr>@if (esAdministrador) { <th>Vendedor</th> }<th>Cliente</th><th>Factura / producto</th><th>Período</th><th>Base comisionable</th><th>%</th><th>Comisión</th><th>Estado</th>@if (esAdministrador) { <th>Acción</th> }</tr></thead>
+                    <tbody>
+                        @if (!ComisionesFiltradas.Any())
+                        {
+                            <tr><td colspan="@(esAdministrador ? 9 : 8)" class="vcom-empty"><i class="ri-inbox-line"></i><strong>No hay comisiones</strong><span>No existen registros para los filtros seleccionados.</span></td></tr>
+                        }
+                        else
+                        {
+                            @foreach (var grupo in GruposPrincipales)
+                            {
+                                var filasGrupo = grupo.ToList();
+                                <tr class="vcom-group-row">
+                                    <td colspan="@(esAdministrador ? 9 : 8)"><div><i class="ri-@(esAdministrador ? "user-star-line" : "user-line")"></i><strong>@(esAdministrador ? "Vendedor" : "Cliente"): @grupo.Key</strong><small>@filasGrupo.Count compras</small></div><b>$ @filasGrupo.Sum(x => x.Valor).ToString("N2", CultureInfo.InvariantCulture)</b></td>
+                                </tr>
+                                @foreach (var grupoCliente in ObtenerSubgrupos(grupo))
+                                {
+                                    @if (esAdministrador)
+                                    {
+                                        <tr class="vcom-client-row"><td colspan="9"><i class="ri-user-line"></i><strong>Cliente: @grupoCliente.Key</strong><span>@grupoCliente.Count() compras · $ @grupoCliente.Sum(x => x.Valor).ToString("N2", CultureInfo.InvariantCulture)</span></td></tr>
+                                    }
+                                    @foreach (var item in grupoCliente)
+                                    {
+                                        <tr @key="item.IdComision">
+                                            @if (esAdministrador) { <td><strong class="vcom-vendor">@item.Vendedor</strong></td> }
+                                            <td><strong>@item.Cliente</strong><small>@item.FechaGeneracion.ToString("dd/MM/yyyy")</small></td>
+                                            <td><strong>@item.NumeroFactura</strong><small>@item.Producto</small>
+                                                @if (item.Firmas.Any())
+                                                {
+                                                    <details class="vcom-firmas"><summary><i class="ri-shield-keyhole-line"></i> @item.Firmas.Sum(x => x.Cantidad).ToString("0.##") firmas · costo $ @item.CostoFirmas.ToString("N2", CultureInfo.InvariantCulture)</summary><div class="vcom-firmas-detail">@foreach (var firma in item.Firmas) { <span>@firma.Cantidad.ToString("0.##") × @firma.Descripcion <b>$ @firma.CostoTotal.ToString("N2", CultureInfo.InvariantCulture)</b></span> }</div></details>
+                                                }
+                                            </td>
+                                            <td><span class="vcom-period">@item.Periodo</span><small>@item.TipoComision</small></td>
+                                            <td><strong>$ @item.BaseComisionable.ToString("N2", CultureInfo.InvariantCulture)</strong>@if (item.CostoFirmas > 0) { <small>Después de firmas</small> }</td>
+                                            <td>@item.Porcentaje.ToString("0.##", CultureInfo.InvariantCulture)%</td><td><strong class="vcom-amount">$ @item.Valor.ToString("N2", CultureInfo.InvariantCulture)</strong></td>
+                                            <td><span class="vcom-status @(item.Estado == "Pagado" ? "is-paid" : "is-pending")"><i class="@(item.Estado == "Pagado" ? "ri-checkbox-circle-line" : "ri-time-line")"></i>@item.Estado</span></td>
+                                            @if (esAdministrador) { <td>@if (item.Estado == "Pendiente") { <button class="vcom-pay" type="button" @onclick="() => MarcarPagadaAsync(item.IdComision)" disabled="@procesando"><i class="ri-check-line"></i> Marcar pagada</button> } else { <small class="vcom-paid-date">@item.FechaPago?.ToString("dd/MM/yyyy")</small> }</td> }
+                                        </tr>
+                                    }
+                                }
+                        }
+                            }
+                    </tbody>
+                </table>
+            </div>
+            <footer class="vcom-panel-foot"><span><i class="ri-information-line"></i> La comisión se calcula con la misma base de aliados.</span><strong>Total visible: $ @ComisionesFiltradas.Sum(x => x.Valor).ToString("N2", CultureInfo.InvariantCulture)</strong></footer>
+        </section>
+    }
+</div>
+
+@code {
+    private List<VendedorComisionRow> comisiones = new();
+    private bool esAdministrador;
+    private bool cargando;
+    private bool procesando;
+    private bool exito;
+    private int userId;
+    private string busqueda = string.Empty;
+    private string filtroEstado = string.Empty;
+    private string filtroTipo = string.Empty;
+    private string filtroVendedor = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
+    private string? mensaje;
+
+    private IEnumerable<VendedorComisionRow> ComisionesFiltradas => comisiones.Where(x =>
+        (string.IsNullOrWhiteSpace(busqueda) || $"{x.Vendedor} {x.Cliente} {x.NumeroFactura} {x.Producto}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrWhiteSpace(filtroVendedor) || x.Vendedor == filtroVendedor) &&
+        (string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado) &&
+        (string.IsNullOrWhiteSpace(filtroTipo) || x.TipoComision == filtroTipo) &&
+        (!fechaDesde.HasValue || x.FechaGeneracion.Date >= fechaDesde.Value.Date) &&
+        (!fechaHasta.HasValue || x.FechaGeneracion.Date <= fechaHasta.Value.Date));
+
+    private IEnumerable<string> VendedoresDisponibles => comisiones.Select(x => x.Vendedor).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> TiposDisponibles => comisiones.Select(x => x.TipoComision).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<IGrouping<string, VendedorComisionRow>> GruposPrincipales => ComisionesFiltradas.GroupBy(x => esAdministrador ? x.Vendedor : x.Cliente).OrderBy(x => x.Key);
+    private IEnumerable<IGrouping<string, VendedorComisionRow>> ObtenerSubgrupos(IGrouping<string, VendedorComisionRow> grupo) => esAdministrador ? grupo.GroupBy(x => x.Cliente).OrderBy(x => x.Key) : new[] { grupo };
+    private IEnumerable<ComisionReporte> ReportePorGrupo => ComisionesFiltradas
+        .GroupBy(x => esAdministrador ? x.Vendedor : x.Cliente)
+        .Select(x => new ComisionReporte(x.Key, x.Count(), x.Count(y => y.Estado == "Pendiente"), x.Sum(y => y.Valor)))
+        .OrderByDescending(x => x.Total);
+
+    private void LimpiarFiltros()
+    {
+        busqueda = string.Empty;
+        filtroVendedor = string.Empty;
+        filtroEstado = string.Empty;
+        filtroTipo = string.Empty;
+        fechaDesde = null;
+        fechaHasta = null;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out userId);
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        var resultado = await VendedorComisionService.ObtenerAsync(userId);
+        esAdministrador = resultado.EsAdministrador;
+        comisiones = resultado.Comisiones.ToList();
+        cargando = false;
+    }
+
+    private async Task MarcarPagadaAsync(int idComision)
+    {
+        if (procesando)
+            return;
+        procesando = true;
+        var resultado = await VendedorComisionService.MarcarPagadaAsync(userId, idComision);
+        exito = resultado.Success;
+        mensaje = resultado.Message;
+        if (resultado.Success)
+            await CargarAsync();
+        procesando = false;
+    }
+
+    private sealed record ComisionReporte(string Nombre, int Compras, int Pendientes, decimal Total);
+}
