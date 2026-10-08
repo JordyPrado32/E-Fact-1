@@ -209,7 +209,9 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
             state.RespuestasIdempotentes[requestId] = JsonSerializer.Deserialize<ChatFacturaResponse>(JsonSerializer.Serialize(response)) ?? response;
         }
 
-        await _conversationStore.SaveAsync(state, cancellationToken);
+        await _conversationStore.SaveAsync(
+            state,
+            state.Emitida ? CancellationToken.None : cancellationToken);
         return response;
     }
 

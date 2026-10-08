@@ -40,7 +40,7 @@
         <section class="vcom-report">
             <div class="vcom-report-head">
                 <div><span class="vcom-section-kicker">REPORTE FILTRADO</span><h3>@(esAdministrador ? "Resumen por vendedor" : "Resumen por cliente")</h3><p>El resumen respeta los filtros seleccionados y agrupa cada compra.</p></div>
-                <strong>@ReportePorGrupo.Count() grupos · @ComisionesFiltradas.Count() compras</strong>
+                <div class="vcom-report-actions"><strong>@ReportePorGrupo.Count() grupos · @ComisionesFiltradas.Count() compras</strong><button class="vcom-export" type="button" @onclick="ExportarCsvAsync" disabled="@(!ComisionesFiltradas.Any())"><i class="ri-file-excel-2-line"></i> Exportar CSV</button></div>
             </div>
             <div class="vcom-report-grid">
                 @foreach (var reporte in ReportePorGrupo)
@@ -55,21 +55,37 @@
                     <span class="vcom-report-empty">No hay datos para generar el reporte con los filtros seleccionados.</span>
                 }
             </div>
+            <div class="vcom-charts">
+                <div class="vcom-chart-card">
+                    <div class="vcom-chart-title"><strong>Comisiones por mes</strong><small>Según el filtro actual</small></div>
+                    @foreach (var mes in ReporteMensual)
+                    {
+                        <div class="vcom-bar-row"><span>@mes.Periodo</span><div class="vcom-bar-track"><i style="@ObtenerAnchoBarra(mes.Total, MaximoMensual)"></i></div><b>$ @mes.Total.ToString("N2", CultureInfo.InvariantCulture)</b></div>
+                    }
+                </div>
+                <div class="vcom-chart-card">
+                    <div class="vcom-chart-title"><strong>Estado de pagos</strong><small>Distribución del reporte</small></div>
+                    @foreach (var estado in ReporteEstados)
+                    {
+                        <div class="vcom-bar-row"><span>@estado.Estado</span><div class="vcom-bar-track"><i class="@(estado.Estado == "Pagado" ? "is-paid" : "is-pending")" style="@ObtenerAnchoBarra(estado.Total, TotalReporte)"></i></div><b>$ @estado.Total.ToString("N2", CultureInfo.InvariantCulture)</b></div>
+                    }
+                </div>
+            </div>
         </section>
 
         <section class="vcom-panel">
             <div class="vcom-panel-head">
                 <div><span class="vcom-section-kicker">DETALLE OPERATIVO</span><h3>Listado de comisiones</h3><p>Las firmas muestran su cantidad y costo descontado de la base comisionable.</p></div>
                 <div class="vcom-filters">
-                    <label><i class="ri-search-line"></i><input placeholder="Buscar cliente, factura o producto" aria-label="Buscar comisiones" @bind="busqueda" @bind:event="oninput" /></label>
+                    <label><i class="ri-search-line"></i><input placeholder="Buscar cliente, RUC, correo o factura" aria-label="Buscar comisiones" @bind="busqueda" @bind:event="oninput" @bind:after="ReiniciarPaginacion" /></label>
                     @if (esAdministrador)
                     {
-                        <select aria-label="Filtrar por vendedor" @bind="filtroVendedor"><option value="">Todos los vendedores</option>@foreach (var vendedor in VendedoresDisponibles) { <option value="@vendedor">@vendedor</option> }</select>
+                        <select aria-label="Filtrar por vendedor" @bind="filtroVendedor" @bind:after="ReiniciarPaginacion"><option value="">Todos los vendedores</option>@foreach (var vendedor in VendedoresDisponibles) { <option value="@vendedor">@vendedor</option> }</select>
                     }
-                    <select aria-label="Filtrar por estado" @bind="filtroEstado"><option value="">Todos los estados</option><option value="Pendiente">Pendientes</option><option value="Pagado">Pagadas</option></select>
-                    <select aria-label="Filtrar por tipo" @bind="filtroTipo"><option value="">Todos los tipos</option>@foreach (var tipo in TiposDisponibles) { <option value="@tipo">@tipo</option> }</select>
-                    <input class="vcom-date" type="date" aria-label="Fecha desde" @bind="fechaDesde" />
-                    <input class="vcom-date" type="date" aria-label="Fecha hasta" @bind="fechaHasta" />
+                    <select aria-label="Filtrar por estado" @bind="filtroEstado" @bind:after="ReiniciarPaginacion"><option value="">Todos los estados</option><option value="Pendiente">Pendientes</option><option value="Pagado">Pagadas</option></select>
+                    <select aria-label="Filtrar por tipo" @bind="filtroTipo" @bind:after="ReiniciarPaginacion"><option value="">Todos los tipos</option>@foreach (var tipo in TiposDisponibles) { <option value="@tipo">@tipo</option> }</select>
+                    <input class="vcom-date" type="date" aria-label="Fecha desde" @bind="fechaDesde" @bind:after="ReiniciarPaginacion" />
+                    <input class="vcom-date" type="date" aria-label="Fecha hasta" @bind="fechaHasta" @bind:after="ReiniciarPaginacion" />
                     <button class="vcom-clear" type="button" @onclick="LimpiarFiltros"><i class="ri-filter-off-line"></i> Limpiar</button>
                 </div>
             </div>
@@ -119,6 +135,7 @@
                     </tbody>
                 </table>
             </div>
+            <div class="vcom-pagination"><button type="button" @onclick="PaginaAnterior" disabled="@(paginaActual <= 1)"><i class="ri-arrow-left-s-line"></i></button><span>Página @paginaActual de @TotalPaginas</span><button type="button" @onclick="PaginaSiguiente" disabled="@(paginaActual >= TotalPaginas)"><i class="ri-arrow-right-s-line"></i></button></div>
             <footer class="vcom-panel-foot"><span><i class="ri-information-line"></i> La comisión se calcula con la misma base de aliados.</span><strong>Total visible: $ @ComisionesFiltradas.Sum(x => x.Valor).ToString("N2", CultureInfo.InvariantCulture)</strong></footer>
         </section>
     }
@@ -135,12 +152,14 @@
     private string filtroEstado = string.Empty;
     private string filtroTipo = string.Empty;
     private string filtroVendedor = string.Empty;
+    [Inject] private IJSRuntime JS { get; set; } = null!;
     private DateTime? fechaDesde;
     private DateTime? fechaHasta;
     private string? mensaje;
-
+    private const int PageSize = 20;
+    private int paginaActual = 1;
     private IEnumerable<VendedorComisionRow> ComisionesFiltradas => comisiones.Where(x =>
-        (string.IsNullOrWhiteSpace(busqueda) || $"{x.Vendedor} {x.Cliente} {x.NumeroFactura} {x.Producto}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrWhiteSpace(busqueda) || $"{x.Vendedor} {x.Cliente} {x.IdentificacionCliente} {x.CorreoCliente} {x.NumeroFactura} {x.Producto}".Contains(busqueda, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrWhiteSpace(filtroVendedor) || x.Vendedor == filtroVendedor) &&
         (string.IsNullOrWhiteSpace(filtroEstado) || x.Estado == filtroEstado) &&
         (string.IsNullOrWhiteSpace(filtroTipo) || x.TipoComision == filtroTipo) &&
@@ -149,12 +168,24 @@
 
     private IEnumerable<string> VendedoresDisponibles => comisiones.Select(x => x.Vendedor).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
     private IEnumerable<string> TiposDisponibles => comisiones.Select(x => x.TipoComision).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
-    private IEnumerable<IGrouping<string, VendedorComisionRow>> GruposPrincipales => ComisionesFiltradas.GroupBy(x => esAdministrador ? x.Vendedor : x.Cliente).OrderBy(x => x.Key);
+    private IEnumerable<IGrouping<string, VendedorComisionRow>> GruposPrincipales => ComisionesPagina.GroupBy(x => esAdministrador ? x.Vendedor : x.Cliente).OrderBy(x => x.Key);
     private IEnumerable<IGrouping<string, VendedorComisionRow>> ObtenerSubgrupos(IGrouping<string, VendedorComisionRow> grupo) => esAdministrador ? grupo.GroupBy(x => x.Cliente).OrderBy(x => x.Key) : new[] { grupo };
-    private IEnumerable<ComisionReporte> ReportePorGrupo => ComisionesFiltradas
+    private IEnumerable<VendedorComisionRow> ComisionesPagina => ComisionesFiltradas.Skip((paginaActual - 1) * PageSize).Take(PageSize);
+    private int TotalPaginas => Math.Max(1, (int)Math.Ceiling(ComisionesFiltradas.Count() / (double)PageSize));
+    private IEnumerable<VendedorComisionReporte> ReportePorGrupo => ComisionesFiltradas
         .GroupBy(x => esAdministrador ? x.Vendedor : x.Cliente)
-        .Select(x => new ComisionReporte(x.Key, x.Count(), x.Count(y => y.Estado == "Pendiente"), x.Sum(y => y.Valor)))
+        .Select(x => new VendedorComisionReporte(x.Key, x.Count(), x.Count(y => y.Estado == "Pendiente"), x.Sum(y => y.Valor)))
         .OrderByDescending(x => x.Total);
+    private IEnumerable<VendedorComisionReporteMensual> ReporteMensual => ComisionesFiltradas
+        .GroupBy(x => x.Periodo)
+        .Select(x => new VendedorComisionReporteMensual(x.Key, x.Sum(y => y.Valor)))
+        .OrderBy(x => x.Periodo);
+    private IEnumerable<VendedorComisionReporteEstado> ReporteEstados => ComisionesFiltradas
+        .GroupBy(x => x.Estado)
+        .Select(x => new VendedorComisionReporteEstado(x.Key, x.Sum(y => y.Valor)))
+        .OrderBy(x => x.Estado);
+    private decimal MaximoMensual => ReporteMensual.Select(x => x.Total).DefaultIfEmpty().Max();
+    private decimal TotalReporte => ComisionesFiltradas.Sum(x => x.Valor);
 
     private void LimpiarFiltros()
     {
@@ -164,6 +195,40 @@
         filtroTipo = string.Empty;
         fechaDesde = null;
         fechaHasta = null;
+        ReiniciarPaginacion();
+    }
+
+    private void ReiniciarPaginacion() => paginaActual = 1;
+    private void PaginaAnterior() => paginaActual = Math.Max(1, paginaActual - 1);
+    private void PaginaSiguiente() => paginaActual = Math.Min(TotalPaginas, paginaActual + 1);
+    private static string ObtenerAnchoBarra(decimal total, decimal maximo) => $"width: {(maximo <= 0 ? 0 : total / maximo * 100):0.##}%";
+
+    private async Task ExportarCsvAsync()
+    {
+        var items = ComisionesFiltradas.ToList();
+        if (items.Count == 0)
+            return;
+
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Vendedor;Cliente;RUC/Identificación;Correo;Factura;Producto;Tipo;Periodo;Base;Porcentaje;Comisión;Estado;Firmas;Costo firmas");
+        foreach (var item in items)
+        {
+            csv.AppendLine(string.Join(';',
+                Csv(item.Vendedor), Csv(item.Cliente), Csv(item.IdentificacionCliente), Csv(item.CorreoCliente),
+                Csv(item.NumeroFactura), Csv(item.Producto), Csv(item.TipoComision), Csv(item.Periodo),
+                item.BaseComisionable.ToString("0.00", CultureInfo.InvariantCulture),
+                item.Porcentaje.ToString("0.##", CultureInfo.InvariantCulture),
+                item.Valor.ToString("0.00", CultureInfo.InvariantCulture), Csv(item.Estado),
+                item.Firmas.Sum(x => x.Cantidad).ToString("0.##", CultureInfo.InvariantCulture),
+                item.CostoFirmas.ToString("0.00", CultureInfo.InvariantCulture)));
+        }
+
+        await JS.InvokeVoidAsync("numericaUi.downloadTextFile", $"Comisiones_Vendedores_{DateTime.Now:yyyyMMdd_HHmmss}.csv", "\uFEFF" + csv, "text/csv;charset=utf-8");
+    }
+
+    private static string Csv(string? value)
+    {
+        return (value ?? string.Empty).Replace(';', ',').Replace('\r', ' ').Replace('\n', ' ');
     }
 
     protected override async Task OnInitializedAsync()
@@ -195,5 +260,4 @@
         procesando = false;
     }
 
-    private sealed record ComisionReporte(string Nombre, int Compras, int Pendientes, decimal Total);
 }

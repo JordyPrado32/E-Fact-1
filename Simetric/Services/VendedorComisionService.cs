@@ -57,6 +57,14 @@ public sealed class VendedorComisionService
                     .Where(c => c.Codcliente == x.comision.IdCliente)
                     .Select(c => c.Nombrerazonsocial ?? c.Nombrecomercial ?? ((c.Nombres ?? "") + " " + (c.Apellidos ?? "")))
                     .FirstOrDefault() ?? "Cliente",
+                IdentificacionCliente = consulta.Clientes
+                    .Where(c => c.Codcliente == x.comision.IdCliente)
+                    .Select(c => c.Numeroidentificacion ?? consulta.Usuarios.Where(u => u.IdUsuario == c.Usuario).Select(u => u.Identificacion).FirstOrDefault())
+                    .FirstOrDefault() ?? string.Empty,
+                CorreoCliente = consulta.Clientes
+                    .Where(c => c.Codcliente == x.comision.IdCliente)
+                    .Select(c => c.Correo ?? consulta.Usuarios.Where(u => u.IdUsuario == c.Usuario).Select(u => u.Email).FirstOrDefault())
+                    .FirstOrDefault() ?? string.Empty,
                 NumeroFactura = consulta.Facturas.Where(f => f.Codfactura == x.comision.IdFactura).Select(f => f.Numfactura).FirstOrDefault() ?? x.comision.IdFactura.ToString(),
                 Producto = consulta.Detallefacturas.Where(d => d.Codfactura == x.comision.IdFactura).OrderBy(d => d.Codlinea).Select(d => d.Descripproducto).FirstOrDefault() ?? "Servicio Numerica",
                 TipoComision = x.comision.TipoComision,
@@ -122,9 +130,19 @@ public sealed class VendedorComisionService
         if (!string.Equals(comision.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase))
             return (false, "Solo se pueden pagar comisiones pendientes.");
 
+        var estadoAnterior = comision.Estado;
         comision.Estado = "Pagado";
         comision.FechaPago = DateTime.Now;
         comision.IdUsuarioPago = actorId;
+        db.Auditorias.Add(new Auditoria
+        {
+            IdUsuario = actorId,
+            Fecha = DateTime.Now,
+            Accion = "Pagar comisión de vendedor",
+            ValoresPrevios = System.Text.Json.JsonSerializer.Serialize(new { comision.IdComision, Estado = estadoAnterior, comision.Valor }),
+            ValorNuevo = System.Text.Json.JsonSerializer.Serialize(new { Estado = comision.Estado, comision.FechaPago, comision.IdUsuarioPago }),
+            Detalles = $"Comisión de vendedor marcada como pagada. Vendedor: {comision.IdVendedor}. Factura: {comision.IdFactura}."
+        });
         await db.SaveChangesAsync();
         return (true, "Comisión marcada como pagada.");
     }
@@ -209,7 +227,10 @@ public sealed class VendedorComisionService
 
             if (existentes.TryGetValue(new { factura.IdFactura, TipoComision = tipo }, out var existente))
             {
-                if (existente.Estado == "Pendiente" && (existente.BaseComisionable != baseComisionable || existente.Porcentaje != porcentaje))
+                if (string.Equals(existente.Estado, "Pagado", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (string.Equals(existente.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase) && (existente.BaseComisionable != baseComisionable || existente.Porcentaje != porcentaje))
                 {
                     existente.BaseComisionable = baseComisionable;
                     existente.Porcentaje = porcentaje;
@@ -299,6 +320,8 @@ public sealed class VendedorComisionRow
     public int IdFactura { get; init; }
     public string Vendedor { get; init; } = string.Empty;
     public string Cliente { get; init; } = string.Empty;
+    public string IdentificacionCliente { get; init; } = string.Empty;
+    public string CorreoCliente { get; init; } = string.Empty;
     public string NumeroFactura { get; init; } = string.Empty;
     public string Producto { get; init; } = string.Empty;
     public string TipoComision { get; init; } = string.Empty;
@@ -320,3 +343,7 @@ public sealed class VendedorFirmaDesglose
     public decimal CostoUnitario { get; init; }
     public decimal CostoTotal { get; init; }
 }
+
+public sealed record VendedorComisionReporte(string Nombre, int Compras, int Pendientes, decimal Total);
+public sealed record VendedorComisionReporteMensual(string Periodo, decimal Total);
+public sealed record VendedorComisionReporteEstado(string Estado, decimal Total);

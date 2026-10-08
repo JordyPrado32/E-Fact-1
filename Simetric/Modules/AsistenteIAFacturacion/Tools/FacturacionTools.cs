@@ -658,7 +658,11 @@ public sealed class FacturacionTools
         if (configuracionAdvertencia is not null)
             return Fail(ToolDefinitions.EmitirFactura, configuracionAdvertencia, null, "emission_configuration_required");
 
-        var result = await _facturacionService.EmitirAsync(state.UserId, state.Draft, BuildEmissionRequestId(state), cancellationToken);
+        var result = await _facturacionService.EmitirAsync(
+            state.UserId,
+            state.Draft,
+            BuildEmissionRequestId(state),
+            CancellationToken.None);
         if (!result.Success)
             return Fail(ToolDefinitions.EmitirFactura, result.Message);
 

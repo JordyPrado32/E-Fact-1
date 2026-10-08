@@ -258,7 +258,20 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         if (!ok)
             return Fail(_facturacionService.UltimoErrorGuardarFactura ?? "No se pudo emitir la factura con el servicio actual.");
 
-        var resultadoSri = await _facturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
+        Simetric.Models.Glogales.mensajeSRI resultadoSri;
+        try
+        {
+            resultadoSri = await _facturacionService.ReintentarEnvioSriFacturaAsync(factura.Codfactura);
+        }
+        catch
+        {
+            return new FacturaEmissionResult
+            {
+                Success = true,
+                Message = $"Factura guardada con numero {numeroFactura}, pero no se pudo confirmar la respuesta del SRI. Revisa Mis facturas antes de volver a emitir.",
+                NumeroFactura = numeroFactura
+            };
+        }
         if (string.Equals(resultadoSri.estado, DocumentoAutorizacionHelper.EstadoAutorizado, StringComparison.OrdinalIgnoreCase))
         {
             var resultadoCorreo = await _facturacionService.IntentarEnviarFacturaPorCorreoAsync(factura.Codfactura, m: resultadoSri);
@@ -269,7 +282,7 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
             return new FacturaEmissionResult
             {
                 Success = true,
-                Message = $"Tu factura se ha autorizado correctamente. Para ver más detalles, dirígete a Mis facturas.{mensajeCorreo}",
+                Message = $"La factura {numeroFactura} se guardó y fue autorizada correctamente por el SRI. Para ver más detalles, dirígete a Mis facturas.{mensajeCorreo}",
                 NumeroFactura = numeroFactura
             };
         }
@@ -277,7 +290,7 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         return new FacturaEmissionResult
         {
             Success = true,
-            Message = $"Factura emitida con numero {numeroFactura}, pero quedo pendiente/no autorizada en SRI. {BuildSriMessage(resultadoSri)}",
+            Message = $"La factura {numeroFactura} se guardó y fue enviada al SRI, pero quedó pendiente/no autorizada. {BuildSriMessage(resultadoSri)}",
             NumeroFactura = numeroFactura
         };
 
