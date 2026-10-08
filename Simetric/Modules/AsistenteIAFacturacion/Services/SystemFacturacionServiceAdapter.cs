@@ -129,7 +129,7 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         if (cliente is null)
             return Fail("El cliente seleccionado ya no existe en el sistema.");
 
-        var emisor = (await _facturacionService.GetEmisoresActivosAsync(userId)).FirstOrDefault();
+        var emisor = (await _facturacionService.GetEmisoresActivosAsync(ownerId)).FirstOrDefault();
         if (emisor is null)
             return Fail("No hay un emisor activo configurado para esta cuenta.");
 

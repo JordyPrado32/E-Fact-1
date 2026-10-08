@@ -40,7 +40,12 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
     public async Task<OpenAIAsistenteResult> ProcesarAsync(FacturaConversationState state, string mensaje, CancellationToken cancellationToken = default)
     {
-        var restrictedResult = TryHandleRestrictedAdminQuery(NormalizarMensaje(mensaje));
+        var normalized = NormalizarMensaje(mensaje);
+        var conversationalResult = TryHandleConversationalCommand(normalized);
+        if (conversationalResult is not null)
+            return conversationalResult;
+
+        var restrictedResult = TryHandleRestrictedAdminQuery(normalized);
         if (restrictedResult is not null)
             return restrictedResult;
 
@@ -100,6 +105,10 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
     public Task<OpenAIAsistenteResult?> TryProcesarRapidoAsync(FacturaConversationState state, string mensaje, CancellationToken cancellationToken = default)
     {
         var normalized = NormalizarMensaje(mensaje);
+        var conversationalResult = TryHandleConversationalCommand(normalized);
+        if (conversationalResult is not null)
+            return Task.FromResult<OpenAIAsistenteResult?>(conversationalResult);
+
         if (!ShouldUseLocalFastPath(state, normalized))
             return Task.FromResult<OpenAIAsistenteResult?>(null);
 
@@ -256,7 +265,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
         }
 
         if (state.Estado == FacturaConversationStates.EsperandoConfirmacion &&
-            ContainsAny(normalized, "si", "confirmo", "dale", "correcto", "emit"))
+            ContainsAny(normalized, "si", "sí", "confirmar", "confirmo", "confirmado", "confirmada", "dale", "correcto", "correcta", "exacto", "exacta", "de acuerdo", "ok", "okay", "listo", "lista", "adelante", "procede", "proceda", "autorizo", "autorizar", "acepto", "aceptar", "apruebo", "aprobar", "hazlo", "continuar", "continua", "emit", "enviar", "envia"))
         {
             var result = await _toolDispatcher.DispatchAsync(ToolDefinitions.EmitirFactura, "{}", state, cancellationToken);
             return new OpenAIAsistenteResult
@@ -657,7 +666,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             return true;
 
         if (state.Estado == FacturaConversationStates.EsperandoConfirmacion &&
-            ContainsAny(normalized, "si", "sí", "confirmo", "dale", "correcto", "emit"))
+            ContainsAny(normalized, "si", "sí", "confirmar", "confirmo", "confirmado", "confirmada", "dale", "correcto", "correcta", "exacto", "exacta", "de acuerdo", "ok", "okay", "listo", "lista", "adelante", "procede", "proceda", "autorizo", "autorizar", "acepto", "aceptar", "apruebo", "aprobar", "hazlo", "continuar", "continua", "emit", "enviar", "envia"))
             return true;
 
         if (IsNotaCreditoIntent(normalized))
@@ -974,10 +983,19 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                 referencias.Count == 1 ? "Quité el descuento del producto." : $"Quité el descuento de {referencias.Count} productos.");
         }
 
+        var cantidadToken = @"(?:\d+(?:[.,]\d+)?|un(?:a|o)?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)";
+        var ajusteVerbo = @"(?:sube(?:le)?|subir|incrementa(?:le)?|agrega(?:le)?|agregar|añade(?:le)?|añadir|aumenta(?:le)?|baja(?:le)?|bajar|reduce|reducir|resta(?:le)?|disminuye(?:le)?|quita(?:le)?|quitar)";
         var ajusteCantidadMatch = Regex.Match(
             normalized,
-            @"\b(?<verbo>sube(?:le)?|subir|incrementa(?:le)?|agrega(?:le)?|aumenta(?:le)?|baja(?:le)?|bajar|reduce|reducir|resta(?:le)?|disminuye(?:le)?|quita(?:le)?)\s+(?<delta>\d+(?:[.,]\d+)?|un|una|uno)\s+(?:unidad|unidades)\b",
+            $@"\b(?<verbo>{ajusteVerbo})\s+(?<delta>{cantidadToken})(?:\s+(?:unidad|unidades))?\b",
             RegexOptions.IgnoreCase);
+        if (!ajusteCantidadMatch.Success)
+        {
+            ajusteCantidadMatch = Regex.Match(
+                normalized,
+                $@"\b(?<verbo>{ajusteVerbo})\b.*?\b(?:cantidad|unidad(?:es)?)\b.*?(?:en|a|por)?\s*(?<delta>{cantidadToken})\b",
+                RegexOptions.IgnoreCase);
+        }
         if (ajusteCantidadMatch.Success)
         {
             referencia ??= ResolveSingleItemReference(state);
@@ -992,7 +1010,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
             var delta = ParseAmountToken(ajusteCantidadMatch.Groups["delta"].Value) ?? 0m;
             var verbo = ajusteCantidadMatch.Groups["verbo"].Value;
-            var increase = ContainsAny(verbo, "sub", "increment", "agrega", "aumenta");
+            var increase = ContainsAny(verbo, "sub", "increment", "agrega", "añad", "aumenta", "suma");
             var nuevaCantidad = increase ? item.Cantidad + delta : item.Cantidad - delta;
 
             var result = nuevaCantidad <= 0m
@@ -1028,13 +1046,13 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
 
         var cantidadMatch = Regex.Match(
             normalized,
-            @"\b(?:pon|ponga|poner|cambia|cambiar|deja|dejar|actualiza|actualizar)\s+(?<cantidad>\d+(?:[.,]\d+)?)\s+(?:unidad|unidades|cantidad)\b",
+            $@"\b(?:pon|ponga|poner|cambia|cambie|cambiar|deja|dejar|actualiza|actualizar|modifica|modificar|establece|establecer)\s+(?<cantidad>{cantidadToken})\s+(?:unidad|unidades|cantidad)\b",
             RegexOptions.IgnoreCase);
         if (!cantidadMatch.Success)
         {
             cantidadMatch = Regex.Match(
                 normalized,
-                @"\b(?:sube|subir|baja|bajar|cambia|cambiar|pon|poner|deja|dejar|actualiza|actualizar)\b.*?\bcantidad\b.*?(?:a|en)?\s*(?<cantidad>\d+(?:[.,]\d+)?)\b",
+                $@"\b(?:sube|subir|baja|bajar|cambia|cambie|cambiar|pon|ponga|poner|deja|dejar|actualiza|actualizar|modifica|modificar|establece|establecer)\b.*?\bcantidad\b.*?(?:a|en|como)?\s*(?<cantidad>{cantidadToken})\b",
                 RegexOptions.IgnoreCase);
         }
         if (cantidadMatch.Success)
@@ -1045,7 +1063,7 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
                 return BuildClarificationResult("Hay varios productos en la factura. Dime cuál cambiar, por ejemplo: 'pon 3 unidades al segundo producto'.");
             }
 
-            var cantidad = ParseDecimal(cantidadMatch.Groups["cantidad"].Value) ?? 0m;
+            var cantidad = ParseAmountToken(cantidadMatch.Groups["cantidad"].Value) ?? 0m;
             var result = await _toolDispatcher.DispatchAsync(
                 ToolDefinitions.ModificarCantidadProducto,
                 JsonSerializer.Serialize(new { referenciaItem = referencia, cantidad }),
@@ -1433,6 +1451,29 @@ public sealed class OpenAIAsistenteService : IOpenAIAsistenteService
             Respuesta = "Puedo ayudarte con facturas, clientes, productos, IVA, descuentos, pagos, cartera, abonos, notas de crédito y débito, retenciones, guías de remisión, liquidaciones de compra y E-Rúbrica. En E-Rúbrica puedo abrir la solicitud de firma, guiarte para cargar documentos, firmarlos, revisar documentos firmados, validar firmas y consultar o configurar tu certificado. Ejemplos: “llévame a llenar la solicitud de firma”, “quiero firmar documentos” o “valida esta firma”.",
             AccionDetectada = "mostrar_ayuda"
         };
+    }
+
+    private static OpenAIAsistenteResult? TryHandleConversationalCommand(string normalized)
+    {
+        if (Regex.IsMatch(normalized, @"^(hola|buenas|buenos dias|buenos días|buenas tardes|buenas noches|buen dia|buen día|hey|que tal|qué tal|como estas|cómo estás)[\s,!.?]*$", RegexOptions.IgnoreCase))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "¡Hola! Soy Numi y estoy listo para ayudarte con tus documentos. ¿Qué necesitas hacer?",
+                AccionDetectada = "saludo"
+            };
+        }
+
+        if (Regex.IsMatch(normalized, @"^(gracias|muchas gracias|te agradezco|gracias por tu ayuda)[\s,!.?]*$", RegexOptions.IgnoreCase))
+        {
+            return new OpenAIAsistenteResult
+            {
+                Respuesta = "¡Con gusto! Cuando necesites algo, aquí estoy para ayudarte.",
+                AccionDetectada = "agradecimiento"
+            };
+        }
+
+        return null;
     }
 
     private async Task<OpenAIAsistenteResult?> TryHandleDraftStatusCommandAsync(

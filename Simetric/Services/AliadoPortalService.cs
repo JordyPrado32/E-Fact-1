@@ -1068,49 +1068,71 @@ public sealed class AliadoPortalService
     {
         if (idFactura <= 0) return;
         await EnsureSchemaAsync();
-        await using var db = await _dbFactory.CreateDbContextAsync();
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        var comisiones = await db.AliadoComisiones
-            .Where(x => x.IdFactura == idFactura &&
-                        !x.TipoComision.StartsWith("Reversion-") &&
-                        x.Estado != "Anulada" && x.Estado != "Revertida")
-            .ToListAsync();
-        foreach (var comision in comisiones)
+        var cantidadComisiones = 0;
+        await using var strategyContext = await _dbFactory.CreateDbContextAsync();
+        var strategy = strategyContext.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(async () =>
         {
-            var estadoDestino = comision.Estado is "Pagada" or "AjustePendiente"
-                ? AliadoComisionEstado.Revertida
-                : AliadoComisionEstado.Anulada;
-            AliadoComisionStateMachine.Require(comision.Estado, estadoDestino);
-            comision.Estado = estadoDestino.ToString();
-            if (estadoDestino == AliadoComisionEstado.Revertida)
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+
+            try
             {
-                var tipo = $"Reversion-{comision.TipoComision}";
-                tipo = tipo[..Math.Min(40, tipo.Length)];
-                if (!await db.AliadoComisiones.AnyAsync(x => x.IdVendedor == comision.IdVendedor &&
-                                                             x.IdFactura == idFactura &&
-                                                             x.TipoComision == tipo))
+                var comisiones = await db.AliadoComisiones
+                    .Where(x => x.IdFactura == idFactura &&
+                                !x.TipoComision.StartsWith("Reversion-") &&
+                                x.Estado != "Anulada" && x.Estado != "Revertida")
+                    .ToListAsync();
+                cantidadComisiones = comisiones.Count;
+
+                foreach (var comision in comisiones)
                 {
-                    db.AliadoComisiones.Add(new AliadoComision
+                    var estadoDestino = comision.Estado is "Pagada" or "AjustePendiente"
+                        ? AliadoComisionEstado.Revertida
+                        : AliadoComisionEstado.Anulada;
+                    AliadoComisionStateMachine.Require(comision.Estado, estadoDestino);
+                    comision.Estado = estadoDestino.ToString();
+                    if (estadoDestino == AliadoComisionEstado.Revertida)
                     {
-                        IdVendedor = comision.IdVendedor,
-                        IdFactura = idFactura,
-                        IdCliente = comision.IdCliente,
-                        TipoComision = tipo,
-                        BaseComisionable = -comision.BaseComisionable,
-                        Porcentaje = comision.Porcentaje,
-                        Valor = -comision.Valor,
-                        Periodo = DateTime.Now.ToString("yyyy-MM"),
-                        Estado = "Generada",
-                        FechaGeneracion = DateTime.Now
-                    });
+                        var tipo = $"Reversion-{comision.TipoComision}";
+                        tipo = tipo[..Math.Min(40, tipo.Length)];
+                        if (!await db.AliadoComisiones.AnyAsync(x => x.IdVendedor == comision.IdVendedor &&
+                                                                     x.IdFactura == idFactura &&
+                                                                     x.TipoComision == tipo))
+                        {
+                            db.AliadoComisiones.Add(new AliadoComision
+                            {
+                                IdVendedor = comision.IdVendedor,
+                                IdFactura = idFactura,
+                                IdCliente = comision.IdCliente,
+                                TipoComision = tipo,
+                                BaseComisionable = -comision.BaseComisionable,
+                                Porcentaje = comision.Porcentaje,
+                                Valor = -comision.Valor,
+                                Periodo = DateTime.Now.ToString("yyyy-MM"),
+                                Estado = "Generada",
+                                FechaGeneracion = DateTime.Now
+                            });
+                        }
+                    }
                 }
+
+                if (cantidadComisiones > 0)
+                    await db.SaveChangesAsync();
+
+                await transaction.CommitAsync();
             }
-        }
-        if (comisiones.Count > 0) await db.SaveChangesAsync();
-        await transaction.CommitAsync();
-        if (comisiones.Count > 0 && actorId is > 0)
+            catch
+            {
+                try { await transaction.RollbackAsync(); } catch { }
+                throw;
+            }
+        });
+
+        if (cantidadComisiones > 0 && actorId is > 0)
             await _auditService.TryRegistrarAuditoriaAsync(actorId.Value, "ANULAR", null,
-                new { IdFactura = idFactura, Cantidad = comisiones.Count, Motivo = motivo },
+                new { IdFactura = idFactura, Cantidad = cantidadComisiones, Motivo = motivo },
                 new { Modulo = "PortalAliados", Entidad = "Comision" });
     }
 

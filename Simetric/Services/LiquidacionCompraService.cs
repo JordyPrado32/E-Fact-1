@@ -606,11 +606,12 @@ public class LiquidacionCompraService
 
         preview.Detalles ??= new List<LiquidacionCompraDetalleDto>();
 
-        await using var context = await _dbFactory.CreateDbContextAsync();
-        var strategy = context.Database.CreateExecutionStrategy();
+        await using var strategyContext = await _dbFactory.CreateDbContextAsync();
+        var strategy = strategyContext.Database.CreateExecutionStrategy();
 
         return await strategy.ExecuteAsync(async () =>
         {
+            await using var context = await _dbFactory.CreateDbContextAsync();
             await using var transaction = await context.Database.BeginTransactionAsync();
 
             try

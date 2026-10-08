@@ -22,6 +22,7 @@ public class NotaCreditoService
     private readonly InitialSequencePromptService _initialSequencePromptService;
     private readonly SriXmlProcessorService _sriXmlProcessorService;
     private readonly EmisorCertificadoProtector _certificadoProtector;
+    private readonly FirmaPathResolver _firmaPathResolver;
     private readonly EmisorSistemaService _emisorSistemaService;
     private readonly AliadoPortalService _aliadoPortalService;
     private readonly EDeclara.ComisionesService _comisionesEDeclaraService;
@@ -36,6 +37,7 @@ public class NotaCreditoService
         InitialSequencePromptService initialSequencePromptService,
         SriXmlProcessorService sriXmlProcessorService,
         EmisorCertificadoProtector certificadoProtector,
+        FirmaPathResolver firmaPathResolver,
         EmisorSistemaService emisorSistemaService,
         AliadoPortalService aliadoPortalService,
         EDeclara.ComisionesService comisionesEDeclaraService)
@@ -49,6 +51,7 @@ public class NotaCreditoService
         _initialSequencePromptService = initialSequencePromptService;
         _sriXmlProcessorService = sriXmlProcessorService;
         _certificadoProtector = certificadoProtector;
+        _firmaPathResolver = firmaPathResolver;
         _emisorSistemaService = emisorSistemaService;
         _aliadoPortalService = aliadoPortalService;
         _comisionesEDeclaraService = comisionesEDeclaraService;
@@ -495,62 +498,63 @@ public class NotaCreditoService
         var resolucion = await ResolverSerieNotaCreditoAsync(nc.Usuario.Value, NormalizarSerieDocumento(nc.Serie));
         nc.Serie = resolucion.SerieRaw;
 
-        var cliente = nc.CodClientes.HasValue
-            ? await db.Clientes.FirstOrDefaultAsync(c => c.Codcliente == nc.CodClientes.Value)
-            : null;
-
-        if (cliente is not null && clienteData is not null)
-        {
-            cliente.Numeroidentificacion = clienteData.Numeroidentificacion?.Trim();
-            cliente.Nombres = clienteData.Nombres;
-            cliente.Apellidos = clienteData.Apellidos;
-            cliente.Nombrerazonsocial = clienteData.Nombrerazonsocial;
-            cliente.Nombrecomercial = clienteData.Nombrecomercial;
-            cliente.Correo = clienteData.Correo?.Trim();
-            cliente.Celular = clienteData.Celular;
-            cliente.Telefonoconvencional = clienteData.Telefonoconvencional;
-            cliente.Direccion = clienteData.Direccion;
-            cliente.Referencia = clienteData.Referencia;
-            cliente.Observaciones = clienteData.Observaciones;
-            cliente.TipoCliente = clienteData.TipoCliente;
-            cliente.Tipoidentificacion = clienteData.Tipoidentificacion;
-            cliente.Oblgconta = clienteData.Oblgconta;
-        }
-
         var correosNotaNormalizados = NormalizarCorreos(correosNota?.Select(x => x.Correo));
         var correosGuardarEnCliente = NormalizarCorreos(
             correosNota?
                 .Where(x => x.GuardarEnCliente)
                 .Select(x => x.Correo));
 
-        var destinatariosNota = await ComprobanteCorreoDestinatariosHelper.ConstruirDestinatariosClienteAsync(
-            db,
-            nc.Usuario,
-            cliente?.Codcliente,
-            cliente?.Correo,
-            correosNotaNormalizados);
-
-        nc.Correoad = SerializarCorreosDocumento(destinatariosNota);
-        nc.Detalleextra = EscribirNotaCreditoCorreoMetadata(new NotaCreditoCorreoMetadata
-        {
-            Destinatarios = destinatariosNota,
-            CorreoEnviado = false,
-            FechaEnvioCorreo = null,
-            UltimoErrorCorreo = null
-        });
-
-        // 2. Define the Execution Strategy for handling retries
-        var strategy = db.Database.CreateExecutionStrategy();
+        Cliente? cliente = null;
+        await using var strategyContext = await _dbFactory.CreateDbContextAsync();
+        var strategy = strategyContext.Database.CreateExecutionStrategy();
 
         await strategy.ExecuteAsync(async () =>
         {
-            // 3. Open the transaction INSIDE the execution strategy
-            await using var transaction = await db.Database.BeginTransactionAsync();
+            await using var transactionDb = await _dbFactory.CreateDbContextAsync();
+            await using var transaction = await transactionDb.Database.BeginTransactionAsync();
 
             try
             {
-                db.NotaCreditos.Add(nc);
-                await db.SaveChangesAsync();
+                cliente = nc.CodClientes.HasValue
+                    ? await transactionDb.Clientes.FirstOrDefaultAsync(c => c.Codcliente == nc.CodClientes.Value)
+                    : null;
+
+                if (cliente is not null && clienteData is not null)
+                {
+                    cliente.Numeroidentificacion = clienteData.Numeroidentificacion?.Trim();
+                    cliente.Nombres = clienteData.Nombres;
+                    cliente.Apellidos = clienteData.Apellidos;
+                    cliente.Nombrerazonsocial = clienteData.Nombrerazonsocial;
+                    cliente.Nombrecomercial = clienteData.Nombrecomercial;
+                    cliente.Correo = clienteData.Correo?.Trim();
+                    cliente.Celular = clienteData.Celular;
+                    cliente.Telefonoconvencional = clienteData.Telefonoconvencional;
+                    cliente.Direccion = clienteData.Direccion;
+                    cliente.Referencia = clienteData.Referencia;
+                    cliente.Observaciones = clienteData.Observaciones;
+                    cliente.TipoCliente = clienteData.TipoCliente;
+                    cliente.Tipoidentificacion = clienteData.Tipoidentificacion;
+                    cliente.Oblgconta = clienteData.Oblgconta;
+                }
+
+                var destinatariosNota = await ComprobanteCorreoDestinatariosHelper.ConstruirDestinatariosClienteAsync(
+                    transactionDb,
+                    nc.Usuario,
+                    cliente?.Codcliente,
+                    cliente?.Correo,
+                    correosNotaNormalizados);
+
+                nc.Correoad = SerializarCorreosDocumento(destinatariosNota);
+                nc.Detalleextra = EscribirNotaCreditoCorreoMetadata(new NotaCreditoCorreoMetadata
+                {
+                    Destinatarios = destinatariosNota,
+                    CorreoEnviado = false,
+                    FechaEnvioCorreo = null,
+                    UltimoErrorCorreo = null
+                });
+
+                transactionDb.NotaCreditos.Add(nc);
+                await transactionDb.SaveChangesAsync();
 
                 foreach (var d in detalles)
                 {
@@ -575,14 +579,14 @@ public class NotaCreditoService
                         Tarifa = d.Iva
                     };
 
-                    db.DetallesNotaCredito.Add(detalleDb);
+                    transactionDb.DetallesNotaCredito.Add(detalleDb);
                 }
 
-                await db.SaveChangesAsync();
+                await transactionDb.SaveChangesAsync();
 
                 if (cliente != null && correosGuardarEnCliente.Any())
                 {
-                    var correosExistentes = await db.ClientesCorreos
+                    var correosExistentes = await transactionDb.ClientesCorreos
                         .Where(cc => cc.CodCliente == cliente.Codcliente && cc.Estado)
                         .Select(cc => cc.Correo)
                         .ToListAsync();
@@ -601,7 +605,7 @@ public class NotaCreditoService
                         if (hashCorreos.Contains(correo))
                             continue;
 
-                        db.ClientesCorreos.Add(new ClienteCorreo
+                        transactionDb.ClientesCorreos.Add(new ClienteCorreo
                         {
                             CodCliente = cliente.Codcliente,
                             Correo = correo,
@@ -611,10 +615,10 @@ public class NotaCreditoService
                         hashCorreos.Add(correo);
                     }
 
-                    await db.SaveChangesAsync();
+                    await transactionDb.SaveChangesAsync();
                 }
 
-                await _emisionControlService.ConsumirDocumentoAsync(db, nc.Usuario.Value);
+                await _emisionControlService.ConsumirDocumentoAsync(transactionDb, nc.Usuario.Value);
 
                 // Commit changes if everything succeeded
                 await transaction.CommitAsync();
@@ -789,6 +793,16 @@ public class NotaCreditoService
         }
 
         var emisor = factura.CodemisorNavigation;
+        if (emisor is null || !emisor.Estado || (!emisor.EsEmisorSistema && emisor.IdUsuario != idUsuario))
+        {
+            emisor = await db.Emisores
+                .AsNoTracking()
+                .FirstOrDefaultAsync(e =>
+                    e.Codigo == factura.Codemisor &&
+                    e.Estado &&
+                    (e.EsEmisorSistema || e.IdUsuario == idUsuario));
+        }
+
         if (emisor == null)
         {
             return new EmisionNotaCreditoAutomaticaResultado
@@ -797,9 +811,9 @@ public class NotaCreditoService
             };
         }
 
-        var rutaCertificado = ResolverRutaCertificado(emisor);
+        var rutaCertificado = _firmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
         var claveCertificado = ResolverClaveCertificado(emisor);
-        if (string.IsNullOrWhiteSpace(rutaCertificado) || !File.Exists(rutaCertificado) || string.IsNullOrWhiteSpace(claveCertificado))
+        if (string.IsNullOrWhiteSpace(rutaCertificado) || string.IsNullOrWhiteSpace(claveCertificado))
         {
             return new EmisionNotaCreditoAutomaticaResultado
             {
@@ -2124,9 +2138,9 @@ public class NotaCreditoService
             };
         }
 
-        var rutaCertificado = ResolverRutaCertificado(emisor);
+        var rutaCertificado = _firmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
         var claveCertificado = ResolverClaveCertificado(emisor);
-        if (string.IsNullOrWhiteSpace(rutaCertificado) || !File.Exists(rutaCertificado) || string.IsNullOrWhiteSpace(claveCertificado))
+        if (string.IsNullOrWhiteSpace(rutaCertificado) || string.IsNullOrWhiteSpace(claveCertificado))
         {
             await ActualizarAutorizacionNCAsync(sec, string.Empty, DateTime.Now.ToString("O"), "El emisor no tiene configurada una firma electrónica válida para emitir la nota de crédito.", "ERROR INTERNO");
             return new EmisionSriNotaCreditoResultado
@@ -2489,30 +2503,6 @@ public class NotaCreditoService
         return string.IsNullOrWhiteSpace(clave)
             ? emisor?.ClaveCertificado?.Trim() ?? string.Empty
             : clave.Trim();
-    }
-
-    private string ResolverRutaCertificado(Emisor? emisor)
-    {
-        var rutaOriginal = emisor?.PathCertificado;
-        if (string.IsNullOrWhiteSpace(rutaOriginal))
-            return string.Empty;
-
-        if (Path.IsPathRooted(rutaOriginal) && File.Exists(rutaOriginal))
-            return rutaOriginal;
-
-        var normalizada = rutaOriginal.Trim().TrimStart('~', '/', '\\').Replace('\\', '/');
-        if (normalizada.StartsWith("App_Data/", StringComparison.OrdinalIgnoreCase))
-            normalizada = normalizada["App_Data/".Length..];
-
-        var relativaSistema = normalizada.Replace('/', Path.DirectorySeparatorChar);
-        var candidatos = new[]
-        {
-            Path.Combine(_env.ContentRootPath, relativaSistema),
-            Path.Combine(_env.ContentRootPath, "App_Data", relativaSistema),
-            Path.Combine(_env.ContentRootPath, "App_Data", "certs", "path", Path.GetFileName(normalizada))
-        };
-
-        return candidatos.FirstOrDefault(File.Exists) ?? rutaOriginal.Trim();
     }
 
     private static string? NormalizarSerieDocumento(string? serie)

@@ -295,6 +295,16 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
     private static List<BotProgressStepDto> BuildProgress(FacturaConversationState state, string? action, string response)
     {
         var normalizedAction = action?.Trim().ToLowerInvariant() ?? state.UltimaIntencion?.Trim().ToLowerInvariant();
+        normalizedAction = normalizedAction switch
+        {
+            "emitirfactura" or "confirmar_emision" => "crear_factura",
+            "emitirnotacreditodesdefactura" => "emitir_nota_credito",
+            "emitirnotadebitodesdefactura" => "emitir_nota_debito",
+            "emitirguiadesdefactura" => "emitir_guia_remision",
+            "emitirliquidacioncompra" => "emitir_liquidacion_compra",
+            "emitirretencion" => "emitir_retencion",
+            _ => normalizedAction
+        };
         var steps = normalizedAction switch
         {
             "crear_cliente" => new List<BotProgressStepDto>
@@ -335,6 +345,31 @@ public sealed class AsistenteFacturacionService : IAsistenteFacturacionService
                 Step("factura_origen", "Buscando factura de origen", "Localizando la factura autorizada indicada.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
                 Step("validar_nota", "Validando nota de crédito", "Comprobando que el documento pueda generar la nota.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
                 Step("confirmacion", "Esperando confirmación", "No se emitirá la nota de crédito sin tu autorización explícita.", state.OperacionPendiente is not null ? "pending" : "completed")
+            },
+            "emitir_nota_debito" => new List<BotProgressStepDto>
+            {
+                Step("factura_origen", "Buscando factura de origen", "Localizando la factura autorizada indicada.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("validar_nota", "Validando nota de débito", "Comprobando motivo, valor e IVA del documento.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá la nota de débito sin tu autorización explícita.", state.OperacionPendiente is not null ? "pending" : "completed")
+            },
+            "emitir_guia_remision" => new List<BotProgressStepDto>
+            {
+                Step("factura_origen", "Buscando factura de origen", "Localizando la factura que se trasladará.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("validar_traslado", "Validando traslado", "Comprobando transportista, placa y direcciones.", response.Contains("falta", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá la guía de remisión sin tu autorización explícita.", state.OperacionPendiente is not null ? "pending" : "completed")
+            },
+            "emitir_liquidacion_compra" => new List<BotProgressStepDto>
+            {
+                Step("proveedor", "Validando proveedor", "Comprobando los datos del proveedor.", response.Contains("falta", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("detalles", "Revisando detalles", "Comprobando descripción, cantidad, precio e IVA.", response.Contains("falta", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("total", "Calculando total", "Verificando los valores de la liquidación.", "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá la liquidación de compra sin tu autorización explícita.", state.OperacionPendiente is not null ? "pending" : "completed")
+            },
+            "emitir_retencion" => new List<BotProgressStepDto>
+            {
+                Step("retencion", "Buscando retención", "Localizando el comprobante de retención indicado.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("validar_retencion", "Validando retención", "Comprobando que el documento pueda emitirse.", response.Contains("no encontr", StringComparison.OrdinalIgnoreCase) ? "warning" : "completed"),
+                Step("confirmacion", "Esperando confirmación", "No se emitirá la retención sin tu autorización explícita.", state.OperacionPendiente is not null ? "pending" : "completed")
             },
             _ => new List<BotProgressStepDto>
             {

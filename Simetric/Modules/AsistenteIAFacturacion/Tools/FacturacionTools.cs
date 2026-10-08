@@ -634,7 +634,7 @@ public sealed class FacturacionTools
 
         state.Estado = FacturaConversationStates.EsperandoConfirmacion;
         state.RequiereConfirmacion = true;
-        return Ok(ToolDefinitions.ValidarFactura, "La factura está lista para confirmación final.", state.Draft);
+        return Ok(ToolDefinitions.ValidarFactura, $"La factura está lista para confirmación final. Total: ${state.Draft.Total:0.00}.", state.Draft);
     }
 
     public Task<ToolResultDto> ObtenerResumenFacturaAsync(FacturaConversationState state)
@@ -1088,20 +1088,9 @@ public sealed class FacturacionTools
 
         foreach (var item in draft.Items)
         {
-            lineas.Add($"- {item.Cantidad:0.##} x {item.Descripcion} a ${item.PrecioUnitario:0.00} con IVA {item.TarifaPorcentaje:0}% = ${item.Total:0.00}");
+            lineas.Add($"- {item.Cantidad:0.##} x {item.Descripcion}: ${item.Total:0.00}");
         }
 
-        lineas.Add($"Subtotal: ${draft.Subtotal:0.00}");
-        lineas.Add($"Descuento: ${draft.Descuento:0.00}");
-        if (draft.IvaDetalles.Count > 0)
-        {
-            foreach (var iva in draft.IvaDetalles)
-            {
-                var etiqueta = iva.TarifaPorcentaje <= 0m ? "IVA 0%" : $"IVA {iva.TarifaPorcentaje:0}%";
-                lineas.Add($"{etiqueta}: base ${iva.BaseImponible:0.00} -> ${iva.ValorIva:0.00}");
-            }
-        }
-        lineas.Add($"Impuestos: ${draft.Impuesto:0.00}");
         lineas.Add($"Total: ${draft.Total:0.00}");
 
         if (!string.IsNullOrWhiteSpace(draft.FormaPago))
