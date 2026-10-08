@@ -1434,8 +1434,9 @@ public sealed class AliadoPortalService
             .FirstOrDefaultAsync();
         var administradores = await db.Usuarios.AsNoTracking()
             .Where(x => x.Estado == true && !string.IsNullOrWhiteSpace(x.Email) &&
-                (x.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId || x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId ||
-                 db.AliadoPortalUsuariosRoles.Any(ur => ur.IdUsuario == x.IdUsuario && db.AliadoPortalRoles.Any(r => r.IdRol == ur.IdRol && r.Activo && r.Nombre == AdminRoleName))))
+                (x.IdTipoUsuario == BackOfficePermissionHelper.SuperAdministradorRoleId ||
+                 (x.IdTipoUsuario == BackOfficePermissionHelper.BackOfficeRoleId &&
+                  x.TipoCliente == BackOfficePermissionHelper.AdministradorBackOfficeTipoCliente)))
             .Select(x => x.Email!)
             .Distinct()
             .ToListAsync();

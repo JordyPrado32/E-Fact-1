@@ -228,7 +228,9 @@
     [Parameter] public bool IncluirComisiones { get; set; }
     private IReadOnlyList<string> avisosComisiones = Array.Empty<string>();
     private string? errorComisiones;
-    private IEnumerable<string> ComisionesVisibles => avisosComisiones.Where(aviso => !notificacionesOcultas.Contains($"comision:{aviso}"));
+    private IEnumerable<string> ComisionesVisibles => puedeVerComisiones
+        ? avisosComisiones.Where(aviso => !notificacionesOcultas.Contains($"comision:{aviso}"))
+        : Array.Empty<string>();
     private List<SolicitudNotificacionDto> notificaciones = new();
     private List<DashboardAuthorizedDocumentDto> documentosAutorizados = new();
     private List<CompraDocumentosHistorialItem> recargasDocumentos = new();
@@ -238,6 +240,7 @@
     private bool panelAbierto;
     private int usuarioIdActual;
     private bool esUsuarioBackOffice;
+    private bool puedeVerComisiones;
     private bool autorizacionesVistasInicializadas;
     private bool notificacionesOcultasInicializadas;
     private CancellationTokenSource? refreshCancellation;
@@ -272,6 +275,7 @@
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         usuarioIdActual = ObtenerUsuarioId(authState.User);
         esUsuarioBackOffice = await PuedeAprobarTransferenciasBackOfficeAsync(authState.User);
+        puedeVerComisiones = await EsAdministradorBackOfficeAsync(authState.User);
 
         await CargarNotificacionesAsync();
         await CargarRecargasDocumentosAsync();
@@ -337,7 +341,7 @@
             .Take(12)
             .ToList();
 
-        if (IncluirComisiones)
+        if (IncluirComisiones && puedeVerComisiones)
         {
             errorComisiones = null;
             try
@@ -349,6 +353,11 @@
                 Logger.LogError(ex, "No se pudieron consultar las notificaciones de comisiones.");
                 errorComisiones = "No se pudieron consultar las comisiones. Abre nuevamente para reintentar.";
             }
+        }
+        else
+        {
+            avisosComisiones = Array.Empty<string>();
+            errorComisiones = null;
         }
     }
 
@@ -733,6 +742,29 @@
         }
 
         return BackOfficePermissionHelper.PuedeAprobarTransferencias(idTipoUsuario, tipoCliente);
+    }
+
+    private async Task<bool> EsAdministradorBackOfficeAsync(ClaimsPrincipal user)
+    {
+        var role = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirst(ClaimTypes.Role)?.Value;
+        var tipoClienteRaw = user.FindFirst("TipoCliente")?.Value;
+        int? idTipoUsuario = int.TryParse(role, out var roleId) ? roleId : null;
+        int? tipoCliente = int.TryParse(tipoClienteRaw, out var tipo) ? tipo : null;
+
+        if (usuarioIdActual > 0)
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var usuario = await context.Usuarios
+                .AsNoTracking()
+                .Where(item => item.IdUsuario == usuarioIdActual)
+                .Select(item => new { item.IdTipoUsuario, item.TipoCliente })
+                .FirstOrDefaultAsync();
+
+            idTipoUsuario = usuario?.IdTipoUsuario ?? idTipoUsuario;
+            tipoCliente = usuario?.TipoCliente ?? tipoCliente;
+        }
+
+        return BackOfficePermissionHelper.EsAdministradorBackOffice(idTipoUsuario, tipoCliente);
     }
 
     private static string GetSolicitudDocumentosDetalle(ReporteVentaBackOffice solicitud)

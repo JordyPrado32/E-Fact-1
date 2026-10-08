@@ -22,6 +22,10 @@ public static class BackOfficePermissionHelper
             (tipoCliente == AdministradorBackOfficeTipoCliente ||
              tipoCliente == CobranzasBackOfficeTipoCliente));
 
+    public static bool EsAdministradorBackOffice(int? idTipoUsuario, int? tipoCliente) =>
+        idTipoUsuario == SuperAdministradorRoleId ||
+        (idTipoUsuario == BackOfficeRoleId && tipoCliente == AdministradorBackOfficeTipoCliente);
+
     public static bool PuedeVerTelemetria(int? idTipoUsuario, int? tipoCliente) =>
         idTipoUsuario == SuperAdministradorRoleId;
 
