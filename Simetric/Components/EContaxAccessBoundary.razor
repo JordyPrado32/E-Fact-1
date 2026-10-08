@@ -9,7 +9,7 @@
 @inject MenuStateService MenuState
 @implements IDisposable
 
-@if (!esEContax || permitido)
+@if (!esEContax || permitido || (evaluando && accesoServicioConfirmado))
 {
     @ChildContent
 }
@@ -23,15 +23,16 @@ else if (!evaluando)
 
 @code {
     [Parameter, EditorRequired] public RenderFragment ChildContent { get; set; } = null!;
-    private bool esEContax, permitido, evaluando;
+    private bool esEContax, permitido, evaluando, accesoServicioConfirmado;
     protected override void OnInitialized() => MenuState.OnMenuChanged += PermisosCambiados;
     protected override Task OnParametersSetAsync() => EvaluarAsync();
     private async Task EvaluarAsync()
     {
         esEContax = EContaxRoutes.IsEContaxPath(Nav, Nav.Uri);
-        permitido = false;
         if (!esEContax) return;
+
         evaluando = true;
+        permitido = false;
         try
         {
             var user = (await Auth.GetAuthenticationStateAsync()).User;
@@ -40,11 +41,17 @@ else if (!evaluando)
             if (!int.TryParse(user.FindFirst("IdUsuario")?.Value ?? user.FindFirstValue(ClaimTypes.NameIdentifier), out var id)) return;
             var esSuperAdmin = string.Equals(user.FindFirst("IdTipoUsuario")?.Value, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase);
             var access = await Acceso.CanAccessAsync(id, EContaxRoutes.ServiceKey, esSuperAdmin);
+            accesoServicioConfirmado = access.HasAccess;
             var path = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0].Trim('/');
             permitido = access.HasAccess && (esSuperAdmin || await Seguridad.PuedeAccederRutaAsync(id, path));
         }
         finally { evaluando = false; }
     }
-    private void PermisosCambiados() => _ = InvokeAsync(async () => { await EvaluarAsync(); StateHasChanged(); });
+    private void PermisosCambiados() => _ = InvokeAsync(async () =>
+    {
+        accesoServicioConfirmado = false;
+        await EvaluarAsync();
+        StateHasChanged();
+    });
     public void Dispose() => MenuState.OnMenuChanged -= PermisosCambiados;
 }

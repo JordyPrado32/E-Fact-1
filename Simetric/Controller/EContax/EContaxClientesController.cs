@@ -87,6 +87,33 @@ public sealed class EContaxClientesController : EContaxApiControllerBase
         }
     }
 
+    [HttpPost("bulk")]
+    public async Task<IActionResult> BulkCreate([FromQuery] int userId, [FromBody] List<EContaxClienteUpsertDto> modelos)
+    {
+        if (userId <= 0)
+            return Unauthorized("Sesion no valida.");
+
+        var resultado = new EContaxBulkImportResultDto();
+        if (modelos is null || modelos.Count == 0)
+            return Ok(resultado);
+
+        for (var indice = 0; indice < modelos.Count; indice++)
+        {
+            try
+            {
+                await ResolverUbicacionEcuadorQuemada(modelos[indice]);
+                await _catalogService.CrearClienteAsync(userId, modelos[indice]);
+                resultado.Creados++;
+            }
+            catch (InvalidOperationException ex)
+            {
+                resultado.Errores.Add($"Fila {indice + 2}: {ex.Message}");
+            }
+        }
+
+        return Ok(resultado);
+    }
+
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromQuery] int userId, [FromBody] EContaxClienteUpsertDto dto)
     {
@@ -302,4 +329,10 @@ public sealed class EContaxClientesController : EContaxApiControllerBase
                 dto.Ciudad = ciudadReal.IdCiudad;
         }
     }
+}
+
+public sealed class EContaxBulkImportResultDto
+{
+    public int Creados { get; set; }
+    public List<string> Errores { get; set; } = new();
 }

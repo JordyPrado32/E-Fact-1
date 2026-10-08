@@ -50,6 +50,7 @@ public sealed class EContaxCatalogService
                 Telefonoconvencional = c.Telefonoconvencional,
                 Celular = c.Celular,
                 Correo = c.Correo,
+                DiasCredito = c.DiasCredito,
                 CorreosAdicionales = context.ClientesCorreos
                     .Where(cc => cc.CodCliente == c.Codcliente && cc.Estado == true)
                     .Select(cc => cc.Correo)
@@ -96,6 +97,7 @@ public sealed class EContaxCatalogService
                 Telefonoconvencional = c.Telefonoconvencional,
                 Celular = c.Celular,
                 Correo = c.Correo,
+                DiasCredito = c.DiasCredito,
                 CorreosAdicionales = context.ClientesCorreos
                     .Where(cc => cc.CodCliente == c.Codcliente && cc.Estado == true)
                     .Select(cc => cc.Correo)
@@ -143,6 +145,7 @@ public sealed class EContaxCatalogService
                 Telefonoconvencional = dto.Telefonoconvencional,
                 Celular = dto.Celular,
                 Correo = dto.Correo,
+                DiasCredito = dto.DiasCredito,
                 Observaciones = dto.Observaciones,
                 Oblgconta = dto.Oblgconta,
                 TipoCliente = dto.TipoCliente,
@@ -197,6 +200,7 @@ public sealed class EContaxCatalogService
             cliente.Telefonoconvencional = dto.Telefonoconvencional;
             cliente.Celular = dto.Celular;
             cliente.Correo = dto.Correo;
+            cliente.DiasCredito = dto.DiasCredito;
             cliente.Observaciones = dto.Observaciones;
             cliente.Oblgconta = dto.Oblgconta;
             cliente.TipoCliente = dto.TipoCliente;

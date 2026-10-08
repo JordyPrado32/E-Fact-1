@@ -14,6 +14,7 @@ public sealed class EContaxClienteDto
     public string? Telefonoconvencional { get; set; }
     public string? Celular { get; set; }
     public string? Correo { get; set; }
+    public int? DiasCredito { get; set; }
     public List<string> CorreosAdicionales { get; set; } = new();
     public string? Observaciones { get; set; }
     public string? Oblgconta { get; set; }
@@ -38,6 +39,7 @@ public sealed class EContaxClienteUpsertDto
     public string? Telefonoconvencional { get; set; }
     public string? Celular { get; set; }
     public string? Correo { get; set; }
+    public int? DiasCredito { get; set; }
     public string? Observaciones { get; set; }
     public int TipoCliente { get; set; }
     public bool? Estado { get; set; } = true;

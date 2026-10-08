@@ -86,6 +86,12 @@ public sealed class EContaxFacturacionService
     public Task<List<ProductoLookupDetalleDto>> BuscarProductosFiltroAsync(int idUsuario, string filtro) =>
         _catalogService.BuscarProductosFiltroAsync(idUsuario, filtro);
 
+    public async Task<List<FacturaListDto>> ListarFacturasAsync(int idUsuario, int top = 500)
+    {
+        await _seguridad.ExigirAccionAsync(idUsuario, EContaxRoutes.FacturacionDocumentos, EContaxAccion.Ver);
+        return await _facturacionService.ListarFacturasUsuarioAsync(idUsuario, top);
+    }
+
     public Task<ProductoLookupDetalleDto?> BuscarProductoParaDetalleAsync(int idUsuario, string criterio) =>
         _catalogService.BuscarProductoParaDetalleAsync(idUsuario, criterio);
 
