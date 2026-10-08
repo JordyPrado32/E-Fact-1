@@ -1,21 +1,27 @@
-﻿@using Simetric.Models.EContax
 @page "/e-contax/clientes"
 
 @using System.Net.Http.Json
+@using System.Text
 @inject HttpClient Http
 @rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using System.ComponentModel.DataAnnotations
 @using System.Text.Json.Serialization
+@using Microsoft.JSInterop
 @using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using Simetric.Data
 @using Simetric.Models
 @using Simetric.Services
-@using Simetric.Services.EContax
-@inject EContaxSeguridadService SeguridadEContax
+@using MiniExcelLibs
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
-@inject AppAccessService AppAccessService
-@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject IJSRuntime JS
+@inject EmisionControlService EmisionControlService
+@inject EmisorOnboardingService EmisorOnboardingService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@attribute [AllowAnonymous]
 
 @{
     var filteredClientes = ClientesFiltrados.ToList();
@@ -30,13 +36,22 @@
     var ultimoRegistroVista = Math.Min(paginaActualVista * registrosPorPagina, TotalRegistrosFiltrados);
 }
 
-<PageTitle>Clientes | @PageBrandTitle</PageTitle>
+<PageTitle>Clientes / Proveedores | @PageBrandTitle</PageTitle>
 
-<div class="entity-shell econtax-turquoise-catalog" data-tour="clientes.page">
+<div class="entity-shell @(EsModoCrudEmbebido ? "entity-shell-embedded-form" : null)" data-tour="clientes.page">
+    @if (MostrarVolverInicioOnboarding)
+    {
+        <div class="breadcrumb-container">
+            <button type="button" class="breadcrumb-home-btn" @onclick='() => NavManager.NavigateTo("/e-contax")'>
+                <i class="bi bi-house-door"></i>
+                <span>Volver al inicio</span>
+            </button>
+        </div>
+    }
     <section class="entity-hero" data-tour="clientes.hero">
         <div class="hero-copy">
             <span class="hero-eyebrow">Catálogo comercial</span>
-            <h2>Gestión de clientes</h2>
+            <h2>Gestión de clientes / proveedores</h2>
             <p>
                 Centraliza la cartera comercial y mantén el registro de clientes alineado
                 con el mismo patrón visual y operativo de Productos.
@@ -64,10 +79,65 @@
         </div>
     </section>
 
-    <section class="toolbar-card" data-tour="clientes.toolbar">
+    <section class="quick-action-bar" aria-label="Acciones rápidas de clientes">
+        <button type="button" class="quick-action-card quick-action-primary" @onclick="AbrirBotAsync">
+            <span class="quick-action-icon"><i class="bi bi-stars"></i></span>
+            <span>
+                <strong>Crear cliente / proveedor con IA</strong>
+                <small>Abre el bot para asistirte</small>
+            </span>
+        </button>
+
+        <button type="button" class="quick-action-card" @onclick="AbrirImportacion">
+            <span class="quick-action-icon quick-action-icon-green"><i class="bi bi-file-earmark-spreadsheet"></i></span>
+            <span>
+                <strong>Importar desde Excel</strong>
+                <small>Carga masiva de clientes</small>
+            </span>
+        </button>
+
+
+
+        <button type="button" class="quick-action-card quick-action-export" @onclick="ExportarClientesExcelAsync">
+            <span class="quick-action-icon quick-action-icon-blue"><i class="bi bi-download"></i></span>
+            <span>
+                <strong>Exportar todos</strong>
+                <small>Descargar Excel</small>
+            </span>
+        </button>
+
+
+        <div class="quick-action-search">
+            <i class="bi bi-search"></i>
+            <input placeholder="Buscar por nombre, identificación o correo..."
+                   value="@filtro"
+                   @oninput="OnFiltroChanged" />
+        </div>
+
+        <button type="button" class="filter-toggle-btn @(mostrarPanelFiltros ? "active" : "")" @onclick="AlternarPanelFiltros">
+            <i class="bi bi-funnel"></i>
+            <span>Filtros</span>
+            @if (filtroTipoCliente > 0 || !string.IsNullOrWhiteSpace(filtro) || registrosPorPagina != 10)
+            {
+                <b></b>
+            }
+        </button>
+    </section>
+
+
+
+    <section class="toolbar-card @(mostrarPanelFiltros ? "filters-visible" : "")" data-tour="clientes.toolbar">
+        @if (isDemoMode)
+        {
+            <div class="status-banner status-banner-info mb-3">
+                <i class="bi bi-eye"></i>
+                <span>Modo demo: puedes revisar clientes y cargar datos al formulario, pero guardar y eliminar están bloqueados.</span>
+            </div>
+        }
+
         <div class="toolbar-copy">
             <span class="toolbar-kicker">Búsqueda y control</span>
-            <h3>Consulta los datos y administra tus clientes</h3>
+            <h3>Consulta los datos y administra tus clientes / proveedores</h3>
             <p>Aqui tienes una lista de tus clientes, donde puedes administrar tu negocio </p>
         </div>
 
@@ -89,7 +159,7 @@
                         <option value="0">Todos</option>
                         @foreach (var tipo in tiposCliente)
                         {
-                            <option value="@tipo.TclCodigo">@TipoClienteClasificacion.ObtenerEtiqueta(tipo.Descripcion)</option>
+                            <option value="@tipo.TclCodigo">@GetTipoClienteEtiqueta(tipo)</option>
                         }
                     </select>
                 </div>
@@ -104,7 +174,7 @@
                     </select>
                 </div>
 
-                <button type="button" class="secondary-btn toolbar-secondary-btn" @onclick="() => CargarTodo(true)">
+                <button type="button" class="secondary-btn toolbar-secondary-btn filter-refresh-btn" @onclick="() => CargarTodo(true)">
                     <i class="bi bi-arrow-clockwise"></i>
                     <span>Refrescar</span>
                 </button>
@@ -121,18 +191,18 @@
             <div class="table-card-head">
                 <div>
                     <span class="table-kicker">Listado activo</span>
-                    <h3>Clientes registrados</h3>
+                    <h3>Clientes / proveedores registrados</h3>
                 </div>
                 <div class="table-head-actions">
                     <span class="table-badge">@filteredClientes.Count registros</span>
-                    <button type="button" class="primary-btn" @onclick="Nuevo" disabled="@(!accionesPermitidas.HasFlag(EContaxAccion.Crear))">
+                <button type="button" class="primary-btn" data-no-auto-loading="true" @onclick="AbrirNuevoClienteModal">
                         <i class="bi bi-plus-lg"></i>
                         <span>Nuevo cliente / proveedor</span>
                     </button>
                 </div>
             </div>
 
-            @if (!string.IsNullOrWhiteSpace(mensaje))
+            @if (!mostrarModalFormularioCliente && !string.IsNullOrWhiteSpace(mensaje))
             {
                 <div class="status-banner status-banner-info">
                     <i class="bi bi-info-circle"></i>
@@ -140,7 +210,7 @@
                 </div>
             }
 
-            @if (!string.IsNullOrWhiteSpace(debugError))
+            @if (!mostrarModalFormularioCliente && !string.IsNullOrWhiteSpace(debugError))
             {
                 <div class="status-banner status-banner-error">
                     <i class="bi bi-exclamation-triangle"></i>
@@ -171,7 +241,7 @@
             else
             {
                 <div class="table-wrap">
-                    <table class="table entity-table entity-table-clients mb-0">
+                    <table class="table entity-table entity-table-clients responsive-cards-table mb-0">
                         <thead>
                             <tr>
                                 <th>Cliente</th>
@@ -187,7 +257,7 @@
                             @foreach (var c in clientesPaginados)
                             {
                                 <tr>
-                                    <td>
+                                    <td data-label="Cliente">
                                         <div class="cell-main cell-main-stacked">
                                             <strong>@GetNombreCompletoCliente(c)</strong>
                                             @if (!string.IsNullOrWhiteSpace(ObtenerNombreSecundarioCliente(c)))
@@ -206,24 +276,33 @@
                                             }
                                         </div>
                                     </td>
-                                    <td class="list-extra-col">
+                                    <td class="list-extra-col" data-label="Contacto">
                                         <div class="compact-detail">
-                                            <span><i class="bi bi-telephone"></i> @(string.IsNullOrWhiteSpace(c.Telefonoconvencional) ? "Sin teléfono" : c.Telefonoconvencional)</span>
+                                            <span><i class="bi bi-telephone"></i> @(string.IsNullOrWhiteSpace(c.Celular) ? (string.IsNullOrWhiteSpace(c.Telefonoconvencional) ? "Sin teléfono" : c.Telefonoconvencional) : c.Celular)</span>
                                             <span><i class="bi bi-geo-alt"></i> @(string.IsNullOrWhiteSpace(GetCiudadNombre(c.Ciudad)) ? "Sin ubicación" : GetCiudadNombre(c.Ciudad))</span>
                                         </div>
                                     </td>
-                                    <td>
+                                    <td data-label="Identificación">
                                         <span class="code-pill">@(string.IsNullOrWhiteSpace(c.Numeroidentificacion) ? "Sin ID" : c.Numeroidentificacion)</span>
                                     </td>
-                                    <td class="text-end"><strong>@c.FacturasEmitidas</strong></td>
-                                    <td class="text-end"><strong>@($"${c.SaldoPendiente:N2}")</strong></td>
-                                    <td class="list-status-col">
+                                    <td class="text-end" data-label="Facturas emitidas">
+                                        <strong>@c.FacturasEmitidas</strong>
+                                    </td>
+                                    <td class="text-end" data-label="Saldo pendiente">
+                                        <strong>@($"${c.SaldoPendiente:N2}")</strong>
+                                    </td>
+                                    <td class="list-status-col" data-label="Estado">
                                         <div class="status-stack">
-                                            <span class="status-pill @(c.Estado == true ? "status-pill-active" : "status-pill-inactive")">@(c.Estado == true ? "Activo" : "Inactivo")</span>
-                                            <small><i class="bi bi-receipt"></i> @(c.UltimaFactura.HasValue ? $"Última factura: {c.UltimaFactura:dd/MM/yyyy}" : "Sin facturas")</small>
+                                            <span class="status-pill @(c.Estado == true ? "status-pill-active" : "status-pill-inactive")">
+                                                @(c.Estado == true ? "Activo" : "Inactivo")
+                                            </span>
+                                            <small>
+                                                <i class="bi bi-receipt"></i>
+                                                @(c.UltimaFactura.HasValue ? $"Última factura: {c.UltimaFactura:dd/MM/yyyy}" : "Sin facturas")
+                                            </small>
                                         </div>
                                     </td>
-                                    <td class="text-end">
+                                    <td class="text-end" data-label="Acciones">
                                         @if (EsConsumidorFinal(c))
                                         {
                                             <span class="action-empty">Sin acciones</span>
@@ -237,12 +316,12 @@
                                                 </button>
 
                                                 <button type="button" class="action-btn action-edit" title="Editar"
-                                                        @onclick="() => Editar(c.Codcliente)" disabled="@(!accionesPermitidas.HasFlag(EContaxAccion.Editar))">
+                                                        @onclick="() => Editar(c.Codcliente)">
                                                     <i class="bi bi-pencil-square"></i>
                                                 </button>
 
                                                 <button type="button" class="action-btn action-delete" title="Eliminar"
-                                                        @onclick="() => ConfirmarEliminar(c)" disabled="@(!accionesPermitidas.HasFlag(EContaxAccion.Eliminar))">
+                                                        @onclick="() => ConfirmarEliminar(c)">
                                                     <i class="bi bi-trash"></i>
                                                 </button>
                                             </div>
@@ -272,6 +351,7 @@
                         </button>
                     </div>
                 </div>
+
             }
 
             @if (mostrarConfirmacion && clienteAEliminar is not null)
@@ -291,8 +371,8 @@
 
             @if (clienteEnVista is not null)
             {
-                <div class="detail-modal-backdrop" @onclick:stopPropagation="true"></div>
-                <div class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="clienteDetalleTitulo">
+                <div class="detail-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+                <div class="detail-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="clienteDetalleTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
                     <div class="detail-modal-content" @onclick:stopPropagation="true">
                         <div class="detail-modal-header">
                             <div>
@@ -367,8 +447,8 @@
                                         </div>
 
                                         <div class="detail-item">
-                                            <span>Ciudad</span>
-                                            <strong>@(string.IsNullOrWhiteSpace(GetCiudadNombre(clienteEnVista.Ciudad)) ? "Sin ciudad" : GetCiudadNombre(clienteEnVista.Ciudad))</strong>
+                                            <span>Cantón</span>
+                                            <strong>@(string.IsNullOrWhiteSpace(GetCiudadNombre(clienteEnVista.Ciudad)) ? "Sin cantón" : GetCiudadNombre(clienteEnVista.Ciudad))</strong>
                                         </div>
 
                                         <div class="detail-item detail-item-full">
@@ -386,15 +466,20 @@
                                     </div>
                                 }
 
-                                @if (!string.IsNullOrWhiteSpace(clienteEnVista.Observaciones))
-                                {
-                                    <div class="detail-note">
-                                        <span>Observaciones</span>
-                                        <strong>@clienteEnVista.Observaciones</strong>
+                                        @if (!string.IsNullOrWhiteSpace(clienteEnVista.Observaciones))
+                                        {
+                                            <div class="detail-note">
+                                                <span>Observaciones</span>
+                                                <strong>@clienteEnVista.Observaciones</strong>
+                                            </div>
+                                        }
+
+                                        <div class="detail-note">
+                                            <span>Días de crédito</span>
+                                            <strong>@(clienteEnVista.DiasCredito.HasValue ? $"{clienteEnVista.DiasCredito} días" : "Sin definir")</strong>
+                                        </div>
                                     </div>
-                                }
-                            </div>
-                        </div>
+                                </div>
 
                         <div class="detail-modal-footer">
                             <button type="button" class="secondary-btn" @onclick="CerrarVistaCliente">Cerrar</button>
@@ -404,23 +489,16 @@
             }
         </section>
 
-        @if (mostrarFormulario)
+        @if (EsModoCrudEmbebido)
         {
         <section class="editor-card entity-editor-card" data-tour="clientes.editor">
             <div class="editor-head">
                 <div>
-                    <span class="panel-kicker">Formulario operativo</span>
+
                     <h3>@(editando ? "Editar cliente" : "Registrar cliente")</h3>
                     <p>Complete los datos comerciales, de contacto y ubicación del cliente.</p>
                 </div>
-                <div class="editor-head-actions">
-                    <span class="editor-badge @(editando ? "editor-badge-edit" : "editor-badge-new")">
-                        @(editando ? "Edición" : "Nuevo")
-                    </span>
-                    <button type="button" class="editor-close-btn" @onclick="CerrarFormulario" aria-label="Cerrar formulario" title="Cerrar">
-                        <i class="bi bi-x-lg"></i>
-                    </button>
-                </div>
+
             </div>
 
             <div class="editor-body entity-form-legacy">
@@ -428,6 +506,13 @@
                     <DataAnnotationsValidator />
 
                     <div @key="formKey">
+                            <details class="form-accordion" open>
+                            <summary class="form-section-heading">
+                                <span>1</span>
+                                <strong>Información básica</strong>
+                                <i class="bi bi-chevron-down"></i>
+                            </summary>
+                            <div class="form-accordion-body">
 
                             <div class="row mb-2">
                                 <div class="col">
@@ -438,7 +523,7 @@
                                         <option value="0">-- Seleccione Tipo --</option>
                                         @foreach (var t in tiposCliente)
                                         {
-                                            <option value="@t.TclCodigo">@TipoClienteClasificacion.ObtenerEtiqueta(t.Descripcion)</option>
+                                            <option value="@t.TclCodigo">@GetTipoClienteEtiqueta(t)</option>
                                         }
                                     </InputSelect>
                                     <ValidationMessage For="@(() => model.TipoCliente)" class="text-danger small" />
@@ -449,14 +534,36 @@
                                                  @bind-Value="model.Tipoidentificacion"
                                                  @bind-Value:after="OnTipoIdentificacionChangedAsync">
                                         <option value="">-- Seleccione --</option>
-                                            @foreach (var id in IdentificacionesDisponibles)
-                                            {
-                                                <option value="@id.Id">@id.Descripcion</option>
-                                            }
+                                        @foreach (var id in IdentificacionesDisponibles)
+                                        {
+                                            <option value="@id.Id">@id.Descripcion</option>
+                                        }
                                     </InputSelect>
                                     <ValidationMessage For="@(() => model.Tipoidentificacion)" class="text-danger small" />
                                 </div>
                             </div>
+
+                            <div class="row mb-2">
+                                <div class="col">
+                                    <label class="form-label small fw-bold">Número Identificación *</label>
+                                     <input class="form-control form-control-sm"
+                                            value="@model.Numeroidentificacion"
+                                            @oninput="OnNumeroIdentificacionChangedAsync"
+                                            @onblur="OnNumeroIdentificacionBlurAsync" />
+                                     <ValidationMessage For="@(() => model.Numeroidentificacion)" class="text-danger small" />
+                                     @if (consultandoCedula)
+                                     {
+                                         <div class="status-banner status-banner-info mt-2">
+                                             <i class="bi bi-search"></i>
+                                             <span>Buscando datos de la identificación...</span>
+                                         </div>
+                                     }
+                                     else if (!string.IsNullOrWhiteSpace(mensajeConsultaCedula))
+                                     {
+                                         <div class="small mt-1 @(consultaCedulaEsError ? "text-danger" : "text-success")">@mensajeConsultaCedula</div>
+                                     }
+                                 </div>
+                             </div>
 
                             @if (!TieneTipoClienteSeleccionado)
                             {
@@ -498,34 +605,45 @@
                                 </div>
                             }
 
-                             <div class="row mb-2">
-                                 <div class="col">
-                                     <label class="form-label small fw-bold">Número Identificación *</label>
-                                     <input class="form-control form-control-sm"
-                                            value="@model.Numeroidentificacion"
-                                            @oninput="OnNumeroIdentificacionChangedAsync"
-                                            @onblur="OnNumeroIdentificacionBlurAsync" />
-                                     <ValidationMessage For="@(() => model.Numeroidentificacion)" class="text-danger small" />
-                                     @if (consultandoCedula)
-                                     {
-                                         <div class="status-banner status-banner-info mt-2">
-                                             <i class="bi bi-search"></i>
-                                             <span>Buscando datos de la identificación...</span>
-                                         </div>
-                                         <div class="small text-muted mt-1">Consultando datos de la cédula...</div>
-                                     }
-                                     else if (!string.IsNullOrWhiteSpace(mensajeConsultaCedula))
-                                     {
-                                         <div class="small mt-1 @(consultaCedulaEsError ? "text-danger" : "text-success")">@mensajeConsultaCedula</div>
-                                     }
-                                 </div>
-                             </div>
+                            </div>
+                            </details>
+
+                            <details class="form-accordion client-provider-accordion" open>
+                            <summary class="form-section-heading">
+                                <span>2</span>
+                                <strong>Proveedor</strong>
+                                <i class="bi bi-chevron-down"></i>
+                            </summary>
+                            <div class="form-accordion-body">
+                                <div class="client-provider-toggle-grid client-provider-toggle-grid-single">
+                                    <label class="client-provider-toggle-card">
+                                        <input type="checkbox"
+                                               class="client-provider-switch-input"
+                                               checked="@model.EsProveedor"
+                                               @onchange="OnEsProveedorChanged" />
+                                        <span class="client-provider-switch"></span>
+                                        <span>
+                                            <strong>Es proveedor</strong>
+                                            <small>Tambien se registra para compras, retenciones y liquidaciones.</small>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                            </details>
+
+                            <details class="form-accordion">
+                            <summary class="form-section-heading">
+                                <span>3</span>
+                                <strong>Contacto</strong>
+                                <i class="bi bi-chevron-down"></i>
+                            </summary>
+                            <div class="form-accordion-body">
 
                             <div class="email-fields-shell mb-3">
                                 <div class="form-group">
                                     <div class="email-primary-row">
                                         <div class="email-primary-field">
-                                            <label class="form-label small fw-bold">Correo Principal</label>
+                                            <label class="form-label small fw-bold">Correo Principal *</label>
                                             <InputText type="email"
                                                        @bind-Value="model.Correo"
                                                        class="form-control form-control-sm"
@@ -547,7 +665,7 @@
                                 {
                                     <div class="email-extra-shell">
                                         <div class="email-extra-head">
-                                            <label class="form-label small fw-bold mb-0">Correos adicionales</label>
+                                            <label class="form-label small fw-bold mb-0">Correos adicionales (opcional)</label>
                                             <button type="button"
                                                     class="email-add-btn"
                                                     @onclick="AgregarCorreoCampo">
@@ -577,41 +695,77 @@
                                 }
                             </div>
 
-                            <div class="row mb-2">
-                                <div class="col">
+                            <div class="row mb-2 client-accounting-phone-row">
+                                <div class="@(DebeMostrarObligadoContabilidad ? "col-md-4 client-accounting-field" : "col-12")">
                                     @if (DebeMostrarObligadoContabilidad)
                                     {
-                                        <label class="form-label small">Obligado a llevar contabilidad</label>
+                                        <label class="form-label small">Obligado a llevar contabilidad *</label>
                                         <InputSelect class="form-select form-select-sm" @bind-Value="model.Oblgconta">
                                             <option value="">-- Seleccione --</option>
                                             <option value="SI">SI</option>
                                             <option value="NO">NO</option>
                                         </InputSelect>
+                                        <ValidationMessage For="@(() => model.Oblgconta)" class="text-danger small" />
                                     }
                                 </div>
-                                <div class="col">
-                                    <label class="form-label small">Teléfono Convencional</label>
-                                    <InputText class="form-control form-control-sm" @bind-Value="model.Telefonoconvencional" />
-                                    <ValidationMessage For="@(() => model.Telefonoconvencional)" class="text-danger small" />
+                                <div class="col-md-8">
+                                    <label class="form-label small">
+                                        @(UsaTelefonoConvencional ? "Teléfono Convencional (opcional)" : "Celular (opcional)")
+                                    </label>
+                                    <div class="phone-field-stack">
+                                        <div class="phone-mode-switch" role="tablist" aria-label="Tipo de telefono">
+                                            <button type="button"
+                                                    class="phone-mode-btn @(UsaTelefonoConvencional ? string.Empty : "is-active")"
+                                                    @onclick='() => SeleccionarTipoContactoTelefonico(ContactoTelefonoCelular)'>
+                                                Celular
+                                            </button>
+                                            <button type="button"
+                                                    class="phone-mode-btn @(UsaTelefonoConvencional ? "is-active" : string.Empty)"
+                                                    @onclick='() => SeleccionarTipoContactoTelefonico(ContactoTelefonoConvencional)'>
+                                                Convencional
+                                            </button>
+                                        </div>
+                                        <div class="input-group input-group-sm phone-input-group">
+                                        @if (UsaTelefonoConvencional)
+                                        {
+                                            <InputText class="form-control form-control-sm" @bind-Value="model.Telefonoconvencional" placeholder="Ej: 022345678" />
+                                        }
+                                        else
+                                        {
+                                            <InputText class="form-control form-control-sm" @bind-Value="model.Celular" placeholder="Ej: 0998765432" />
+                                        }
+                                    </div>
+                                    </div>
+                                    @if (UsaTelefonoConvencional)
+                                    {
+                                        <ValidationMessage For="@(() => model.Telefonoconvencional)" class="text-danger small" />
+                                    }
+                                    else
+                                    {
+                                        <ValidationMessage For="@(() => model.Celular)" class="text-danger small" />
+                                    }
                                 </div>
                             </div>
 
-                            <div class="row mb-2">
-                                <div class="col">
-                                    <label class="form-label small">Celular</label>
-                                    <InputText class="form-control form-control-sm" @bind-Value="model.Celular" />
-                                    <ValidationMessage For="@(() => model.Celular)" class="text-danger small" />
-                                </div>
                             </div>
+                            </details>
+
+                            <details class="form-accordion">
+                            <summary class="form-section-heading">
+                                <span>3</span>
+                                <strong>Dirección</strong>
+                                <i class="bi bi-chevron-down"></i>
+                            </summary>
+                            <div class="form-accordion-body">
 
                             <div class="mb-2">
-                                <label class="form-label small">Dirección</label>
+                                <label class="form-label small">Dirección (opcional)</label>
                                 <InputText class="form-control form-control-sm" @bind-Value="model.Direccion" />
                             </div>
 
                             <div class="row mb-3">
                                 <div class="col">
-                                    <label class="form-label small fw-bold">País</label>
+                                    <label class="form-label small fw-bold">País (opcional)</label>
                                     <InputSelect class="form-select form-select-sm"
                                                  @bind-Value="model.Pais"
                                                  @bind-Value:after="OnPaisChangedAsync">
@@ -624,7 +778,7 @@
                                     <ValidationMessage For="@(() => model.Pais)" class="text-danger small" />
                                 </div>
                                 <div class="col">
-                                    <label class="form-label small fw-bold">Provincia</label>
+                                    <label class="form-label small fw-bold">Provincia (opcional)</label>
                                     <InputSelect class="form-select form-select-sm"
                                                  @bind-Value="model.Provincia"
                                                  @bind-Value:after="OnProvinciaChangedAsync"
@@ -640,11 +794,11 @@
                             </div>
 
                             <div class="mb-3">
-                                <label class="form-label small fw-bold">Ciudad</label>
+                                <label class="form-label small fw-bold">Cantón (opcional)</label>
                                 <InputSelect class="form-select form-select-sm"
                                              @bind-Value="model.Ciudad"
                                              disabled="@(model.Provincia is null || !CiudadesDisponibles.Any())">
-                                    <option value="">@(model.Provincia.HasValue ? "-- Seleccione Ciudad --" : "-- Seleccione una provincia --")</option>
+                                    <option value="">@(model.Provincia.HasValue ? "-- Seleccione Cantón --" : "-- Seleccione una provincia --")</option>
                                     @foreach (var c in CiudadesDisponibles)
                                     {
                                         <option value="@c.IdCiudad">@c.Descripcion</option>
@@ -652,6 +806,9 @@
                                 </InputSelect>
                                 <ValidationMessage For="@(() => model.Ciudad)" class="text-danger small" />
                             </div>
+
+                            </div>
+                            </details>
 
                             <details class="form-accordion">
                                 <summary class="form-section-heading">
@@ -662,7 +819,7 @@
                                 <div class="form-accordion-body">
                                     <div class="client-extra-grid">
                                         <div class="client-extra-block client-credit-days">
-                                            <label class="form-label small">Días de crédito</label>
+                                            <label class="form-label small">Días de crédito (opcional)</label>
                                             <div class="credit-chip-list">
                                                 @foreach (var dias in diasCreditoOpciones)
                                                 {
@@ -691,7 +848,7 @@
                                         </div>
 
                                         <div class="client-extra-block client-state-block">
-                                            <label class="form-label small">Estado</label>
+                                            <label class="form-label small">Estado (opcional)</label>
                                             <div class="state-chip-list">
                                                 <button type="button"
                                                         class="state-chip @(model.Estado == true ? "active" : null)"
@@ -709,17 +866,26 @@
                                         </div>
                                     </div>
 
-                                    <div class="client-extra-notes">
-                                        <label class="form-label small">Observaciones</label>
-                                        <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="model.Observaciones" />
+                                    <div class="row g-3 align-items-start client-credit-grid">
+                                        <div class="col-12 client-credit-notes">
+                                            <label class="form-label small">Observaciones (opcional)</label>
+                                            <InputTextArea class="form-control form-control-sm w-100" rows="2" @bind-Value="model.Observaciones" />
+                                        </div>
                                     </div>
                                 </div>
                             </details>
 
                         <div class="form-actions entity-form-actions">
-                            <button class="secondary-btn" type="button" @onclick="Nuevo">Limpiar</button>
-                            <button class="primary-btn" type="submit" disabled="@(!accionesPermitidas.HasFlag(editando ? EContaxAccion.Editar : EContaxAccion.Crear))">
-                                <i class="bi bi-save me-1"></i> @(editando ? "Guardar cambios" : "Crear cliente")
+                            <button class="primary-btn @(guardandoCliente ? "n-auto-loading" : null)" type="submit" disabled="@(!PuedeGuardarCliente || guardandoCliente)">
+                                @if (!guardandoCliente)
+                                {
+                                    <i class="bi bi-save me-1"></i>
+                                }
+                                @(isDemoMode ? "Guardar bloqueado" : (guardandoCliente ? "Guardando..." : (editando ? "Guardar cambios" : "Crear cliente / proveedor")))
+                            </button>
+                            <button type="button" class="secondary-btn clear-action-btn" @onclick="Nuevo">
+                                <i class="bi bi-eraser"></i>
+                                Limpiar formulario
                             </button>
                         </div>
 
@@ -728,14 +894,602 @@
             </div>
         </section>
         }
+        else if (mostrarModalFormularioCliente)
+        {
+            <div class="detail-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+            <div class="detail-modal detail-modal-form" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="clienteFormularioTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+                <div class="detail-modal-content detail-modal-form-content" @onclick:stopPropagation="true">
+                    <div class="detail-modal-header">
+                        <div>
+                            <span class="detail-kicker">Catálogo comercial</span>
+                            <h3 id="clienteFormularioTitulo">@(editando ? "Editar cliente / proveedor" : "Registrar cliente / proveedor")</h3>
+                        </div>
+                        <button type="button" class="detail-close" @onclick="CerrarModalFormularioCliente" aria-label="Cerrar formulario" title="Cerrar">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="detail-modal-body detail-modal-form-body">
+                        <section class="editor-card entity-editor-card" data-tour="clientes.editor">
+                            <div class="editor-body entity-form-legacy">
+                                <EditForm Model="@model" OnValidSubmit="Guardar" OnInvalidSubmit="OnFormularioClienteInvalido">
+                                    <DataAnnotationsValidator />
+
+                                    <div @key="formKey">
+                                            <details class="form-accordion" open>
+                                            <summary class="form-section-heading">
+                                                <span>1</span>
+                                                <strong>Información básica</strong>
+                                                <i class="bi bi-chevron-down"></i>
+                                            </summary>
+                                            <div class="form-accordion-body">
+
+                                            <div class="row mb-2">
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold">Tipo de Cliente *</label>
+                                                    <InputSelect class="form-select form-select-sm"
+                                                                 @bind-Value="model.TipoCliente"
+                                                                 @bind-Value:after="OnTipoClienteChanged">
+                                                        <option value="0">-- Seleccione Tipo --</option>
+                                                        @foreach (var t in tiposCliente)
+                                                        {
+                                                            <option value="@t.TclCodigo">@GetTipoClienteEtiqueta(t)</option>
+                                                        }
+                                                    </InputSelect>
+                                                    <ValidationMessage For="@(() => model.TipoCliente)" class="text-danger small" />
+                                                </div>
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold">Tipo Identificación *</label>
+                                                    <InputSelect class="form-select form-select-sm"
+                                                                 @bind-Value="model.Tipoidentificacion"
+                                                                 @bind-Value:after="OnTipoIdentificacionChangedAsync">
+                                                        <option value="">-- Seleccione --</option>
+                                                        @foreach (var id in IdentificacionesDisponibles)
+                                                        {
+                                                            <option value="@id.Id">@id.Descripcion</option>
+                                                        }
+                                                    </InputSelect>
+                                                    <ValidationMessage For="@(() => model.Tipoidentificacion)" class="text-danger small" />
+                                                </div>
+                                            </div>
+
+                                            <div class="row mb-2">
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold">Número Identificación *</label>
+                                                     <input class="form-control form-control-sm"
+                                                            value="@model.Numeroidentificacion"
+                                                            @oninput="OnNumeroIdentificacionChangedAsync"
+                                                            @onblur="OnNumeroIdentificacionBlurAsync" />
+                                                     <ValidationMessage For="@(() => model.Numeroidentificacion)" class="text-danger small" />
+                                                     @if (consultandoCedula)
+                                                     {
+                                                         <div class="status-banner status-banner-info mt-2">
+                                                             <i class="bi bi-search"></i>
+                                                             <span>Buscando datos de la identificación...</span>
+                                                         </div>
+                                                     }
+                                                     else if (!string.IsNullOrWhiteSpace(mensajeConsultaCedula))
+                                                     {
+                                                         <div class="small mt-1 @(consultaCedulaEsError ? "text-danger" : "text-success")">@mensajeConsultaCedula</div>
+                                                     }
+                                                 </div>
+                                             </div>
+
+                                            @if (!TieneTipoClienteSeleccionado)
+                                            {
+                                                <div class="status-banner status-banner-info mb-2">
+                                                    <i class="bi bi-info-circle"></i>
+                                                    <span>Selecciona primero el tipo de cliente</span>
+                                                </div>
+                                            }
+
+                                            @if (EsPersonaSeleccionada)
+                                            {
+                                                <div class="row mb-2">
+                                                    <div class="col">
+                                                        <label class="form-label small fw-bold">Apellidos *</label>
+                                                        <InputText class="form-control form-control-sm" @bind-Value="model.Apellidos" />
+                                                        <ValidationMessage For="@(() => model.Apellidos)" class="text-danger small" />
+                                                    </div>
+                                                    <div class="col">
+                                                        <label class="form-label small fw-bold">Nombres *</label>
+                                                        <InputText class="form-control form-control-sm" @bind-Value="model.Nombres" />
+                                                        <ValidationMessage For="@(() => model.Nombres)" class="text-danger small" />
+                                                    </div>
+                                                </div>
+                                            }
+
+                                            @if (EsEmpresaSeleccionada)
+                                            {
+                                                <div class="row mb-2">
+                                                    <div class="col">
+                                                        <label class="form-label small fw-bold">Nombre Comercial *</label>
+                                                        <InputText class="form-control form-control-sm" @bind-Value="model.Nombrecomercial" />
+                                                        <ValidationMessage For="@(() => model.Nombrecomercial)" class="text-danger small" />
+                                                    </div>
+                                                    <div class="col">
+                                                        <label class="form-label small fw-bold">Razón Social *</label>
+                                                        <InputText class="form-control form-control-sm" @bind-Value="model.Nombrerazonsocial" />
+                                                        <ValidationMessage For="@(() => model.Nombrerazonsocial)" class="text-danger small" />
+                                                    </div>
+                                                </div>
+                                            }
+
+                                            </div>
+                                            </details>
+
+                                            <details class="form-accordion client-provider-accordion" open>
+                                            <summary class="form-section-heading">
+                                                <span>2</span>
+                                                <strong>Proveedor</strong>
+                                                <i class="bi bi-chevron-down"></i>
+                                            </summary>
+                                            <div class="form-accordion-body">
+                                                <div class="client-provider-toggle-grid client-provider-toggle-grid-single">
+                                                    <label class="client-provider-toggle-card">
+                                                        <input type="checkbox"
+                                                               class="client-provider-switch-input"
+                                                               checked="@model.EsProveedor"
+                                                               @onchange="OnEsProveedorChanged" />
+                                                        <span class="client-provider-switch"></span>
+                                                        <span>
+                                                            <strong>Es proveedor</strong>
+                                                            <small>Tambien se registra para compras, retenciones y liquidaciones.</small>
+                                                        </span>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            </details>
+
+                                            <details class="form-accordion">
+                                            <summary class="form-section-heading">
+                                                <span>3</span>
+                                                <strong>Contacto</strong>
+                                                <i class="bi bi-chevron-down"></i>
+                                            </summary>
+                                            <div class="form-accordion-body">
+
+                                            <div class="email-fields-shell mb-3">
+                                                <div class="form-group">
+                                                    <div class="email-primary-row">
+                                                        <div class="email-primary-field">
+                                                            <label class="form-label small fw-bold">Correo Principal *</label>
+                                                            <InputText type="email"
+                                                                       @bind-Value="model.Correo"
+                                                                       class="form-control form-control-sm"
+                                                                       placeholder="correo@empresa.com" />
+                                                            <ValidationMessage For="@(() => model.Correo)" class="text-danger small" />
+                                                        </div>
+
+                                                        <button type="button"
+                                                                class="email-add-icon-btn"
+                                                                @onclick="AgregarCorreoCampo"
+                                                                title="Agregar correo adicional"
+                                                                aria-label="Agregar correo adicional">
+                                                            <i class="bi bi-plus-lg"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                @if (model.CorreosAdicionales.Any())
+                                                {
+                                                    <div class="email-extra-shell">
+                                                        <div class="email-extra-head">
+                                                            <label class="form-label small fw-bold mb-0">Correos adicionales (opcional)</label>
+                                                            <button type="button"
+                                                                    class="email-add-btn"
+                                                                    @onclick="AgregarCorreoCampo">
+                                                                <i class="bi bi-plus-lg"></i>
+                                                                <span>Agregar otro correo</span>
+                                                            </button>
+                                                        </div>
+
+                                                        @for (var correoIndex = 0; correoIndex < model.CorreosAdicionales.Count; correoIndex++)
+                                                        {
+                                                            var indiceCorreo = correoIndex;
+                                                            <div class="email-extra-row">
+                                                                <InputText type="email"
+                                                                           @bind-Value="model.CorreosAdicionales[indiceCorreo]"
+                                                                           class="form-control form-control-sm"
+                                                                           placeholder="correo.adicional@empresa.com" />
+                                                                <button type="button"
+                                                                        class="email-remove-btn"
+                                                                        @onclick="() => EliminarCorreoAdicional(indiceCorreo)"
+                                                                        title="Eliminar correo adicional"
+                                                                        aria-label="Eliminar correo adicional">
+                                                                    <i class="bi bi-trash"></i>
+                                                                </button>
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+
+                                            <div class="row mb-2 client-accounting-phone-row">
+                                                <div class="@(DebeMostrarObligadoContabilidad ? "col-md-4 client-accounting-field" : "col-12")">
+                                                    @if (DebeMostrarObligadoContabilidad)
+                                                    {
+                                                        <label class="form-label small">Obligado a llevar contabilidad *</label>
+                                                        <InputSelect class="form-select form-select-sm" @bind-Value="model.Oblgconta">
+                                                            <option value="">-- Seleccione --</option>
+                                                            <option value="SI">SI</option>
+                                                            <option value="NO">NO</option>
+                                                        </InputSelect>
+                                                        <ValidationMessage For="@(() => model.Oblgconta)" class="text-danger small" />
+                                                    }
+                                                </div>
+                                                <div class="col-md-8">
+                                                    <label class="form-label small">
+                                                        @(UsaTelefonoConvencional ? "Teléfono Convencional (opcional)" : "Celular (opcional)")
+                                                    </label>
+                                                    <div class="phone-field-stack">
+                                                        <div class="phone-mode-switch" role="tablist" aria-label="Tipo de telefono">
+                                                            <button type="button"
+                                                                    class="phone-mode-btn @(UsaTelefonoConvencional ? string.Empty : "is-active")"
+                                                                    @onclick='() => SeleccionarTipoContactoTelefonico(ContactoTelefonoCelular)'>
+                                                                Celular
+                                                            </button>
+                                                            <button type="button"
+                                                                    class="phone-mode-btn @(UsaTelefonoConvencional ? "is-active" : string.Empty)"
+                                                                    @onclick='() => SeleccionarTipoContactoTelefonico(ContactoTelefonoConvencional)'>
+                                                                Convencional
+                                                            </button>
+                                                        </div>
+                                                        <div class="input-group input-group-sm phone-input-group">
+                                                        @if (UsaTelefonoConvencional)
+                                                        {
+                                                            <InputText class="form-control form-control-sm" @bind-Value="model.Telefonoconvencional" placeholder="Ej: 022345678" />
+                                                        }
+                                                        else
+                                                        {
+                                                            <InputText class="form-control form-control-sm" @bind-Value="model.Celular" placeholder="Ej: 0998765432" />
+                                                        }
+                                                    </div>
+                                                    </div>
+                                                    @if (UsaTelefonoConvencional)
+                                                    {
+                                                        <ValidationMessage For="@(() => model.Telefonoconvencional)" class="text-danger small" />
+                                                    }
+                                                    else
+                                                    {
+                                                        <ValidationMessage For="@(() => model.Celular)" class="text-danger small" />
+                                                    }
+                                                </div>
+                                            </div>
+
+                                            </div>
+                                            </details>
+
+                                            <details class="form-accordion">
+                                            <summary class="form-section-heading">
+                                                <span>3</span>
+                                                <strong>Dirección</strong>
+                                                <i class="bi bi-chevron-down"></i>
+                                            </summary>
+                                            <div class="form-accordion-body">
+
+                                            <div class="mb-2">
+                                                <label class="form-label small">Dirección (opcional)</label>
+                                                <InputText class="form-control form-control-sm" @bind-Value="model.Direccion" />
+                                            </div>
+
+                                            <div class="row mb-3">
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold">País (opcional)</label>
+                                                    <InputSelect class="form-select form-select-sm"
+                                                                 @bind-Value="model.Pais"
+                                                                 @bind-Value:after="OnPaisChangedAsync">
+                                                        <option value="">-- Seleccione País --</option>
+                                                        @foreach (var p in paises)
+                                                        {
+                                                            <option value="@p.IdPais">@p.Descripcion</option>
+                                                        }
+                                                    </InputSelect>
+                                                    <ValidationMessage For="@(() => model.Pais)" class="text-danger small" />
+                                                </div>
+                                                <div class="col">
+                                                    <label class="form-label small fw-bold">Provincia (opcional)</label>
+                                                    <InputSelect class="form-select form-select-sm"
+                                                                 @bind-Value="model.Provincia"
+                                                                 @bind-Value:after="OnProvinciaChangedAsync"
+                                                                 disabled="@(model.Pais is null)">
+                                                        <option value="">-- Seleccione Provincia --</option>
+                                                        @foreach (var pr in ProvinciasDisponibles)
+                                                        {
+                                                            <option value="@pr.IdProvincia">@pr.Descripcion</option>
+                                                        }
+                                                    </InputSelect>
+                                                    <ValidationMessage For="@(() => model.Provincia)" class="text-danger small" />
+                                                </div>
+                                            </div>
+
+                                            <div class="mb-3">
+                                                <label class="form-label small fw-bold">Cantón (opcional)</label>
+                                                <InputSelect class="form-select form-select-sm"
+                                                             @bind-Value="model.Ciudad"
+                                                             disabled="@(model.Provincia is null || !CiudadesDisponibles.Any())">
+                                                    <option value="">@(model.Provincia.HasValue ? "-- Seleccione Cantón --" : "-- Seleccione una provincia --")</option>
+                                                    @foreach (var c in CiudadesDisponibles)
+                                                    {
+                                                        <option value="@c.IdCiudad">@c.Descripcion</option>
+                                                    }
+                                                </InputSelect>
+                                                <ValidationMessage For="@(() => model.Ciudad)" class="text-danger small" />
+                                            </div>
+
+                                            </div>
+                                            </details>
+
+                                            <details class="form-accordion">
+                                                <summary class="form-section-heading">
+                                                    <span>4</span>
+                                                    <strong>Información adicional</strong>
+                                                    <i class="bi bi-chevron-down"></i>
+                                                </summary>
+                                                <div class="form-accordion-body">
+                                                    <div class="client-extra-grid">
+                                                        <div class="client-extra-block client-credit-days">
+                                                            <label class="form-label small">Días de crédito (opcional)</label>
+                                                            <div class="credit-chip-list">
+                                                                @foreach (var dias in diasCreditoOpciones)
+                                                                {
+                                                                    var seleccionado = model.DiasCredito == dias;
+                                                                    <button type="button"
+                                                                            class="credit-chip @(seleccionado ? "active" : null)"
+                                                                            @onclick="() => SeleccionarDiasCredito(dias)">
+                                                                        @dias
+                                                                    </button>
+                                                                }
+                                                                <button type="button"
+                                                                        class="credit-chip @(UsaDiasCreditoPersonalizado ? "active" : null)"
+                                                                        @onclick="ActivarDiasCreditoPersonalizado">
+                                                                    Otro
+                                                                </button>
+                                                            </div>
+
+                                                            @if (UsaDiasCreditoPersonalizado)
+                                                            {
+                                                                <InputNumber class="form-control form-control-sm credit-custom-input"
+                                                                             TValue="int?"
+                                                                             @bind-Value="model.DiasCredito"
+                                                                             min="0"
+                                                                             placeholder="Ingresa los días" />
+                                                            }
+                                                        </div>
+
+                                                        <div class="client-extra-block client-state-block">
+                                                            <label class="form-label small">Estado (opcional)</label>
+                                                            <div class="state-chip-list">
+                                                                <button type="button"
+                                                                        class="state-chip @(model.Estado == true ? "active" : null)"
+                                                                        @onclick="() => SeleccionarEstadoCliente(true)">
+                                                                    <span class="state-dot state-dot-active"></span>
+                                                                    <span>Activo</span>
+                                                                </button>
+                                                                <button type="button"
+                                                                        class="state-chip @(model.Estado == false ? "active" : null)"
+                                                                        @onclick="() => SeleccionarEstadoCliente(false)">
+                                                                    <span class="state-dot state-dot-inactive"></span>
+                                                                    <span>Inactivo</span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="row g-3 align-items-start client-credit-grid">
+                                                        <div class="col-12 client-credit-notes">
+                                                            <label class="form-label small">Observaciones (opcional)</label>
+                                                            <InputTextArea class="form-control form-control-sm w-100" rows="2" @bind-Value="model.Observaciones" />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </details>
+
+                                        <div class="client-modal-save-feedback">
+                                            @if (!string.IsNullOrWhiteSpace(mensajeFormulario))
+                                            {
+                                                <div class="status-banner @(mensajeFormularioEsError ? "status-banner-error" : "status-banner-info") mb-3">
+                                                    <i class="bi @(mensajeFormularioEsError ? "bi-exclamation-triangle" : "bi-info-circle")"></i>
+                                                    <span>@mensajeFormulario</span>
+                                                </div>
+                                            }
+
+                                            @if (!string.IsNullOrWhiteSpace(debugErrorFormulario))
+                                            {
+                                                <div class="status-banner status-banner-error mb-3">
+                                                    <i class="bi bi-bug"></i>
+                                                    <span>@debugErrorFormulario</span>
+                                                </div>
+                                            }
+
+                                            <ValidationSummary class="client-modal-validation-summary" />
+                                        </div>
+
+                                        <div class="form-actions entity-form-actions">
+                                            <button class="primary-btn @(guardandoCliente ? "n-auto-loading" : null)" type="submit" disabled="@(!PuedeGuardarCliente || guardandoCliente)">
+                                                @if (!guardandoCliente)
+                                                {
+                                                    <i class="bi bi-save me-1"></i>
+                                                }
+                                                @(isDemoMode ? "Guardar bloqueado" : (guardandoCliente ? "Guardando..." : (editando ? "Guardar cambios" : "Crear cliente / proveedor")))
+                                            </button>
+                                            <button type="button" class="secondary-btn clear-action-btn" @onclick="Nuevo">
+                                                <i class="bi bi-eraser"></i>
+                                                Limpiar formulario
+                                            </button>
+                                        </div>
+
+                                        </div>
+                                </EditForm>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        }
     </section>
+
+    <section class="quick-tips-section" aria-label="Consejos rápidos de clientes">
+        <div class="quick-tips-head">
+            <span class="quick-tips-head-icon"><i class="bi bi-lightbulb"></i></span>
+            <div>
+                <strong>Consejos rápidos</strong>
+                <small>Pequeñas acciones para mantener tu cartera lista para facturar.</small>
+            </div>
+        </div>
+
+        <div class="quick-tip-grid">
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-blue"><i class="bi bi-stars"></i></span>
+                <div>
+                    <strong>Usa el asistente IA</strong>
+                    <p>Crea clientes con datos guiados y evita completar el formulario desde cero.</p>
+                </div>
+            </article>
+
+            <article class="quick-tip-item">
+                <span class="quick-tip-item-icon quick-tip-item-icon-violet"><i class="bi bi-envelope-plus"></i></span>
+                <div>
+                    <strong>Agrega correos extra</strong>
+                    <p>Registra contactos adicionales para enviar documentos a más destinatarios.</p>
+                </div>
+            </article>
+        </div>
+    </section>
+
+
+
+@if (mostrarImportacion)
+{
+    <div class="detail-modal-backdrop" data-no-backdrop-dismiss="true" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true"></div>
+    <div class="detail-modal" data-no-backdrop-dismiss="true" role="dialog" aria-modal="true" aria-labelledby="importacionClientesTitulo" @onclick:stopPropagation="true" @onmousedown:stopPropagation="true" @onpointerdown:stopPropagation="true">
+        <div class="detail-modal-content" style="width: min(620px, 100%);" @onclick:stopPropagation="true">
+            <div class="detail-modal-header" style="background: linear-gradient(135deg, #00a896, #007c73); padding: 1.15rem 1.25rem; color: #ffffff;">
+                <div>
+                    <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.85;">Carga masiva</span>
+                    <h3 id="importacionClientesTitulo" style="margin: 0; font-size: 1.25rem; font-weight: 700; color: #ffffff;">Importar clientes desde Excel</h3>
+                    <p style="margin: 5px 0 0 0; font-size: 0.82rem; opacity: 0.9;">Descarga la plantilla, llénala en Excel y vuelve a cargarla.</p>
+                </div>
+                <button type="button" style="background: rgba(255, 255, 255, 0.16); border: 0; color: #ffffff; width: 36px; height: 36px; border-radius: 12px; font-size: 1.5rem; cursor: pointer; display: flex; align-items: center; justify-content: center;" @onclick="CerrarImportacion" aria-label="Cerrar modal">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+
+            <div class="detail-modal-body" style="padding: 1.2rem 1.25rem; background: linear-gradient(180deg, #ffffff, #effbf9); overflow-y: auto; max-height: calc(100vh - 220px);">
+                <div style="display: grid; gap: 1rem; margin-bottom: 1.25rem;">
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+                        <div style="flex: 1;">
+                            <strong style="font-size: 0.88rem; color: #0f172a; display: block; margin-bottom: 0.25rem;">1. Descarga la plantilla</strong>
+                            <p style="margin: 0; font-size: 0.76rem; color: #64748b;">Estructura correcta con columnas obligatorias y opcionales.</p>
+                        </div>
+                        <button type="button" class="secondary-btn" @onclick="DescargarModeloImportacionAsync">
+                            <i class="bi bi-download"></i>
+                            Modelo
+                        </button>
+                    </div>
+
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+                        <div style="flex: 1;">
+                            <strong style="font-size: 0.88rem; color: #0f172a; display: block; margin-bottom: 0.25rem;">2. Carga tu archivo</strong>
+                            <p style="margin: 0; font-size: 0.76rem; color: #64748b;">Selecciona el archivo con tus clientes para importar.</p>
+                        </div>
+                        <label class="import-file-button" style="cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border-radius: 10px; background: #e9faf7; color: #007c73; font-size: 0.82rem; font-weight: 600; border: 1px solid #bce8e3;">
+                            <i class="bi bi-upload"></i>
+                            Seleccionar
+                            <InputFile accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" OnChange="ImportarClientesAsync" style="display: none;" />
+                        </label>
+                    </div>
+                </div>
+
+                @if (importandoClientes)
+                {
+                    <div style="margin-top: 1.5rem; padding: 1.5rem; border-radius: 16px; background: #fffbeb; border: 2px dashed #f59e0b; display: flex; flex-direction: column; align-items: center; gap: 1.1rem; text-align: center;">
+                        <div class="spinner-border text-warning" style="width: 2.8rem; height: 2.8rem; border-width: 0.28em;" role="status">
+                            <span class="visually-hidden">Procesando...</span>
+                        </div>
+                        <div>
+                            <strong style="color: #b45309; font-size: 1.08rem; font-weight: 800; display: block;">Procesando archivo...</strong>
+                            <span style="color: #d97706; font-size: 0.81rem;">Estamos importando y validando tus clientes. Por favor, no cierres esta ventana.</span>
+                        </div>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(mensajeImportacion))
+                {
+                    @if (erroresImportacion == 0)
+                    {
+                        <!-- ÉXITO: checkmark animado + botón cerrar -->
+                        <div style="margin-top: 1.5rem; padding: 1.75rem 1.5rem; border-radius: 16px; background: linear-gradient(135deg, #f0fdf4, #dcfce7); border: 2px solid #86efac; display: flex; flex-direction: column; align-items: center; gap: 1.1rem; text-align: center;">
+                            <div class="import-success-icon">
+                                <svg viewBox="0 0 52 52" style="width: 56px; height: 56px;" fill="none">
+                                    <circle cx="26" cy="26" r="25" stroke="#22c55e" stroke-width="2" fill="#dcfce7" />
+                                    <path class="import-check-path" d="M14 26 L22 34 L38 18" stroke="#16a34a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+                                </svg>
+                            </div>
+                            <div>
+                                <strong style="color: #15803d; font-size: 1.08rem; font-weight: 800; display: block; margin-bottom: 0.3rem;">@mensajeImportacion</strong>
+                            </div>
+                            <button type="button" @onclick="CerrarImportacion"
+                                style="background: linear-gradient(135deg, #16a34a, #22c55e); color: #fff; border: 0; border-radius: 999px; padding: 0.6rem 2rem; font-size: 0.9rem; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(22,163,74,0.25); transition: transform 0.15s;">
+                                <i class="bi bi-check2 me-2"></i> Cerrar
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- ERROR: X animada, sin botón cerrar -->
+                        <div style="margin-top: 1.5rem; padding: 1.5rem; border-radius: 16px; background: linear-gradient(135deg, #fff5f5, #fee2e2); border: 2px solid #fca5a5; display: flex; flex-direction: column; align-items: center; gap: 1rem; text-align: center;">
+                            <div class="import-error-icon">
+                                <svg viewBox="0 0 52 52" style="width: 52px; height: 52px;" fill="none">
+                                    <circle cx="26" cy="26" r="25" stroke="#ef4444" stroke-width="2" fill="#fee2e2" />
+                                    <line class="import-x-path" x1="17" y1="17" x2="35" y2="35" stroke="#dc2626" stroke-width="3" stroke-linecap="round" />
+                                    <line class="import-x-path2" x1="35" y1="17" x2="17" y2="35" stroke="#dc2626" stroke-width="3" stroke-linecap="round" />
+                                </svg>
+                            </div>
+                            <div>
+                                <strong style="color: #991b1b; font-size: 1rem; font-weight: 800; display: block; margin-bottom: 0.4rem;">@mensajeImportacion</strong>
+                                @if (listaErroresImportacion != null && listaErroresImportacion.Any())
+                                {
+                                    <div style="max-height: 140px; overflow-y: auto; border: 1px solid #fca5a5; background: #fff; border-radius: 10px; padding: 0.65rem 0.85rem; text-align: left; margin-top: 0.5rem;">
+                                        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.74rem; color: #991b1b; display: flex; flex-direction: column; gap: 0.2rem;">
+                                            @foreach (var error in listaErroresImportacion)
+                                            {
+                                                <li>@error</li>
+                                            }
+                                        </ul>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
 </div>
 
 @code {
 
+    [Parameter] public Simetric.Models.Cliente? ClientePrefill { get; set; }
+    [Parameter] public EventCallback<string> OnClienteGuardado { get; set; }
+
+
     private int usuarioLogueadoId = 0;
-    private EContaxAccion accionesPermitidas;
-    private string PageBrandTitle => IsEContaxPath(NavManager.Uri) ? "Numerica E-Contax" : "Numerica e-fact";
+    private bool isDemoMode;
+    private string PageBrandTitle => "Numerica E-Contax";
+
+    private bool mostrarImportacion = false;
+    private bool importandoClientes = false;
+    private int erroresImportacion = 0;
+    private string? mensajeImportacion;
+    private List<string> listaErroresImportacion = new();
+
+    private class BulkImportResult
+    {
+        public int Creados { get; set; }
+        public List<string> Errores { get; set; } = new();
+    }
+
 
     private string filtro = "";
     private int filtroTipoCliente = 0;
@@ -743,11 +1497,15 @@
     private int paginaActual = 1;
     private readonly int[] opcionesRegistrosPorPagina = { 5, 10, 20 };
     private bool mostrarDropdownTipo = false;
+    private bool mostrarPanelFiltros = true;
 
     private bool mostrarConfirmacion = false;
+    private bool mostrarModalFormularioCliente;
     private ClienteDto? clienteAEliminar;
     private ClienteDto? clienteEnVista;
     private static readonly int[] diasCreditoOpciones = [0, 15, 30, 45, 60, 90];
+    private const string ContactoTelefonoCelular = "CELULAR";
+    private const string ContactoTelefonoConvencional = "CONVENCIONAL";
 
     private class TipoClienteDto
     {
@@ -776,15 +1534,15 @@
         public int? Pais { get; set; }
         public int? Provincia { get; set; }
         public int? Ciudad { get; set; }
+        public DateTime? UltimaFactura { get; set; }
         public int FacturasEmitidas { get; set; }
         public decimal SaldoPendiente { get; set; }
-        public DateTime? UltimaFactura { get; set; }
         public List<string> CorreosAdicionales { get; set; } = new();
     }
 
     private class ClienteUpsertDto : IValidatableObject
     {
-        [JsonIgnore]
+        [System.Text.Json.Serialization.JsonIgnore]
         public Clientes? Parent { get; set; }
 
         public int Codcliente { get; set; }
@@ -804,11 +1562,8 @@
         [Required(ErrorMessage = "Debe seleccionar el tipo de identificación")]
         public int? Tipoidentificacion { get; set; }
 
-        [Required(ErrorMessage = "El número de identificación es obligatorio")]
-        [StringLength(20, MinimumLength = 3, ErrorMessage = "La identificación debe tener entre 3 y 20 caracteres")]
         public string? Numeroidentificacion { get; set; }
 
-        [Required(ErrorMessage = "La dirección es obligatoria")]
         [StringLength(250, ErrorMessage = "Máximo 250 caracteres")]
         public string? Direccion { get; set; }
 
@@ -816,11 +1571,13 @@
 
         public string? Celular { get; set; }
 
+        [JsonIgnore]
+        public string TipoContactoTelefonico { get; set; } = "CELULAR";
+
         [Required(ErrorMessage = "El correo electrónico es obligatorio")]
         [EmailAddress(ErrorMessage = "Correo electrónico no válido")]
         [StringLength(150, ErrorMessage = "Máximo 150 caracteres")]
         public string? Correo { get; set; }
-
         public int? DiasCredito { get; set; }
 
         [Required(ErrorMessage = "Debe indicar si lleva contabilidad")]
@@ -838,12 +1595,44 @@
         [StringLength(300, ErrorMessage = "Máximo 300 caracteres")]
         public string? Observaciones { get; set; }
 
-        [Required(ErrorMessage = "Debe seleccionar un país")]
         public int? Pais { get; set; }
 
         public int? Provincia { get; set; }
 
         public int? Ciudad { get; set; }
+
+        [JsonIgnore]
+        public bool EsCliente { get; set; } = true;
+
+        [JsonIgnore]
+        public bool EsProveedor { get; set; }
+
+        [JsonIgnore]
+        public string? CuentaContableProveedor { get; set; } = "21311 - Proveedores";
+
+        [JsonIgnore]
+        public string? CreditoTributarioProveedor { get; set; }
+
+        [JsonIgnore]
+        public string? CodigoProveedor { get; set; }
+
+        [JsonIgnore]
+        public bool EsSujetoRetencionProveedor { get; set; }
+
+        [JsonIgnore]
+        public bool RegistraInformacionBancariaProveedor { get; set; }
+
+        [JsonIgnore]
+        public string? BancoProveedor { get; set; }
+
+        [JsonIgnore]
+        public string? TipoCuentaProveedor { get; set; }
+
+        [JsonIgnore]
+        public string? NumeroCuentaProveedor { get; set; }
+
+        private static string? NormalizarTelefono(string? valor) =>
+            string.IsNullOrWhiteSpace(valor) ? null : valor.Trim();
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
@@ -854,27 +1643,84 @@
             Nombrerazonsocial = Nombrerazonsocial?.Trim();
             Direccion = Direccion?.Trim();
             Correo = Correo?.Trim();
-            Telefonoconvencional = Telefonoconvencional?.Trim();
-            Celular = Celular?.Trim();
+            Telefonoconvencional = NormalizarTelefono(Telefonoconvencional);
+            Celular = NormalizarTelefono(Celular);
             Observaciones = Observaciones?.Trim();
             Oblgconta = Oblgconta?.Trim().ToUpperInvariant();
 
             if (TipoCliente <= 0)
                 yield break;
 
-            var identificacion = Tipoidentificacion.HasValue
-                ? Parent?.identificaciones.FirstOrDefault(x => x.Id == Tipoidentificacion.Value)
-                : null;
-            var esAlfanumerica = EsIdentificacionAlfanumerica(identificacion);
+            bool esDocumentoAlfanumerico = false;
+            bool esCedula = false;
+            bool esRuc = false;
+            if (Parent != null && Tipoidentificacion.HasValue)
+            {
+                var match = Parent.identificaciones.FirstOrDefault(x => x.Id == Tipoidentificacion.Value);
+                if (match != null)
+                {
+                    esDocumentoAlfanumerico = string.Equals(match.Codigo, "06", StringComparison.OrdinalIgnoreCase) ||
+                                               string.Equals(match.Codigo, "08", StringComparison.OrdinalIgnoreCase) ||
+                                               match.Descripcion.Contains("pasaporte", StringComparison.OrdinalIgnoreCase) ||
+                                               match.Descripcion.Contains("exterior", StringComparison.OrdinalIgnoreCase);
+                    esCedula = string.Equals(match.Codigo, "05", StringComparison.OrdinalIgnoreCase) ||
+                               match.Descripcion.Contains("cedula", StringComparison.OrdinalIgnoreCase) ||
+                               match.Descripcion.Contains("cédula", StringComparison.OrdinalIgnoreCase);
+                    esRuc = string.Equals(match.Codigo, "04", StringComparison.OrdinalIgnoreCase) ||
+                            match.Descripcion.Contains("RUC", StringComparison.OrdinalIgnoreCase);
+                }
+            }
 
-            if (!string.IsNullOrWhiteSpace(Numeroidentificacion) &&
-                !(esAlfanumerica ? Numeroidentificacion.All(char.IsLetterOrDigit) : Numeroidentificacion.All(char.IsDigit)))
+            if (!string.IsNullOrWhiteSpace(Numeroidentificacion) && Numeroidentificacion.All(char.IsDigit))
+            {
+                if (esCedula && Numeroidentificacion.Length == 9)
+                {
+                    Numeroidentificacion = "0" + Numeroidentificacion;
+                }
+                else if (esRuc && Numeroidentificacion.Length == 12)
+                {
+                    Numeroidentificacion = "0" + Numeroidentificacion;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(Numeroidentificacion))
             {
                 yield return new ValidationResult(
-                    esAlfanumerica
-                        ? "La identificación solo puede contener letras y números."
-                        : "La identificación solo debe contener números.",
+                    "El número de identificación es obligatorio.",
                     new[] { nameof(Numeroidentificacion) });
+            }
+            else
+            {
+                if (esDocumentoAlfanumerico)
+                {
+                    if (!Numeroidentificacion.All(char.IsLetterOrDigit))
+                    {
+                        yield return new ValidationResult(
+                            "La identificación solo puede contener letras y números.",
+                            new[] { nameof(Numeroidentificacion) });
+                    }
+                    if (Numeroidentificacion.Length < 3 || Numeroidentificacion.Length > 20)
+                    {
+                        yield return new ValidationResult(
+                            "La identificación debe tener entre 3 y 20 caracteres.",
+                            new[] { nameof(Numeroidentificacion) });
+                    }
+                }
+                else
+                {
+                    if (!Numeroidentificacion.All(char.IsDigit))
+                    {
+                        yield return new ValidationResult(
+                            "La identificación solo debe contener números.",
+                            new[] { nameof(Numeroidentificacion) });
+                    }
+                    if (Numeroidentificacion.Length < 10 || Numeroidentificacion.Length > 13)
+                    {
+                        yield return new ValidationResult(
+                            "La identificación debe tener entre 10 y 13 dígitos.",
+                            new[] { nameof(Numeroidentificacion) });
+                    }
+                }
             }
 
             foreach (var correoAdicional in CorreosAdicionales.Where(correo => !string.IsNullOrWhiteSpace(correo)))
@@ -919,7 +1765,7 @@
                 else if (!TieneDosPalabras(Apellidos))
                 {
                     yield return new ValidationResult(
-                        "Debe ingresar sus dos apellidos en el mismo campo (ej: Pérez López).",
+                        "Debe ingresar al menos un apellido.",
                         new[] { nameof(Apellidos) });
                 }
 
@@ -932,12 +1778,19 @@
                 else if (!TieneDosPalabras(Nombres))
                 {
                     yield return new ValidationResult(
-                        "Debe ingresar sus dos nombres en el mismo campo (ej: Juan Carlos).",
+                        "Debe ingresar al menos un nombre.",
                         new[] { nameof(Nombres) });
                 }
             }
             else
             {
+                if (string.IsNullOrWhiteSpace(Nombrecomercial))
+                {
+                    yield return new ValidationResult(
+                        "El nombre comercial es obligatorio para persona jurídica.",
+                        new[] { nameof(Nombrecomercial) });
+                }
+
                 if (string.IsNullOrWhiteSpace(Nombrerazonsocial))
                 {
                     yield return new ValidationResult(
@@ -945,13 +1798,8 @@
                         new[] { nameof(Nombrerazonsocial) });
                 }
 
-                if (string.IsNullOrWhiteSpace(Nombrecomercial))
-                {
-                    yield return new ValidationResult(
-                        "El nombre comercial es obligatorio para persona jurídica.",
-                        new[] { nameof(Nombrecomercial) });
-                }
             }
+
         }
 
         private bool EsTextoPersona()
@@ -987,10 +1835,17 @@
         }
     }
 
-    private static bool TieneDosPalabras(string texto)
+    private static bool TieneDosPalabras(string texto) =>
+        !string.IsNullOrWhiteSpace(texto);
+
+    private static string GetTipoClienteEtiqueta(TipoClienteDto tipo) =>
+        GetTipoClienteEtiqueta(tipo.Descripcion);
+
+    private static string GetTipoClienteEtiqueta(string? descripcion)
     {
-        return !string.IsNullOrWhiteSpace(texto);
+        return TipoClienteClasificacion.ObtenerEtiqueta(descripcion);
     }
+
     private List<IdentificacionDto> identificaciones = new();
     private class IdentificacionDto
     {
@@ -1024,6 +1879,31 @@
         {
             model.CorreosAdicionales.RemoveAt(index);
         }
+    }
+
+    private void OnEsClienteChanged(ChangeEventArgs e)
+    {
+        model.EsCliente = e.Value is bool value ? value : string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        if (!model.EsCliente && !model.EsProveedor)
+            model.EsCliente = true;
+    }
+
+    private void OnEsProveedorChanged(ChangeEventArgs e)
+    {
+        model.EsProveedor = e.Value is bool value ? value : string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        if (model.EsProveedor)
+        {
+            AsegurarDatosProveedorPorDefecto();
+        }
+        else
+        {
+            model.RegistraInformacionBancariaProveedor = false;
+        }
+    }
+
+    private void OnRegistraInformacionBancariaProveedorChanged(ChangeEventArgs e)
+    {
+        model.RegistraInformacionBancariaProveedor = e.Value is bool value ? value : string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
     private List<PaisLookupDto> paises = new();
@@ -1066,35 +1946,56 @@
     private List<ClienteDto> clientes = new();
     private bool cargando = true;
     private string? mensaje;
+    private string? mensajeFormulario;
+    private string? debugErrorFormulario;
+    private bool mensajeFormularioEsError;
     private string? mensajeConsultaCedula;
     private string? debugError;
     private string dbName = "-";
+    private EmisionEstado? emisionEstado;
     private ClienteUpsertDto model = new();
     private bool editando = false;
-    private bool mostrarFormulario = false;
     private bool estadoAux = true;
+    private bool guardandoCliente;
+    private bool prefillFacturaAplicado;
     private bool consultandoCedula;
     private bool consultaCedulaEsError;
     private string? ultimaCedulaConsultada;
     private CancellationTokenSource? consultaCedulaCts;
     private List<TipoClienteDto> tiposCliente = new();
+    private bool EsModoCrudEmbebido => OnClienteGuardado.HasDelegate;
+    private bool PuedeGuardarCliente =>
+        !isDemoMode &&
+        model.TipoCliente > 0 &&
+        model.Tipoidentificacion.HasValue &&
+        model.Tipoidentificacion.Value > 0 &&
+        !string.IsNullOrWhiteSpace(model.Numeroidentificacion) &&
+        !string.IsNullOrWhiteSpace(model.Correo) &&
+        (!DebeMostrarObligadoContabilidad || !string.IsNullOrWhiteSpace(model.Oblgconta)) &&
+        (EsEmpresaSeleccionada
+            ? !string.IsNullOrWhiteSpace(model.Nombrecomercial) && !string.IsNullOrWhiteSpace(model.Nombrerazonsocial)
+            : !string.IsNullOrWhiteSpace(model.Apellidos) && !string.IsNullOrWhiteSpace(model.Nombres));
+    private bool MostrarVolverInicioOnboarding =>
+        !isDemoMode &&
+        (EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
+        model.Parent = this;
+        isDemoMode = EsRutaDemoClientes();
 
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
-
-        if (!await ValidarAccesoEContaxAsync(user))
+        if (isDemoMode)
         {
-            cargando = false;
+            CargarDemoClientes();
             await InvokeAsync(StateHasChanged);
             return;
         }
 
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
         usuarioLogueadoId = ObtenerIdUsuario(user);
-        accionesPermitidas = await SeguridadEContax.GetAccionesRutaAsync(usuarioLogueadoId, EContaxRoutes.Clientes);
 
         if (usuarioLogueadoId <= 0)
         {
@@ -1105,6 +2006,7 @@
         }
 
         await CargarTodo();
+        await AplicarClientePrefillFacturaAsync();
     }
 
     private async Task CargarLookupsClientes()
@@ -1130,6 +2032,13 @@
                     tiposCliente.Add(new TipoClienteDto { TclCodigo = codigo, Descripcion = desc });
                 }
             }
+
+            tiposCliente = tiposCliente
+                .Where(tipo => EsDescripcionPersonaNatural(tipo.Descripcion) || EsDescripcionEmpresa(tipo.Descripcion))
+                .GroupBy(GetTipoClienteEtiqueta, StringComparer.OrdinalIgnoreCase)
+                .Select(grupo => grupo.First())
+                .OrderBy(tipo => EsDescripcionEmpresa(tipo.Descripcion) ? 2 : 1)
+                .ToList();
 
             paises = new();
             if (doc.RootElement.TryGetProperty("paises", out var paisesElem) &&
@@ -1169,40 +2078,6 @@
         }
     }
 
-    private async Task<bool> ValidarAccesoEContaxAsync(ClaimsPrincipal user)
-    {
-        if (!IsEContaxPath(NavManager.Uri))
-            return true;
-
-        if (user.Identity?.IsAuthenticated != true)
-        {
-            NavManager.NavigateTo("/login", forceLoad: true);
-            return false;
-        }
-
-        var userId = ObtenerIdUsuario(user);
-        if (userId <= 0)
-        {
-            NavManager.NavigateTo("/login", forceLoad: true);
-            return false;
-        }
-
-        var isSuperAdmin = string.Equals(
-            user.FindFirst("IdTipoUsuario")?.Value,
-            AppAccessService.AdminRoleId,
-            StringComparison.OrdinalIgnoreCase);
-
-        var access = await AppAccessService.CanAccessAsync(userId, EContaxRoutes.ServiceKey, isSuperAdmin);
-        if (!access.HasAccess)
-        {
-            NavManager.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", forceLoad: true);
-            return false;
-        }
-
-        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
-        return true;
-    }
-
     private static int ObtenerIdUsuario(ClaimsPrincipal user)
     {
         var id = user.FindFirst("IdUsuario")?.Value
@@ -1210,8 +2085,6 @@
 
         return int.TryParse(id, out var userId) ? userId : 0;
     }
-
-    private bool IsEContaxPath(string location) => EContaxRoutes.IsEContaxPath(NavManager, location);
 
     private async Task CargarPaises()
     {
@@ -1466,6 +2339,15 @@
 
     private async Task CargarTodo(bool esRefresco = false)
     {
+        if (isDemoMode)
+        {
+            CargarDemoClientes();
+            if (esRefresco)
+                mensaje = "Datos demo recargados correctamente.";
+            StateHasChanged();
+            return;
+        }
+
         cargando = true;
         mensaje = null;
         debugError = null;
@@ -1491,7 +2373,10 @@
 
             clientes = data ?? new();
 
+            await CargarUltimasFacturasClientes();
             await PrepararLookupsUbicacionParaListado();
+            await EmisorOnboardingService.RefreshRequirementAsync(usuarioLogueadoId);
+            emisionEstado = await EmisionControlService.ObtenerEstadoAsync(usuarioLogueadoId);
 
             if (esRefresco) mensaje = "Datos actualizados correctamente.";
             dbName = $"API ({Http.BaseAddress})";
@@ -1505,6 +2390,69 @@
         {
             cargando = false;
             StateHasChanged();
+        }
+    }
+
+    private async Task CargarUltimasFacturasClientes()
+    {
+        var ids = clientes.Select(c => c.Codcliente).Where(id => id > 0).Distinct().ToList();
+        if (ids.Count == 0 || usuarioLogueadoId <= 0)
+            return;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var fechas = await context.Facturas
+            .AsNoTracking()
+            .Where(f => f.Idusuario == usuarioLogueadoId &&
+                        f.Codclientes.HasValue &&
+                        ids.Contains(f.Codclientes.Value))
+            .Select(f => new
+            {
+                ClienteId = f.Codclientes!.Value,
+                Fecha = f.Fchautorizacion ?? f.Fechaentrega
+            })
+            .ToListAsync();
+
+        var ultimas = fechas
+            .Where(x => x.Fecha.HasValue)
+            .GroupBy(x => x.ClienteId)
+            .ToDictionary(g => g.Key, g => g.Max(x => x.Fecha));
+
+        foreach (var cliente in clientes)
+            cliente.UltimaFactura = ultimas.GetValueOrDefault(cliente.Codcliente);
+
+        var facturasEmitidas = await context.Facturas
+            .AsNoTracking()
+            .Where(f => f.Idusuario == usuarioLogueadoId &&
+                        f.Codclientes.HasValue &&
+                        ids.Contains(f.Codclientes.Value))
+            .GroupBy(f => f.Codclientes!.Value)
+            .Select(g => new { ClienteId = g.Key, Total = g.Count() })
+            .ToDictionaryAsync(x => x.ClienteId, x => x.Total);
+
+        var saldosPendientes = await context.Facturas
+            .AsNoTracking()
+            .Where(f => f.Idusuario == usuarioLogueadoId &&
+                        f.Codclientes.HasValue &&
+                        ids.Contains(f.Codclientes.Value) &&
+                        f.Tipopago == "19")
+            .Select(f => new
+            {
+                ClienteId = f.Codclientes!.Value,
+                SaldoPendiente = (f.Valortotal ?? 0m) - (
+                    context.Abonos
+                        .Where(a => a.codFactura == f.Codfactura && a.estado == true)
+                        .Sum(a => (decimal?)a.abono) ?? 0m)
+            })
+            .ToListAsync();
+
+        var saldoPorCliente = saldosPendientes
+            .GroupBy(x => x.ClienteId)
+            .ToDictionary(g => g.Key, g => Math.Round(g.Sum(x => Math.Max(x.SaldoPendiente, 0m)), 2));
+
+        foreach (var cliente in clientes)
+        {
+            cliente.FacturasEmitidas = facturasEmitidas.GetValueOrDefault(cliente.Codcliente);
+            cliente.SaldoPendiente = saldoPorCliente.GetValueOrDefault(cliente.Codcliente);
         }
     }
 
@@ -1550,6 +2498,16 @@
     {
         var nuevoValor = int.TryParse(e.Value?.ToString(), out var valor) ? valor : 10;
         registrosPorPagina = opcionesRegistrosPorPagina.Contains(nuevoValor) ? nuevoValor : 10;
+        paginaActual = 1;
+    }
+
+    private void AlternarPanelFiltros() => mostrarPanelFiltros = !mostrarPanelFiltros;
+
+    private void LimpiarFiltros()
+    {
+        filtro = string.Empty;
+        filtroTipoCliente = 0;
+        registrosPorPagina = 10;
         paginaActual = 1;
     }
 
@@ -1659,16 +2617,25 @@
     private string GetTipoClienteDescripcion(int tipoCliente)
     {
         if (tipoCliente <= 0) return "Sin tipo de cliente";
-        var descripcion = tiposCliente.FirstOrDefault(t => t.TclCodigo == tipoCliente)?.Descripcion;
-        return string.IsNullOrWhiteSpace(descripcion)
-            ? $"Tipo #{tipoCliente}"
-            : TipoClienteClasificacion.ObtenerEtiqueta(descripcion);
+        var tipo = tiposCliente.FirstOrDefault(t => t.TclCodigo == tipoCliente);
+        return tipo is null ? $"Tipo #{tipoCliente}" : GetTipoClienteEtiqueta(tipo);
     }
 
     private string GetTipoIdentificacionDescripcion(int? tipoIdentificacion)
     {
         if (!tipoIdentificacion.HasValue) return "Sin identificación";
         return identificaciones.FirstOrDefault(i => i.Id == tipoIdentificacion.Value)?.Descripcion ?? $"Identificación #{tipoIdentificacion.Value}";
+    }
+
+    private async Task AbrirBotAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("numericaUi.openAsistenteFacturacion");
+        }
+        catch
+        {
+        }
     }
 
     private static string GetEstadoDescripcion(bool? estado) => estado == true ? "Activo" : "Inactivo";
@@ -1717,26 +2684,769 @@
         return ciudades.FirstOrDefault(x => x.IdCiudad == id)?.Descripcion ?? $"Ciudad#{id}";
     }
 
-    private void CerrarFormulario()
+    private void AbrirNuevoClienteModal()
     {
-        mostrarFormulario = false;
-        mensaje = null;
-        debugError = null;
+        Nuevo();
+        mensajeFormulario = null;
+        debugErrorFormulario = null;
+        mensajeFormularioEsError = false;
+        mostrarModalFormularioCliente = true;
     }
 
-    private void LimpiarFiltros()
+    private void CerrarModalFormularioCliente()
     {
-        filtro = string.Empty;
-        filtroTipoCliente = 0;
-        registrosPorPagina = 10;
-        paginaActual = 1;
+        mostrarModalFormularioCliente = false;
+        mensajeFormulario = null;
+        debugErrorFormulario = null;
+        mensajeFormularioEsError = false;
     }
+
+    private void AbrirImportacion()
+    {
+        mostrarImportacion = true;
+        importandoClientes = false;
+        mensajeImportacion = null;
+        erroresImportacion = 0;
+        listaErroresImportacion.Clear();
+    }
+
+    private void CerrarImportacion()
+    {
+        mostrarImportacion = false;
+        mensajeImportacion = null;
+        erroresImportacion = 0;
+        listaErroresImportacion.Clear();
+    }
+
+    private async Task DescargarModeloImportacionAsync()
+    {
+        var data = new[]
+        {
+            new
+            {
+                TipoCliente = "Juridica",
+                TipoIdentificacion = "RUC",
+                Identificacion = "1790011223001",
+                NombreRazonSocial = "Simetric Software S.A.",
+                NombreComercial = "Simetric",
+                Apellidos = "",
+                Nombres = "",
+                Correo = "info@simetric.com",
+                Celular = "0991234567",
+                Telefono = "022123456",
+                Direccion = "Av. Amazonas N21-12",
+                ObligadoContabilidad = "SI",
+                DiasCredito = 30,
+                Pais = "Ecuador",
+                Provincia = "Pichincha",
+                Ciudad = "Quito",
+                Observaciones = "Cliente corporativo"
+            },
+            new
+            {
+                TipoCliente = "Natural",
+                TipoIdentificacion = "Cedula",
+                Identificacion = "1723456789",
+                NombreRazonSocial = "",
+                NombreComercial = "",
+                Apellidos = "Perez Castro",
+                Nombres = "Juan Andres",
+                Correo = "juan@gmail.com",
+                Celular = "0987654321",
+                Telefono = "022765432",
+                Direccion = "Calle Los Tulipanes N32",
+                ObligadoContabilidad = "NO",
+                DiasCredito = 0,
+                Pais = "Ecuador",
+                Provincia = "Pichincha",
+                Ciudad = "Quito",
+                Observaciones = "Cliente frecuente"
+            }
+        };
+
+        using var stream = new MemoryStream();
+        stream.SaveAs(data);
+        stream.Position = 0;
+
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync(
+            "downloadFileFromStream",
+            "Modelo_importacion_clientes.xlsx",
+            streamRef,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    }
+
+    private async Task ExportarClientesExcelAsync()
+    {
+        var dataList = new List<object>();
+
+        foreach (var c in ClientesFiltrados)
+        {
+            var tipoClienteDesc = tiposCliente.FirstOrDefault(t => t.TclCodigo == c.TipoCliente)?.Descripcion ?? "Natural";
+            var tipoClienteStr = TipoClienteClasificacion.EsJuridica(tipoClienteDesc) ? "Juridica" : "Natural";
+
+            var tipoIdentificacionStr = identificaciones.FirstOrDefault(x => x.Id == c.Tipoidentificacion)?.Descripcion ?? (c.Tipoidentificacion == 1 ? "Cedula" : "RUC");
+
+            var identificacion = c.Numeroidentificacion ?? string.Empty;
+            var razonSocial = c.Nombrerazonsocial ?? string.Empty;
+            var nombreComercial = c.Nombrecomercial ?? string.Empty;
+            var apellidos = c.Apellidos ?? string.Empty;
+            var nombres = c.Nombres ?? string.Empty;
+            var correo = c.Correo ?? string.Empty;
+            var celular = c.Celular ?? string.Empty;
+            var telefono = c.Telefonoconvencional ?? string.Empty;
+            var direccion = c.Direccion ?? string.Empty;
+            var oblgConta = c.Oblgconta ?? "NO";
+            var diasCredito = c.DiasCredito ?? 0;
+
+            var pais = c.Pais.HasValue
+                ? paises.FirstOrDefault(p => p.IdPais == c.Pais.Value)?.Descripcion ?? string.Empty
+                : string.Empty;
+
+            var provincia = c.Provincia.HasValue
+                ? provincias.FirstOrDefault(p => p.IdProvincia == c.Provincia.Value)?.Descripcion ?? string.Empty
+                : string.Empty;
+
+            var ciudad = c.Ciudad.HasValue
+                ? ciudades.FirstOrDefault(x => x.IdCiudad == c.Ciudad.Value)?.Descripcion ?? string.Empty
+                : string.Empty;
+
+            var observaciones = c.Observaciones ?? string.Empty;
+
+            dataList.Add(new
+            {
+                TipoCliente = tipoClienteStr,
+                TipoIdentificacion = tipoIdentificacionStr,
+                Identificacion = identificacion,
+                NombreRazonSocial = razonSocial,
+                NombreComercial = nombreComercial,
+                Apellidos = apellidos,
+                Nombres = nombres,
+                Correo = correo,
+                Celular = celular,
+                Telefono = telefono,
+                Direccion = direccion,
+                ObligadoContabilidad = oblgConta,
+                DiasCredito = diasCredito,
+                Pais = pais,
+                Provincia = provincia,
+                Ciudad = ciudad,
+                Observaciones = observaciones
+            });
+        }
+
+        using var stream = new MemoryStream();
+        stream.SaveAs(dataList);
+        stream.Position = 0;
+
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync(
+            "downloadFileFromStream",
+            $"Clientes_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+            streamRef,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+    }
+
+
+    private async Task ImportarClientesAsync(InputFileChangeEventArgs e)
+    {
+        if (isDemoMode)
+        {
+            mensajeImportacion = "La importación está bloqueada en modo demo.";
+            erroresImportacion = 1;
+            await JS.ShowAlertAsync("Acción bloqueada", "La importación está bloqueada en modo demo.", "warning");
+            return;
+        }
+
+        var archivo = e.File;
+        if (archivo is null)
+            return;
+
+        var extension = Path.GetExtension(archivo.Name).ToLowerInvariant();
+        if (extension != ".csv" && extension != ".xlsx")
+        {
+            mensajeImportacion = "Por favor, selecciona un archivo en formato .xlsx o .csv.";
+            erroresImportacion = 1;
+            await JS.ShowAlertAsync("Formato no válido", "Por favor, selecciona un archivo en formato .xlsx o .csv.", "warning");
+            return;
+        }
+
+        const long maxSize = 4 * 1024 * 1024;
+        if (archivo.Size > maxSize)
+        {
+            mensajeImportacion = "El archivo supera el máximo permitido de 4 MB.";
+            erroresImportacion = 1;
+            await JS.ShowAlertAsync("Archivo muy grande", "El archivo supera el máximo permitido de 4 MB.", "warning");
+            return;
+        }
+
+        importandoClientes = true;
+        erroresImportacion = 0;
+        mensajeImportacion = "Procesando archivo...";
+        StateHasChanged();
+
+        try
+        {
+            var dtoList = new List<ClienteUpsertDto>();
+            var errores = new List<string>();
+            var filaOffset = 2; // Fila real en Excel
+
+            if (extension == ".xlsx")
+            {
+                using var stream = archivo.OpenReadStream(maxSize);
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                ms.Position = 0;
+
+                var rows = MiniExcelLibs.MiniExcel.Query(ms, useHeaderRow: false).Cast<IDictionary<string, object>>().ToList();
+
+                if (rows.Count < 2)
+                {
+                    mensajeImportacion = "El archivo no contiene clientes para importar.";
+                    erroresImportacion = 1;
+                    importandoClientes = false;
+                    await JS.ShowAlertAsync("Archivo vacío", "El archivo no contiene clientes para importar.", "warning");
+                    return;
+                }
+
+                for (int index = 1; index < rows.Count; index++)
+                {
+                    var row = rows[index];
+                    if (row == null || row.Values.All(v => v == null || string.IsNullOrWhiteSpace(v.ToString())))
+                        continue;
+
+                    var fila = index + 1; // Fila real en Excel
+
+                    // Columns: A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9, K=10, L=11, M=12, N=13, O=14, P=15, Q=16
+                    var tipoClienteText = ExcelCampo(row, "A");
+                    var tipoIdentificacionText = ExcelCampo(row, "B");
+                    var identificacion = ExcelCampo(row, "C");
+                    var razonSocial = ExcelCampo(row, "D");
+                    var nombreComercial = ExcelCampo(row, "E");
+                    var apellidos = ExcelCampo(row, "F");
+                    var nombres = ExcelCampo(row, "G");
+                    var correo = ExcelCampo(row, "H");
+                    var celular = ExcelCampo(row, "I");
+                    var telefono = ExcelCampo(row, "J");
+                    var direccion = ExcelCampo(row, "K");
+                    var oblgConta = ExcelCampo(row, "L").Trim().ToUpperInvariant();
+                    if (string.IsNullOrWhiteSpace(oblgConta) || oblgConta == "0" || oblgConta == "NO")
+                    {
+                        oblgConta = "NO";
+                    }
+                    else if (oblgConta == "1" || oblgConta == "SI" || oblgConta == "S")
+                    {
+                        oblgConta = "SI";
+                    }
+                    else
+                    {
+                        oblgConta = "NO";
+                    }
+
+                    // Validaciones iniciales
+                    if (string.IsNullOrWhiteSpace(tipoClienteText) ||
+                        string.IsNullOrWhiteSpace(tipoIdentificacionText) ||
+                        string.IsNullOrWhiteSpace(identificacion) ||
+                        string.IsNullOrWhiteSpace(correo) ||
+                        string.IsNullOrWhiteSpace(oblgConta))
+                    {
+                        errores.Add($"Fila {fila}: Faltan campos obligatorios (Tipo de cliente, Tipo de identificación, Identificación, Correo, o Llevar contabilidad) en las columnas del registro.");
+                        continue;
+                    }
+
+                    // Map TipoCliente (Natural o Jurídica)
+                    int tipoClienteId = 0;
+                    var tcTextLower = RemoveAccents(tipoClienteText).ToLowerInvariant();
+                    if (tcTextLower.Contains("jurid") || tcTextLower.Contains("empresa"))
+                    {
+                        tipoClienteId = tiposCliente.FirstOrDefault(x => TipoClienteClasificacion.EsJuridica(x.Descripcion))?.TclCodigo ?? 2;
+                    }
+                    else if (tcTextLower.Contains("natur") || tcTextLower.Contains("person"))
+                    {
+                        tipoClienteId = tiposCliente.FirstOrDefault(x => !TipoClienteClasificacion.EsJuridica(x.Descripcion))?.TclCodigo ?? 1;
+                    }
+
+                    if (tipoClienteId <= 0)
+                    {
+                        errores.Add($"Fila {fila}: Tipo de cliente '{tipoClienteText}' no válido (debe ser Natural o Juridica).");
+                        continue;
+                    }
+
+                    // Map TipoIdentificacion
+                    var tidTextLower = RemoveAccents(tipoIdentificacionText).ToLowerInvariant();
+                    int? tipoIdentificacionId = null;
+                    var matchTid = identificaciones.FirstOrDefault(x =>
+                        RemoveAccents(x.Descripcion).Contains(tidTextLower, StringComparison.OrdinalIgnoreCase) ||
+                        x.Codigo.Contains(tidTextLower, StringComparison.OrdinalIgnoreCase)
+                    );
+                    if (matchTid != null)
+                    {
+                        tipoIdentificacionId = matchTid.Id;
+                    }
+                    else
+                    {
+                        matchTid = identificaciones.FirstOrDefault(x =>
+                            tidTextLower.Contains(RemoveAccents(x.Descripcion).ToLowerInvariant()) ||
+                            tidTextLower.Contains(x.Codigo.ToLowerInvariant())
+                        );
+                        if (matchTid != null)
+                        {
+                            tipoIdentificacionId = matchTid.Id;
+                        }
+                    }
+
+                    if (!tipoIdentificacionId.HasValue)
+                    {
+                        errores.Add($"Fila {fila}: Tipo de identificación '{tipoIdentificacionText}' no válido (debe ser Cedula o RUC).");
+                        continue;
+                    }
+
+                    // Map OblgConta (SI/NO)
+                    if (oblgConta != "SI" && oblgConta != "NO")
+                    {
+                        errores.Add($"Fila {fila}: Llevar contabilidad '{oblgConta}' no válido (debe ser SI o NO).");
+                        continue;
+                    }
+
+                    // Map Ubicación (País, Provincia, Ciudad)
+                    var paisText = ExcelCampo(row, "N");
+                    var provinciaText = ExcelCampo(row, "O");
+                    var ciudadText = ExcelCampo(row, "P");
+
+                    int? paisId = ecuadorPaisId;
+                    if (!string.IsNullOrWhiteSpace(paisText))
+                    {
+                        var matchPais = paises.FirstOrDefault(x => CompararSinTildesNiCaja(x.Descripcion, paisText));
+                        if (matchPais != null) paisId = matchPais.IdPais;
+                    }
+
+                    int? provinciaId = null;
+                    if (!string.IsNullOrWhiteSpace(provinciaText) && paisId == ecuadorPaisId)
+                    {
+                        var matchProv = provincias.FirstOrDefault(x => CompararSinTildesNiCaja(x.Descripcion, provinciaText));
+                        if (matchProv != null) provinciaId = matchProv.IdProvincia;
+                    }
+
+                    int? ciudadId = null;
+                    if (!string.IsNullOrWhiteSpace(ciudadText) && provinciaId.HasValue)
+                    {
+                        var matchCiudad = ciudades.FirstOrDefault(x => x.IdProvincia == provinciaId.Value && CompararSinTildesNiCaja(x.Descripcion, ciudadText));
+                        if (matchCiudad != null) ciudadId = matchCiudad.IdCiudad;
+                    }
+
+                    var diasCreditoStr = ExcelCampo(row, "M");
+                    int? diasCredito = null;
+                    if (!string.IsNullOrWhiteSpace(diasCreditoStr) && int.TryParse(diasCreditoStr, out var dcVal))
+                    {
+                        diasCredito = dcVal;
+                    }
+
+                    var obs = ExcelCampo(row, "Q");
+
+                    var dto = new ClienteUpsertDto
+                    {
+                        TipoCliente = tipoClienteId,
+                        Tipoidentificacion = tipoIdentificacionId,
+                        Numeroidentificacion = identificacion,
+                        Nombrerazonsocial = razonSocial,
+                        Nombrecomercial = nombreComercial,
+                        Apellidos = apellidos,
+                        Nombres = nombres,
+                        Correo = correo,
+                        Celular = celular,
+                        Telefonoconvencional = telefono,
+                        Direccion = direccion,
+                        Oblgconta = oblgConta,
+                        DiasCredito = diasCredito,
+                        Pais = paisId,
+                        Provincia = provinciaId,
+                        Ciudad = ciudadId,
+                        Observaciones = obs,
+                        Estado = true
+                    };
+
+                    dtoList.Add(dto);
+                }
+            }
+            else // CSV
+            {
+                using var stream = archivo.OpenReadStream(maxSize);
+                using var reader = new StreamReader(stream, Encoding.UTF8, true);
+                var contenido = await reader.ReadToEndAsync();
+                var lineas = contenido.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+                if (lineas.Length < 2)
+                {
+                    mensajeImportacion = "El archivo no contiene clientes para importar.";
+                    erroresImportacion = 1;
+                    importandoClientes = false;
+                    await JS.ShowAlertAsync("Archivo vacío", "El archivo no contiene clientes para importar.", "warning");
+                    return;
+                }
+
+                for (int index = 1; index < lineas.Length; index++)
+                {
+                    var campos = SepararCsv(lineas[index]);
+                    if (campos.All(string.IsNullOrWhiteSpace))
+                        continue;
+
+                    var fila = index - 1 + filaOffset;
+
+                    if (campos.Count < 12)
+                    {
+                        errores.Add($"Fila {fila}: faltan columnas en la estructura. Debe incluir TipoCliente, TipoIdentificacion, Identificacion, Celular, Telefono, Direccion, Correo y ObligadoContabilidad; los teléfonos pueden estar vacíos.");
+                        continue;
+                    }
+
+                    var tipoClienteText = Campo(campos, 0).Trim();
+                    var tipoIdentificacionText = Campo(campos, 1).Trim();
+                    var identificacion = Campo(campos, 2).Trim();
+                    var razonSocial = Campo(campos, 3).Trim();
+                    var nombreComercial = Campo(campos, 4).Trim();
+                    var apellidos = Campo(campos, 5).Trim();
+                    var nombres = Campo(campos, 6).Trim();
+                    var correo = Campo(campos, 7).Trim();
+                    var celular = Campo(campos, 8).Trim();
+                    var telefono = Campo(campos, 9).Trim();
+                    var direccion = Campo(campos, 10).Trim();
+                    var oblgConta = Campo(campos, 11).Trim().ToUpperInvariant();
+                    if (string.IsNullOrWhiteSpace(oblgConta) || oblgConta == "0" || oblgConta == "NO")
+                    {
+                        oblgConta = "NO";
+                    }
+                    else if (oblgConta == "1" || oblgConta == "SI" || oblgConta == "S")
+                    {
+                        oblgConta = "SI";
+                    }
+                    else
+                    {
+                        oblgConta = "NO";
+                    }
+
+                    // Validaciones iniciales
+                    if (string.IsNullOrWhiteSpace(tipoClienteText) ||
+                        string.IsNullOrWhiteSpace(tipoIdentificacionText) ||
+                        string.IsNullOrWhiteSpace(identificacion) ||
+                        string.IsNullOrWhiteSpace(correo) ||
+                        string.IsNullOrWhiteSpace(oblgConta))
+                    {
+                        errores.Add($"Fila {fila}: Faltan campos obligatorios (Tipo de cliente, Tipo de identificación, Identificación, Correo, o Llevar contabilidad) en las columnas del registro.");
+                        continue;
+                    }
+
+                    // Map TipoCliente (Natural o Jurídica)
+                    int tipoClienteId = 0;
+                    var tcTextLower = RemoveAccents(tipoClienteText).ToLowerInvariant();
+                    if (tcTextLower.Contains("jurid") || tcTextLower.Contains("empresa"))
+                    {
+                        tipoClienteId = tiposCliente.FirstOrDefault(x => TipoClienteClasificacion.EsJuridica(x.Descripcion))?.TclCodigo ?? 2;
+                    }
+                    else if (tcTextLower.Contains("natur") || tcTextLower.Contains("person"))
+                    {
+                        tipoClienteId = tiposCliente.FirstOrDefault(x => !TipoClienteClasificacion.EsJuridica(x.Descripcion))?.TclCodigo ?? 1;
+                    }
+
+                    if (tipoClienteId <= 0)
+                    {
+                        errores.Add($"Fila {fila}: Tipo de cliente '{tipoClienteText}' no válido (debe ser Natural o Juridica).");
+                        continue;
+                    }
+
+                    // Map TipoIdentificacion
+                    var tidTextLower = RemoveAccents(tipoIdentificacionText).ToLowerInvariant();
+                    int? tipoIdentificacionId = null;
+                    var matchTid = identificaciones.FirstOrDefault(x =>
+                        RemoveAccents(x.Descripcion).Contains(tidTextLower, StringComparison.OrdinalIgnoreCase) ||
+                        x.Codigo.Contains(tidTextLower, StringComparison.OrdinalIgnoreCase)
+                    );
+                    if (matchTid != null)
+                    {
+                        tipoIdentificacionId = matchTid.Id;
+                    }
+                    else
+                    {
+                        matchTid = identificaciones.FirstOrDefault(x =>
+                            tidTextLower.Contains(RemoveAccents(x.Descripcion).ToLowerInvariant()) ||
+                            tidTextLower.Contains(x.Codigo.ToLowerInvariant())
+                        );
+                        if (matchTid != null)
+                        {
+                            tipoIdentificacionId = matchTid.Id;
+                        }
+                    }
+
+                    if (!tipoIdentificacionId.HasValue)
+                    {
+                        errores.Add($"Fila {fila}: Tipo de identificación '{tipoIdentificacionText}' no válido (debe ser Cedula o RUC).");
+                        continue;
+                    }
+
+                    // Map OblgConta (SI/NO)
+                    if (oblgConta != "SI" && oblgConta != "NO")
+                    {
+                        errores.Add($"Fila {fila}: Llevar contabilidad '{oblgConta}' no válido (debe ser SI o NO).");
+                        continue;
+                    }
+
+                    // Map Ubicación (País, Provincia, Ciudad)
+                    var paisText = Campo(campos, 13).Trim();
+                    var provinciaText = Campo(campos, 14).Trim();
+                    var ciudadText = Campo(campos, 15).Trim();
+
+                    int? paisId = ecuadorPaisId;
+                    if (!string.IsNullOrWhiteSpace(paisText))
+                    {
+                        var matchPais = paises.FirstOrDefault(x => CompararSinTildesNiCaja(x.Descripcion, paisText));
+                        if (matchPais != null) paisId = matchPais.IdPais;
+                    }
+
+                    int? provinciaId = null;
+                    if (!string.IsNullOrWhiteSpace(provinciaText) && paisId == ecuadorPaisId)
+                    {
+                        var matchProv = provincias.FirstOrDefault(x => CompararSinTildesNiCaja(x.Descripcion, provinciaText));
+                        if (matchProv != null) provinciaId = matchProv.IdProvincia;
+                    }
+
+                    int? ciudadId = null;
+                    if (!string.IsNullOrWhiteSpace(ciudadText) && provinciaId.HasValue)
+                    {
+                        var matchCiudad = ciudades.FirstOrDefault(x => x.IdProvincia == provinciaId.Value && CompararSinTildesNiCaja(x.Descripcion, ciudadText));
+                        if (matchCiudad != null) ciudadId = matchCiudad.IdCiudad;
+                    }
+
+                    var diasCreditoStr = Campo(campos, 12).Trim();
+                    int? diasCredito = null;
+                    if (!string.IsNullOrWhiteSpace(diasCreditoStr) && int.TryParse(diasCreditoStr, out var dcVal))
+                    {
+                        diasCredito = dcVal;
+                    }
+
+                    var obs = Campo(campos, 16).Trim();
+
+                    var dto = new ClienteUpsertDto
+                    {
+                        TipoCliente = tipoClienteId,
+                        Tipoidentificacion = tipoIdentificacionId,
+                        Numeroidentificacion = identificacion,
+                        Nombrerazonsocial = razonSocial,
+                        Nombrecomercial = nombreComercial,
+                        Apellidos = apellidos,
+                        Nombres = nombres,
+                        Correo = correo,
+                        Celular = celular,
+                        Telefonoconvencional = telefono,
+                        Direccion = direccion,
+                        Oblgconta = oblgConta,
+                        DiasCredito = diasCredito,
+                        Pais = paisId,
+                        Provincia = provinciaId,
+                        Ciudad = ciudadId,
+                        Observaciones = obs,
+                        Estado = true
+                    };
+
+                    dtoList.Add(dto);
+                }
+            }
+
+            var creados = 0;
+            if (dtoList.Any())
+            {
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
+                var respuesta = await Http.PostAsJsonAsync($"api/e-contax/clientes/bulk?userId={usuarioLogueadoId}", dtoList, cts.Token);
+                if (respuesta.IsSuccessStatusCode)
+                {
+                    var result = await respuesta.Content.ReadFromJsonAsync<BulkImportResult>(cancellationToken: cts.Token);
+                    if (result != null)
+                    {
+                        creados = result.Creados;
+                        errores.AddRange(result.Errores);
+                    }
+                }
+                else
+                {
+                    errores.Add($"Error en la carga masiva: {await respuesta.Content.ReadAsStringAsync()}");
+                }
+            }
+
+            erroresImportacion = errores.Count;
+            listaErroresImportacion = errores;
+            mensajeImportacion = errores.Count == 0
+                ? $"Importación completada: {creados} clientes creados."
+                : $"Se crearon {creados} clientes. {errores.Count} filas presentaron errores.";
+
+            if (errores.Count == 0)
+            {
+                await CargarTodo();
+                EmisionControlService.NotifyChanged();
+            }
+            else if (creados > 0)
+            {
+                await CargarTodo();
+                EmisionControlService.NotifyChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            erroresImportacion = 1;
+            mensajeImportacion = $"No se pudo importar el archivo: {ex.Message}";
+        }
+        finally
+        {
+            importandoClientes = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string CleanImportedExcelField(object? value)
+    {
+        if (value == null) return string.Empty;
+        if (value is double d)
+        {
+            return d.ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (value is decimal de)
+        {
+            return de.ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (value is float f)
+        {
+            return f.ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        var str = value.ToString() ?? string.Empty;
+        str = str.Trim();
+
+        // 1. If it's in scientific notation (e.g. 1.79E+12 or 1,79E+12)
+        if (str.Contains('E', StringComparison.OrdinalIgnoreCase))
+        {
+            var normalizedStr = str.Replace(',', '.');
+            if (double.TryParse(normalizedStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsedDouble))
+            {
+                return parsedDouble.ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        // 2. If it's a decimal number string (e.g. 1701042960.0 or 1701042960,0)
+        var normalizedDecimal = str.Replace(',', '.');
+        if (double.TryParse(normalizedDecimal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsedNum))
+        {
+            if (parsedNum % 1 == 0)
+            {
+                return parsedNum.ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        return str;
+    }
+
+    private static string ExcelCampo(IDictionary<string, object> row, string columnLetter)
+    {
+        if (row != null && row.TryGetValue(columnLetter, out var val))
+        {
+            return CleanImportedExcelField(val);
+        }
+        return string.Empty;
+    }
+
+    private static string RemoveAccents(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var normalizedString = text.Normalize(NormalizationForm.FormD);
+        var stringBuilder = new StringBuilder();
+
+        foreach (var c in normalizedString)
+        {
+            var unicodeCategory = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
+            if (unicodeCategory != System.Globalization.UnicodeCategory.NonSpacingMark)
+            {
+                stringBuilder.Append(c);
+            }
+        }
+
+        return stringBuilder.ToString().Normalize(NormalizationForm.FormC);
+    }
+
+    private static bool CompararSinTildesNiCaja(string? a, string? b)
+    {
+        if (a == null && b == null) return true;
+        if (a == null || b == null) return false;
+        var normA = RemoveAccents(a).Trim().ToLowerInvariant();
+        var normB = RemoveAccents(b).Trim().ToLowerInvariant();
+        return string.Equals(normA, normB);
+    }
+
+    private static List<string> SepararCsv(string linea)
+    {
+        var resultado = new List<string>();
+        var actual = new StringBuilder();
+        var entreComillas = false;
+
+        for (var i = 0; i < linea.Length; i++)
+        {
+            var caracter = linea[i];
+            if (caracter == '"')
+            {
+                if (entreComillas && i + 1 < linea.Length && linea[i + 1] == '"')
+                {
+                    actual.Append('"');
+                    i++;
+                }
+                else
+                {
+                    entreComillas = !entreComillas;
+                }
+            }
+            else if (caracter == ';' && !entreComillas)
+            {
+                resultado.Add(actual.ToString());
+                actual.Clear();
+            }
+            else
+            {
+                actual.Append(caracter);
+            }
+        }
+
+        resultado.Add(actual.ToString());
+        return resultado;
+    }
+
+    private static string CleanImportedField(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith("=\"") && trimmed.EndsWith("\""))
+        {
+            trimmed = trimmed.Substring(2, trimmed.Length - 3);
+        }
+        else if (trimmed.StartsWith("=") && !trimmed.Contains(";"))
+        {
+            trimmed = trimmed.Substring(1);
+            if (trimmed.StartsWith("\"") && trimmed.EndsWith("\""))
+            {
+                trimmed = trimmed.Substring(1, trimmed.Length - 2);
+            }
+        }
+        else if (trimmed.StartsWith("\"") && trimmed.EndsWith("\""))
+        {
+            trimmed = trimmed.Substring(1, trimmed.Length - 2);
+        }
+        return trimmed.Trim();
+    }
+
+    private static string Campo(IReadOnlyList<string> campos, int indice) =>
+        indice < campos.Count ? CleanImportedField(campos[indice]) : string.Empty;
 
     private void Nuevo()
+
     {
-        mostrarFormulario = true;
         editando = false;
         mensaje = null;
+        mensajeFormulario = null;
+        debugErrorFormulario = null;
+        mensajeFormularioEsError = false;
         clienteEnVista = null;
 
         model = new ClienteUpsertDto
@@ -1752,6 +3462,7 @@
             Telefonoconvencional = "",
             Celular = "",
             Correo = "",
+            DiasCredito = null,
             Oblgconta = "",
             TipoCliente = 0,
             Estado = true,
@@ -1772,9 +3483,104 @@
         StateHasChanged();
     }
 
+    private async Task AplicarClientePrefillFacturaAsync()
+    {
+        if (prefillFacturaAplicado || ClientePrefill is null)
+            return;
+
+        prefillFacturaAplicado = true;
+
+        _ = int.TryParse(ClientePrefill.Tipoidentificacion, out var tipoIdentificacion);
+
+        model = new ClienteUpsertDto
+        {
+            Parent = this,
+            Codcliente = 0,
+            Apellidos = ClientePrefill.Apellidos,
+            Nombres = ClientePrefill.Nombres,
+            Nombrecomercial = ClientePrefill.Nombrecomercial,
+            Nombrerazonsocial = ClientePrefill.Nombrerazonsocial,
+            Tipoidentificacion = tipoIdentificacion > 0 ? tipoIdentificacion : null,
+            Numeroidentificacion = ClientePrefill.Numeroidentificacion?.Trim() ?? string.Empty,
+            Direccion = ClientePrefill.Direccion?.Trim() ?? string.Empty,
+            Telefonoconvencional = ClientePrefill.Telefonoconvencional?.Trim() ?? string.Empty,
+            Celular = ClientePrefill.Celular?.Trim() ?? string.Empty,
+            Correo = ClientePrefill.Correo?.Trim() ?? string.Empty,
+            DiasCredito = ClientePrefill.DiasCredito,
+            Oblgconta = NormalizarObligadoContabilidad(ClientePrefill.Oblgconta),
+            TipoCliente = ClientePrefill.TipoCliente ?? 0,
+            Estado = ClientePrefill.Estado ?? true,
+            Observaciones = ClientePrefill.Observaciones?.Trim() ?? string.Empty,
+            Pais = ClientePrefill.Pais ?? ecuadorPaisId,
+            Provincia = ClientePrefill.Provincia,
+            Ciudad = ClientePrefill.Ciudad,
+            EsTipoEmpresa = EsTipoClienteEmpresa(ClientePrefill.TipoCliente ?? 0),
+            EsProveedor = ClientePrefill.Retenciones == true || ClientePrefill.Retiva == true || ClientePrefill.Retfuente == true
+        };
+
+        if (model.EsProveedor)
+            AsegurarDatosProveedorPorDefecto();
+
+        estadoAux = model.Estado ?? true;
+        ActualizarTipoClienteForm();
+        PrepararTipoContactoTelefonico();
+        formKey = Guid.NewGuid();
+
+        if (model.Pais.HasValue)
+            await CargarProvincias(model.Pais.Value);
+
+        if (model.Provincia.HasValue)
+            await CargarCiudades(model.Provincia.Value);
+
+        await InvokeAsync(StateHasChanged);
+    }
+
     private async Task Editar(int id)
     {
-        mostrarFormulario = true;
+        if (isDemoMode)
+        {
+            var itemDemo = clientes.FirstOrDefault(c => c.Codcliente == id);
+            if (itemDemo is null)
+                return;
+
+            model = new ClienteUpsertDto
+            {
+                Parent = this,
+                Codcliente = itemDemo.Codcliente,
+                Apellidos = itemDemo.Apellidos,
+                Nombres = itemDemo.Nombres,
+                Nombrecomercial = itemDemo.Nombrecomercial,
+                Nombrerazonsocial = itemDemo.Nombrerazonsocial,
+                Tipoidentificacion = itemDemo.Tipoidentificacion,
+                Numeroidentificacion = itemDemo.Numeroidentificacion,
+                Direccion = itemDemo.Direccion,
+                Telefonoconvencional = itemDemo.Telefonoconvencional,
+                Celular = itemDemo.Celular,
+                Correo = itemDemo.Correo,
+                DiasCredito = itemDemo.DiasCredito,
+                CorreosAdicionales = itemDemo.CorreosAdicionales.ToList(),
+                Oblgconta = NormalizarObligadoContabilidad(itemDemo.Oblgconta),
+                TipoCliente = itemDemo.TipoCliente,
+                Estado = itemDemo.Estado,
+                Observaciones = itemDemo.Observaciones,
+                Pais = itemDemo.Pais,
+                Provincia = itemDemo.Provincia,
+                Ciudad = itemDemo.Ciudad,
+                EsTipoEmpresa = EsTipoClienteEmpresa(itemDemo.TipoCliente)
+            };
+
+            editando = true;
+            PrepararTipoContactoTelefonico();
+            mensajeConsultaCedula = null;
+            consultaCedulaEsError = false;
+            ultimaCedulaConsultada = null;
+            mensaje = "Cliente demo cargado en el formulario.";
+            formKey = Guid.NewGuid();
+            mostrarModalFormularioCliente = true;
+            StateHasChanged();
+            return;
+        }
+
         mensaje = "Cargando cliente...";
         debugError = null;
         clienteEnVista = null;
@@ -1821,6 +3627,7 @@
                 Telefonoconvencional = item.Telefonoconvencional,
                 Celular = item.Celular,
                 Correo = item.Correo, // Principal
+                DiasCredito = item.DiasCredito,
 
                 CorreosAdicionales = item.CorreosAdicionales != null
                     ? item.CorreosAdicionales.Where(correo => !string.IsNullOrWhiteSpace(correo)).ToList()
@@ -1838,6 +3645,8 @@
 
             await PrepararLookupsUbicacionFormularioAsync();
             ActualizarTipoClienteForm();
+            PrepararTipoContactoTelefonico();
+            await CargarProveedorEnFormularioAsync(model.Numeroidentificacion);
 
             estadoAux = model.Estado ?? true;
             mensajeConsultaCedula = null;
@@ -1846,6 +3655,7 @@
             editando = true;
             formKey = Guid.NewGuid();
             mensaje = "Cliente cargado para edición.";
+            mostrarModalFormularioCliente = true;
             StateHasChanged();
         }
         catch (Exception ex)
@@ -1855,10 +3665,188 @@
         }
     }
 
+    private async Task CargarProveedorEnFormularioAsync(string? identificacion)
+    {
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var proveedor = await context.Proveedores
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ruc == identificacion.Trim() && x.estado != false);
+
+        if (proveedor is null)
+            return;
+
+        model.EsProveedor = true;
+        model.CuentaContableProveedor = string.IsNullOrWhiteSpace(proveedor.cuentaContable)
+            ? "21311 - Proveedores"
+            : proveedor.cuentaContable;
+        model.CreditoTributarioProveedor = proveedor.retIva1;
+        model.CodigoProveedor = proveedor.detalle;
+        model.EsSujetoRetencionProveedor = proveedor.llevaRetencion == true;
+        model.TipoCuentaProveedor = proveedor.tipoCuenta;
+        model.NumeroCuentaProveedor = proveedor.numeroCuenta;
+        model.BancoProveedor = proveedor.institucionFin?.ToString();
+        model.RegistraInformacionBancariaProveedor =
+            !string.IsNullOrWhiteSpace(model.TipoCuentaProveedor) ||
+            !string.IsNullOrWhiteSpace(model.NumeroCuentaProveedor) ||
+            !string.IsNullOrWhiteSpace(model.BancoProveedor);
+    }
+
+    private string? ValidarDatosProveedorFormulario()
+    {
+        return null;
+    }
+
+    private void AsegurarDatosProveedorPorDefecto()
+    {
+        model.EsCliente = true;
+        model.CuentaContableProveedor = string.IsNullOrWhiteSpace(model.CuentaContableProveedor)
+            ? "21311 - Proveedores"
+            : model.CuentaContableProveedor.Trim();
+        model.CreditoTributarioProveedor = string.IsNullOrWhiteSpace(model.CreditoTributarioProveedor)
+            ? "01"
+            : model.CreditoTributarioProveedor.Trim();
+    }
+
+    private async Task SincronizarProveedorDesdeClienteAsync()
+    {
+        var identificacion = model.Numeroidentificacion?.Trim();
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return;
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var proveedor = await context.Proveedores
+            .FirstOrDefaultAsync(x => x.ruc == identificacion);
+
+        if (!model.EsProveedor)
+        {
+            if (proveedor is not null && proveedor.estado != false)
+            {
+                proveedor.estado = false;
+                proveedor.fechaActualizacion = DateTime.Now;
+                await context.SaveChangesAsync();
+            }
+
+            return;
+        }
+
+        AsegurarDatosProveedorPorDefecto();
+
+        if (proveedor is null)
+        {
+            proveedor = new Proveedor
+            {
+                ruc = identificacion,
+                estado = true
+            };
+            context.Proveedores.Add(proveedor);
+        }
+
+        proveedor.estado = true;
+
+        var nombres = SepararPartes(model.Nombres);
+        var apellidos = SepararPartes(model.Apellidos);
+
+        proveedor.tipoIdentificacion = ObtenerCodigoTipoIdentificacionProveedor();
+        proveedor.personaNatural = EsPersonaSeleccionada ? 'S' : 'N';
+        proveedor.primerNombre = EsPersonaSeleccionada ? nombres.ElementAtOrDefault(0) : null;
+        proveedor.segundoNombre = EsPersonaSeleccionada ? nombres.ElementAtOrDefault(1) : null;
+        proveedor.primerApellido = EsPersonaSeleccionada ? apellidos.ElementAtOrDefault(0) : null;
+        proveedor.segundoApellido = EsPersonaSeleccionada ? apellidos.ElementAtOrDefault(1) : null;
+        proveedor.nombreComercial = model.Nombrecomercial;
+        proveedor.nombre = ObtenerNombreProveedorDesdeFormulario();
+        proveedor.direccion = model.Direccion;
+        proveedor.telefono = model.Telefonoconvencional;
+        proveedor.telefonoMovil = model.Celular;
+        proveedor.email = model.Correo;
+        proveedor.obligado = string.Equals(model.Oblgconta, "SI", StringComparison.OrdinalIgnoreCase) ? 'S' : 'N';
+        proveedor.cuentaContable = model.CuentaContableProveedor?.Trim();
+        proveedor.retIva1 = model.CreditoTributarioProveedor?.Trim();
+        proveedor.llevaRetencion = model.EsSujetoRetencionProveedor;
+        proveedor.detalle = model.CodigoProveedor?.Trim();
+        proveedor.tipoCuenta = model.RegistraInformacionBancariaProveedor ? model.TipoCuentaProveedor?.Trim() : null;
+        proveedor.numeroCuenta = model.RegistraInformacionBancariaProveedor ? model.NumeroCuentaProveedor?.Trim() : null;
+        proveedor.institucionFin = model.RegistraInformacionBancariaProveedor && int.TryParse(model.BancoProveedor?.Trim(), out var bancoCodigo)
+            ? bancoCodigo
+            : null;
+        proveedor.fechaActualizacion = DateTime.Now;
+
+        await context.SaveChangesAsync();
+    }
+
+    private string? ObtenerCodigoTipoIdentificacionProveedor()
+    {
+        if (!model.Tipoidentificacion.HasValue)
+            return null;
+
+        return identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value)?.Codigo;
+    }
+
+    private string ObtenerNombreProveedorDesdeFormulario()
+    {
+        if (EsEmpresaSeleccionada)
+            return (model.Nombrerazonsocial ?? model.Nombrecomercial ?? model.Numeroidentificacion ?? string.Empty).Trim();
+
+        return string.Join(" ", new[] { model.Nombres, model.Apellidos }
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!.Trim()));
+    }
+
+    private static List<string> SepararPartes(string? texto) =>
+        (texto ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+    private void SetMensajeFormularioOListado(string? texto, string? detalle = null, bool esError = false)
+    {
+        if (mostrarModalFormularioCliente)
+        {
+            mensajeFormulario = texto;
+            debugErrorFormulario = detalle;
+            mensajeFormularioEsError = esError;
+            return;
+        }
+
+        mensaje = texto;
+        debugError = detalle;
+    }
+
+    private void LimpiarMensajesFormularioOListado()
+    {
+        if (mostrarModalFormularioCliente)
+        {
+            mensajeFormulario = null;
+            debugErrorFormulario = null;
+            mensajeFormularioEsError = false;
+            return;
+        }
+
+        mensaje = null;
+        debugError = null;
+    }
+
+    private void OnFormularioClienteInvalido(EditContext editContext)
+    {
+        mensajeFormulario = "Revisa los campos obligatorios antes de guardar.";
+        debugErrorFormulario = null;
+        mensajeFormularioEsError = true;
+    }
+
     private async Task Guardar()
     {
-        mensaje = "Guardando...";
-        debugError = null;
+        if (guardandoCliente)
+            return;
+
+        if (isDemoMode)
+        {
+            SetMensajeFormularioOListado("Modo demo: guardar clientes esta bloqueado.", esError: true);
+            return;
+        }
+
+        guardandoCliente = true;
+        SetMensajeFormularioOListado("Guardando...");
         model.Estado = estadoAux;
         ActualizarTipoClienteForm();
 
@@ -1870,6 +3858,7 @@
         model.Direccion = model.Direccion?.Trim();
         model.Telefonoconvencional = model.Telefonoconvencional?.Trim();
         model.Celular = model.Celular?.Trim();
+        NormalizarTelefonosPorTipoContacto();
         model.Correo = model.Correo?.Trim();
         model.CorreosAdicionales = model.CorreosAdicionales
             .Select(correo => correo?.Trim() ?? string.Empty)
@@ -1878,6 +3867,13 @@
             .ToList();
         model.Oblgconta = model.Oblgconta?.Trim().ToUpperInvariant();
         model.Observaciones = model.Observaciones?.Trim();
+
+        var errorProveedor = ValidarDatosProveedorFormulario();
+        if (!string.IsNullOrWhiteSpace(errorProveedor))
+        {
+            SetMensajeFormularioOListado(errorProveedor, esError: true);
+            return;
+        }
 
         if (EsEmpresaSeleccionada)
         {
@@ -1892,6 +3888,8 @@
 
         try
         {
+            var identificacionGuardada = model.Numeroidentificacion?.Trim() ?? string.Empty;
+            var estabaEditando = editando;
             HttpResponseMessage resp = !editando
                 ? await Http.PostAsJsonAsync($"api/e-contax/clientes?userId={usuarioLogueadoId}", model)
                 : await Http.PutAsJsonAsync($"api/e-contax/clientes/{model.Codcliente}?userId={usuarioLogueadoId}", model);
@@ -1900,37 +3898,53 @@
 
             if (!resp.IsSuccessStatusCode)
             {
-                mensaje = $"Error API: {(int)resp.StatusCode}";
-                debugError = body;
+                SetMensajeFormularioOListado($"Error API: {(int)resp.StatusCode}", body, esError: true);
                 return;
             }
 
-            mensaje = editando ? "Cliente actualizado correctamente." : "Cliente creado correctamente.";
-            debugError = null;
+            await SincronizarProveedorDesdeClienteAsync();
+
+            LimpiarMensajesFormularioOListado();
 
             await CargarTodo();
+            EmisionControlService.NotifyChanged();
+
+            if (OnClienteGuardado.HasDelegate && !string.IsNullOrWhiteSpace(identificacionGuardada))
+            {
+                await OnClienteGuardado.InvokeAsync(identificacionGuardada);
+                return;
+            }
+
+            mostrarModalFormularioCliente = false;
             Nuevo();
+            mensaje = estabaEditando ? "Cliente actualizado correctamente." : "Cliente creado correctamente.";
         }
         catch (Exception ex)
         {
-            debugError = $"{ex.Message} | INNER: {ex.InnerException?.Message}";
-            mensaje = "Error al guardar cliente.";
+            SetMensajeFormularioOListado("Error al guardar cliente.", $"{ex.Message} | INNER: {ex.InnerException?.Message}", esError: true);
+        }
+        finally
+        {
+            guardandoCliente = false;
         }
     }
 
     private bool TieneTipoClienteSeleccionado => model.TipoCliente > 0;
-
-    private bool EsPersonaSeleccionada => TieneTipoClienteSeleccionado && !EsEmpresaSeleccionada;
-
-    private bool EsEmpresaSeleccionada => TieneTipoClienteSeleccionado && EsTipoClienteEmpresa(model.TipoCliente);
     private bool UsaDiasCreditoPersonalizado =>
         model.DiasCredito.HasValue && !diasCreditoOpciones.Contains(model.DiasCredito.Value);
+    private bool UsaTelefonoConvencional =>
+        string.Equals(model.TipoContactoTelefonico, ContactoTelefonoConvencional, StringComparison.OrdinalIgnoreCase);
+
+    private bool EsPersonaSeleccionada =>
+        TieneTipoClienteSeleccionado &&
+        EsDescripcionPersonaNatural(tiposCliente.FirstOrDefault(t => t.TclCodigo == model.TipoCliente)?.Descripcion);
+
+    private bool EsEmpresaSeleccionada => TieneTipoClienteSeleccionado && EsTipoClienteEmpresa(model.TipoCliente);
 
     private IEnumerable<IdentificacionDto> IdentificacionesDisponibles =>
         identificaciones.Where(EsIdentificacionPermitidaPorTipoCliente);
 
-    private bool DebeMostrarObligadoContabilidad =>
-        EsEmpresaSeleccionada || EsIdentificacionRucSeleccionada;
+    private bool DebeMostrarObligadoContabilidad => true;
 
     private bool EsIdentificacionRucSeleccionada =>
         model.Tipoidentificacion.HasValue &&
@@ -1965,8 +3979,14 @@
             return false;
 
         var desc = tiposCliente.FirstOrDefault(t => t.TclCodigo == tipoCliente)?.Descripcion;
-        return TipoClienteClasificacion.EsJuridica(desc);
+        return EsDescripcionEmpresa(desc);
     }
+
+    private static bool EsDescripcionPersonaNatural(string? descripcion) =>
+        TipoClienteClasificacion.EsNatural(descripcion);
+
+    private static bool EsDescripcionEmpresa(string? descripcion) =>
+        TipoClienteClasificacion.EsJuridica(descripcion);
 
     private void ActualizarTipoClienteForm()
     {
@@ -2011,6 +4031,35 @@
         model.Estado = estado;
     }
 
+    private void SeleccionarTipoContactoTelefonico(string tipo)
+    {
+        if (string.Equals(model.TipoContactoTelefonico, tipo, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        model.TipoContactoTelefonico = tipo;
+
+        if (UsaTelefonoConvencional)
+            model.Celular = null;
+        else
+            model.Telefonoconvencional = null;
+    }
+
+    private void PrepararTipoContactoTelefonico()
+    {
+        model.TipoContactoTelefonico =
+            !string.IsNullOrWhiteSpace(model.Telefonoconvencional) && string.IsNullOrWhiteSpace(model.Celular)
+                ? ContactoTelefonoConvencional
+                : ContactoTelefonoCelular;
+    }
+
+    private void NormalizarTelefonosPorTipoContacto()
+    {
+        if (UsaTelefonoConvencional)
+            model.Celular = null;
+        else
+            model.Telefonoconvencional = null;
+    }
+
     private async Task OnTipoIdentificacionChangedAsync()
     {
         consultaCedulaCts?.Cancel();
@@ -2034,27 +4083,29 @@
         consultaCedulaCts?.Dispose();
         consultaCedulaCts = null;
 
-        if (EsTipoIdentificacionConsultaExternaSeleccionado &&
-            model.Numeroidentificacion.Length is 10 or 13)
+        if (!EsTipoIdentificacionConsultaExternaSeleccionado ||
+            model.Numeroidentificacion.Length is not (10 or 13))
         {
-            var cts = new CancellationTokenSource();
-            consultaCedulaCts = cts;
+            return;
+        }
 
-            try
+        var cts = new CancellationTokenSource();
+        consultaCedulaCts = cts;
+
+        try
+        {
+            await Task.Delay(250, cts.Token);
+            await ConsultarCedulaSiAplicaAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(consultaCedulaCts, cts))
             {
-                await Task.Delay(250, cts.Token);
-                await ConsultarCedulaSiAplicaAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            finally
-            {
-                if (ReferenceEquals(consultaCedulaCts, cts))
-                {
-                    consultaCedulaCts.Dispose();
-                    consultaCedulaCts = null;
-                }
+                consultaCedulaCts.Dispose();
+                consultaCedulaCts = null;
             }
         }
     }
@@ -2068,7 +4119,7 @@
 
     private async Task ConsultarCedulaSiAplicaAsync(CancellationToken cancellationToken = default)
     {
-        if (consultandoCedula)
+        if (isDemoMode || consultandoCedula)
             return;
 
         if (!EsTipoIdentificacionConsultaExternaSeleccionado)
@@ -2113,13 +4164,16 @@
                 return;
             }
 
-            mensajeConsultaCedula = resultado?.Mensaje ?? "No se encontraron datos automáticos para esta cédula.";
+            mensajeConsultaCedula = resultado?.Mensaje ?? "No se encontraron datos automáticos para esta identificación.";
             consultaCedulaEsError = false;
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
             debugError = (debugError is null) ? ex.Message : $"{debugError} || {ex.Message}";
-            mensajeConsultaCedula = "No se pudo consultar la cédula ahora. Puedes completar los datos manualmente.";
+            mensajeConsultaCedula = "No se pudo consultar la identificación ahora. Puedes completar los datos manualmente.";
             consultaCedulaEsError = true;
         }
         finally
@@ -2330,6 +4384,14 @@
     {
         if (clienteAEliminar is null) return;
 
+        if (isDemoMode)
+        {
+            mensaje = "Modo demo: eliminar clientes está bloqueado.";
+            debugError = null;
+            CancelarEliminar();
+            return;
+        }
+
         try
         {
             var resp = await Http.PutAsync($"api/e-contax/clientes/{clienteAEliminar.Codcliente}/desactivar?userId={usuarioLogueadoId}", null);
@@ -2344,6 +4406,7 @@
 
             mensaje = "Cliente desactivado (eliminación lógica).";
             await CargarTodo();
+            EmisionControlService.NotifyChanged();
             CancelarEliminar();
         }
         catch (Exception ex)
@@ -2351,5 +4414,135 @@
             debugError = $"{ex.Message} | INNER: {ex.InnerException?.Message}";
             mensaje = "No se pudo desactivar (API).";
         }
+    }
+
+    private bool EsRutaDemoClientes() =>
+        NavManager.ToBaseRelativePath(NavManager.Uri).StartsWith("demo/clientes", StringComparison.OrdinalIgnoreCase);
+
+    private void CargarDemoClientes()
+    {
+        usuarioLogueadoId = 0;
+        cargando = false;
+        mensaje = "Estás viendo una cartera de clientes de ejemplo.";
+        debugError = null;
+
+        tiposCliente =
+        [
+            new TipoClienteDto { TclCodigo = 1, Descripcion = "Persona Natural" },
+            new TipoClienteDto { TclCodigo = 2, Descripcion = TipoClienteClasificacion.EtiquetaJuridica }
+        ];
+
+        identificaciones =
+        [
+            new IdentificacionDto { Id = 1, Descripcion = "Cédula" },
+            new IdentificacionDto { Id = 2, Descripcion = "RUC" }
+        ];
+
+        paises = PaisCatalogoService.Paises
+            .Select((descripcion, index) => new PaisLookupDto
+            {
+                IdPais = index + 1,
+                Descripcion = descripcion
+            })
+            .ToList();
+
+        provincias =
+        [
+            new ProvinciaLookupDto { IdProvincia = 1, IdPais = 1, Descripcion = "Pichincha" },
+            new ProvinciaLookupDto { IdProvincia = 2, IdPais = 1, Descripcion = "Guayas" }
+        ];
+
+        ciudades =
+        [
+            new CiudadLookupDto { IdCiudad = 1, IdProvincia = 1, Descripcion = "Quito" },
+            new CiudadLookupDto { IdCiudad = 2, IdProvincia = 2, Descripcion = "Guayaquil" }
+        ];
+
+        ecuadorPaisId = 1;
+
+        clientes =
+        [
+            new ClienteDto
+            {
+                Codcliente = 1,
+                TipoCliente = 2,
+                Tipoidentificacion = 2,
+                Numeroidentificacion = "1790012345001",
+                Nombrerazonsocial = "Comercial Andina S.A.",
+                Nombrecomercial = "Comercial Andina",
+                Correo = "contabilidad@comercialandina.ec",
+                Telefonoconvencional = "022345678",
+                Celular = "0991234567",
+                Direccion = "Av. Amazonas y Naciones Unidas",
+                Oblgconta = "SI",
+                Estado = true,
+                UltimaFactura = DateTime.Today.AddDays(-3),
+                FacturasEmitidas = 18,
+                SaldoPendiente = 1240.50m,
+                Pais = 1,
+                Provincia = 1,
+                Ciudad = 1,
+                CorreosAdicionales = new List<string> { "compras@comercialandina.ec" }
+            },
+            new ClienteDto
+            {
+                Codcliente = 2,
+                TipoCliente = 1,
+                Tipoidentificacion = 1,
+                Numeroidentificacion = "1712345678",
+                Apellidos = "Mena",
+                Nombres = "Juan Carlos",
+                Correo = "juan.mena@email.com",
+                Telefonoconvencional = "042345678",
+                Celular = "0987654321",
+                Direccion = "Urdesa central",
+                Oblgconta = "NO",
+                Estado = true,
+                UltimaFactura = DateTime.Today.AddDays(-12),
+                FacturasEmitidas = 6,
+                SaldoPendiente = 0m,
+                Pais = 1,
+                Provincia = 2,
+                Ciudad = 2
+            },
+            new ClienteDto
+            {
+                Codcliente = 3,
+                TipoCliente = 2,
+                Tipoidentificacion = 2,
+                Numeroidentificacion = "0999988877001",
+                Nombrerazonsocial = "Ferretería Central Cía. Ltda.",
+                Nombrecomercial = "Ferretería Central",
+                Correo = "admin@ferreteriacentral.ec",
+                Telefonoconvencional = "042222333",
+                Celular = "0971112233",
+                Direccion = "Av. del Bombero km 4.5",
+                Oblgconta = "SI",
+                Estado = true,
+                UltimaFactura = DateTime.Today.AddDays(-7),
+                FacturasEmitidas = 11,
+                SaldoPendiente = 320.00m,
+                Pais = 1,
+                Provincia = 2,
+                Ciudad = 2
+            }
+        ];
+
+        Nuevo();
+        model.TipoCliente = 2;
+        model.Tipoidentificacion = 2;
+        model.Numeroidentificacion = "1790012345001";
+        model.Nombrecomercial = "Comercial Andina";
+        model.Nombrerazonsocial = "Comercial Andina S.A.";
+        model.Direccion = "Av. Amazonas y Naciones Unidas";
+        model.Telefonoconvencional = "022345678";
+        model.Celular = "0991234567";
+        model.Correo = "contabilidad@comercialandina.ec";
+        model.Oblgconta = "SI";
+        model.Pais = 1;
+        model.Provincia = 1;
+        model.Ciudad = 1;
+        model.EsTipoEmpresa = true;
+        model.CorreosAdicionales = new List<string> { "compras@comercialandina.ec" };
     }
 }

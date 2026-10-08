@@ -88,7 +88,42 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
         path = path.Split('?', '#')[0].TrimEnd('/');
         if (path is EContaxRoutes.Root or EContaxRoutes.DashboardAlias or EContaxRoutes.Profile or EContaxRoutes.Soporte)
             return accion == EContaxAccion.Ver;
-        if (path is "/e-contax/administracion/roles" or "/e-contax/administracion/usuarios")
+        path = path.ToLowerInvariant() switch
+        {
+            EContaxRoutes.FacturacionDocumentos or
+            EContaxRoutes.FacturacionNotaCredito or
+            EContaxRoutes.FacturacionNotasCreditoGeneradas or
+            EContaxRoutes.FacturacionNotaDebito or
+            EContaxRoutes.FacturacionNotasDebitoGeneradas or
+            EContaxRoutes.FacturacionGuiaRemision or
+            EContaxRoutes.FacturacionGuiasRemisionGeneradas or
+            EContaxRoutes.FacturacionRetencionesGeneradas or
+            EContaxRoutes.Cotizaciones or
+            EContaxRoutes.ComprasImportarXml or
+            EContaxRoutes.ComprasNuevaLiquidacion or
+            EContaxRoutes.ComprasLiquidacionesGeneradas or
+            EContaxRoutes.CuentasPorCobrar or
+            EContaxRoutes.CuentasPorCobrarEstadoCuenta or
+            EContaxRoutes.ReportesDocumentos or
+            EContaxRoutes.ReportesLogs or
+            EContaxRoutes.Proveedores or
+            EContaxRoutes.SolicitudNueva or
+            EContaxRoutes.SolicitudPagos or
+            EContaxRoutes.SolicitudPagoResultado => EContaxRoutes.FacturacionNueva,
+            EContaxRoutes.ConfiguracionTiposCliente => EContaxRoutes.Clientes,
+            EContaxRoutes.AdministracionCajasSecuencias => EContaxRoutes.AdministracionRoles,
+            EContaxRoutes.ConfiguracionSeguridad => EContaxRoutes.AdministracionRoles,
+            EContaxRoutes.ConfiguracionFirma => EContaxRoutes.Emisor,
+            EContaxRoutes.ConfiguracionCentroNormativo or
+            EContaxRoutes.ConfiguracionGeneral or
+            EContaxRoutes.Parametrizacion or
+            EContaxRoutes.Tutoriales or
+            EContaxRoutes.CompraDocumentos or
+            EContaxRoutes.HistorialCompras or
+            EContaxRoutes.Suscripciones => EContaxRoutes.Root,
+            _ => path
+        };
+        if (path is EContaxRoutes.AdministracionRoles or EContaxRoutes.AdministracionUsuarios)
             return accion == EContaxAccion.Ver || await PuedeAdministrarAsync(userId);
         var rutas = await db.EContaxMenus.AsNoTracking().Where(x => x.EstadoMenu == 1 && x.UrlMenu != null)
             .Select(x => x.UrlMenu!).ToListAsync();
