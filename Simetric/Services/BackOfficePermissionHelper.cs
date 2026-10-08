@@ -78,7 +78,9 @@ public static class BackOfficePermissionHelper
         await using var context = await dbFactory.CreateDbContextAsync();
         return await context.Usuarios.AsNoTracking().AnyAsync(usuario =>
             usuario.IdUsuario == idUsuario && usuario.Estado == true &&
-            (usuario.IdTipoUsuario == BackOfficeRoleId || usuario.IdTipoUsuario == SuperAdministradorRoleId));
+            (usuario.IdTipoUsuario == SuperAdministradorRoleId ||
+             (usuario.IdTipoUsuario == BackOfficeRoleId &&
+              usuario.TipoCliente != 2)));
     }
     public static async Task<bool> PuedeAccederERubricaAsync(
         ClaimsPrincipal user,
