@@ -1,0 +1,274 @@
+@page "/e-declara/declaraciones"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models.EDeclara
+@using Simetric.Services
+@using Simetric.Services.EDeclara
+@inject AuthenticationStateProvider AuthStateProvider
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject EDeclaraDeclaracionesService DeclaracionesService
+@inject IUsuarioService UsuarioService
+@inject NavigationManager Navigation
+
+<PageTitle>Declaraciones | E-Declara</PageTitle>
+
+<div class="ec-shell">
+    <section class="ec-hero">
+        <div>
+            <span class="ec-kicker">Gestión tributaria · E-Declara</span>
+            <h1>Análisis de declaración IVA</h1>
+            <p>Revisa la información descargada, valida clasificaciones y guarda el borrador del período.</p>
+        </div>
+        <span class="ec-hero-badge"><i class="ri-file-chart-line"></i> E-Declara</span>
+    </section>
+
+    @if (cargando)
+    {
+        <section class="ec-state"><span class="spinner-border" role="status"></span><strong>Preparando declaración</strong></section>
+    }
+    else if (!string.IsNullOrWhiteSpace(error))
+    {
+            <section class="ec-alert ec-alert-error" role="alert" aria-live="assertive"><i class="ri-error-warning-line"></i><span>@error</span></section>
+    }
+    else
+    {
+        <section class="ec-context-card">
+            <div class="ec-context-copy"><span class="ec-kicker">Cuenta E-Declara</span><strong>@perfilNombre</strong><small>@perfilIdentificacion</small></div>
+            <div class="ec-context-period"><label><span>Año</span><select value="@anio" @onchange="CambiarAnioAsync">@for (var value = DateTime.Today.Year; value >= DateTime.Today.Year - 6; value--){<option value="@value">@value</option>}</select></label><label><span>Período</span><select value="@periodo" @onchange="CambiarPeriodoAsync">@for (var value = 1; value <= 12; value++){<option value="@value">@NombrePeriodo(value)</option>}<option value="13">Primer semestre</option><option value="14">Segundo semestre</option></select></label></div>
+            <button type="button" class="ec-btn ec-btn-light" disabled="@ocupado" @onclick="AnalizarAsync"><i class="ri-refresh-line"></i> Actualizar análisis</button>
+        </section>
+
+        <nav class="ec-stepper" aria-label="Flujo de declaración">
+            <button type="button" class="ec-step @(pasoActual == 1 ? "is-active" : "is-done")" @onclick="() => IrPaso(1)"><span>1</span><div><strong>Período</strong><small>Cuenta y rango fiscal</small></div></button>
+            <i class="ri-arrow-right-line"></i>
+            <button type="button" class="ec-step @(pasoActual == 2 ? "is-active" : pasoActual > 2 ? "is-done" : "")" @onclick="() => IrPaso(2)"><span>2</span><div><strong>Validación</strong><small>Documentos y controles</small></div></button>
+            <i class="ri-arrow-right-line"></i>
+            <button type="button" class="ec-step @(pasoActual == 3 ? "is-active" : "")" disabled="@(!analisis.PuedeGuardarBorrador)" @onclick="() => IrPaso(3)"><span>3</span><div><strong>Revisión</strong><small>Casillas y borrador</small></div></button>
+        </nav>
+
+        @if (!string.IsNullOrWhiteSpace(mensaje))
+        {
+            <section class="ec-alert ec-alert-success" role="status" aria-live="polite"><i class="ri-checkbox-circle-line"></i><span>@mensaje</span></section>
+        }
+
+        @if (pasoActual == 1)
+        {
+            <section class="ec-welcome-card">
+                <div class="ec-welcome-icon"><i class="ri-file-search-line"></i></div>
+                <div><span class="ec-kicker">Paso 1 · Preparar</span><h2>Selecciona el período que vas a declarar</h2><p>El análisis utiliza únicamente facturas, notas de crédito y retenciones descargadas para esta cuenta E-Declara.</p></div>
+                <button type="button" class="ec-btn ec-btn-primary" disabled="@ocupado" @onclick="IrAValidacionAsync">Continuar <i class="ri-arrow-right-line"></i></button>
+            </section>
+        }
+
+        @if (pasoActual is 2 or 3)
+        {
+        <section class="ec-metrics">
+            <article><span>Documentos</span><strong>@analisis.TotalDocumentos</strong><small>Período seleccionado</small></article>
+            <article><span>Compras</span><strong>@Dinero(analisis.ComprasBase)</strong><small>Base imponible</small></article>
+            <article><span>Notas de crédito</span><strong>@Dinero(analisis.NotasCreditoBase)</strong><small>Base a descontar</small></article>
+            <article><span>Base neta</span><strong>@Dinero(analisis.BaseNeta)</strong><small>Compras menos notas</small></article>
+            <article><span>IVA neto</span><strong>@Dinero(analisis.IvaNeto)</strong><small>IVA de compras menos notas</small></article>
+            <article class="@(analisis.PendientesClasificacion > 0 ? "is-pending" : "")"><span>Pendientes</span><strong>@analisis.PendientesClasificacion</strong><small>Actividad o casilla</small></article>
+        </section>
+
+        <section class="ec-source-strip" aria-label="Documentos analizados">
+            <span class="ec-source-title"><i class="ri-database-2-line"></i> Fuentes del análisis</span>
+            <span><i class="ri-file-list-3-line"></i> @analisis.TotalFacturas factura(s)</span>
+            <span><i class="ri-file-reduce-line"></i> @analisis.TotalNotasCredito nota(s) de crédito</span>
+            <span><i class="ri-file-shield-2-line"></i> @analisis.TotalRetenciones retención(es)</span>
+            <span class="ec-source-progress"><strong>@ValidacionesCorrectas/@ValidacionesTotal</strong> controles aprobados</span>
+        </section>
+
+        <section class="ec-validation-card">
+            <div class="ec-validation-head">
+                <div><span class="ec-kicker">Control previo</span><h2>Validaciones de la declaración</h2><p class="ec-subtitle">Selecciona un control para consultar cómo resolverlo.</p></div>
+                <span class="ec-validation-state @(analisis.TieneBloqueos ? "is-error" : "is-ok")"><i class="ri-@(analisis.TieneBloqueos ? "close-circle" : "checkbox-circle")-line"></i>@(analisis.TieneBloqueos ? "Requiere corrección" : "Lista para borrador")</span>
+            </div>
+            <div class="ec-validation-grid">
+                @foreach (var item in analisis.Validaciones)
+                {
+                    <button type="button" @key="item.Codigo" class="ec-validation-item @(item.EsValida ? "is-ok" : item.EsBloqueante ? "is-error" : "is-warning")" @onclick="() => AbrirValidacion(item)">
+                        <i class="ri-@(item.EsValida ? "checkbox-circle" : item.EsBloqueante ? "error-warning" : "alert")-line"></i>
+                        <div><strong>@item.Mensaje</strong><small>@(item.EsValida ? "Validado" : item.EsBloqueante ? "Corrige este punto para guardar" : "Advertencia: puedes continuar con el borrador")</small></div>
+                        <i class="ri-arrow-right-s-line ec-validation-arrow"></i>
+                    </button>
+                }
+            </div>
+            @if (analisis.TieneBloqueos)
+            {
+                <div class="ec-inline-warning"><i class="ri-lock-line"></i><span>Resuelve los bloqueos desde Compras antes de guardar el borrador.</span><button type="button" class="ec-link-btn" @onclick="IrACompras">Abrir Compras</button></div>
+            }
+        </section>
+
+        @if (pasoActual == 2)
+        {
+            <section class="ec-next-card"><div><span class="ec-kicker">Siguiente paso</span><strong>Cuando las validaciones estén listas, revisa las casillas calculadas.</strong></div><button type="button" class="ec-btn ec-btn-primary" disabled="@(!analisis.PuedeGuardarBorrador)" @onclick="() => IrPaso(3)">Revisar casillas <i class="ri-arrow-right-line"></i></button></section>
+        }
+
+        @if (pasoActual == 3)
+        {
+        <section class="ec-workspace">
+            <div class="ec-editor-head"><div><span class="ec-kicker">Paso 3 · Revisar</span><h2>Casillas de la declaración</h2><p class="ec-subtitle">Los valores se calculan desde los documentos clasificados del período.</p></div><button type="button" class="ec-btn ec-btn-primary" disabled="@(ocupado || !analisis.PuedeGuardarBorrador)" @onclick="SolicitarGuardado"><i class="ri-save-3-line"></i> Guardar borrador</button></div>
+            <div class="ec-table-wrap">
+                <table class="ec-table">
+                    <thead><tr><th>Casilla</th><th class="number">Base</th><th class="number">IVA</th><th>Documentos</th></tr></thead>
+                    <tbody>
+                    @if (analisis.Casillas.Count == 0)
+                    {
+                        <tr><td colspan="4"><div class="ec-empty"><i class="ri-inbox-archive-line"></i><strong>No hay documentos para analizar</strong><span>Consulta o importa los comprobantes desde Compras.</span><button type="button" class="ec-link-btn" @onclick="IrACompras">Ir a Compras</button></div></td></tr>
+                    }
+                    @foreach (var item in analisis.Casillas)
+                    {
+                        <tr @key="item.Casilla"><td><strong>@item.Casilla</strong></td><td class="number">@Dinero(item.Base)</td><td class="number">@Dinero(item.Iva)</td><td>@item.Documentos</td></tr>
+                    }
+                    </tbody>
+                    @if (analisis.Casillas.Count > 0)
+                    {
+                        <tfoot><tr><td><strong>Total neto</strong></td><td class="number"><strong>@Dinero(analisis.BaseNeta)</strong></td><td class="number"><strong>@Dinero(analisis.IvaNeto)</strong></td><td><strong>@analisis.Casillas.Sum(x => x.Documentos)</strong></td></tr></tfoot>
+                    }
+                </table>
+            </div>
+            <div class="ec-summary-footer"><span><i class="ri-shield-check-line"></i> Retenciones de IVA identificadas: <strong>@Dinero(analisis.RetencionesIva)</strong></span><span><i class="ri-information-line"></i> Las advertencias de clasificación no bloquean el borrador.</span></div>
+        </section>
+        }
+        }
+    }
+</div>
+
+@if (validacionSeleccionada is not null)
+{
+    <div class="ec-modal-backdrop" role="presentation" @onclick="CerrarModal">
+        <section class="ec-modal" role="dialog" aria-modal="true" aria-labelledby="validacion-titulo" @onclick:stopPropagation="true">
+            <div class="ec-modal-head"><div><span class="ec-kicker">Detalle de control</span><h2 id="validacion-titulo">@TituloValidacion(validacionSeleccionada)</h2></div><button type="button" class="ec-modal-close" aria-label="Cerrar" @onclick="CerrarModal"><i class="ri-close-line"></i></button></div>
+            <div class="ec-modal-status @(validacionSeleccionada.EsValida ? "is-ok" : validacionSeleccionada.EsBloqueante ? "is-error" : "is-warning")"><i class="ri-@(validacionSeleccionada.EsValida ? "checkbox-circle" : validacionSeleccionada.EsBloqueante ? "error-warning" : "alert")-line"></i><strong>@validacionSeleccionada.Mensaje</strong></div>
+            <p class="ec-modal-copy">@AyudaValidacion(validacionSeleccionada)</p>
+            <div class="ec-modal-actions"><button type="button" class="ec-btn ec-btn-light" @onclick="CerrarModal">Cerrar</button>@if (!validacionSeleccionada.EsValida && validacionSeleccionada.Codigo == "CLASIFICACION"){<button type="button" class="ec-btn ec-btn-primary" @onclick="IrACompras">Ir a Compras</button>}</div>
+        </section>
+    </div>
+}
+
+@if (mostrarConfirmacionGuardado)
+{
+    <div class="ec-modal-backdrop" role="presentation" @onclick="CancelarGuardado">
+        <section class="ec-modal ec-modal-confirm" role="dialog" aria-modal="true" aria-labelledby="guardar-titulo" @onclick:stopPropagation="true">
+            <div class="ec-modal-icon"><i class="ri-save-3-line"></i></div><h2 id="guardar-titulo">Guardar borrador de declaración</h2><p class="ec-modal-copy">Se guardará el análisis de @NombrePeriodo(periodo) @anio para la cuenta <strong>@perfilNombre</strong>. Podrás revisarlo nuevamente antes de presentarlo.</p>
+            <div class="ec-modal-actions"><button type="button" class="ec-btn ec-btn-light" @onclick="CancelarGuardado">Cancelar</button><button type="button" class="ec-btn ec-btn-primary" disabled="@ocupado" @onclick="ConfirmarGuardadoAsync"><i class="ri-check-line"></i> Confirmar guardado</button></div>
+        </section>
+    </div>
+}
+
+@code {
+    private int userId;
+    private int anio = DateTime.Today.Year;
+    private int periodo = DateTime.Today.Month;
+    private bool cargando = true;
+    private bool ocupado;
+    private int pasoActual = 1;
+    private bool mostrarConfirmacionGuardado;
+    private EDeclaraDeclaracionValidacion? validacionSeleccionada;
+    private string error = string.Empty;
+    private string mensaje = string.Empty;
+    private string perfilNombre = string.Empty;
+    private string perfilIdentificacion = string.Empty;
+    private EDeclaraDeclaracionAnalisis analisis = new();
+    private int ValidacionesTotal => analisis.Validaciones.Count;
+    private int ValidacionesCorrectas => analisis.Validaciones.Count(x => x.EsValida);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var state = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = state.User;
+            if (user.Identity?.IsAuthenticated != true || !int.TryParse(user.FindFirst("IdUsuario")?.Value, out userId))
+            {
+                Navigation.NavigateTo("/login", true);
+                return;
+            }
+
+            var superAdmin = user.FindFirst("IdTipoUsuario")?.Value == AppAccessService.AdminRoleId;
+            var access = await AppAccessService.CanAccessAsync(userId, EDeclaraRoutes.ServiceKey, superAdmin);
+            if (!access.HasAccess)
+            {
+                Navigation.NavigateTo($"/suscripciones?servicio={EDeclaraRoutes.ServiceKey}", true);
+                return;
+            }
+
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
+            var cuenta = await UsuarioService.ObtenerUsuarioPorId(userId);
+            perfilNombre = cuenta is null ? "Cuenta E-Declara" : (!string.IsNullOrWhiteSpace(cuenta.NombreEmpresa) ? cuenta.NombreEmpresa : cuenta.NombreCompleto);
+            perfilIdentificacion = cuenta?.Identificacion?.Trim() ?? string.Empty;
+            await AnalizarAsync();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task CambiarAnioAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) anio = value; pasoActual = 1; await AnalizarAsync(); }
+    private async Task CambiarPeriodoAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) periodo = value; pasoActual = 1; await AnalizarAsync(); }
+
+    private async Task IrAValidacionAsync() { pasoActual = 2; await AnalizarAsync(); }
+    private void IrPaso(int paso) { if (paso == 3 && !analisis.PuedeGuardarBorrador) { pasoActual = 2; return; } pasoActual = paso; }
+    private void AbrirValidacion(EDeclaraDeclaracionValidacion item) => validacionSeleccionada = item;
+    private void CerrarModal() => validacionSeleccionada = null;
+    private void SolicitarGuardado() => mostrarConfirmacionGuardado = analisis.PuedeGuardarBorrador;
+    private void CancelarGuardado() => mostrarConfirmacionGuardado = false;
+    private void IrACompras() { CerrarModal(); Navigation.NavigateTo(EDeclaraRoutes.Compras); }
+    private async Task ConfirmarGuardadoAsync() { mostrarConfirmacionGuardado = false; await GuardarAsync(); }
+
+    private static string TituloValidacion(EDeclaraDeclaracionValidacion item) => item.Codigo switch
+    {
+        "CUENTA" => "Cuenta E-Declara",
+        "DOCUMENTOS" => "Documentos del período",
+        "PERIODO" => "Fechas del período",
+        "IDENTIFICACION" => "Identificación del contribuyente",
+        "IMPORTES" => "Importes tributarios",
+        "DUPLICADOS" => "Documentos duplicados",
+        "NOTAS" => "Relación de notas de crédito",
+        "CLASIFICACION" => "Clasificación de documentos",
+        _ => "Validación"
+    };
+
+    private static string AyudaValidacion(EDeclaraDeclaracionValidacion item) => item.Codigo switch
+    {
+        "CUENTA" => "La declaración solo puede trabajar con la identificación configurada en la cuenta E-Declara activa.",
+        "DOCUMENTOS" => "Descarga o importa las facturas, notas de crédito y retenciones desde el módulo Compras.",
+        "PERIODO" => "Cada documento debe tener una fecha de emisión dentro del mes o semestre seleccionado.",
+        "IDENTIFICACION" => "La identificación del comprador o sujeto retenido debe coincidir con la cuenta activa.",
+        "IMPORTES" => "Revisa que la base imponible y el IVA de los documentos sean valores no negativos.",
+        "DUPLICADOS" => "Elimina el registro repetido o conserva solo el comprobante válido antes de analizar nuevamente.",
+        "NOTAS" => "Cada nota de crédito debe estar relacionada con una factura del mismo proveedor y período.",
+        "CLASIFICACION" => "Asigna la actividad y casilla correspondiente a cada factura y nota de crédito.",
+        _ => "Revisa el detalle en el módulo Compras."
+    };
+
+    private async Task AnalizarAsync()
+    {
+        if (userId <= 0) return;
+        ocupado = true;
+        error = string.Empty;
+        mensaje = string.Empty;
+        try { analisis = await DeclaracionesService.AnalizarAsync(userId, anio, periodo); }
+        catch (Exception ex) { error = ex.Message; }
+        finally { ocupado = false; }
+    }
+
+    private async Task GuardarAsync()
+    {
+        ocupado = true;
+        error = string.Empty;
+        mensaje = string.Empty;
+        try { await DeclaracionesService.GuardarAsync(userId, analisis); mensaje = "Borrador guardado correctamente."; }
+        catch (Exception ex) { error = ex.Message; }
+        finally { ocupado = false; }
+    }
+
+    private static string NombrePeriodo(int value) => System.Globalization.CultureInfo.GetCultureInfo("es-EC").DateTimeFormat.GetMonthName(value);
+    private static string Dinero(decimal value) => value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("es-EC"));
+}

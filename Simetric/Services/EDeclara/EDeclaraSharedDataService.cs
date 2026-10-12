@@ -22,10 +22,14 @@ namespace Simetric.Services.EDeclara;
 public sealed class EDeclaraSharedDataService
 {
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly EDeclaraDeclaracionesService _declaracionesService;
 
-    public EDeclaraSharedDataService(IDbContextFactory<AppDbContext> dbFactory)
+    public EDeclaraSharedDataService(
+        IDbContextFactory<AppDbContext> dbFactory,
+        EDeclaraDeclaracionesService declaracionesService)
     {
         _dbFactory = dbFactory;
+        _declaracionesService = declaracionesService;
     }
 
     /// <summary>
@@ -67,24 +71,9 @@ public sealed class EDeclaraSharedDataService
             })
             .ToListAsync();
 
-        // ── Declaraciones → tabla PRODUCTO filtrada por usuario ───────────
-        // Aquí usamos Producto como proxy hasta que exista la tabla real.
-        // Cuando tengas la tabla de declaraciones, reemplaza este bloque.
-        var totalDeclaraciones = await db.Productos
-            .Where(p => p.Idusuario == userId)
-            .CountAsync();
-
-        var declaraciones = await db.Productos
-            .Where(p => p.Idusuario == userId)
-            .OrderByDescending(p => p.Codigo)
-            .Take(top)
-            .Select(p => new EDeclaraDeclaracionResumen
-            {
-                Titulo = (p.Nombre ?? string.Empty).Trim(),
-                Periodo = null,           // sin campo periodo aún
-                Activo = p.Estado == true
-            })
-            .ToListAsync();
+        var resumenDeclaraciones = await _declaracionesService.ObtenerResumenAsync(userId, top);
+        var totalDeclaraciones = resumenDeclaraciones.Total;
+        var declaraciones = resumenDeclaraciones.Items;
 
         return new EDeclaraSharedDataSnapshot
         {

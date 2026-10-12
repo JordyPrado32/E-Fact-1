@@ -474,7 +474,7 @@ public sealed class EDeclaraComprasService
         if (!valida) throw new InvalidOperationException("La fecha de emisión no pertenece al período seleccionado.");
     }
 
-    private async Task EnsureSchemaAsync()
+    public async Task EnsureSchemaAsync()
     {
         if (_schemaEnsured) return;
         await SchemaLock.WaitAsync();
