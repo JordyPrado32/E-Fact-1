@@ -218,7 +218,8 @@ public sealed class CompraDocumentosFacturacionService
     public async Task<CompraDocumentosFacturaResultado> EmitirFacturaFirmaAsync(
         int solId,
         string? reference,
-        string? authorizationCode)
+        string? authorizationCode,
+        Cliente? destinatarioFactura = null)
     {
         if (solId <= 0)
             return CompraDocumentosFacturaResultado.Error("La solicitud de firma no es valida.");
@@ -258,7 +259,7 @@ public sealed class CompraDocumentosFacturacionService
             reference,
             authorizationCode,
             usarIdComoMarcador: true,
-            titularFirma: solicitud.SolIdUsuarioCliente is null ? new Cliente
+            titularFirma: destinatarioFactura ?? (solicitud.SolIdUsuarioCliente is null ? new Cliente
             {
                 Nombres = solicitud.SolNombres,
                 Apellidos = $"{solicitud.SolPrimerApellido} {solicitud.SolSegundoApellido}".Trim(),
@@ -269,7 +270,7 @@ public sealed class CompraDocumentosFacturacionService
                 Celular = solicitud.SolTelefono1,
                 Direccion = solicitud.SolDireccion,
                 Estado = true
-            } : null);
+            } : null));
     }
 
     private static Factura ConstruirFactura(

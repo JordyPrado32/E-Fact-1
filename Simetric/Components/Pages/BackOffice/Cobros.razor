@@ -47,6 +47,21 @@
                         <span class="approve-message-kicker">Validación de recarga</span>
                         <p>@mensajeConfirmacionAprobacion</p>
                     </div>
+                    <fieldset class="invoice-recipient-fieldset">
+                        <legend>¿A quién se emitirá la factura?</legend>
+                        <label class="invoice-recipient-option @(emitirFacturaANumeros ? string.Empty : "selected")">
+                            <input type="radio" name="destinatario-factura" value="cliente"
+                                   checked="@(!emitirFacturaANumeros)"
+                                   @onchange="() => emitirFacturaANumeros = false" />
+                            <span><strong>Al cliente</strong><small>@GetClientCleanName(ventaPendienteConfirmacion.Cliente)</small></span>
+                        </label>
+                        <label class="invoice-recipient-option @(emitirFacturaANumeros ? "selected" : string.Empty)">
+                            <input type="radio" name="destinatario-factura" value="numeros"
+                                   checked="@emitirFacturaANumeros"
+                                   @onchange="() => emitirFacturaANumeros = true" />
+                            <span><strong>Números Asesoría Legal y Tributaria</strong><small>Emitir usando su ficha tributaria registrada</small></span>
+                        </label>
+                    </fieldset>
                 </div>
                 <div class="modal-footer-n modal-footer-approve">
                     <button type="button" class="btn btn-light" @onclick="CancelarConfirmacionAprobacion" disabled="@isSaving">Cancelar</button>
@@ -745,6 +760,7 @@
     private bool mostrarConfirmacionAprobacion;
     private ReporteVentaBackOffice? ventaPendienteConfirmacion;
     private string mensajeConfirmacionAprobacion = string.Empty;
+    private bool emitirFacturaANumeros;
     private bool kpisLoaded;
     private bool puedeAprobarTransferencias;
 
@@ -1314,6 +1330,7 @@
             ? $"Se aprobará la compra de firma de {cliente} por ${venta.Valor:N2}. Esta acción confirmará el pago y generará la factura automática."
             : $"Se aprobará la recarga de {cliente} por ${venta.Valor:N2}. Esta acción acreditará los documentos y generará la factura automática.";
         ventaPendienteConfirmacion = venta;
+        emitirFacturaANumeros = false;
         mostrarConfirmacionAprobacion = true;
         return;
     }
@@ -1356,7 +1373,7 @@
             CompraDocumentosFacturaResultado resultadoFactura;
             try
             {
-                resultadoFactura = await EmitirFacturaTransferenciaBackOfficeAsync(dbVenta);
+                resultadoFactura = await EmitirFacturaTransferenciaBackOfficeAsync(dbVenta, emitirFacturaANumeros);
             }
             catch (Exception ex)
             {
@@ -1406,6 +1423,7 @@
                     dbVenta.FormaPago,
                     dbVenta.Observacion,
                     FacturaGenerada = resultadoFactura.Exito,
+                    DestinatarioFactura = emitirFacturaANumeros ? "Números Asesoría Legal y Tributaria" : "Cliente",
                     resultadoFactura.CodFactura,
                     resultadoFactura.NumeroFactura,
                     resultadoFactura.Autorizada,
@@ -1472,6 +1490,7 @@
         mostrarConfirmacionAprobacion = false;
         ventaPendienteConfirmacion = null;
         mensajeConfirmacionAprobacion = string.Empty;
+        emitirFacturaANumeros = false;
     }
 
     #if false
@@ -1710,14 +1729,41 @@
         }
     }
 
-    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaBackOfficeAsync(ReporteVentaBackOffice venta)
+    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaBackOfficeAsync(
+        ReporteVentaBackOffice venta,
+        bool emitirANumeros = false)
     {
-        if (EsSolicitudTransferenciaFirma(venta))
+        Cliente? destinatarioFactura = null;
+        if (emitirANumeros)
         {
-            return await EmitirFacturaTransferenciaFirmaAsync(venta);
+            destinatarioFactura = await ObtenerClienteNumerosAsync();
+            if (destinatarioFactura is null)
+            {
+                return CompraDocumentosFacturaResultado.Error(
+                    "No se encontró la ficha tributaria activa de Números Asesoría Legal y Tributaria.");
+            }
         }
 
-        return await EmitirFacturaTransferenciaDocumentosAsync(venta);
+        if (EsSolicitudTransferenciaFirma(venta))
+        {
+            return await EmitirFacturaTransferenciaFirmaAsync(venta, destinatarioFactura);
+        }
+
+        return await EmitirFacturaTransferenciaDocumentosAsync(venta, destinatarioFactura);
+    }
+
+    private async Task<Cliente?> ObtenerClienteNumerosAsync()
+    {
+        await using var context = await DbFactory.CreateDbContextAsync();
+        return await context.Clientes
+            .AsNoTracking()
+            .Where(c => c.Estado != false &&
+                ((c.Nombrerazonsocial != null && c.Nombrerazonsocial.Contains("Asesoría Legal y Tributaria")) ||
+                 (c.Nombrerazonsocial != null && c.Nombrerazonsocial.Contains("Asesoria Legal y Tributaria")) ||
+                 (c.Nombrecomercial != null && c.Nombrecomercial.Contains("Números Asesoría")) ||
+                 (c.Nombrecomercial != null && c.Nombrecomercial.Contains("Numeros Asesoria"))))
+            .OrderByDescending(c => c.Codcliente)
+            .FirstOrDefaultAsync();
     }
 
     private async Task CargarFacturasVentasAsync(AppDbContext context, IEnumerable<ReporteVentaBackOffice> ventas)
@@ -1839,7 +1885,9 @@
         }
     }
 
-    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaFirmaAsync(ReporteVentaBackOffice venta)
+    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaFirmaAsync(
+        ReporteVentaBackOffice venta,
+        Cliente? destinatarioFactura = null)
     {
         var solicitudId = ObtenerSolicitudFirmaId(venta);
         if (!solicitudId.HasValue)
@@ -1862,7 +1910,8 @@
         var resultado = await CompraDocumentosFacturacionService.EmitirFacturaFirmaAsync(
             solicitudId.Value,
             $"BO-{venta.IdReporte}",
-            GetComprobanteRef(venta.Observacion));
+            GetComprobanteRef(venta.Observacion),
+            destinatarioFactura);
 
         if (resultado.Exito)
         {
@@ -1907,7 +1956,9 @@
         return resultado;
     }
 
-    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaDocumentosAsync(ReporteVentaBackOffice venta)
+    private async Task<CompraDocumentosFacturaResultado> EmitirFacturaTransferenciaDocumentosAsync(
+        ReporteVentaBackOffice venta,
+        Cliente? destinatarioFactura = null)
     {
         var email = GetClientEmail(venta.Cliente);
         var compraId = ObtenerCompraDocumentosId(venta);
@@ -1985,7 +2036,8 @@
             compra,
             $"BO-{venta.IdReporte}",
             GetComprobanteRef(venta.Observacion),
-            esTransferenciaBackOffice: true);
+            esTransferenciaBackOffice: true,
+            titularFirma: destinatarioFactura);
 
         if (resultado.CodFactura > 0)
         {
