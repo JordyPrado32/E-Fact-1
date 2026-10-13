@@ -2,11 +2,14 @@
 
 @using Microsoft.AspNetCore.Components.Authorization
 @using Simetric.DTOs.EContax
+@using Simetric.Models.EContax
 @using Simetric.Services
 @using Simetric.Services.EContax
 @using System.Security.Claims
+@using System.Text.Json
 @inject AuthenticationStateProvider AuthStateProvider
 @inject EContaxOrganizacionService OrganizacionService
+@inject EContaxSeguridadService SeguridadService
 @inject NavigationManager NavManager
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
@@ -123,6 +126,14 @@
                 </div>
             }
 
+            @if (Configurar)
+            {
+                <div class="status-banner status-banner-warning">
+                    <i class="bi bi-building-check"></i>
+                    <span>Configura el nombre y RUC de tu empresa. La sucursal inicial <strong>Matriz</strong> ya fue creada y puedes cambiar su nombre después.</span>
+                </div>
+            }
+
             @if (!puedeAdministrar && resumen is not null)
             {
                 <div class="status-banner status-banner-warning">
@@ -211,6 +222,11 @@
                                             <button type="button" class="action-btn action-edit" title="Editar"
                                                     @onclick="() => EditarSucursal(sucursal)" disabled="@(!puedeAdministrar)">
                                                 <i class="bi bi-pencil-square"></i>
+                                            </button>
+
+                                            <button type="button" class="action-btn action-view" title="Configurar roles de la sucursal"
+                                                    @onclick="() => AbrirRolesSucursal(sucursal)" disabled="@(!puedeAdministrar)">
+                                                <i class="bi bi-shield-check"></i>
                                             </button>
 
                                             <button type="button" class="action-btn action-toggle" title="Cambiar estado"
@@ -326,21 +342,111 @@
             </div>
         </section>
     </section>
+
+    @if (mostrarRolesSucursal && sucursalRoles is not null)
+    {
+        <div class="modal fade show d-block" style="background-color: rgba(0,0,0,0.5); z-index: 1050;" tabindex="-1" @onclick="CerrarRolesSucursal">
+            <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" @onclick:stopPropagation="true">
+                <div class="modal-content border-0 shadow">
+                    <div class="modal-header">
+                        <div>
+                            <h5 class="modal-title">Roles de @sucursalRoles.Nombre</h5>
+                            <p class="mb-0 text-muted">Estos roles quedarán disponibles para los futuros usuarios vinculados a esta sucursal.</p>
+                        </div>
+                        <button type="button" class="btn-close" aria-label="Cerrar" @onclick="CerrarRolesSucursal"></button>
+                    </div>
+
+                    @if (cargandoRoles)
+                    {
+                        <div class="modal-body"><p class="mb-0">Cargando roles y permisos…</p></div>
+                    }
+                    else if (rolesResumen is not null)
+                    {
+                        <div class="modal-body">
+                            <div class="row g-3 mb-3">
+                                <div class="col-12 col-md-5">
+                                    <label class="form-label">Rol de la sucursal</label>
+                                    <select class="form-select" value="@rolSucursalId" @onchange="SeleccionarRolSucursal">
+                                        <option value="0">Nuevo rol</option>
+                                        @foreach (var rol in RolesSucursal)
+                                        {
+                                            <option @key="rol.IdPerfil" value="@rol.IdPerfil">@rol.Nombre</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-12 col-md-7">
+                                    <label class="form-label">Nombre del rol</label>
+                                    <input class="form-control" @bind="nombreRolSucursal" maxlength="200" placeholder="Ej: Vendedor" />
+                                </div>
+                            </div>
+
+                            <p class="text-muted">Selecciona los menús y acciones que tendrán los usuarios cuando posteriormente se les asigne este rol.</p>
+                            @foreach (var grupo in GruposMenusRol)
+                            {
+                                <fieldset class="border rounded p-3 mb-3">
+                                    <legend class="fs-6">@grupo.Key</legend>
+                                    <div class="row g-2">
+                                        @foreach (var menu in grupo)
+                                        {
+                                            <div class="col-12 col-lg-6">
+                                                <label class="d-block border rounded p-2">
+                                                    <input type="checkbox" checked="@menusRol.Contains(menu.IdMenu)" @onchange="e => ToggleMenuRol(menu.IdMenu, e.Value is true)" />
+                                                    <span class="ms-1">@menu.NombreMenu</span>
+                                                </label>
+                                                @if (menusRol.Contains(menu.IdMenu))
+                                                {
+                                                    <div class="d-flex flex-wrap gap-2 px-2 py-1">
+                                                        @foreach (var accion in AccionesEditables)
+                                                        {
+                                                            <label class="small"><input type="checkbox" checked="@accionesRol.GetValueOrDefault(menu.IdMenu).HasFlag(accion)" @onchange="e => ToggleAccionRol(menu.IdMenu, accion, e.Value is true)" /> @accion</label>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                </fieldset>
+                            }
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" @onclick="CerrarRolesSucursal">Cerrar</button>
+                            <button type="button" class="primary-btn" disabled="@guardandoRolSucursal" @onclick="GuardarRolSucursalAsync">
+                                @(guardandoRolSucursal ? "Guardando…" : "Guardar rol")
+                            </button>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
 </div>
 
 @code {
     private int usuarioId;
+    [SupplyParameterFromQuery(Name = "configurar")]
+    public bool Configurar { get; set; }
     private bool cargando = true;
     private bool guardandoEmpresa;
     private bool guardandoSucursal;
+    private bool cargandoRoles;
+    private bool guardandoRolSucursal;
+    private bool mostrarRolesSucursal;
     private bool editandoSucursal;
     private string filtro = string.Empty;
     private string filtroEstado = "todos";
     private string? mensaje;
     private string? error;
     private EContaxOrganizacionResumenDto? resumen;
+    private EContaxSeguridadResumen? rolesResumen;
+    private EContaxSucursalResumenDto? sucursalRoles;
     private EContaxEmpresaUpsertDto empresaModel = new();
     private EContaxSucursalUpsertDto sucursalModel = new();
+    private HashSet<int> menusRol = new();
+    private Dictionary<int, EContaxAccion> accionesRol = new();
+    private int rolSucursalId;
+    private string nombreRolSucursal = string.Empty;
+    private static readonly EContaxAccion[] AccionesEditables =
+        { EContaxAccion.Ver, EContaxAccion.Crear, EContaxAccion.Editar, EContaxAccion.Eliminar, EContaxAccion.Exportar };
 
     private bool PuedeAdministrar => resumen?.Contexto.EsJefeEmpresa == true ||
         string.Equals(resumen?.Contexto.Rol, EContaxTenantService.RolJefeEmpresa, StringComparison.OrdinalIgnoreCase);
@@ -370,6 +476,16 @@
             return query;
         }
     }
+
+    private IEnumerable<EContaxPerfil> RolesSucursal => rolesResumen?.Perfiles
+        .Where(x => x.IdSucursal == sucursalRoles?.IdSucursal)
+        .OrderBy(x => x.Nombre)
+        ?? Enumerable.Empty<EContaxPerfil>();
+
+    private IEnumerable<IGrouping<string, EContaxMenu>> GruposMenusRol => rolesResumen?.CatalogoMenus
+        .Where(x => x.UrlMenu is not null)
+        .GroupBy(NombreGrupoRol)
+        ?? Enumerable.Empty<IGrouping<string, EContaxMenu>>();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -502,6 +618,141 @@
         {
             error = ex.Message;
         }
+    }
+
+    private async Task AbrirRolesSucursal(EContaxSucursalResumenDto sucursal)
+    {
+        if (!PuedeAdministrar)
+            return;
+
+        sucursalRoles = sucursal;
+        mostrarRolesSucursal = true;
+        cargandoRoles = true;
+        error = null;
+
+        try
+        {
+            rolesResumen = await SeguridadService.GetResumenAsync(usuarioId);
+            NuevoRolSucursal();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            CerrarRolesSucursal();
+        }
+        finally
+        {
+            cargandoRoles = false;
+        }
+    }
+
+    private void SeleccionarRolSucursal(ChangeEventArgs args)
+    {
+        rolSucursalId = int.TryParse(args.Value?.ToString(), out var id) ? id : 0;
+        var rol = RolesSucursal.FirstOrDefault(x => x.IdPerfil == rolSucursalId);
+        if (rol is null)
+        {
+            NuevoRolSucursal();
+            return;
+        }
+
+        nombreRolSucursal = rol.Nombre;
+        menusRol = EContaxSeguridadService.LeerMenus(rol.MenusJson);
+        accionesRol = menusRol.ToDictionary(id => id, id => EContaxSeguridadService.AccionesDe(rol.AccionesJson, id));
+    }
+
+    private void NuevoRolSucursal()
+    {
+        rolSucursalId = 0;
+        nombreRolSucursal = string.Empty;
+        menusRol.Clear();
+        accionesRol.Clear();
+    }
+
+    private void ToggleMenuRol(int idMenu, bool marcado)
+    {
+        if (marcado)
+        {
+            menusRol.Add(idMenu);
+            accionesRol[idMenu] = EContaxAccion.Ver;
+        }
+        else
+        {
+            menusRol.Remove(idMenu);
+            accionesRol.Remove(idMenu);
+        }
+    }
+
+    private void ToggleAccionRol(int idMenu, EContaxAccion accion, bool marcado)
+    {
+        if (accion == EContaxAccion.Ver)
+        {
+            ToggleMenuRol(idMenu, marcado);
+            return;
+        }
+
+        accionesRol[idMenu] = marcado
+            ? accionesRol.GetValueOrDefault(idMenu) | accion
+            : accionesRol.GetValueOrDefault(idMenu) & ~accion;
+    }
+
+    private async Task GuardarRolSucursalAsync()
+    {
+        if (rolesResumen is null || sucursalRoles is null || guardandoRolSucursal)
+            return;
+
+        guardandoRolSucursal = true;
+        error = null;
+
+        try
+        {
+            var accionesJson = JsonSerializer.Serialize(accionesRol
+                .Where(x => menusRol.Contains(x.Key))
+                .ToDictionary(x => x.Key, x => x.Value));
+
+            await SeguridadService.GuardarPerfilAsync(
+                usuarioId,
+                rolSucursalId,
+                nombreRolSucursal,
+                sucursalRoles.IdSucursal,
+                menusRol,
+                accionesJson);
+
+            mensaje = "Rol de sucursal guardado. Quedará disponible para futuras vinculaciones.";
+            CerrarRolesSucursal();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            guardandoRolSucursal = false;
+        }
+    }
+
+    private void CerrarRolesSucursal()
+    {
+        mostrarRolesSucursal = false;
+        cargandoRoles = false;
+        sucursalRoles = null;
+        rolesResumen = null;
+        NuevoRolSucursal();
+    }
+
+    private string NombreGrupoRol(EContaxMenu menu)
+    {
+        var visitados = new HashSet<int>();
+        while (menu.IdPadre is > 0 && visitados.Add(menu.IdMenu))
+        {
+            var padre = rolesResumen?.CatalogoMenus.FirstOrDefault(x => x.IdMenu == menu.IdPadre);
+            if (padre is null)
+                break;
+
+            menu = padre;
+        }
+
+        return menu.NombreMenu ?? "General";
     }
 
     private void VerProductosSucursal(int sucursalId)

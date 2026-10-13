@@ -22,11 +22,16 @@ public sealed class AppAccessService
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly PagoService _pagoService;
+    private readonly EContaxOrganizacionService _eContaxOrganizacion;
 
-    public AppAccessService(IDbContextFactory<AppDbContext> dbFactory, PagoService pagoService)
+    public AppAccessService(
+        IDbContextFactory<AppDbContext> dbFactory,
+        PagoService pagoService,
+        EContaxOrganizacionService eContaxOrganizacion)
     {
         _dbFactory = dbFactory;
         _pagoService = pagoService;
+        _eContaxOrganizacion = eContaxOrganizacion;
     }
 
     public async Task EnsureSchemaAsync()
@@ -356,6 +361,9 @@ public sealed class AppAccessService
 
         if (activeSubscription is not null)
         {
+            if (string.Equals(service.Clave, EContaxServiceKey, StringComparison.OrdinalIgnoreCase))
+                await _eContaxOrganizacion.ProvisionarCuentaInicialAsync(userId);
+
             var status = activeSubscription.EsVitalicia
                 ? "Suscripcion vitalicia activa"
                 : activeSubscription.FechaFin.HasValue

@@ -34,6 +34,7 @@ public static class EContaxMenuCatalog
         new("reportes-documentos", "Reporte documentos", EContaxRoutes.ReportesDocumentos, "ri-file-chart-line", 8),
         new("administracion", "Administracion", null, "ri-admin-line", 9),
         new("roles", "Roles y permisos", EContaxRoutes.AdministracionRoles, "ri-shield-keyhole-line", 1, "administracion"),
+        new("roles-internos", "Sucursales y roles", EContaxRoutes.Organizacion, "ri-group-settings-line", 10),
         new("cajas", "Cajas y secuencias", EContaxRoutes.AdministracionCajasSecuencias, "ri-layout-grid-line", 2, "administracion"),
         new("impuestos", "Impuestos", EContaxRoutes.AdministracionImpuestos, "ri-percent-line", 3, "administracion"),
         new("usuarios", "Usuarios", EContaxRoutes.AdministracionUsuarios, "ri-user-line", 4, "administracion"),
@@ -42,20 +43,20 @@ public static class EContaxMenuCatalog
         new("logs-inicio", "Logs de Inicio", EContaxRoutes.AdministracionLogsInicio, "ri-history-line", 7, "administracion"),
         new("retenciones", "Retenciones", EContaxRoutes.AdministracionRetenciones, "ri-inbox-archive-line", 8, "administracion"),
         new("auditoria-sql", "SQL Auditoria", EContaxRoutes.AdministracionAuditoriaSql, "ri-shield-check-line", 9, "administracion"),
-        new("documentos-generados", "Documentos Generados", null, "ri-folder-history-line", 10),
+        new("documentos-generados", "Documentos Generados", null, "ri-folder-history-line", 11),
         new("notas-credito-generadas", "Mis Notas de Crédito", EContaxRoutes.FacturacionNotasCreditoGeneradas, "ri-file-list-2-line", 1, "documentos-generados"),
         new("retenciones-generadas", "Mis Retenciones", EContaxRoutes.FacturacionRetencionesGeneradas, "ri-file-list-2-line", 2, "documentos-generados"),
         new("guias-generadas", "Mis Guias de Remisión", EContaxRoutes.FacturacionGuiasRemisionGeneradas, "ri-file-list-2-line", 3, "documentos-generados"),
         new("liquidaciones-generadas", "Mis Liquidaciones Compras", EContaxRoutes.ComprasLiquidacionesGeneradas, "ri-file-list-2-line", 4, "documentos-generados"),
         new("notas-debito-generadas", "Mis Notas de Debito", EContaxRoutes.FacturacionNotasDebitoGeneradas, "ri-file-list-2-line", 5, "documentos-generados"),
-        new("configuracion", "Configuración", null, "ri-settings-3-line", 11),
+        new("configuracion", "Configuración", null, "ri-settings-3-line", 12),
         new("emisor", "Emisor", EContaxRoutes.Emisor, "ri-building-2-line", 1, "configuracion"),
         new("perfil", "Mi Perfil", EContaxRoutes.Profile, "ri-user-settings-line", 2, "configuracion"),
         new("puntos-emision", "Pto. Emision", EContaxRoutes.ConfiguracionPuntosEmision, "ri-safe-2-line", 3, "configuracion"),
         new("centro-normativo", "Centro normativo", EContaxRoutes.ConfiguracionCentroNormativo, "ri-scales-3-line", 4, "configuracion"),
         new("firma", "Firma", EContaxRoutes.ConfiguracionFirma, "ri-shield-keyhole-line", 5, "configuracion"),
-        new("tutoriales", "Tutoriales", EContaxRoutes.Tutoriales, "ri-question-line", 12),
-        new("soporte", "Soporte", EContaxRoutes.Soporte, "ri-customer-service-2-line", 13)
+        new("tutoriales", "Tutoriales", EContaxRoutes.Tutoriales, "ri-question-line", 13),
+        new("soporte", "Soporte", EContaxRoutes.Soporte, "ri-customer-service-2-line", 14)
     ];
 
     public static async Task EnsureAsync(AppDbContext context)
@@ -81,6 +82,7 @@ public static class EContaxMenuCatalog
 
             var menu = menus.FirstOrDefault(item =>
                 (definicion.Url is not null && string.Equals(item.UrlMenu, definicion.Url, StringComparison.OrdinalIgnoreCase)) ||
+                (definicion.Key == "roles-internos" && string.Equals(item.UrlMenu, EContaxRoutes.AdministracionRolesInternos, StringComparison.OrdinalIgnoreCase)) ||
                 (definicion.Url is null &&
                  string.Equals(item.NombreMenu?.Trim(), definicion.Nombre, StringComparison.OrdinalIgnoreCase) &&
                  (item.IdPadre ?? 0) == (idPadre ?? 0)));

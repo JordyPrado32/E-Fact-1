@@ -52,6 +52,7 @@ public static class EContaxRoutes
     public const string AdministracionImpuestos = "/e-contax/administracion/impuestos";
     public const string AdministracionRetenciones = "/e-contax/administracion/retenciones";
     public const string AdministracionRoles = "/e-contax/administracion/roles";
+    public const string AdministracionRolesInternos = "/e-contax/administracion/roles-internos";
     public const string AdministracionUsuarios = "/e-contax/administracion/usuarios";
     public const string AdministracionCajasSecuencias = "/e-contax/administracion/cajas-secuencias";
     public const string AdministracionAuditoriaSql = "/e-contax/administracion/auditoria-sql";
