@@ -26,14 +26,22 @@ public sealed class NotificacionDescartadaService
     public async Task DescartarAsync(int usuarioId, IEnumerable<string> ids, CancellationToken cancellationToken = default)
     {
         var values = ids.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Where(x => x.Length <= 200)
-            .Distinct(StringComparer.Ordinal).Take(200).ToList();
+            .Distinct(StringComparer.Ordinal).ToList();
         if (usuarioId <= 0 || values.Count == 0) return;
 
         await EnsureSchemaAsync(cancellationToken);
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
-        var existentes = await db.Set<NotificacionDescartada>()
-            .Where(x => x.IdUsuario == usuarioId && values.Contains(x.NotificacionId))
-            .Select(x => x.NotificacionId).ToListAsync(cancellationToken);
+        var existentes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var bloque in values.Chunk(1000))
+        {
+            var idsBloque = bloque.ToList();
+            var encontrados = await db.Set<NotificacionDescartada>()
+                .Where(x => x.IdUsuario == usuarioId && idsBloque.Contains(x.NotificacionId))
+                .Select(x => x.NotificacionId)
+                .ToListAsync(cancellationToken);
+            existentes.UnionWith(encontrados);
+        }
+
         var ahora = DateTime.Now;
         db.AddRange(values.Except(existentes, StringComparer.Ordinal).Select(id => new NotificacionDescartada
         {
