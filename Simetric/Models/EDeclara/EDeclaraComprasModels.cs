@@ -25,12 +25,15 @@ public sealed class EDeclaraCompraDocumento
     public string Origen { get; set; } = "MANUAL";
     public bool EsFaltante { get; set; }
     public IReadOnlyList<string> Detalles { get; set; } = Array.Empty<string>();
-    public bool RequiereClasificacion => TipoDocumento is (1 or 3) && !EsFaltante && (TipoFacturacion is null or <= 0 || string.IsNullOrWhiteSpace(Casilla));
+    public bool RequiereClasificacion => TipoDocumento is (1 or 2 or 3 or 4) && !EsFaltante && (TipoFacturacion is null or <= 0 || string.IsNullOrWhiteSpace(Casilla));
     public decimal Total => BaseImponible + Iva;
 }
 
 public sealed record EDeclaraActividadCompra(int Id, string Descripcion);
-public sealed record EDeclaraCasillaCompra(string Id, string Descripcion, string CasillaAsociada = "");
+public sealed record EDeclaraCasillaCompra(string Id, string Descripcion, string CasillaAsociada = "")
+{
+    public bool EsVenta { get; init; }
+}
 public sealed record EDeclaraTarifaCompra(decimal Valor, string Descripcion);
 
 public sealed class EDeclaraComprasCatalogos
@@ -38,6 +41,8 @@ public sealed class EDeclaraComprasCatalogos
     public IReadOnlyList<EDeclaraActividadCompra> Actividades { get; init; } = Array.Empty<EDeclaraActividadCompra>();
     public IReadOnlyList<EDeclaraCasillaCompra> CasillasCompras { get; init; } = Array.Empty<EDeclaraCasillaCompra>();
     public IReadOnlyList<EDeclaraCasillaCompra> CasillasNotasCredito { get; init; } = Array.Empty<EDeclaraCasillaCompra>();
+    public IReadOnlyList<EDeclaraCasillaCompra> CasillasVentas { get; init; } = Array.Empty<EDeclaraCasillaCompra>();
+    public IReadOnlyList<EDeclaraCasillaCompra> CasillasNotasCreditoVentas { get; init; } = Array.Empty<EDeclaraCasillaCompra>();
     public IReadOnlyList<EDeclaraTarifaCompra> Tarifas { get; init; } = Array.Empty<EDeclaraTarifaCompra>();
 }
 

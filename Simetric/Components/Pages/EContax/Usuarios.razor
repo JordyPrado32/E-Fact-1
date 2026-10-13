@@ -1,3 +1,4 @@
+@page "/e-contax/administracion/usuarios"
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
@@ -160,9 +161,16 @@
                                     </div>
                                 </td>
                                 <td>
-                                    <span class="role-pill @(rol is null ? "system-badge" : string.Empty)">
-                                        @(rol?.NombreRol ?? "Sin rol E-Contax")
-                                    </span>
+                                    @if (TieneEContaxActivo(u.IdUsuario))
+                                    {
+                                        <span class="role-pill @(rol is null ? "system-badge" : string.Empty)">
+                                            @(rol?.NombreRol ?? "Sin rol E-Contax")
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="role-pill system-badge">Sin E-Contax activo</span>
+                                    }
                                 </td>
                                 <td>
                                     <div class="cell-main">
@@ -317,16 +325,76 @@
                             <input @bind="tempUser.Identificacion" class="form-control field-input" />
                         </div>
 
+                        @if (CuentaConGestionEContax)
+                        {
                         <div class="form-field form-field-wide">
                             <label class="field-label">Rol asignado</label>
-                            <select @bind="rolSeleccionadoId" class="form-select field-input">
+                            <select value="@rolSeleccionadoId" @onchange="OnRolSeleccionadoChanged" class="form-select field-input" disabled="@SuperAdminEditando">
                                 <option value="0">Seleccione un rol</option>
                                 @foreach (var rol in rolesEContax)
                                 {
                                     <option value="@rol.IdRol">@rol.NombreRol</option>
                                 }
                             </select>
+                            @if (SuperAdminEditando)
+                            {
+                                <div class="form-note mt-2">
+                                    <i class="bi bi-shield-lock"></i>
+                                    <span>Los superadmins siempre conservan el rol JEFE_EMPRESA.</span>
+                                </div>
+                            }
                         </div>
+
+                        <div class="form-field form-field-wide">
+                            <label class="field-label">Menús del rol</label>
+                            @if (rolSeleccionadoId <= 0)
+                            {
+                                <div class="form-note">
+                                    <i class="bi bi-info-circle"></i>
+                                    <span>Seleccione un rol para configurar sus menús.</span>
+                                </div>
+                            }
+                            else if (cargandoMenusRol)
+                            {
+                                <div class="form-note">
+                                    <i class="bi bi-arrow-repeat"></i>
+                                    <span>Cargando menús del rol...</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="role-menu-grid">
+                                    @foreach (var menu in menusEContax.Where(item => item.IdPadre is null or 0))
+                                    {
+                                        <label class="role-menu-item">
+                                            <input type="checkbox"
+                                                   checked="@menusRolSeleccionados.Contains(menu.IdMenu)"
+                                                   disabled="@SuperAdminEditando"
+                                                   @onchange="e => CambiarMenuRol(menu.IdMenu, e.Value is true)" />
+                                            <span>@menu.NombreMenu</span>
+                                        </label>
+                                        @foreach (var subMenu in menusEContax.Where(item => item.IdPadre == menu.IdMenu))
+                                        {
+                                            <label class="role-menu-item role-menu-child">
+                                                <input type="checkbox"
+                                                       checked="@menusRolSeleccionados.Contains(subMenu.IdMenu)"
+                                                       disabled="@SuperAdminEditando"
+                                                       @onchange="e => CambiarMenuRol(subMenu.IdMenu, e.Value is true)" />
+                                                <span>@subMenu.NombreMenu</span>
+                                            </label>
+                                        }
+                                    }
+                                </div>
+                            }
+                        </div>
+                        }
+                        else
+                        {
+                            <div class="form-note form-field-wide">
+                                <i class="bi bi-info-circle"></i>
+                                <span>Esta cuenta no tiene el servicio E-Contax activo. No se gestionan roles ni permisos.</span>
+                            </div>
+                        }
 
                         <div class="form-field">
                             <label class="field-label">Empresa</label>
@@ -550,6 +618,9 @@
 
     private List<Usuario> usuariosList = new();
     private List<EContaxRol> rolesEContax = new();
+    private List<EContaxMenu> menusEContax = new();
+    private HashSet<int> menusRolSeleccionados = new();
+    private HashSet<int> usuariosConEContaxActivo = new();
     private List<EContaxUsuarioRolAsignadoDto> asignaciones = new();
     private List<EContaxUserAssignmentDto> asignacionesContexto = new();
     private List<EContaxEmpresaDto> empresasEContax = new();
@@ -568,6 +639,7 @@
     private bool showAvatarSelector;
     private bool showAvatarManager;
     private bool showDetailModal;
+    private bool cargandoMenusRol;
     private bool isLoading = true;
     private int currentUserId;
     private int rolSeleccionadoId;
@@ -577,6 +649,8 @@
     private int UsuariosConRol => usuariosList.Count(u => GetRolAsignado(u.IdUsuario) is not null);
     private int UsuariosBloqueados => usuariosList.Count(u => u.CuentaBloqueada == true);
     private bool RolSeleccionadoEsJefeEmpresa => EsRolJefeEmpresa(rolSeleccionadoId);
+    private bool SuperAdminEditando => tempUser.IdUsuario > 0 && EsSuperAdminUsuario(tempUser);
+    private int IdRolJefeEmpresa => rolesEContax.FirstOrDefault(item => EsRolJefeEmpresa(item.IdRol))?.IdRol ?? 0;
     private IEnumerable<EContaxSucursalDto> SucursalesEmpresaSeleccionada =>
         sucursalesEContax.Where(s => s.IdEmpresa == empresaSeleccionadaId);
 
@@ -606,15 +680,47 @@
                 ? idTipoUsuario
                 : 0;
 
-            usuariosList = await UserService.GetUsuariosAsync(currentUserId, tipoActual);
+            var usuariosCargados = await UserService.GetUsuariosAsync(currentUserId, tipoActual);
+            usuariosConEContaxActivo = await ObtenerUsuariosConEContaxActivoAsync(usuariosCargados);
+            usuariosList = usuariosCargados
+                .Where(usuario => usuariosConEContaxActivo.Contains(usuario.IdUsuario))
+                .ToList();
             rolesEContax = (await AdministracionService.GetEContaxRolesAsync())
                 .Where(item => item.EstadoRol == 1)
                 .OrderBy(item => item.NombreRol)
+                .ToList();
+            menusEContax = (await AdministracionService.GetEContaxMenusAsync())
+                .Where(item => item.EstadoMenu == 1 &&
+                    !string.IsNullOrWhiteSpace(item.NombreMenu))
+                .OrderBy(item => item.OrdenMenu ?? int.MaxValue)
+                .ThenBy(item => item.NombreMenu)
                 .ToList();
             asignaciones = await AdministracionService.GetEContaxUsuariosRolesAsync();
             empresasEContax = await OrganizacionService.GetEmpresasAsync();
             sucursalesEContax = await OrganizacionService.GetSucursalesAsync();
             asignacionesContexto = await OrganizacionService.GetUsuariosContextoAsync(currentUserId);
+
+            var idRolJefeEmpresa = IdRolJefeEmpresa;
+            if (idRolJefeEmpresa > 0)
+            {
+                var asignacionesCorregidas = false;
+                foreach (var superAdmin in usuariosList.Where(EsSuperAdminUsuario))
+                {
+                    if (GetRolAsignado(superAdmin.IdUsuario)?.IdRol == idRolJefeEmpresa)
+                    {
+                        continue;
+                    }
+
+                    asignacionesCorregidas |= await AdministracionService.AsignarEContaxRolAUsuarioAsync(
+                        superAdmin.IdUsuario,
+                        idRolJefeEmpresa);
+                }
+
+                if (asignacionesCorregidas)
+                {
+                    asignaciones = await AdministracionService.GetEContaxUsuariosRolesAsync();
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -624,6 +730,51 @@
         {
             isLoading = false;
         }
+    }
+
+    private async Task<HashSet<int>> ObtenerUsuariosConEContaxActivoAsync(IEnumerable<Usuario> usuarios)
+    {
+        var usuariosIds = usuarios.Select(x => x.IdUsuario).ToHashSet();
+        var activos = usuarios
+            .Where(x => string.Equals(x.IdTipoUsuario?.ToString(), AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.IdUsuario)
+            .ToHashSet();
+
+        if (usuariosIds.Count == 0)
+        {
+            return activos;
+        }
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var servicioId = await context.AppServicios.AsNoTracking()
+            .Where(x => x.Estado && x.Clave == AppAccessService.EContaxServiceKey)
+            .Select(x => (int?)x.ServicioId)
+            .FirstOrDefaultAsync();
+
+        if (servicioId is null)
+        {
+            return activos;
+        }
+
+        var titularesActivos = await context.UsuarioServicioSuscripciones.AsNoTracking()
+            .Where(x => usuariosIds.Contains(x.IdUsuario) && x.ServicioId == servicioId && x.Estado == "ACTIVA" &&
+                (x.EsVitalicia || !x.FechaFin.HasValue || x.FechaFin.Value.Date > DateTime.Today) &&
+                (!x.FechaInicio.HasValue || x.FechaInicio.Value.Date <= DateTime.Today))
+            .Select(x => x.IdUsuario)
+            .ToListAsync();
+        activos.UnionWith(titularesActivos);
+
+        var empresasActivas = await context.EContaxEmpresas.AsNoTracking()
+            .Where(x => x.Estado && x.IdTitular.HasValue && titularesActivos.Contains(x.IdTitular.Value))
+            .Select(x => x.IdEmpresa)
+            .ToListAsync();
+        var usuariosVinculados = await context.EContaxUsuariosContexto.AsNoTracking()
+            .Where(x => usuariosIds.Contains(x.IdUsuario) && x.Estado && empresasActivas.Contains(x.IdEmpresa))
+            .Select(x => x.IdUsuario)
+            .ToListAsync();
+        activos.UnionWith(usuariosVinculados);
+
+        return activos;
     }
 
     private void VerDetalle(Usuario u)
@@ -680,7 +831,17 @@
         if (u != null)
         {
             tempUser = ClonarUsuario(u);
-            rolSeleccionadoId = GetRolAsignado(u.IdUsuario)?.IdRol ?? 0;
+            rolSeleccionadoId = TieneEContaxActivo(u.IdUsuario)
+                ? (EsSuperAdminUsuario(u) ? IdRolJefeEmpresa : GetRolAsignado(u.IdUsuario)?.IdRol ?? 0)
+                : 0;
+            if (TieneEContaxActivo(u.IdUsuario))
+            {
+                await CargarMenusRolAsync();
+            }
+            else
+            {
+                menusRolSeleccionados.Clear();
+            }
             var contextoUsuario = GetContextoUsuario(u.IdUsuario);
             empresaSeleccionadaId = contextoUsuario?.IdEmpresa ?? empresaSeleccionadaId;
             sucursalSeleccionadaId = contextoUsuario?.IdSucursal ?? 0;
@@ -704,6 +865,7 @@
                 CuentaBloqueada = false
             };
             rolSeleccionadoId = 0;
+            menusRolSeleccionados.Clear();
             var contextoActual = GetContextoUsuario(currentUserId);
             empresaSeleccionadaId = contextoActual?.IdEmpresa ?? empresaSeleccionadaId;
             sucursalSeleccionadaId = contextoActual?.IdSucursal ?? SucursalesEmpresaSeleccionada.FirstOrDefault()?.IdSucursal ?? 0;
@@ -720,6 +882,47 @@
     }
 
     private void ToggleAvatarSelector() => showAvatarSelector = !showAvatarSelector;
+
+    private async Task OnRolSeleccionadoChanged(ChangeEventArgs args)
+    {
+        if (SuperAdminEditando)
+        {
+            rolSeleccionadoId = IdRolJefeEmpresa;
+            return;
+        }
+
+        rolSeleccionadoId = int.TryParse(args.Value?.ToString(), out var id) ? id : 0;
+        await CargarMenusRolAsync();
+    }
+
+    private async Task CargarMenusRolAsync()
+    {
+        cargandoMenusRol = rolSeleccionadoId > 0;
+        menusRolSeleccionados = SuperAdminEditando
+            ? menusEContax.Where(item => item.EstadoMenu == 1).Select(item => item.IdMenu).ToHashSet()
+            : rolSeleccionadoId > 0
+            ? (await AdministracionService.GetEContaxMenusByRolIdAsync(rolSeleccionadoId))
+                .Select(item => item.IdMenu)
+                .ToHashSet()
+            : new HashSet<int>();
+        cargandoMenusRol = false;
+    }
+
+    private void CambiarMenuRol(int idMenu, bool seleccionado)
+    {
+        if (seleccionado)
+        {
+            menusRolSeleccionados.Add(idMenu);
+        }
+        else
+        {
+            menusRolSeleccionados.Remove(idMenu);
+        }
+    }
+
+    private bool TieneEContaxActivo(int idUsuario) => usuariosConEContaxActivo.Contains(idUsuario);
+
+    private bool CuentaConGestionEContax => tempUser.IdUsuario == 0 || TieneEContaxActivo(tempUser.IdUsuario);
 
     private void SeleccionarAvatar(string url)
     {
@@ -790,6 +993,12 @@
 
     private async Task Guardar()
     {
+        var gestionarEContax = CuentaConGestionEContax;
+        if (SuperAdminEditando)
+        {
+            rolSeleccionadoId = IdRolJefeEmpresa;
+        }
+
         errorFormularioUsuario = ValidarFormularioUsuario();
         if (!string.IsNullOrWhiteSpace(errorFormularioUsuario))
         {
@@ -806,8 +1015,17 @@
 
         await UserService.SaveUsuarioAsync(tempUser);
 
-        if (rolSeleccionadoId > 0)
+        if (gestionarEContax && rolSeleccionadoId > 0 && !SuperAdminEditando)
         {
+            var menusGuardados = await AdministracionService.AsignarEContaxMenusARolAsync(
+                rolSeleccionadoId,
+                menusRolSeleccionados.ToList());
+            if (!menusGuardados)
+            {
+                errorFormularioUsuario = "El usuario se guardo, pero no se pudieron actualizar los menus del rol E-Contax.";
+                return;
+            }
+
             var rolGuardado = await AdministracionService.AsignarEContaxRolAUsuarioAsync(tempUser.IdUsuario, rolSeleccionadoId);
             if (!rolGuardado)
             {
@@ -816,18 +1034,26 @@
             }
         }
 
-        try
+        if (gestionarEContax && SuperAdminEditando && rolSeleccionadoId > 0)
         {
-            await OrganizacionService.AsignarUsuarioAsync(
-                currentUserId,
-                tempUser.IdUsuario,
-                empresaSeleccionadaId,
-                sucursalSeleccionadaId > 0 ? sucursalSeleccionadaId : null);
+            await AdministracionService.AsignarEContaxRolAUsuarioAsync(tempUser.IdUsuario, rolSeleccionadoId);
         }
-        catch (Exception ex)
+
+        if (gestionarEContax)
         {
-            errorFormularioUsuario = $"El usuario se guardo, pero no se pudo asignar empresa/sucursal. {ex.Message}";
-            return;
+            try
+            {
+                await OrganizacionService.AsignarUsuarioAsync(
+                    currentUserId,
+                    tempUser.IdUsuario,
+                    empresaSeleccionadaId,
+                    sucursalSeleccionadaId > 0 ? sucursalSeleccionadaId : null);
+            }
+            catch (Exception ex)
+            {
+                errorFormularioUsuario = $"El usuario se guardo, pero no se pudo asignar empresa/sucursal. {ex.Message}";
+                return;
+            }
         }
 
         if (tempUser.IdUsuario > 0 && cajaUsuarioEditando != null)
@@ -1034,17 +1260,22 @@
             return "Ya existe otro usuario registrado con ese correo.";
         }
 
-        if (rolSeleccionadoId <= 0)
+        if (SuperAdminEditando && rolSeleccionadoId != IdRolJefeEmpresa)
+        {
+            return "Los superadmins deben conservar el rol JEFE_EMPRESA.";
+        }
+
+        if (CuentaConGestionEContax && rolSeleccionadoId <= 0)
         {
             return "Debes seleccionar un rol E-Contax para el usuario.";
         }
 
-        if (empresaSeleccionadaId <= 0)
+        if (CuentaConGestionEContax && empresaSeleccionadaId <= 0)
         {
             return "Debes seleccionar la empresa del usuario.";
         }
 
-        if (!RolSeleccionadoEsJefeEmpresa && sucursalSeleccionadaId <= 0)
+        if (CuentaConGestionEContax && !RolSeleccionadoEsJefeEmpresa && sucursalSeleccionadaId <= 0)
         {
             return "Debes seleccionar la sucursal del usuario.";
         }
@@ -1117,6 +1348,9 @@
         var nombre = rolesEContax.FirstOrDefault(item => item.IdRol == idRol)?.NombreRol;
         return EContaxTenantService.EsRolJefeEmpresa(nombre);
     }
+
+    private static bool EsSuperAdminUsuario(Usuario usuario) =>
+        string.Equals(usuario.IdTipoUsuario?.ToString(), AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase);
 
     private async Task<bool> ValidarAccesoEContaxAsync(System.Security.Claims.ClaimsPrincipal user)
     {

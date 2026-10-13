@@ -2955,8 +2955,7 @@ public sealed class AliadoPortalService
         if (tipoDocumento == "RUC")
         {
             if (identificacionNormalizada.Length != 13 || !identificacionNormalizada.All(char.IsDigit) ||
-                !identificacionNormalizada.EndsWith("001", StringComparison.Ordinal) ||
-                !ValidarCedulaAliado(identificacionNormalizada[..10]))
+                !identificacionNormalizada.EndsWith("001", StringComparison.Ordinal))
                 return "El RUC debe tener 13 dígitos y terminar en 001.";
         }
         else if (tipoDocumento == "CEDULA")

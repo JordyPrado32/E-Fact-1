@@ -1,0 +1,363 @@
+@page "/e-contax/administracion/roles"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models.EContax
+@using Simetric.Services
+@using Simetric.Services.EContax
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject AuthenticationStateProvider AuthStateProvider
+@inject EContaxAdministracionService AdministracionService
+@inject NavigationManager NavManager
+
+<PageTitle>Roles y permisos | E-Contax</PageTitle>
+
+<div class="econtax-role-templates">
+    <section class="security-hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">Administración de accesos</span>
+            <h2>Plantillas de roles E-Contax</h2>
+            <p>Define los menús que tendrá disponible cada rol antes de asignarlo a un usuario.</p>
+        </div>
+        <button type="button" class="primary-btn" @onclick="NuevoRol" disabled="@(!esSuperAdmin)">
+            <i class="bi bi-plus-lg"></i> Nuevo rol
+        </button>
+    </section>
+
+    @if (cargando)
+    {
+        <section class="roles-panel p-4">Cargando roles y menús...</section>
+    }
+    else if (!esSuperAdmin)
+    {
+        <section class="roles-panel p-4">
+            <h3>Acceso restringido</h3>
+            <p>Solo un superadmin puede administrar las plantillas globales de E-Contax.</p>
+        </section>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <div class="alert alert-danger mt-3">@error</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(mensaje))
+        {
+            <div class="alert alert-success mt-3">@mensaje</div>
+        }
+
+        <section class="role-template-layout">
+            <aside class="roles-panel role-template-list">
+                <div class="panel-head">
+                    <div>
+                        <span class="panel-kicker">Plantillas disponibles</span>
+                        <h3>Roles E-Contax</h3>
+                    </div>
+                    <span class="badge bg-light text-dark">@roles.Count</span>
+                </div>
+
+                @if (!roles.Any())
+                {
+                    <p class="text-muted">Todavía no existen roles configurados.</p>
+                }
+                else
+                {
+                    <div class="role-template-items">
+                        @foreach (var rol in roles)
+                        {
+                            <button type="button"
+                                    @key="rol.IdRol"
+                                    class="role-template-item @(rolSeleccionado?.IdRol == rol.IdRol ? "is-selected" : string.Empty)"
+                                    @onclick="() => SeleccionarRolAsync(rol)">
+                                <span>
+                                    <strong>@rol.NombreRol</strong>
+                                    <small>@(rol.EstadoRol == 1 ? "Activo" : "Inactivo")</small>
+                                </span>
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
+                        }
+                    </div>
+                }
+            </aside>
+
+            <section class="roles-panel role-template-editor">
+                <div class="panel-head">
+                    <div>
+                        <span class="panel-kicker">Configuración de plantilla</span>
+                        <h3>@(rolSeleccionado?.IdRol > 0 ? "Editar rol" : "Nuevo rol")</h3>
+                    </div>
+                    @if (rolSeleccionado?.IdRol > 0)
+                    {
+                        <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="CambiarEstadoRolAsync">
+                            @(rolSeleccionado.EstadoRol == 1 ? "Desactivar" : "Reactivar")
+                        </button>
+                    }
+                </div>
+
+                @if (rolSeleccionado is null)
+                {
+                    <p class="text-muted">Selecciona un rol o crea una nueva plantilla.</p>
+                }
+                else
+                {
+                    <div class="mb-4">
+                        <label class="form-label">Nombre del rol</label>
+                        <input class="form-control" @bind="rolSeleccionado.NombreRol" maxlength="200" />
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <span class="panel-kicker">Menús de navegación</span>
+                            <p class="text-muted mb-0">@(RolJefeEmpresaSeleccionado ? "JEFE_EMPRESA tiene acceso total para los superadmins." : "Selecciona todos los accesos que tendrá esta plantilla.")</p>
+                        </div>
+                        <span class="badge bg-light text-dark">@menusSeleccionados.Count seleccionados</span>
+                    </div>
+
+                    <div class="role-menu-template-grid">
+                        @foreach (var menu in MenusPadre)
+                        {
+                            <div class="role-menu-template-group">
+                                <label class="role-menu-template-parent">
+                                    <input type="checkbox"
+                                           checked="@menusSeleccionados.Contains(menu.IdMenu)"
+                                           disabled="@RolJefeEmpresaSeleccionado"
+                                           @onchange="e => CambiarMenu(menu.IdMenu, e.Value is true)" />
+                                    <i class="@ResolveIcono(menu.IconoMenu)"></i>
+                                    <strong>@menu.NombreMenu</strong>
+                                </label>
+                                @foreach (var hijo in GetMenusHijos(menu.IdMenu))
+                                {
+                                    <label class="role-menu-template-child">
+                                        <input type="checkbox"
+                                               checked="@menusSeleccionados.Contains(hijo.IdMenu)"
+                                                disabled="@RolJefeEmpresaSeleccionado"
+                                               @onchange="e => CambiarMenu(hijo.IdMenu, e.Value is true)" />
+                                        <span>@hijo.NombreMenu</span>
+                                    </label>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    @if (MenusHuerfanos.Any())
+                    {
+                        <div class="role-menu-template-group mt-3">
+                            <span class="panel-kicker">Otros menús</span>
+                            @foreach (var menu in MenusHuerfanos)
+                            {
+                                <label class="role-menu-template-child">
+                                    <input type="checkbox"
+                                           checked="@menusSeleccionados.Contains(menu.IdMenu)"
+                                           @onchange="e => CambiarMenu(menu.IdMenu, e.Value is true)" />
+                                    <span>@menu.NombreMenu</span>
+                                </label>
+                            }
+                        </div>
+                    }
+
+                    <div class="text-end mt-4">
+                        <button type="button" class="primary-btn" @onclick="GuardarAsync" disabled="@guardando">
+                            @(guardando ? "Guardando..." : "Guardar plantilla")
+                        </button>
+                    </div>
+                }
+            </section>
+        </section>
+    }
+</div>
+
+@code {
+    private readonly List<EContaxRol> roles = new();
+    private readonly List<EContaxMenu> menus = new();
+    private EContaxRol? rolSeleccionado;
+    private HashSet<int> menusSeleccionados = new();
+    private bool cargando = true;
+    private bool guardando;
+    private bool esSuperAdmin;
+    private string? error;
+    private string? mensaje;
+
+    private IEnumerable<EContaxMenu> MenusPadre => menus
+        .Where(item => item.IdPadre is null or 0)
+        .OrderBy(item => item.OrdenMenu ?? int.MaxValue)
+        .ThenBy(item => item.NombreMenu);
+
+    private IEnumerable<EContaxMenu> MenusHuerfanos => menus
+        .Where(item => item.IdPadre is > 0 && !menus.Any(parent => parent.IdMenu == item.IdPadre))
+        .OrderBy(item => item.OrdenMenu ?? int.MaxValue)
+        .ThenBy(item => item.NombreMenu);
+
+    private bool RolJefeEmpresaSeleccionado =>
+        rolSeleccionado is not null && EsRolJefeEmpresa(rolSeleccionado.NombreRol);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        esSuperAdmin = user.Identity?.IsAuthenticated == true &&
+            string.Equals(user.FindFirst("IdTipoUsuario")?.Value, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase);
+
+        if (esSuperAdmin)
+        {
+            await CargarAsync();
+        }
+        else
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        error = null;
+
+        try
+        {
+            roles.Clear();
+            roles.AddRange((await AdministracionService.GetEContaxRolesAsync(includeInactivos: true))
+                .OrderBy(item => item.NombreRol));
+            menus.Clear();
+            menus.AddRange(await AdministracionService.GetEContaxMenusAsync());
+
+            if (rolSeleccionado is null)
+            {
+                var primerRol = roles.FirstOrDefault(item => item.EstadoRol == 1) ?? roles.FirstOrDefault();
+                if (primerRol is not null)
+                {
+                    await SeleccionarRolAsync(primerRol);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudieron cargar las plantillas. {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task SeleccionarRolAsync(EContaxRol rol)
+    {
+        rolSeleccionado = new EContaxRol
+        {
+            IdRol = rol.IdRol,
+            NombreRol = rol.NombreRol,
+            PermisoRol = rol.PermisoRol,
+            EstadoRol = rol.EstadoRol
+        };
+        menusSeleccionados = EsRolJefeEmpresa(rol.NombreRol)
+            ? menus.Where(item => item.EstadoMenu == 1).Select(item => item.IdMenu).ToHashSet()
+            : (await AdministracionService.GetEContaxMenusByRolIdAsync(rol.IdRol))
+                .Select(item => item.IdMenu)
+                .ToHashSet();
+        mensaje = null;
+        error = null;
+    }
+
+    private void NuevoRol()
+    {
+        rolSeleccionado = new EContaxRol { EstadoRol = 1 };
+        menusSeleccionados = new HashSet<int>();
+        mensaje = null;
+        error = null;
+    }
+
+    private void CambiarMenu(int idMenu, bool seleccionado)
+    {
+        if (seleccionado)
+        {
+            menusSeleccionados.Add(idMenu);
+        }
+        else
+        {
+            menusSeleccionados.Remove(idMenu);
+        }
+    }
+
+    private async Task GuardarAsync()
+    {
+        if (rolSeleccionado is null || string.IsNullOrWhiteSpace(rolSeleccionado.NombreRol))
+        {
+            error = "El nombre del rol es obligatorio.";
+            return;
+        }
+
+        guardando = true;
+        error = null;
+        mensaje = null;
+
+        try
+        {
+            var nombre = rolSeleccionado.NombreRol.Trim();
+            if (!await AdministracionService.GuardarEContaxRolAsync(rolSeleccionado))
+            {
+                error = "No se pudo guardar el rol. Verifica que no exista otro con el mismo nombre.";
+                return;
+            }
+
+            await CargarRolesAsync();
+            var guardado = roles.FirstOrDefault(item =>
+                item.IdRol == rolSeleccionado.IdRol ||
+                string.Equals(item.NombreRol?.Trim(), nombre, StringComparison.OrdinalIgnoreCase));
+
+            var menusDelRol = RolJefeEmpresaSeleccionado
+                ? menus.Where(item => item.EstadoMenu == 1).Select(item => item.IdMenu).ToList()
+                : menusSeleccionados.ToList();
+
+            if (guardado is null || !await AdministracionService.AsignarEContaxMenusARolAsync(guardado.IdRol, menusDelRol))
+            {
+                error = "El rol se guardó, pero no se pudieron guardar sus menús.";
+                return;
+            }
+
+            await SeleccionarRolAsync(guardado);
+            mensaje = "Plantilla de rol guardada correctamente.";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task CambiarEstadoRolAsync()
+    {
+        if (rolSeleccionado is null || rolSeleccionado.IdRol <= 0)
+        {
+            return;
+        }
+
+        var correcto = rolSeleccionado.EstadoRol == 1
+            ? await AdministracionService.DesactivarEContaxRolAsync(rolSeleccionado.IdRol)
+            : await AdministracionService.ReactivarEContaxRolAsync(rolSeleccionado.IdRol);
+
+        if (correcto)
+        {
+            await CargarRolesAsync();
+            var actualizado = roles.FirstOrDefault(item => item.IdRol == rolSeleccionado.IdRol);
+            if (actualizado is not null)
+            {
+                await SeleccionarRolAsync(actualizado);
+            }
+            mensaje = "Estado del rol actualizado.";
+        }
+    }
+
+    private async Task CargarRolesAsync()
+    {
+        roles.Clear();
+        roles.AddRange((await AdministracionService.GetEContaxRolesAsync(includeInactivos: true))
+            .OrderBy(item => item.NombreRol));
+    }
+
+    private IEnumerable<EContaxMenu> GetMenusHijos(int idPadre) => menus
+        .Where(item => item.IdPadre == idPadre)
+        .OrderBy(item => item.OrdenMenu ?? int.MaxValue)
+        .ThenBy(item => item.NombreMenu);
+
+    private static string ResolveIcono(string? icono) =>
+        string.IsNullOrWhiteSpace(icono) ? "bi bi-folder" : icono;
+
+    private static bool EsRolJefeEmpresa(string? nombre) =>
+        string.Equals(nombre?.Trim(), "JEFE_EMPRESA", StringComparison.OrdinalIgnoreCase);
+}

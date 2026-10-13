@@ -14,16 +14,24 @@ public sealed class EDeclaraDeclaracionAnalisis
     public decimal NotasCreditoBase { get; init; }
     public decimal NotasCreditoIva { get; init; }
     public decimal RetencionesIva { get; init; }
+    public decimal VentasBase { get; init; }
+    public decimal VentasIva { get; init; }
+    public decimal NotasCreditoVentasBase { get; init; }
+    public decimal NotasCreditoVentasIva { get; init; }
     public IReadOnlyList<EDeclaraCasillaAnalisis> Casillas { get; init; } = Array.Empty<EDeclaraCasillaAnalisis>();
     public IReadOnlyList<EDeclaraDeclaracionValidacion> Validaciones { get; init; } = Array.Empty<EDeclaraDeclaracionValidacion>();
     public decimal BaseNeta => decimal.Round(ComprasBase - NotasCreditoBase, 2);
     public decimal IvaNeto => decimal.Round(ComprasIva - NotasCreditoIva, 2);
+    public decimal IvaGenerado => decimal.Round(VentasIva - NotasCreditoVentasIva, 2);
+    public decimal IvaAntesRetenciones => decimal.Round(IvaGenerado - IvaNeto, 2);
+    public decimal IvaDespuesRetenciones => decimal.Round(IvaAntesRetenciones - RetencionesIva, 2);
     public bool TieneBloqueos => Validaciones.Any(x => !x.EsValida && x.EsBloqueante);
     public bool PuedeGuardarBorrador => TotalDocumentos > 0 && !TieneBloqueos;
 }
 
 public sealed class EDeclaraCasillaAnalisis
 {
+    public string Grupo { get; init; } = string.Empty;
     public string Casilla { get; init; } = string.Empty;
     public decimal Base { get; init; }
     public decimal Iva { get; init; }

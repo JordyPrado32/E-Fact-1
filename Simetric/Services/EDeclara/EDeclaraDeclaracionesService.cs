@@ -59,14 +59,16 @@ public sealed class EDeclaraDeclaracionesService
               FROM EDECLARA_COMPRA_DOCUMENTOS d
               LEFT JOIN EDECLARA_COMPRA_CASILLAS c ON c.ID=d.CASILLA AND c.ESTADO=1
              WHERE d.IDUSUARIO=@userId AND d.IDCONTRIBUYENTE=@userId
-               AND d.ANIO=@anio AND d.PERIODO=@periodo AND d.TIPODOCUMENTO IN (1,3,6) AND d.ESTADO=1
+               AND d.ANIO=@anio AND d.PERIODO=@periodo AND d.TIPODOCUMENTO IN (1,2,3,4,6) AND d.ESTADO=1
              ORDER BY TRY_CONVERT(INT, d.CASILLA), d.ID
             """, new { userId, anio, periodo })).ToList();
 
         var compras = documentos.Where(x => x.TipoDocumento == 1).ToList();
+        var ventas = documentos.Where(x => x.TipoDocumento == 2).ToList();
         var notas = documentos.Where(x => x.TipoDocumento == 3).ToList();
+        var notasVentas = documentos.Where(x => x.TipoDocumento == 4).ToList();
         var retenciones = documentos.Where(x => x.TipoDocumento == 6).ToList();
-        var pendientes = documentos.Count(x => x.TipoDocumento is (1 or 3) && !x.EsFaltante &&
+        var pendientes = documentos.Count(x => x.TipoDocumento is (1 or 2 or 3 or 4) && !x.EsFaltante &&
             (x.TipoFacturacion is null or <= 0 || string.IsNullOrWhiteSpace(x.Casilla)));
         var notasSinFactura = notas.Count(x => !x.EsFaltante &&
             (string.IsNullOrWhiteSpace(x.SerieDocumentoModificado) || string.IsNullOrWhiteSpace(x.NumeroDocumentoModificado) ||
@@ -81,13 +83,14 @@ public sealed class EDeclaraDeclaracionesService
             .GroupBy(x => new { x.TipoDocumento, x.Serie, x.Numero, x.Ruc, x.Iva })
             .Any(x => x.Count() > 1);
         var casillas = documentos
-            .Where(x => x.TipoDocumento is 1 or 3)
-            .GroupBy(x => string.IsNullOrWhiteSpace(x.Casilla) ? "Sin casilla" : x.Casilla.Trim())
+            .Where(x => x.TipoDocumento is 1 or 2 or 3 or 4)
+            .GroupBy(x => new { Grupo = x.TipoDocumento is 2 or 4 ? "Ventas" : "Compras", Casilla = string.IsNullOrWhiteSpace(x.Casilla) ? "Sin casilla" : x.Casilla.Trim() })
             .Select(x => new EDeclaraCasillaAnalisis
             {
-                Casilla = x.Key,
-                Base = decimal.Round(x.Where(y => y.TipoDocumento == 1).Sum(y => y.Base) - x.Where(y => y.TipoDocumento == 3).Sum(y => y.Base), 2),
-                Iva = decimal.Round(x.Where(y => y.TipoDocumento == 1).Sum(y => y.Iva) - x.Where(y => y.TipoDocumento == 3).Sum(y => y.Iva), 2),
+                Grupo = x.Key.Grupo,
+                Casilla = x.Key.Casilla,
+                Base = decimal.Round(x.Key.Grupo == "Ventas" ? x.Where(y => y.TipoDocumento == 2).Sum(y => y.Base) - x.Where(y => y.TipoDocumento == 4).Sum(y => y.Base) : x.Where(y => y.TipoDocumento == 1).Sum(y => y.Base) - x.Where(y => y.TipoDocumento == 3).Sum(y => y.Base), 2),
+                Iva = decimal.Round(x.Key.Grupo == "Ventas" ? x.Where(y => y.TipoDocumento == 2).Sum(y => y.Iva) - x.Where(y => y.TipoDocumento == 4).Sum(y => y.Iva) : x.Where(y => y.TipoDocumento == 1).Sum(y => y.Iva) - x.Where(y => y.TipoDocumento == 3).Sum(y => y.Iva), 2),
                 Documentos = x.Count()
             })
             .OrderBy(x => x.Casilla == "Sin casilla" ? 1 : 0)
@@ -103,7 +106,7 @@ public sealed class EDeclaraDeclaracionesService
             Validacion("IMPORTES", !importesInvalidos, "Los importes tributarios son válidos.", "Hay documentos con importes tributarios negativos.", true),
             Validacion("DUPLICADOS", !duplicados, "No se encontraron documentos duplicados.", "Hay documentos duplicados dentro del período.", true),
             Validacion("NOTAS", notasSinFactura == 0, "Las notas de crédito tienen factura relacionada.", $"Hay {notasSinFactura} nota(s) de crédito sin factura relacionada.", true),
-            Validacion("CLASIFICACION", pendientes == 0, "Todos los documentos están clasificados.", $"Hay {pendientes} documento(s) pendiente(s) de actividad o casilla.", false)
+            Validacion("CLASIFICACION", pendientes == 0, "Todos los documentos están clasificados.", $"Hay {pendientes} documento(s) pendiente(s) de actividad o casilla.", true)
         };
 
         return new EDeclaraDeclaracionAnalisis
@@ -119,6 +122,10 @@ public sealed class EDeclaraDeclaracionesService
             ComprasIva = decimal.Round(compras.Sum(x => x.Iva), 2),
             NotasCreditoBase = decimal.Round(notas.Sum(x => x.Base), 2),
             NotasCreditoIva = decimal.Round(notas.Sum(x => x.Iva), 2),
+            VentasBase = decimal.Round(ventas.Sum(x => x.Base), 2),
+            VentasIva = decimal.Round(ventas.Sum(x => x.Iva), 2),
+            NotasCreditoVentasBase = decimal.Round(notasVentas.Sum(x => x.Base), 2),
+            NotasCreditoVentasIva = decimal.Round(notasVentas.Sum(x => x.Iva), 2),
             RetencionesIva = decimal.Round(retenciones.Sum(x => x.Iva), 2),
             Casillas = casillas,
             Validaciones = validaciones
@@ -147,14 +154,15 @@ public sealed class EDeclaraDeclaracionesService
         {
             id = await db.ExecuteScalarAsync<long>("""
                 INSERT INTO EDECLARA_DECLARACIONES
-                    (IDUSUARIO,ANIO,PERIODO,BASECOMPRAS,IVACOMPRAS,BASENOTASCREDITO,IVANOTASCREDITO,
+                    (IDUSUARIO,ANIO,PERIODO,BASECOMPRAS,IVACOMPRAS,BASENOTASCREDITO,IVANOTASCREDITO,BASEVENTAS,IVAVENTAS,BASENOTASCREDVENTAS,IVANOTASCREDVENTAS,
                      RETENCIONESIVA,TOTALDOCUMENTOS,PENDIENTESCLASIFICACION,PUEDEGUARDAR,ESTADO,FECHACREACION,FECHAACTUALIZACION)
                 OUTPUT INSERTED.ID
-                VALUES (@userId,@Anio,@Periodo,@ComprasBase,@ComprasIva,@NotasCreditoBase,@NotasCreditoIva,
+                VALUES (@userId,@Anio,@Periodo,@ComprasBase,@ComprasIva,@NotasCreditoBase,@NotasCreditoIva,@VentasBase,@VentasIva,@NotasCreditoVentasBase,@NotasCreditoVentasIva,
                         @RetencionesIva,@TotalDocumentos,@PendientesClasificacion,@PuedeGuardar,1,SYSUTCDATETIME(),SYSUTCDATETIME())
                 """, new { userId, Anio = calculado.Anio, Periodo = calculado.Periodo,
                     ComprasBase = calculado.ComprasBase, ComprasIva = calculado.ComprasIva,
-                    calculado.NotasCreditoBase, calculado.NotasCreditoIva, calculado.RetencionesIva,
+                    calculado.NotasCreditoBase, calculado.NotasCreditoIva, VentasBase = calculado.VentasBase, VentasIva = calculado.VentasIva,
+                    NotasCreditoVentasBase = calculado.NotasCreditoVentasBase, NotasCreditoVentasIva = calculado.NotasCreditoVentasIva, calculado.RetencionesIva,
                     calculado.TotalDocumentos, calculado.PendientesClasificacion, PuedeGuardar = calculado.PuedeGuardarBorrador }, transaction);
         }
         else
@@ -163,12 +171,14 @@ public sealed class EDeclaraDeclaracionesService
                 UPDATE EDECLARA_DECLARACIONES SET
                        BASECOMPRAS=@ComprasBase, IVACOMPRAS=@ComprasIva,
                        BASENOTASCREDITO=@NotasCreditoBase, IVANOTASCREDITO=@NotasCreditoIva,
+                       BASEVENTAS=@VentasBase, IVAVENTAS=@VentasIva, BASENOTASCREDVENTAS=@NotasCreditoVentasBase, IVANOTASCREDVENTAS=@NotasCreditoVentasIva,
                        RETENCIONESIVA=@RetencionesIva, TOTALDOCUMENTOS=@TotalDocumentos,
                        PENDIENTESCLASIFICACION=@PendientesClasificacion, PUEDEGUARDAR=@PuedeGuardar,
                        FECHAACTUALIZACION=SYSUTCDATETIME()
                  WHERE ID=@id
                 """, new { id, ComprasBase = calculado.ComprasBase, ComprasIva = calculado.ComprasIva,
-                    calculado.NotasCreditoBase, calculado.NotasCreditoIva, calculado.RetencionesIva,
+                    calculado.NotasCreditoBase, calculado.NotasCreditoIva, VentasBase = calculado.VentasBase, VentasIva = calculado.VentasIva,
+                    NotasCreditoVentasBase = calculado.NotasCreditoVentasBase, NotasCreditoVentasIva = calculado.NotasCreditoVentasIva, calculado.RetencionesIva,
                     calculado.TotalDocumentos, calculado.PendientesClasificacion, PuedeGuardar = calculado.PuedeGuardarBorrador }, transaction);
         }
 
@@ -176,9 +186,9 @@ public sealed class EDeclaraDeclaracionesService
         foreach (var casilla in calculado.Casillas)
         {
             await db.ExecuteAsync("""
-                INSERT INTO EDECLARA_DECLARACION_CASILLAS (IDDECLARACION,CASILLA,BASE,IVA,DOCUMENTOS)
-                VALUES (@id,@Casilla,@Base,@Iva,@Documentos)
-                """, new { id, casilla.Casilla, casilla.Base, casilla.Iva, casilla.Documentos }, transaction);
+                INSERT INTO EDECLARA_DECLARACION_CASILLAS (IDDECLARACION,TIPO,CASILLA,BASE,IVA,DOCUMENTOS)
+                VALUES (@id,@Tipo,@Casilla,@Base,@Iva,@Documentos)
+                """, new { id, Tipo = casilla.Grupo == "Ventas" ? 2 : 1, casilla.Casilla, casilla.Base, casilla.Iva, casilla.Documentos }, transaction);
         }
 
         await transaction.CommitAsync();
@@ -225,6 +235,8 @@ public sealed class EDeclaraDeclaracionesService
                         IDUSUARIO INT NOT NULL, ANIO INT NOT NULL, PERIODO INT NOT NULL,
                         BASECOMPRAS DECIMAL(18,2) NOT NULL DEFAULT 0, IVACOMPRAS DECIMAL(18,2) NOT NULL DEFAULT 0,
                         BASENOTASCREDITO DECIMAL(18,2) NOT NULL DEFAULT 0, IVANOTASCREDITO DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        BASEVENTAS DECIMAL(18,2) NOT NULL DEFAULT 0, IVAVENTAS DECIMAL(18,2) NOT NULL DEFAULT 0,
+                        BASENOTASCREDVENTAS DECIMAL(18,2) NOT NULL DEFAULT 0, IVANOTASCREDVENTAS DECIMAL(18,2) NOT NULL DEFAULT 0,
                         RETENCIONESIVA DECIMAL(18,2) NOT NULL DEFAULT 0, TOTALDOCUMENTOS INT NOT NULL DEFAULT 0,
                         PENDIENTESCLASIFICACION INT NOT NULL DEFAULT 0, PUEDEGUARDAR BIT NOT NULL DEFAULT 0,
                         ESTADO BIT NOT NULL DEFAULT 1,
@@ -237,6 +249,10 @@ public sealed class EDeclaraDeclaracionesService
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','IVACOMPRAS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD IVACOMPRAS DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_IVACOMPRAS DEFAULT 0;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','BASENOTASCREDITO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD BASENOTASCREDITO DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_BASENC DEFAULT 0;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','IVANOTASCREDITO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD IVANOTASCREDITO DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_IVANC DEFAULT 0;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','BASEVENTAS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD BASEVENTAS DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_BASEVENTAS DEFAULT 0;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','IVAVENTAS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD IVAVENTAS DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_IVAVENTAS DEFAULT 0;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','BASENOTASCREDVENTAS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD BASENOTASCREDVENTAS DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_BASENCV DEFAULT 0;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','IVANOTASCREDVENTAS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD IVANOTASCREDVENTAS DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_IVANCV DEFAULT 0;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','RETENCIONESIVA') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD RETENCIONESIVA DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_RETIVA DEFAULT 0;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','TOTALDOCUMENTOS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD TOTALDOCUMENTOS INT NOT NULL CONSTRAINT DF_EDECLARA_DEC_DOCS DEFAULT 0;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','PENDIENTESCLASIFICACION') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD PENDIENTESCLASIFICACION INT NOT NULL CONSTRAINT DF_EDECLARA_DEC_PEND DEFAULT 0;
@@ -245,12 +261,13 @@ public sealed class EDeclaraDeclaracionesService
                 BEGIN
                     CREATE TABLE dbo.EDECLARA_DECLARACION_CASILLAS(
                         ID BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_EDECLARA_DECLARACION_CASILLAS PRIMARY KEY,
-                        IDDECLARACION BIGINT NOT NULL, CASILLA NVARCHAR(20) NOT NULL,
+                        IDDECLARACION BIGINT NOT NULL, TIPO INT NOT NULL DEFAULT 1, CASILLA NVARCHAR(20) NOT NULL,
                         BASE DECIMAL(18,2) NOT NULL DEFAULT 0, IVA DECIMAL(18,2) NOT NULL DEFAULT 0,
                         DOCUMENTOS INT NOT NULL DEFAULT 0,
                         CONSTRAINT FK_EDECLARA_DECLARACION_CASILLAS FOREIGN KEY(IDDECLARACION) REFERENCES dbo.EDECLARA_DECLARACIONES(ID)
                     );
                 END;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACION_CASILLAS','TIPO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACION_CASILLAS ADD TIPO INT NOT NULL CONSTRAINT DF_EDECLARA_DEC_CAS_TIPO DEFAULT 1;
                 """);
             _schemaEnsured = true;
         }

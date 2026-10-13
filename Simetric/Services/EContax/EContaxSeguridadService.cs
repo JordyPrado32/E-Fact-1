@@ -25,13 +25,42 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
     public async Task<List<EContaxMenu>> GetMenusAsync(int userId)
     {
         await using var db = await factory.CreateDbContextAsync();
+        await EContaxMenuCatalog.EnsureAsync(db);
         var miembro = await db.EContaxUsuariosContexto.AsNoTracking().FirstOrDefaultAsync(x => x.IdUsuario == userId);
         if (miembro is null || !miembro.Estado || miembro.Suspendido ||
             !await db.Usuarios.AnyAsync(x => x.IdUsuario == userId && x.Estado == true)) return new();
         var empresa = await db.EContaxEmpresas.AsNoTracking().SingleAsync(x => x.IdEmpresa == miembro.IdEmpresa);
         if (!empresa.Estado) return new();
         var menus = await db.EContaxMenus.AsNoTracking().Where(x => x.EstadoMenu == 1).ToListAsync();
+        var tipoUsuario = await db.Usuarios.AsNoTracking()
+            .Where(x => x.IdUsuario == userId)
+            .Select(x => x.IdTipoUsuario)
+            .FirstOrDefaultAsync();
+        var esSuperAdmin = string.Equals(
+            tipoUsuario?.ToString(),
+            AppAccessService.AdminRoleId,
+            StringComparison.OrdinalIgnoreCase);
+
+        if (esSuperAdmin) return menus;
+
         var permitidos = menus.Select(x => x.IdMenu).ToHashSet();
+        var idRolEContax = await db.Database.SqlQuery<int>($@"
+            SELECT TOP (1) ur.[id_rol] AS [Value]
+            FROM [dbo].[ECONTAX_USUARIO_ROL] ur
+            INNER JOIN [dbo].[rol] r ON r.[id_rol] = ur.[id_rol]
+            WHERE ur.[id_usuario] = {userId}
+              AND ISNULL(ur.[estado], 0) = 1
+              AND ISNULL(r.[estado_rol], 0) = 1
+            ORDER BY ur.[id_rol]").FirstOrDefaultAsync();
+        var usaRolEContax = idRolEContax > 0;
+        if (usaRolEContax)
+        {
+            var menusDelRol = await db.Database.SqlQuery<int>($@"
+                SELECT rm.[id_menu] AS [Value]
+                FROM [dbo].[ECONTAX_ROL_MENU] rm
+                WHERE rm.[id_rol] = {idRolEContax}").ToListAsync();
+            permitidos.IntersectWith(menusDelRol);
+        }
         if (empresa.MenusJson is not null) permitidos.IntersectWith(LeerMenus(empresa.MenusJson));
         if (empresa.IdTitular != userId)
         {
@@ -39,7 +68,7 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                 .FirstOrDefaultAsync(x => x.IdEmpresa == miembro.IdEmpresa && x.IdSucursal == miembro.IdSucursal && x.Estado);
             if (sucursal is null) return new();
             if (sucursal.MenusJson is not null) permitidos.IntersectWith(LeerMenus(sucursal.MenusJson));
-            if (!miembro.EsAdminSucursal)
+            if (!miembro.EsAdminSucursal && !usaRolEContax)
             {
                 var perfil = await db.EContaxPerfiles.AsNoTracking().FirstOrDefaultAsync(x =>
                     x.IdPerfil == miembro.IdPerfil && x.IdEmpresa == miembro.IdEmpresa && x.Estado &&

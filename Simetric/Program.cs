@@ -87,6 +87,7 @@ builder.Services.AddScoped<ContribuyenteEdeclaraService>();
 builder.Services.AddScoped<ComisionesService>();
 builder.Services.AddScoped<EDeclaraSriCredentialService>();
 builder.Services.AddScoped<EDeclaraComprasService>();
+builder.Services.AddScoped<EDeclaraClasificacionIaService>();
 builder.Services.AddScoped<EDeclaraDeclaracionesService>();
 
 // AUTENTICACION / AUTORIZACION

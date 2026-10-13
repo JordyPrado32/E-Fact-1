@@ -7,6 +7,7 @@
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject EDeclaraDeclaracionesService DeclaracionesService
+@inject EDeclaraClasificacionIaService ClasificacionIaService
 @inject IUsuarioService UsuarioService
 @inject NavigationManager Navigation
 
@@ -53,7 +54,7 @@
 
         @if (!string.IsNullOrWhiteSpace(mensaje))
         {
-            <section class="ec-alert ec-alert-success" role="status" aria-live="polite"><i class="ri-checkbox-circle-line"></i><span>@mensaje</span></section>
+            <section class="ec-alert @(mensajeError ? "ec-alert-error" : "ec-alert-success")" role="status" aria-live="polite"><i class="ri-@(mensajeError ? "error-warning" : "checkbox-circle")-line"></i><span>@mensaje</span></section>
         }
 
         @if (pasoActual == 1)
@@ -96,8 +97,11 @@
             <article><span>Documentos</span><strong>@analisis.TotalDocumentos</strong><small>Período seleccionado</small></article>
             <article><span>Compras</span><strong>@Dinero(analisis.ComprasBase)</strong><small>Base imponible</small></article>
             <article><span>Notas de crédito</span><strong>@Dinero(analisis.NotasCreditoBase)</strong><small>Base a descontar</small></article>
+            <article><span>Ventas</span><strong>@Dinero(analisis.VentasBase)</strong><small>Base imponible</small></article>
+            <article><span>IVA generado</span><strong>@Dinero(analisis.IvaGenerado)</strong><small>Ventas menos NC</small></article>
             <article><span>Base neta</span><strong>@Dinero(analisis.BaseNeta)</strong><small>Compras menos notas</small></article>
             <article><span>IVA neto</span><strong>@Dinero(analisis.IvaNeto)</strong><small>IVA de compras menos notas</small></article>
+            <article><span>Saldo antes de retenciones</span><strong>@Dinero(analisis.IvaAntesRetenciones)</strong><small>IVA generado menos crédito</small></article>
             <article class="@(analisis.PendientesClasificacion > 0 ? "is-pending" : "")"><span>Pendientes</span><strong>@analisis.PendientesClasificacion</strong><small>Actividad o casilla</small></article>
         </section>
 
@@ -126,7 +130,7 @@
             </div>
             @if (analisis.TieneBloqueos)
             {
-                <div class="ec-inline-warning"><i class="ri-lock-line"></i><span>Resuelve los bloqueos desde Compras antes de guardar el borrador.</span><button type="button" class="ec-link-btn" @onclick="IrACompras">Abrir Compras</button></div>
+                <div class="ec-inline-warning"><i class="ri-lock-line"></i><span>Resuelve los bloqueos antes de guardar el borrador.</span>@if (analisis.PendientesClasificacion > 0){<button type="button" class="ec-btn ec-btn-ai" disabled="@(ocupado || clasificandoIa)" @onclick="ClasificarConIaAsync">@if(clasificandoIa){<span class="spinner-border spinner-border-sm"></span>}else{<i class="ri-sparkling-2-line"></i>} Clasificar con IA</button>}<button type="button" class="ec-link-btn" @onclick="IrACompras">Abrir Compras</button></div>
             }
         </section>
 
@@ -141,24 +145,24 @@
             <div class="ec-editor-head"><div><span class="ec-kicker">Paso 3 · Revisar</span><h2>Casillas de la declaración</h2><p class="ec-subtitle">Los valores se calculan desde los documentos clasificados del período.</p></div><button type="button" class="ec-btn ec-btn-primary" disabled="@(ocupado || !analisis.PuedeGuardarBorrador)" @onclick="SolicitarGuardado"><i class="ri-save-3-line"></i> Guardar borrador</button></div>
             <div class="ec-table-wrap">
                 <table class="ec-table">
-                    <thead><tr><th>Casilla</th><th class="number">Base</th><th class="number">IVA</th><th>Documentos</th></tr></thead>
+                    <thead><tr><th>Origen</th><th>Casilla</th><th class="number">Base</th><th class="number">IVA</th><th>Documentos</th></tr></thead>
                     <tbody>
                     @if (analisis.Casillas.Count == 0)
                     {
-                        <tr><td colspan="4"><div class="ec-empty"><i class="ri-inbox-archive-line"></i><strong>No hay documentos para analizar</strong><span>Consulta o importa los comprobantes desde Compras.</span><button type="button" class="ec-link-btn" @onclick="IrACompras">Ir a Compras</button></div></td></tr>
+                        <tr><td colspan="5"><div class="ec-empty"><i class="ri-inbox-archive-line"></i><strong>No hay documentos para analizar</strong><span>Consulta o importa los comprobantes desde Compras.</span><button type="button" class="ec-link-btn" @onclick="IrACompras">Ir a Compras</button></div></td></tr>
                     }
                     @foreach (var item in analisis.Casillas)
                     {
-                        <tr @key="item.Casilla"><td><strong>@item.Casilla</strong></td><td class="number">@Dinero(item.Base)</td><td class="number">@Dinero(item.Iva)</td><td>@item.Documentos</td></tr>
+                        <tr @key="item.Grupo + item.Casilla"><td><span class="ec-badge">@item.Grupo</span></td><td><strong>@item.Casilla</strong></td><td class="number">@Dinero(item.Base)</td><td class="number">@Dinero(item.Iva)</td><td>@item.Documentos</td></tr>
                     }
                     </tbody>
                     @if (analisis.Casillas.Count > 0)
                     {
-                        <tfoot><tr><td><strong>Total neto</strong></td><td class="number"><strong>@Dinero(analisis.BaseNeta)</strong></td><td class="number"><strong>@Dinero(analisis.IvaNeto)</strong></td><td><strong>@analisis.Casillas.Sum(x => x.Documentos)</strong></td></tr></tfoot>
+                        <tfoot><tr><td colspan="2"><strong>Totales</strong></td><td class="number"><strong>@Dinero(analisis.BaseNeta + analisis.VentasBase - analisis.NotasCreditoVentasBase)</strong></td><td class="number"><strong>@Dinero(analisis.IvaNeto + analisis.IvaGenerado)</strong></td><td><strong>@analisis.Casillas.Sum(x => x.Documentos)</strong></td></tr></tfoot>
                     }
                 </table>
             </div>
-            <div class="ec-summary-footer"><span><i class="ri-shield-check-line"></i> Retenciones de IVA identificadas: <strong>@Dinero(analisis.RetencionesIva)</strong></span><span><i class="ri-information-line"></i> Las advertencias de clasificación no bloquean el borrador.</span></div>
+            <div class="ec-summary-footer"><span><i class="ri-shield-check-line"></i> Retenciones de IVA identificadas: <strong>@Dinero(analisis.RetencionesIva)</strong></span><span><i class="ri-calculator-line"></i> Saldo estimado después de retenciones: <strong>@Dinero(analisis.IvaDespuesRetenciones)</strong></span></div>
         </section>
         }
         }
@@ -193,6 +197,9 @@
     private int periodo = DateTime.Today.Month;
     private bool cargando = true;
     private bool ocupado;
+    private bool clasificandoIa;
+    private bool clasificacionAutomaticaIntentada;
+    private bool mensajeError;
     private int pasoActual = 1;
     private bool mostrarConfirmacionGuardado;
     private EDeclaraDeclaracionValidacion? validacionSeleccionada;
@@ -229,6 +236,7 @@
             perfilNombre = cuenta is null ? "Cuenta E-Declara" : (!string.IsNullOrWhiteSpace(cuenta.NombreEmpresa) ? cuenta.NombreEmpresa : cuenta.NombreCompleto);
             perfilIdentificacion = cuenta?.Identificacion?.Trim() ?? string.Empty;
             await AnalizarAsync();
+            await ClasificarPendientesAutomaticamenteAsync();
         }
         catch (Exception ex)
         {
@@ -240,8 +248,8 @@
         }
     }
 
-    private async Task CambiarAnioAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) anio = value; pasoActual = 1; await AnalizarAsync(); }
-    private async Task CambiarPeriodoAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) periodo = value; pasoActual = 1; await AnalizarAsync(); }
+    private async Task CambiarAnioAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) anio = value; pasoActual = 1; clasificacionAutomaticaIntentada = false; await AnalizarAsync(); await ClasificarPendientesAutomaticamenteAsync(); }
+    private async Task CambiarPeriodoAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) periodo = value; pasoActual = 1; clasificacionAutomaticaIntentada = false; await AnalizarAsync(); await ClasificarPendientesAutomaticamenteAsync(); }
 
     private async Task IrAValidacionAsync() { pasoActual = 2; await AnalizarAsync(); }
     private void IrPaso(int paso) { if (paso == 3 && !analisis.PuedeGuardarBorrador) { pasoActual = 2; return; } pasoActual = paso; }
@@ -274,7 +282,7 @@
         "IMPORTES" => "Revisa que la base imponible y el IVA de los documentos sean valores no negativos.",
         "DUPLICADOS" => "Elimina el registro repetido o conserva solo el comprobante válido antes de analizar nuevamente.",
         "NOTAS" => "Cada nota de crédito debe estar relacionada con una factura del mismo proveedor y período.",
-        "CLASIFICACION" => "Asigna la actividad y casilla correspondiente a cada factura y nota de crédito.",
+         "CLASIFICACION" => "Ejecuta la clasificación automática con IA. Solo se guardarán actividades y casillas existentes en el catálogo E-Declara.",
         _ => "Revisa el detalle en el módulo Compras."
     };
 
@@ -284,6 +292,7 @@
         ocupado = true;
         error = string.Empty;
         mensaje = string.Empty;
+        mensajeError = false;
         try { analisis = await DeclaracionesService.AnalizarAsync(userId, anio, periodo); }
         catch (Exception ex) { error = ex.Message; }
         finally { ocupado = false; }
@@ -294,9 +303,37 @@
         ocupado = true;
         error = string.Empty;
         mensaje = string.Empty;
+        mensajeError = false;
         try { await DeclaracionesService.GuardarAsync(userId, analisis); mensaje = "Borrador guardado correctamente."; }
         catch (Exception ex) { error = ex.Message; }
         finally { ocupado = false; }
+    }
+
+    private async Task ClasificarConIaAsync()
+    {
+        ocupado = clasificandoIa = true;
+        error = string.Empty;
+        mensaje = string.Empty;
+        mensajeError = false;
+        try
+        {
+            var resultado = await ClasificacionIaService.ClasificarAsync(userId, anio, periodo);
+            var detalle = resultado.Errores.Count > 0 ? $" {string.Join(" | ", resultado.Errores.Take(3))}" : string.Empty;
+            await AnalizarAsync();
+            mensajeError = resultado.Clasificados == 0 && resultado.TieneErrores;
+            mensaje = resultado.Clasificados == 0
+                ? $"No se clasificaron documentos automáticamente.{detalle}"
+                : $"IA clasificó {resultado.Clasificados} documento(s). Pendientes: {resultado.Pendientes}.{detalle}";
+        }
+        catch (Exception ex) { mensajeError = true; mensaje = $"No se pudo ejecutar la clasificación automática: {ex.Message}"; }
+        finally { ocupado = clasificandoIa = false; }
+    }
+
+    private async Task ClasificarPendientesAutomaticamenteAsync()
+    {
+        if (clasificacionAutomaticaIntentada || analisis.PendientesClasificacion == 0) return;
+        clasificacionAutomaticaIntentada = true;
+        await ClasificarConIaAsync();
     }
 
     private static string NombrePeriodo(int value) => System.Globalization.CultureInfo.GetCultureInfo("es-EC").DateTimeFormat.GetMonthName(value);

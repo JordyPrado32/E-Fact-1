@@ -181,6 +181,7 @@ public class EContaxAdministracionService
     public async Task<List<EContaxMenu>> GetEContaxMenusAsync(bool includeInactivos = false)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();
+        await EContaxMenuCatalog.EnsureAsync(context);
 
         var query = context.EContaxMenus
             .AsNoTracking();
@@ -207,6 +208,7 @@ public class EContaxAdministracionService
         }
 
         await using var context = await _dbFactory.CreateDbContextAsync();
+        await EContaxMenuCatalog.EnsureAsync(context);
 
         var rolValido = await context.EContaxRoles
             .AsNoTracking()
@@ -374,6 +376,19 @@ public class EContaxAdministracionService
                     return false;
                 }
 
+                var nombreRol = await context.EContaxRoles
+                    .Where(item => item.IdRol == idRol)
+                    .Select(item => item.NombreRol)
+                    .FirstOrDefaultAsync();
+
+                if (string.Equals(nombreRol?.Trim(), "JEFE_EMPRESA", StringComparison.OrdinalIgnoreCase))
+                {
+                    idMenus = await context.EContaxMenus
+                        .Where(item => item.EstadoMenu == 1)
+                        .Select(item => item.IdMenu)
+                        .ToListAsync();
+                }
+
                 var idsValidos = await context.EContaxMenus
                     .AsNoTracking()
                     .Where(item =>
@@ -419,6 +434,28 @@ public class EContaxAdministracionService
             {
                 await using var context = await _dbFactory.CreateDbContextAsync();
                 await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+
+                var tipoUsuario = await context.Usuarios
+                    .AsNoTracking()
+                    .Where(item => item.IdUsuario == idUsuario)
+                    .Select(item => item.IdTipoUsuario)
+                    .FirstOrDefaultAsync();
+
+                if (string.Equals(tipoUsuario?.ToString(), AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase))
+                {
+                    idRol = await context.EContaxRoles
+                        .Where(item => item.EstadoRol == 1)
+                        .Where(item => item.NombreRol != null &&
+                            (item.NombreRol.Trim().ToUpper() == "JEFE_EMPRESA" || item.NombreRol.Trim().ToUpper().Contains("JEFE")))
+                        .OrderBy(item => item.IdRol)
+                        .Select(item => item.IdRol)
+                        .FirstOrDefaultAsync();
+
+                    if (idRol <= 0)
+                    {
+                        return false;
+                    }
+                }
 
                 var rolValido = await context.EContaxRoles.AnyAsync(item =>
                     item.IdRol == idRol &&

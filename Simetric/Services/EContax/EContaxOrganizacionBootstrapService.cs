@@ -375,5 +375,7 @@ BEGIN
       AND [ESTADO] = 1;
 END;
 """);
+
+        await EContaxMenuCatalog.EnsureAsync(context);
     }
 }

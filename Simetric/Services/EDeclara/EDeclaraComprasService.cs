@@ -4,6 +4,9 @@ using System.Text.Json;
 using System.Xml.Linq;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
+using Simetric.Data;
+using Simetric.Models;
 using Simetric.Models.EDeclara;
 
 namespace Simetric.Services.EDeclara;
@@ -16,15 +19,18 @@ public sealed class EDeclaraComprasService
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly EDeclaraSriCredentialService _credentialService;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
     public EDeclaraComprasService(
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
-        EDeclaraSriCredentialService credentialService)
+        EDeclaraSriCredentialService credentialService,
+        IDbContextFactory<AppDbContext> dbFactory)
     {
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
         _credentialService = credentialService;
+        _dbFactory = dbFactory;
         _connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("No se encontró la cadena de conexión 'DefaultConnection'.");
     }
@@ -79,9 +85,9 @@ public sealed class EDeclaraComprasService
             SELECT ID AS Id, DESCRIPCION AS Descripcion FROM EDECLARA_COMPRA_ACTIVIDADES
              WHERE ESTADO=1 ORDER BY DESCRIPCION
             """)).ToList();
-        var casillas = (await db.QueryAsync<(string Id, string Descripcion, bool Compras, bool NotasCredito, string CasillaAsociada)>("""
+        var casillas = (await db.QueryAsync<(string Id, string Descripcion, bool Compras, bool NotasCredito, bool Ventas, bool NotasCreditoVentas, string CasillaAsociada)>("""
             SELECT ID AS Id, DESCRIPCION AS Descripcion, COMPRAS AS Compras, NOTASCREDITO AS NotasCredito,
-                   CASILLAASOCIADA AS CasillaAsociada
+                   VENTAS AS Ventas, NOTASCREDVENTAS AS NotasCreditoVentas, CASILLAASOCIADA AS CasillaAsociada
               FROM EDECLARA_COMPRA_CASILLAS WHERE ESTADO=1 ORDER BY TRY_CONVERT(INT,ID), ID
             """)).ToList();
         var tarifas = (await db.QueryAsync<EDeclaraTarifaCompra>("""
@@ -93,6 +99,8 @@ public sealed class EDeclaraComprasService
             Actividades = actividades,
             CasillasCompras = casillas.Where(x => x.Compras).Select(x => new EDeclaraCasillaCompra(x.Id, x.Descripcion, x.CasillaAsociada)).ToList(),
             CasillasNotasCredito = casillas.Where(x => x.NotasCredito).Select(x => new EDeclaraCasillaCompra(x.Id, x.Descripcion, x.CasillaAsociada)).ToList(),
+            CasillasVentas = casillas.Where(x => x.Ventas).Select(x => new EDeclaraCasillaCompra(x.Id, x.Descripcion, x.CasillaAsociada) { EsVenta = true }).ToList(),
+            CasillasNotasCreditoVentas = casillas.Where(x => x.NotasCreditoVentas).Select(x => new EDeclaraCasillaCompra(x.Id, x.Descripcion, x.CasillaAsociada) { EsVenta = true }).ToList(),
             Tarifas = tarifas
         };
     }
@@ -107,11 +115,11 @@ public sealed class EDeclaraComprasService
         documento.Serie = NormalizarSerie(documento.Serie);
         documento.NumeroDocumentoModificado = NormalizarNumeroOpcional(documento.NumeroDocumentoModificado);
         documento.SerieDocumentoModificado = NormalizarSerieOpcional(documento.SerieDocumentoModificado);
-        if (documento.TipoDocumento == 3)
+        if (documento.TipoDocumento is 3 or 4)
         {
             var factura = await BuscarFacturaRelacionadaAsync(userId, documento.IdContribuyente, documento.Anio, documento.Periodo,
-                documento.SerieDocumentoModificado, documento.NumeroDocumentoModificado, documento.Ruc);
-            if (factura is null) throw new InvalidOperationException("La factura relacionada no está registrada en compras para este período y proveedor.");
+                documento.SerieDocumentoModificado, documento.NumeroDocumentoModificado, documento.Ruc, documento.TipoDocumento == 4 ? 2 : 1);
+            if (factura is null) throw new InvalidOperationException("La factura relacionada no está registrada para este período y tercero.");
             documento.RazonSocial = string.IsNullOrWhiteSpace(documento.RazonSocial) ? factura.RazonSocial : documento.RazonSocial;
             documento.Concepto = string.IsNullOrWhiteSpace(documento.Concepto) ? factura.Concepto : documento.Concepto;
             documento.TipoFacturacion ??= factura.TipoFacturacion;
@@ -173,6 +181,132 @@ public sealed class EDeclaraComprasService
         return id;
     }
 
+    public async Task<EDeclaraImportacionResultado> SincronizarVentasEFactAsync(int userId, int anio, int periodo, int tipoDocumento)
+    {
+        if (tipoDocumento is not (2 or 4))
+            throw new InvalidOperationException("La sincronización E-Fact solo aplica a ventas y notas de crédito de ventas.");
+
+        await EnsureSchemaAsync();
+        await ValidarPerfilAsync(userId);
+        var (desde, hasta) = ObtenerRangoPeriodo(anio, periodo);
+        var importados = 0;
+        var omitidos = 0;
+        var errores = new List<string>();
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        if (tipoDocumento == 2)
+        {
+            var ventas = await db.Facturas.AsNoTracking()
+                .Include(x => x.CodclientesNavigation)
+                .Include(x => x.CodemisorNavigation)
+                .Where(x => x.Idusuario == userId && x.Coddocumento == 1 && x.Estado != false
+                    && (x.Autorizado == true || x.Estadoenviosri == DocumentoAutorizacionHelper.EstadoAutorizado)
+                    && (x.Fchautorizacion ?? x.Fechaentrega) >= desde
+                    && (x.Fchautorizacion ?? x.Fechaentrega) < hasta)
+                .OrderBy(x => x.Fchautorizacion ?? x.Fechaentrega)
+                .ThenBy(x => x.Serie).ThenBy(x => x.Numfactura)
+                .ToListAsync();
+
+            foreach (var venta in ventas)
+            {
+                var fecha = venta.Fchautorizacion ?? venta.Fechaentrega;
+                var cliente = venta.CodclientesNavigation;
+                var emisor = venta.CodemisorNavigation;
+                var baseImponible = venta.Subtotal ?? ((venta.Subtotal12 ?? 0m) + (venta.Subtotal0 ?? 0m));
+                var documento = new EDeclaraCompraDocumento
+                {
+                    Anio = anio,
+                    Periodo = periodo,
+                    TipoDocumento = 2,
+                    Serie = venta.Serie ?? string.Empty,
+                    Numero = venta.Numfactura ?? string.Empty,
+                    FechaEmision = fecha!.Value.Date,
+                    Ruc = cliente?.Numeroidentificacion ?? string.Empty,
+                    RazonSocial = NombreCliente(cliente),
+                    IdentificacionComprador = emisor?.Ruc ?? string.Empty,
+                    Concepto = "Venta emitida en E-Fact",
+                    Tarifa = ObtenerTarifa(baseImponible, venta.Iva ?? 0m),
+                    BaseImponible = baseImponible,
+                    Iva = venta.Iva ?? 0m,
+                    NumeroAutorizacion = venta.Numautorizacion ?? venta.Codclave ?? string.Empty,
+                    Origen = "EFACT"
+                };
+                var resultado = await GuardarSincronizadoAsync(userId, documento);
+                if (resultado.Importado) importados++;
+                else if (resultado.Omitido) omitidos++;
+                else if (resultado.Error is not null) errores.Add(resultado.Error);
+            }
+        }
+        else
+        {
+            var notas = await (
+                from nc in db.NotaCreditos.AsNoTracking()
+                join f in db.Facturas.AsNoTracking() on nc.IdDocModificado equals f.Codfactura
+                join c0 in db.Clientes.AsNoTracking() on nc.CodClientes equals c0.Codcliente into clientes
+                from c in clientes.DefaultIfEmpty()
+                join e0 in db.Emisores.AsNoTracking() on nc.CodEmisor equals e0.Codigo into emisores
+                from e in emisores.DefaultIfEmpty()
+                where nc.Usuario == userId && nc.Estado == true
+                    && nc.Autorizado == DocumentoAutorizacionHelper.EstadoAutorizado
+                    && f.Coddocumento == 1
+                    && (nc.FchAutorizacion ?? nc.FechaEmiDocModificado) >= desde
+                    && (nc.FchAutorizacion ?? nc.FechaEmiDocModificado) < hasta
+                orderby nc.FchAutorizacion ?? nc.FechaEmiDocModificado, nc.Serie, nc.NumNotaCredito
+                select new { Nota = nc, Factura = f, Cliente = c, Emisor = e })
+                .ToListAsync();
+
+            foreach (var item in notas)
+            {
+                var nota = item.Nota;
+                var fecha = nota.FchAutorizacion ?? nota.FechaEmiDocModificado;
+                var baseImponible = nota.Subtotal ?? 0m;
+                var documento = new EDeclaraCompraDocumento
+                {
+                    Anio = anio,
+                    Periodo = periodo,
+                    TipoDocumento = 4,
+                    Serie = nota.Serie ?? string.Empty,
+                    Numero = nota.NumNotaCredito ?? string.Empty,
+                    FechaEmision = fecha!.Value.Date,
+                    Ruc = item.Cliente?.Numeroidentificacion ?? string.Empty,
+                    RazonSocial = NombreCliente(item.Cliente),
+                    IdentificacionComprador = item.Emisor?.Ruc ?? string.Empty,
+                    Concepto = string.IsNullOrWhiteSpace(nota.Motivo) ? "Nota de crédito de venta emitida en E-Fact" : nota.Motivo,
+                    BaseImponible = baseImponible,
+                    Iva = nota.Iva ?? 0m,
+                    Tarifa = ObtenerTarifa(baseImponible, nota.Iva ?? 0m),
+                    SerieDocumentoModificado = item.Factura.Serie ?? string.Empty,
+                    NumeroDocumentoModificado = item.Factura.Numfactura ?? nota.NumDocModificado ?? string.Empty,
+                    NumeroAutorizacion = nota.NumAutorizacion ?? nota.CodClave ?? string.Empty,
+                    Origen = "EFACT"
+                };
+                var resultado = await GuardarSincronizadoAsync(userId, documento);
+                if (resultado.Importado) importados++;
+                else if (resultado.Omitido) omitidos++;
+                else if (resultado.Error is not null) errores.Add(resultado.Error);
+            }
+        }
+
+        return new EDeclaraImportacionResultado(importados, omitidos, errores);
+    }
+
+    private async Task<(bool Importado, bool Omitido, string? Error)> GuardarSincronizadoAsync(int userId, EDeclaraCompraDocumento documento)
+    {
+        try
+        {
+            await GuardarAsync(userId, documento);
+            return (true, false, null);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("ya está registrado", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, true, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, false, $"{documento.Serie}-{documento.Numero}: {ex.Message}");
+        }
+    }
+
     public async Task ActualizarClasificacionAsync(int userId, long id, int? actividad, string? casilla)
     {
         await EnsureSchemaAsync();
@@ -223,7 +357,7 @@ public sealed class EDeclaraComprasService
     }
 
     public async Task<EDeclaraImportacionResultado> ImportarXmlAsync(
-        int userId, int contribuyenteId, int anio, int periodo, IEnumerable<(string Nombre, string Xml)> archivos, string origen = "XML")
+        int userId, int contribuyenteId, int anio, int periodo, IEnumerable<(string Nombre, string Xml)> archivos, string origen = "XML", int tipoFactura = 1)
     {
         var identificacion = await ValidarPerfilAsync(userId);
         contribuyenteId = userId;
@@ -234,7 +368,7 @@ public sealed class EDeclaraComprasService
         {
             try
             {
-                var registros = ParsearXml(archivo.Xml, contribuyenteId, anio, periodo, identificacion, origen);
+                var registros = ParsearXml(archivo.Xml, contribuyenteId, anio, periodo, identificacion, origen, tipoFactura);
                 foreach (var registro in registros)
                 {
                     try { await GuardarAsync(userId, registro); importados++; }
@@ -279,7 +413,7 @@ public sealed class EDeclaraComprasService
     }
 
     public async Task<EDeclaraCompraDocumento?> BuscarFacturaRelacionadaAsync(
-        int userId, int contribuyenteId, int anio, int periodo, string serie, string numero, string ruc)
+        int userId, int contribuyenteId, int anio, int periodo, string serie, string numero, string ruc, int tipoFactura = 1)
     {
         await EnsureSchemaAsync();
         contribuyenteId = userId;
@@ -292,7 +426,7 @@ public sealed class EDeclaraComprasService
               FROM EDECLARA_COMPRA_DOCUMENTOS d
               LEFT JOIN EDECLARA_COMPRA_CASILLAS c ON c.ID=d.CASILLA
              WHERE d.IDUSUARIO=@userId AND d.IDCONTRIBUYENTE=@contribuyenteId AND d.ANIO=@anio AND d.PERIODO=@periodo
-               AND d.TIPODOCUMENTO=1 AND d.SERIE=@serie AND d.NUMERO=@numero AND d.RUC=@ruc AND d.ESTADO=1
+               AND d.TIPODOCUMENTO=@tipoFactura AND d.SERIE=@serie AND d.NUMERO=@numero AND d.RUC=@ruc AND d.ESTADO=1
              ORDER BY d.ID DESC
             """, new
         {
@@ -300,6 +434,7 @@ public sealed class EDeclaraComprasService
             contribuyenteId,
             anio,
             periodo,
+            tipoFactura,
             serie = NormalizarSerie(serie),
             numero = NormalizarNumero(numero),
             ruc = SoloDigitos(ruc)
@@ -392,7 +527,7 @@ public sealed class EDeclaraComprasService
     }
 
     private static IReadOnlyList<EDeclaraCompraDocumento> ParsearXml(
-        string xml, int contribuyenteId, int anio, int periodo, string identificacionEsperada, string origen)
+        string xml, int contribuyenteId, int anio, int periodo, string identificacionEsperada, string origen, int tipoFactura)
     {
         if (string.IsNullOrWhiteSpace(xml)) throw new InvalidOperationException("El XML está vacío.");
         var envoltura = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
@@ -401,7 +536,8 @@ public sealed class EDeclaraComprasService
         var raiz = documento.Root?.DescendantsAndSelf().FirstOrDefault(x => x.Name.LocalName is "factura" or "notaCredito" or "comprobanteRetencion")
             ?? throw new InvalidOperationException("El XML no corresponde a una factura, nota de crédito ni comprobante de retención.");
         var esRetencion = raiz.Name.LocalName == "comprobanteRetencion";
-        var tipo = esRetencion ? 6 : raiz.Name.LocalName == "notaCredito" ? 3 : 1;
+        var esNotaCredito = raiz.Name.LocalName == "notaCredito";
+        var tipo = esRetencion ? 6 : esNotaCredito ? tipoFactura == 2 ? 4 : 3 : tipoFactura;
         string Valor(string nombre) => raiz.Descendants().FirstOrDefault(x => x.Name.LocalName == nombre)?.Value.Trim() ?? string.Empty;
         var infoTributaria = raiz.Elements().FirstOrDefault(x => x.Name.LocalName == "infoTributaria");
         var infoRetencion = raiz.Elements().FirstOrDefault(x => x.Name.LocalName == "infoCompRetencion");
@@ -410,19 +546,21 @@ public sealed class EDeclaraComprasService
         var fecha = ParseFecha(fechaTexto) ?? throw new InvalidOperationException("El XML no contiene una fecha de emisión válida.");
         ValidarPeriodo(fecha, anio, periodo);
         var comprador = esRetencion ? ValorEn(infoRetencion, "identificacionSujetoRetenido") : Valor("identificacionComprador");
-        if (!CoincideIdentificacion(comprador, identificacionEsperada))
+        var ruc = ValorEn(infoTributaria, "ruc");
+        var identificacionDocumento = tipo is 2 or 4 ? ruc : comprador;
+        if (!CoincideIdentificacion(identificacionDocumento, identificacionEsperada))
             throw new InvalidOperationException("El comprobante no pertenece a la identificación configurada en Mi perfil.");
         var serie = ValorEn(infoTributaria, "estab") + ValorEn(infoTributaria, "ptoEmi");
         var numero = ValorEn(infoTributaria, "secuencial");
-        var ruc = ValorEn(infoTributaria, "ruc");
-        var razon = ValorEn(infoTributaria, "razonSocial");
+        var razonComprador = Valor("razonSocialComprador");
+        var razon = tipo is 2 or 4 && !string.IsNullOrWhiteSpace(razonComprador) ? razonComprador : ValorEn(infoTributaria, "razonSocial");
         var autorizacion = envoltura.Descendants().FirstOrDefault(x => x.Name.LocalName == "numeroAutorizacion")?.Value.Trim() ?? Valor("claveAcceso");
         var detalleNodos = raiz.Descendants().Where(x => x.Name.LocalName == "detalle").ToList();
         var detalles = detalleNodos.Select(x => x.Elements().FirstOrDefault(e => e.Name.LocalName == "descripcion")?.Value.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToList();
         if (esRetencion)
             detalles = raiz.Descendants().Where(x => x.Name.LocalName == "impuesto").Select(x =>
                 $"Código {Child(x, "codigoRetencion")}: base {Child(x, "baseImponible")}, retenido {Child(x, "valorRetenido")}").ToList();
-        var concepto = detalles.FirstOrDefault() ?? (tipo == 1 ? "Compra importada" : tipo == 3 ? "Nota de crédito importada" : "Retención importada");
+        var concepto = detalles.FirstOrDefault() ?? (tipo == 1 ? "Compra importada" : tipo == 2 ? "Venta importada" : tipo is 3 or 4 ? "Nota de crédito importada" : "Retención importada");
         var modificado = Valor("numDocModificado").Replace("-", string.Empty, StringComparison.Ordinal);
         var impuestos = esRetencion
             ? raiz.Descendants().Where(x => x.Name.LocalName == "impuesto")
@@ -457,12 +595,12 @@ public sealed class EDeclaraComprasService
 
     private static void ValidarDocumento(EDeclaraCompraDocumento d, string identificacionPerfil)
     {
-        if (d.TipoDocumento is not (1 or 3 or 6)) throw new InvalidOperationException("Tipo de documento inválido.");
+        if (d.TipoDocumento is not (1 or 2 or 3 or 4 or 6)) throw new InvalidOperationException("Tipo de documento inválido.");
         if (string.IsNullOrWhiteSpace(d.Serie)) throw new InvalidOperationException("Ingresa la serie.");
         if (string.IsNullOrWhiteSpace(d.Numero)) throw new InvalidOperationException("Ingresa el número del documento.");
         if (d.FechaEmision == default) throw new InvalidOperationException("Ingresa la fecha de emisión.");
         ValidarPeriodo(d.FechaEmision, d.Anio, d.Periodo);
-        if (!d.EsFaltante && string.IsNullOrWhiteSpace(d.Ruc)) throw new InvalidOperationException("Ingresa la identificación del proveedor.");
+        if (!d.EsFaltante && string.IsNullOrWhiteSpace(d.Ruc)) throw new InvalidOperationException(d.TipoDocumento is 2 or 4 ? "Ingresa la identificación del cliente." : "Ingresa la identificación del proveedor.");
         if (!d.EsFaltante && !string.IsNullOrWhiteSpace(d.IdentificacionComprador) && !CoincideIdentificacion(d.IdentificacionComprador, identificacionPerfil))
             throw new InvalidOperationException("El documento no pertenece a la identificación configurada en Mi perfil.");
         if (d.BaseImponible < 0 || d.Iva < 0 || d.Tarifa < 0) throw new InvalidOperationException("Los valores tributarios no pueden ser negativos.");
@@ -472,6 +610,21 @@ public sealed class EDeclaraComprasService
     {
         var valida = fecha.Year == anio && (periodo switch { 13 => fecha.Month <= 6, 14 => fecha.Month >= 7, >= 1 and <= 12 => fecha.Month == periodo, _ => false });
         if (!valida) throw new InvalidOperationException("La fecha de emisión no pertenece al período seleccionado.");
+    }
+
+    private static (DateTime Desde, DateTime Hasta) ObtenerRangoPeriodo(int anio, int periodo)
+    {
+        if (periodo is >= 1 and <= 12)
+        {
+            var desde = new DateTime(anio, periodo, 1);
+            return (desde, desde.AddMonths(1));
+        }
+        return periodo switch
+        {
+            13 => (new DateTime(anio, 1, 1), new DateTime(anio, 7, 1)),
+            14 => (new DateTime(anio, 7, 1), new DateTime(anio + 1, 1, 1)),
+            _ => throw new InvalidOperationException("El período seleccionado no es válido.")
+        };
     }
 
     public async Task EnsureSchemaAsync()
@@ -518,19 +671,32 @@ public sealed class EDeclaraComprasService
         END;
         IF OBJECT_ID('dbo.EDECLARA_COMPRA_CASILLAS','U') IS NULL
         BEGIN
-          CREATE TABLE dbo.EDECLARA_COMPRA_CASILLAS(ID NVARCHAR(20) NOT NULL PRIMARY KEY,DESCRIPCION NVARCHAR(300) NOT NULL,COMPRAS BIT NOT NULL DEFAULT 0,NOTASCREDITO BIT NOT NULL DEFAULT 0,CASILLAASOCIADA NVARCHAR(20) NOT NULL DEFAULT '',ESTADO BIT NOT NULL DEFAULT 1);
+          CREATE TABLE dbo.EDECLARA_COMPRA_CASILLAS(ID NVARCHAR(20) NOT NULL PRIMARY KEY,DESCRIPCION NVARCHAR(300) NOT NULL,COMPRAS BIT NOT NULL DEFAULT 0,NOTASCREDITO BIT NOT NULL DEFAULT 0,VENTAS BIT NOT NULL DEFAULT 0,NOTASCREDVENTAS BIT NOT NULL DEFAULT 0,CASILLAASOCIADA NVARCHAR(20) NOT NULL DEFAULT '',ESTADO BIT NOT NULL DEFAULT 1);
           IF OBJECT_ID('dbo.GTCASILLAS','U') IS NOT NULL
-            EXEC('INSERT INTO dbo.EDECLARA_COMPRA_CASILLAS(ID,DESCRIPCION,COMPRAS,NOTASCREDITO,CASILLAASOCIADA) SELECT idCasilla,ISNULL(descripcion,''''),ISNULL(compras,0),ISNULL(notasCredCompras,0),ISNULL(casillaAsociada,'''') FROM dbo.GTCASILLAS');
+            EXEC('INSERT INTO dbo.EDECLARA_COMPRA_CASILLAS(ID,DESCRIPCION,COMPRAS,NOTASCREDITO,VENTAS,NOTASCREDVENTAS,CASILLAASOCIADA) SELECT idCasilla,ISNULL(descripcion,''''),ISNULL(compras,0),ISNULL(notasCredCompras,0),ISNULL(ventas,0),ISNULL(notasCredVentas,0),ISNULL(casillaAsociada,'''') FROM dbo.GTCASILLAS');
           IF NOT EXISTS(SELECT 1 FROM dbo.EDECLARA_COMPRA_CASILLAS) INSERT INTO dbo.EDECLARA_COMPRA_CASILLAS VALUES
-            ('500','Compras locales gravadas',1,0,'535',1),('510','Compras con tarifa diferente de cero',1,0,'535',1),('520','Compras con tarifa cero',1,0,'535',1),('530','Adquisiciones del período',1,0,'535',1),('535','Notas de crédito en compras',0,1,'',1);
+            ('500','Compras locales gravadas',1,0,0,0,'535',1),('510','Compras con tarifa diferente de cero',1,0,0,0,'535',1),('520','Compras con tarifa cero',1,0,0,0,'535',1),('530','Adquisiciones del período',1,0,0,0,'535',1),('535','Notas de crédito en compras',0,1,0,0,'',1);
+        END;
+        IF COL_LENGTH('dbo.EDECLARA_COMPRA_CASILLAS','VENTAS') IS NULL ALTER TABLE dbo.EDECLARA_COMPRA_CASILLAS ADD VENTAS BIT NOT NULL CONSTRAINT DF_EDECLARA_CASILLA_VENTAS DEFAULT 0;
+        IF COL_LENGTH('dbo.EDECLARA_COMPRA_CASILLAS','NOTASCREDVENTAS') IS NULL ALTER TABLE dbo.EDECLARA_COMPRA_CASILLAS ADD NOTASCREDVENTAS BIT NOT NULL CONSTRAINT DF_EDECLARA_CASILLA_NCV DEFAULT 0;
+        IF OBJECT_ID('dbo.GTCASILLAS','U') IS NOT NULL
+        BEGIN
+          UPDATE c SET VENTAS=ISNULL(g.ventas,0),NOTASCREDVENTAS=ISNULL(g.notasCredVentas,0)
+            FROM dbo.EDECLARA_COMPRA_CASILLAS c INNER JOIN dbo.GTCASILLAS g ON g.idCasilla=c.ID;
         END;
         IF COL_LENGTH('dbo.EDECLARA_COMPRA_CASILLAS','CASILLAASOCIADA') IS NULL
           ALTER TABLE dbo.EDECLARA_COMPRA_CASILLAS ADD CASILLAASOCIADA NVARCHAR(20) NOT NULL CONSTRAINT DF_EDECLARA_COMPRA_CASILLA_ASOCIADA DEFAULT '';
+        IF NOT EXISTS(SELECT 1 FROM dbo.EDECLARA_COMPRA_CASILLAS WHERE ID='530')
+          INSERT INTO dbo.EDECLARA_COMPRA_CASILLAS(ID,DESCRIPCION,COMPRAS,NOTASCREDITO,CASILLAASOCIADA,ESTADO) VALUES('530','530',1,0,'',1);
         IF OBJECT_ID('dbo.EDECLARA_COMPRA_TARIFAS','U') IS NULL
         BEGIN
           CREATE TABLE dbo.EDECLARA_COMPRA_TARIFAS(VALOR DECIMAL(7,2) NOT NULL PRIMARY KEY,DESCRIPCION NVARCHAR(80) NOT NULL,ESTADO BIT NOT NULL DEFAULT 1);
           INSERT INTO dbo.EDECLARA_COMPRA_TARIFAS VALUES(0,'0%',1),(5,'5%',1),(8,'8%',1),(12,'12%',1),(13,'13%',1),(15,'15%',1),(20,'20%',1);
         END;
+        IF NOT EXISTS(SELECT 1 FROM dbo.EDECLARA_COMPRA_TARIFAS WHERE VALOR=5)
+          INSERT INTO dbo.EDECLARA_COMPRA_TARIFAS(VALOR,DESCRIPCION,ESTADO) VALUES(5,'5%',1);
+        IF NOT EXISTS(SELECT 1 FROM dbo.EDECLARA_COMPRA_TARIFAS WHERE VALOR=8)
+          INSERT INTO dbo.EDECLARA_COMPRA_TARIFAS(VALOR,DESCRIPCION,ESTADO) VALUES(8,'8%',1);
         """;
 
     private static string Child(XElement element, string name) => element.Elements().FirstOrDefault(x => x.Name.LocalName == name)?.Value.Trim() ?? string.Empty;
@@ -546,6 +712,8 @@ public sealed class EDeclaraComprasService
     private static decimal ParseDecimal(string? value) => decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var result) ? result : 0m;
     private static DateTime? ParseFecha(string? value) => DateTime.TryParseExact(value, new[] { "dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var result) ? result : null;
     private static string SoloDigitos(string? value) => new((value ?? string.Empty).Where(char.IsDigit).ToArray());
+    private static string NombreCliente(Cliente? cliente) => cliente is null ? string.Empty : (!string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial) ? cliente.Nombrerazonsocial : $"{cliente.Nombres} {cliente.Apellidos}".Trim());
+    private static decimal ObtenerTarifa(decimal baseImponible, decimal iva) => baseImponible <= 0m ? 0m : Math.Round(iva / baseImponible * 100m, 2);
     private static bool CoincideIdentificacion(string? a, string? b) { var x=SoloDigitos(a); var y=SoloDigitos(b); return x.Length >= 10 && y.Length >= 10 && x[..10] == y[..10]; }
     private static string NormalizarNumero(string value) => SoloDigitos(value).PadLeft(9, '0');
     private static string NormalizarNumeroOpcional(string value) => string.IsNullOrWhiteSpace(value) ? string.Empty : NormalizarNumero(value);
