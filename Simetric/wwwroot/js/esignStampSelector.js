@@ -43,7 +43,7 @@ export async function init(options, dotNetRef) {
     let activePlacementIndex = 0;
     let selectedPositions = [null, null];
 
-    const fixedStampWidthMm = 56;
+    const fixedStampWidthMm = 40;
     const stampHeightRatio = 0.5;
     const minZoomPercent = 50;
     const maxZoomPercent = 200;
