@@ -814,6 +814,9 @@ public sealed class FacturaPdfService : IFacturaPdfService
             PdfInformacionAdicional.LineaProveedor
         };
 
+        if (!string.IsNullOrWhiteSpace(facturaView.ClienteCompra))
+            notas.Add($"Cliente de la compra: {facturaView.ClienteCompra.Trim()}");
+
         if (!string.IsNullOrWhiteSpace(cliente?.Referencia))
             notas.Add(cliente.Referencia!.Trim());
 

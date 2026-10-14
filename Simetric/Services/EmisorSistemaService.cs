@@ -244,6 +244,10 @@ public sealed class EmisorSistemaService
                  IdentificacionCliente = f.CodclientesNavigation != null
                      ? f.CodclientesNavigation.Numeroidentificacion
                      : null,
+                  EsFacturaEmitidaANumeros = f.Notas != null &&
+                      f.Notas.Contains(MarcadorCompraNotas) &&
+                      f.CodclientesNavigation != null &&
+                      f.CodclientesNavigation.Numeroidentificacion == "1793225825001",
                  Detalle = f.Detallefacturas
                      .OrderBy(d => d.Codlinea)
                      .Select(d => d.Descripproducto)

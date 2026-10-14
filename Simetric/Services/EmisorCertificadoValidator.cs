@@ -115,25 +115,29 @@ public sealed class EmisorCertificadoValidator
                 apiHttpStatusCode: apiResult.HttpStatusCode,
                 apiSuccess: apiResult.Success);
 
-        var identificaciones = new[] { info.Ruc, info.Cedula }
-            .Where(valor => !string.IsNullOrWhiteSpace(valor))
-            .Select(valor => NormalizarDigitos(valor))
-            .Where(valor => !string.IsNullOrWhiteSpace(valor))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        string? identificacionCoincidente = FirstFilled(info.Ruc, info.Cedula);
+        if (paraFacturacion)
+        {
+            var identificaciones = new[] { info.Ruc, info.Cedula }
+                .Where(valor => !string.IsNullOrWhiteSpace(valor))
+                .Select(valor => NormalizarDigitos(valor))
+                .Where(valor => !string.IsNullOrWhiteSpace(valor))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
 
-        var identificacionCoincidente = identificaciones
-            .FirstOrDefault(valor => PerteneceAlRuc(valor, emisor.Ruc));
+            identificacionCoincidente = identificaciones
+                .FirstOrDefault(valor => PerteneceAlRuc(valor, emisor.Ruc));
 
-        if (identificacionCoincidente is null)
-            return CertificadoEmisorValidationResult.Fail(
-                $"La firma pertenece a una identificacion diferente y no coincide con el RUC {emisor.Ruc} del emisor.",
-                identificacionExtraida: FirstFilled(info.Ruc, info.Cedula),
-                nombreTitular: info.NombreTitular,
-                estadoVigencia: info.EstadoVigencia,
-                apiResponseJson: apiResult.RawJson,
-                apiHttpStatusCode: apiResult.HttpStatusCode,
-                apiSuccess: apiResult.Success);
+            if (identificacionCoincidente is null)
+                return CertificadoEmisorValidationResult.Fail(
+                    $"La firma pertenece a una identificacion diferente y no coincide con el RUC {emisor.Ruc} del emisor.",
+                    identificacionExtraida: FirstFilled(info.Ruc, info.Cedula),
+                    nombreTitular: info.NombreTitular,
+                    estadoVigencia: info.EstadoVigencia,
+                    apiResponseJson: apiResult.RawJson,
+                    apiHttpStatusCode: apiResult.HttpStatusCode,
+                    apiSuccess: apiResult.Success);
+        }
 
         var estaVigente =
             string.Equals(info.EstadoVigencia?.Trim(), "VIGENTE", StringComparison.OrdinalIgnoreCase) &&

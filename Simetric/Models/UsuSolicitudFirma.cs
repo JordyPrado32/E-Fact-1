@@ -550,27 +550,10 @@ namespace Simetric.Models
             return tercerDigito switch
             {
                 <= 5 => EsCedulaEcuatorianaValida(ruc[..10]) && ruc[10..] != "000",
-                6 => ValidarModulo11(ruc[..8], int.Parse(ruc[8].ToString()), new[] { 3, 2, 7, 6, 5, 4, 3, 2 }) &&
-                     ruc[9..] != "0000",
-                9 => ValidarModulo11(ruc[..9], int.Parse(ruc[9].ToString()), new[] { 4, 3, 2, 7, 6, 5, 4, 3, 2 }) &&
-                     ruc[10..] != "000",
+                6 => ruc[9..] != "0000",
+                9 => ruc[10..] != "000",
                 _ => false
             };
-        }
-
-        private static bool ValidarModulo11(string baseNumero, int digitoVerificador, int[] coeficientes)
-        {
-            var suma = 0;
-
-            for (var i = 0; i < coeficientes.Length; i++)
-            {
-                suma += int.Parse(baseNumero[i].ToString()) * coeficientes[i];
-            }
-
-            var residuo = suma % 11;
-            var verificadorCalculado = residuo == 0 ? 0 : 11 - residuo;
-
-            return verificadorCalculado == digitoVerificador;
         }
 
         [Column("SOLMONTOPAGO")]

@@ -1,7 +1,6 @@
 @page "/emisor"
 
 @page "/demo/emisor"
-@using ConsultaDeRucApi.Services
 @using System.Net.Http.Json
 @using System.ComponentModel.DataAnnotations
 @using Microsoft.AspNetCore.Authorization
@@ -281,17 +280,8 @@
                             <div class="col">
                                 <label class="form-label small fw-bold">RUC *</label>
                                 <InputText class="form-control form-control-sm"
-                                           @bind-Value="model.Ruc"
-                                           @onkeydown="OnRucKeyDownAsync"
-                                           @onkeyup="OnRucKeyUpAsync" />
+                                           @bind-Value="model.Ruc" />
                                 <ValidationMessage For="@(() => model.Ruc)" class="text-danger small" />
-                                <small class="text-muted d-block mt-1">
-                                    Presiona Enter para consultar automáticamente los datos del SRI.
-                                </small>
-                                @if (consultandoSri)
-                                {
-                                    <small class="text-primary d-block mt-1">Consultando datos del SRI...</small>
-                                }
                             </div>
                         </div>
 
@@ -517,17 +507,8 @@
                                                 <div class="col">
                                                     <label class="form-label small fw-bold">RUC *</label>
                                                     <InputText class="form-control form-control-sm"
-                                                               @bind-Value="model.Ruc"
-                                                               @onkeydown="OnRucKeyDownAsync"
-                                                               @onkeyup="OnRucKeyUpAsync" />
+                                                               @bind-Value="model.Ruc" />
                                                     <ValidationMessage For="@(() => model.Ruc)" class="text-danger small" />
-                                                    <small class="text-muted d-block mt-1">
-                                                        Presiona Enter para consultar automáticamente los datos del SRI.
-                                                    </small>
-                                                    @if (consultandoSri)
-                                                    {
-                                                        <small class="text-primary d-block mt-1">Consultando datos del SRI...</small>
-                                                    }
                                                 </div>
                                             </div>
 
@@ -895,8 +876,6 @@
     private bool guardandoEmisor;
     private EmisorDto? emisorAEliminar;
     private EmisionEstado? emisionEstado;
-    private bool consultandoSri;
-    private bool omitirSiguienteGuardadoPorConsultaSri;
     private bool MostrarVolverInicioOnboarding =>
         !isDemoMode &&
         (EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false);
@@ -1120,184 +1099,6 @@
         return int.TryParse(idClaim, out var id) ? id : null;
     }
 
-    private Task OnRucKeyDownAsync(KeyboardEventArgs args)
-    {
-        if (string.Equals(args.Key, "Enter", StringComparison.OrdinalIgnoreCase))
-        {
-            omitirSiguienteGuardadoPorConsultaSri = true;
-        }
-
-        return Task.CompletedTask;
-    }
-
-    private async Task OnRucKeyUpAsync(KeyboardEventArgs args)
-    {
-        if (!string.Equals(args.Key, "Enter", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        await ConsultarSriPorRucAsync();
-    }
-
-    private async Task ConsultarSriPorRucAsync()
-    {
-        if (isDemoMode)
-        {
-            mensaje = "Modo demo: la consulta automática al SRI está bloqueada.";
-            debugError = null;
-            return;
-        }
-
-        var ruc = SoloDigitos(model.Ruc);
-        model.Ruc = ruc;
-
-        if (string.IsNullOrWhiteSpace(ruc))
-        {
-            mensaje = "Ingresa un RUC antes de consultar al SRI.";
-            debugError = null;
-            return;
-        }
-
-        if (ruc.Length != 13)
-        {
-            mensaje = "El RUC debe tener 13 dígitos para consultar al SRI.";
-            debugError = null;
-            return;
-        }
-
-        consultandoSri = true;
-        mensaje = "Consultando datos del SRI...";
-        debugError = null;
-        StateHasChanged();
-
-        try
-        {
-            var consulta = new CConsultaSri();
-            var datos = await Task.Run(() => consulta.GetRucSri(ruc));
-
-            if (datos is null)
-            {
-                mensaje = "El SRI no devolvió información para este RUC.";
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(datos.Error))
-            {
-                mensaje = "No se pudieron recuperar los datos del SRI.";
-                debugError = FormatearMensajeError(datos.Error);
-                return;
-            }
-
-            AplicarDatosSri(datos, ruc);
-            var establecimientoDetectado = string.IsNullOrWhiteSpace(model.CodEstablecimiento)
-                ? null
-                : model.CodEstablecimiento;
-
-            mensaje = establecimientoDetectado is null
-                ? "Datos del SRI cargados. Revisa y completa los campos faltantes antes de guardar."
-                : $"Datos del SRI cargados. El establecimiento {establecimientoDetectado} quedará asignado automáticamente en puntos de emisión cuando guardes el emisor.";
-            debugError = null;
-        }
-        catch (Exception ex)
-        {
-            mensaje = "Ocurrió un error al consultar el SRI.";
-            debugError = FormatearMensajeError(ex.Message);
-        }
-        finally
-        {
-            consultandoSri = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private void AplicarDatosSri(DatosPersonaSri datos, string ruc)
-    {
-        var establecimiento = SeleccionarEstablecimientoSri(datos.personaEstablecimientos);
-        var nombreComercial = Convert.ToString(datos.nombreComercial)?.Trim();
-
-        model.Ruc = ruc;
-        model.RazonSocial = TextoSeguro(datos.razonSocial);
-        model.NomComercial = TextoSeguro(nombreComercial);
-        model.LlevaContabilidad = "NO";
-        model.Retenciones = "NO";
-        model.DireccionMatriz = TextoSeguro(establecimiento?.direccionCompleta);
-        model.DirEstablecimiento = TextoSeguro(establecimiento?.direccionCompleta);
-        model.CodEstablecimiento = ObtenerEstablecimientoDesdeRuc(ruc)
-            ?? NormalizarCodigoEstablecimiento(establecimiento?.numeroEstablecimiento)
-            ?? "001";
-    }
-
-    private static PersonaEstablecimientosRuc? SeleccionarEstablecimientoSri(List<PersonaEstablecimientosRuc>? establecimientos)
-    {
-        if (establecimientos is null || establecimientos.Count == 0)
-        {
-            return null;
-        }
-
-        return establecimientos.FirstOrDefault(item =>
-                   (item.estado ?? string.Empty).Contains("ABIER", StringComparison.OrdinalIgnoreCase) ||
-                   (item.estado ?? string.Empty).Contains("ACT", StringComparison.OrdinalIgnoreCase))
-               ?? establecimientos.FirstOrDefault();
-    }
-
-    private static string TextoSeguro(string? valor) =>
-        string.IsNullOrWhiteSpace(valor) ? string.Empty : valor.Trim();
-
-    private static string MapearLlevaContabilidadSri(DatosPersonaSri datos)
-    {
-        var obligado = datos.obligado?.Trim();
-        if (string.IsNullOrWhiteSpace(obligado))
-        {
-            return "NO";
-        }
-
-        if (obligado.Equals("SI", StringComparison.OrdinalIgnoreCase) ||
-            obligado.Equals("S", StringComparison.OrdinalIgnoreCase) ||
-            obligado.Equals("Si", StringComparison.OrdinalIgnoreCase) ||
-            obligado.Contains("OBLIG", StringComparison.OrdinalIgnoreCase))
-        {
-            return "SI";
-        }
-
-        if (obligado.Equals("NO", StringComparison.OrdinalIgnoreCase) ||
-            obligado.Equals("N", StringComparison.OrdinalIgnoreCase) ||
-            obligado.Equals("No", StringComparison.OrdinalIgnoreCase) ||
-            obligado.Contains("NO OBLIG", StringComparison.OrdinalIgnoreCase))
-        {
-            return "NO";
-        }
-
-        return string.Empty;
-    }
-
-    private static string MapearRetencionesSri(DatosPersonaSri datos)
-    {
-        var texto = string.Join(" ",
-            new[]
-            {
-                datos.claseContribuyente,
-                datos.subtipoContribuyente,
-                datos.actividadContribuyente,
-                Convert.ToString(datos.agenteRepresentante),
-                Convert.ToString(datos.representanteLegal)
-            }.Where(item => !string.IsNullOrWhiteSpace(item)));
-
-        if (string.IsNullOrWhiteSpace(texto))
-        {
-            return "NO";
-        }
-
-        if (texto.Contains("AGENTE DE RETENCION", StringComparison.OrdinalIgnoreCase) ||
-            texto.Contains("AGENTE RETENCION", StringComparison.OrdinalIgnoreCase) ||
-            texto.Contains("RETENCION", StringComparison.OrdinalIgnoreCase))
-        {
-            return "SI";
-        }
-
-        return "NO";
-    }
-
     private static string? NormalizarCodigoEstablecimiento(string? numeroEstablecimiento)
     {
         var digitos = SoloDigitos(numeroEstablecimiento);
@@ -1335,12 +1136,6 @@
     {
         if (guardandoEmisor)
         {
-            return;
-        }
-
-        if (omitirSiguienteGuardadoPorConsultaSri || consultandoSri)
-        {
-            omitirSiguienteGuardadoPorConsultaSri = false;
             return;
         }
 

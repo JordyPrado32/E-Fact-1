@@ -11,6 +11,7 @@ namespace Simetric.DTOs
         public decimal? DescuentoGlobalPct { get; set; }
         public decimal? DescuentoGlobalValor { get; set; }
         public string? TituloDocumento { get; set; }
+        public string? ClienteCompra { get; set; }
 
 
         public List<Detallefactura> Detalles { get; set; } = new();

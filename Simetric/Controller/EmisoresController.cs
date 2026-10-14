@@ -195,12 +195,6 @@ namespace Simetric.Controllers
             if (string.IsNullOrWhiteSpace(clave))
                 return BadRequest("Ingresa la clave del archivo .p12.");
 
-            var emisor = await _context.Emisores
-                .AsNoTracking()
-                .Where(item => item.IdUsuario == idCuenta.Value && item.Estado == true && !item.EsEmisorSistema)
-                .OrderByDescending(item => item.Codigo)
-                .FirstOrDefaultAsync();
-
             await using var input = archivo.OpenReadStream();
             using var buffer = new MemoryStream();
             await input.CopyToAsync(buffer, HttpContext.RequestAborted);
@@ -237,20 +231,15 @@ namespace Simetric.Controllers
 
             var detalle = apiResult.Info;
             var identificacion = string.IsNullOrWhiteSpace(detalle.Ruc) ? detalle.Cedula : detalle.Ruc;
-            var coincideCuenta = emisor is null ||
-                string.IsNullOrWhiteSpace(identificacion) ||
-                CoincideIdentificacionFirma(identificacion, emisor.Ruc);
-            var esValida = detalle.EsValida && coincideCuenta;
+            var esValida = detalle.EsValida;
             var mensaje = !detalle.EsValida
                 ? "El archivo o la clave no son validos, o la firma no esta vigente."
-                : !coincideCuenta
-                    ? $"La firma es valida, pero no corresponde al RUC {emisor!.Ruc} de la cuenta."
-                    : "La firma y la clave son correctas. El archivo no fue guardado.";
+                : "La firma y la clave son correctas. El archivo no fue guardado.";
 
             return Ok(new
             {
                 esValida,
-                coincideCuenta,
+                coincideCuenta = true,
                 mensaje,
                 detalle.EstadoVigencia,
                 detalle.NombreTitular,
@@ -264,17 +253,6 @@ namespace Simetric.Controllers
                     ? (int?)null
                     : (detalle.FechaExpiracion.Value.Date - DateTimeOffset.Now.Date).Days
             });
-        }
-
-        private static bool CoincideIdentificacionFirma(string? identificacionFirma, string? rucCuenta)
-        {
-            var firma = new string((identificacionFirma ?? string.Empty).Where(char.IsDigit).ToArray());
-            var cuenta = new string((rucCuenta ?? string.Empty).Where(char.IsDigit).ToArray());
-            if (string.IsNullOrWhiteSpace(firma) || string.IsNullOrWhiteSpace(cuenta))
-                return false;
-
-            return firma == cuenta ||
-                   (firma.Length == 10 && cuenta.Length == 13 && cuenta.StartsWith(firma, StringComparison.Ordinal));
         }
 
         private async Task<bool> RegistrarValidacionFirmaAsync(

@@ -2629,35 +2629,9 @@ public class LiquidacionCompraService
         };
     }
 
-    private static bool ValidarRucPrivado(string ruc)
-    {
-        int[] coeficientes = { 4, 3, 2, 7, 6, 5, 4, 3, 2 };
-        var suma = 0;
+    private static bool ValidarRucPrivado(string ruc) => ruc[10..] != "000";
 
-        for (var i = 0; i < coeficientes.Length; i++)
-            suma += int.Parse(ruc[i].ToString(), CultureInfo.InvariantCulture) * coeficientes[i];
-
-        var residuo = suma % 11;
-        var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
-        var digitoRecibido = int.Parse(ruc[9].ToString(), CultureInfo.InvariantCulture);
-
-        return digitoCalculado == digitoRecibido && ruc[10..] != "000";
-    }
-
-    private static bool ValidarRucPublico(string ruc)
-    {
-        int[] coeficientes = { 3, 2, 7, 6, 5, 4, 3, 2 };
-        var suma = 0;
-
-        for (var i = 0; i < coeficientes.Length; i++)
-            suma += int.Parse(ruc[i].ToString(), CultureInfo.InvariantCulture) * coeficientes[i];
-
-        var residuo = suma % 11;
-        var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
-        var digitoRecibido = int.Parse(ruc[8].ToString(), CultureInfo.InvariantCulture);
-
-        return digitoCalculado == digitoRecibido && ruc[9..] != "0000";
-    }
+    private static bool ValidarRucPublico(string ruc) => ruc[9..] != "0000";
 
     private static string ObtenerNombreClienteLiquidacion(Cliente? cliente)
     {

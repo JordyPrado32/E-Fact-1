@@ -5,11 +5,13 @@
 @using Simetric.Models
 @using Simetric.Services
 @using Simetric.Services.ESign
+@using System.Text.RegularExpressions
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IESignMenuService ESignMenuService
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject MenuStateService MenuStateService
 @inject NavigationManager NavigationManager
+@inject EmisionControlService EmisionControlService
 @implements IDisposable
 
 @if (isLoading)
@@ -231,6 +233,7 @@ else
     private bool isLoading = true;
     private int menuAbiertoId;
     private bool usuarioTieneFirma = false;
+    private bool puedeFirmarDocumentos = false;
     private bool isSuperAdmin = false;
 
     protected override async Task OnInitializedAsync()
@@ -263,6 +266,7 @@ else
             listadoMenus.Clear();
             isSuperAdmin = false;
             usuarioTieneFirma = false;
+            puedeFirmarDocumentos = false;
 
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
             var user = authState.User;
@@ -276,6 +280,8 @@ else
 
                 if (int.TryParse(user.FindFirst("IdUsuario")?.Value, out int userId))
                 {
+                    puedeFirmarDocumentos = isSuperAdmin || await TieneAccesoFirmaDocumentosAsync(userId);
+
                     await using var context = await DbFactory.CreateDbContextAsync();
                     usuarioTieneFirma = await context.Set<UsuSolicitudFirma>()
                         .AnyAsync(s => s.SolIdUsuarioCliente == userId &&
@@ -356,6 +362,11 @@ else
             .ThenBy(m => m.OrdenMenu ?? 9999)
             .ThenBy(m => m.IdMenu))
         {
+            if (!puedeFirmarDocumentos && EsMenuFirmaDocumento(menu))
+            {
+                continue;
+            }
+
             var ruta = NormalizarRuta(menu.RutaMenu);
             var llave = string.IsNullOrWhiteSpace(ruta)
                 ? $"parent:{menu.IdMenuPadre}:{GetMenuDisplayName(menu.NombreMenu)}"
@@ -375,6 +386,78 @@ else
         }
 
         return resultado;
+    }
+
+    private async Task<bool> TieneAccesoFirmaDocumentosAsync(int userId)
+    {
+        if (await EmisionControlService.TienePlanDocumentosActivoAsync(userId))
+        {
+            return true;
+        }
+
+        await using var context = await DbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios
+            .AsNoTracking()
+            .Where(item => item.IdUsuario == userId)
+            .Select(item => new { item.estadoAsociado, item.idJefe })
+            .FirstOrDefaultAsync();
+
+        var idsCuenta = new[]
+        {
+            userId,
+            usuario?.estadoAsociado == true && usuario.idJefe is > 0
+                ? usuario.idJefe.Value
+                : userId
+        }.Distinct().ToArray();
+
+        var solicitudesPagadas = await context.UsuSolicitudFirma
+            .AsNoTracking()
+            .Where(item => item.SolIdUsuarioCliente.HasValue && idsCuenta.Contains(item.SolIdUsuarioCliente.Value) &&
+                           item.SolActivo &&
+                           item.SolPagoExitoso == true)
+            .Select(item => new
+            {
+                item.SolFechaSolicitud,
+                item.SolFechaPago,
+                item.SolFechaAprobacion,
+                item.SolVigencia
+            })
+            .ToListAsync();
+
+        return solicitudesPagadas.Any(item =>
+            CalcularFechaFinFirma(
+                item.SolFechaAprobacion ?? item.SolFechaPago ?? item.SolFechaSolicitud,
+                item.SolVigencia) >= DateTime.Today);
+    }
+
+    private static bool EsMenuFirmaDocumento(Menu menu)
+    {
+        var ruta = NormalizarRuta(menu.RutaMenu);
+        return ruta.Equals("/e-rubrica/documentos/firmar", StringComparison.OrdinalIgnoreCase) ||
+               ruta.Equals("/e-rubrica/documentos/estampar", StringComparison.OrdinalIgnoreCase) ||
+               (menu.NombreMenu?.Contains("firmar", StringComparison.OrdinalIgnoreCase) == true &&
+                menu.NombreMenu.Contains("pdf", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static DateTime CalcularFechaFinFirma(DateTime fechaInicio, string? vigencia)
+    {
+        var match = Regex.Match(vigencia ?? string.Empty, @"\d+");
+        if (!match.Success || !int.TryParse(match.Value, out var cantidad))
+        {
+            return fechaInicio.AddYears(1);
+        }
+
+        if (Regex.IsMatch(vigencia ?? string.Empty, @"D[IÍ]AS?", RegexOptions.IgnoreCase))
+        {
+            return fechaInicio.AddDays(cantidad);
+        }
+
+        if (Regex.IsMatch(vigencia ?? string.Empty, @"MESES?", RegexOptions.IgnoreCase))
+        {
+            return fechaInicio.AddMonths(cantidad);
+        }
+
+        return fechaInicio.AddYears(cantidad);
     }
 
     private static bool RutasIguales(string? rutaMenu, string rutaActual) =>

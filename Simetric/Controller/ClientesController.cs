@@ -1069,7 +1069,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
                 return $"RUC inválido. El RUC debe tener exactamente 13 dígitos (se recibieron {dto.Numeroidentificacion.Length} dígitos).";
 
             if (!ValidarRucEcuatoriano(dto.Numeroidentificacion))
-                return "RUC inválido. No supera el algoritmo de validación del dígito verificador del SRI.";
+                return "RUC inválido. La estructura del RUC no es válida.";
         }
         else if (esDocumentoAlfanumerico)
         {
@@ -1250,35 +1250,9 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
         };
     }
 
-    private static bool ValidarRucPrivado(string ruc)
-    {
-        int[] coeficientes = { 4, 3, 2, 7, 6, 5, 4, 3, 2 };
-        var suma = 0;
+    private static bool ValidarRucPrivado(string ruc) => ruc[10..] != "000";
 
-        for (var i = 0; i < coeficientes.Length; i++)
-            suma += int.Parse(ruc[i].ToString(), System.Globalization.CultureInfo.InvariantCulture) * coeficientes[i];
-
-        var residuo = suma % 11;
-        var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
-        var digitoRecibido = int.Parse(ruc[9].ToString(), System.Globalization.CultureInfo.InvariantCulture);
-
-        return digitoCalculado == digitoRecibido && ruc[10..] != "000";
-    }
-
-    private static bool ValidarRucPublico(string ruc)
-    {
-        int[] coeficientes = { 3, 2, 7, 6, 5, 4, 3, 2 };
-        var suma = 0;
-
-        for (var i = 0; i < coeficientes.Length; i++)
-            suma += int.Parse(ruc[i].ToString(), System.Globalization.CultureInfo.InvariantCulture) * coeficientes[i];
-
-        var residuo = suma % 11;
-        var digitoCalculado = residuo == 0 ? 0 : 11 - residuo;
-        var digitoRecibido = int.Parse(ruc[8].ToString(), System.Globalization.CultureInfo.InvariantCulture);
-
-        return digitoCalculado == digitoRecibido && ruc[9..] != "0000";
-    }
+    private static bool ValidarRucPublico(string ruc) => ruc[9..] != "0000";
 
     private async Task<bool> EsTipoJuridico(int tipoCliente)
     {
@@ -1561,7 +1535,7 @@ IF COL_LENGTH('dbo.CLIENTES', 'DIAS_CREDITO') IS NULL
                 return $"RUC inválido. El RUC debe tener exactamente 13 dígitos (se recibieron {dto.Numeroidentificacion.Length} dígitos).";
 
             if (!ValidarRucEcuatoriano(dto.Numeroidentificacion))
-                return "RUC inválido. No supera el algoritmo de validación del dígito verificador del SRI.";
+                return "RUC inválido. La estructura del RUC no es válida.";
         }
         else if (esDocumentoAlfanumerico)
         {

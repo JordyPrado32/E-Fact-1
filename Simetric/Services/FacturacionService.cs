@@ -31,6 +31,7 @@ namespace Simetric.Services
     public class FacturacionService
     {
         private const string MarcadorCompraDocumentosNotas = "[COMPRA_DOCS:";
+        private const string RucNumerosAsesoria = "1793225825001";
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> FacturaSequenceLocks = new(StringComparer.OrdinalIgnoreCase);
         private readonly IDbContextFactory<AppDbContext> _dbFactory;
         private readonly IEmailService _emailService;
@@ -114,6 +115,22 @@ namespace Simetric.Services
             cliente.Apellidos = LimpiarTextoOpcional(cliente.Apellidos);
             cliente.Nombrerazonsocial = LimpiarTextoOpcional(cliente.Nombrerazonsocial);
             cliente.Nombrecomercial = LimpiarTextoOpcional(cliente.Nombrecomercial);
+
+            if (cliente.TipoCliente is null or <= 0)
+            {
+                var tiposCliente = await context.Tipoclientes
+                    .AsNoTracking()
+                    .OrderBy(x => x.TclCodigo)
+                    .ToListAsync();
+
+                cliente.TipoCliente = tiposCliente.FirstOrDefault(x => TipoClienteClasificacion.EsJuridica(x.TclDescripcion))?.TclCodigo
+                    ?? tiposCliente.FirstOrDefault(x => !TipoClienteClasificacion.EsNatural(x.TclDescripcion))?.TclCodigo
+                    ?? tiposCliente.FirstOrDefault()?.TclCodigo;
+
+                if (cliente.TipoCliente is null or <= 0)
+                    throw new InvalidOperationException("No existe un tipo de cliente configurado para guardar la factura.");
+            }
+
             cliente.Referencia = LimpiarTextoOpcional(cliente.Referencia);
             cliente.Oblgconta = string.IsNullOrWhiteSpace(cliente.Oblgconta)
                 ? "NO"
@@ -2897,7 +2914,7 @@ IF @resultado < 0
             await using var context = await _dbFactory.CreateDbContextAsync();
             var usuariosCuentaIds = await ObtenerUsuariosCuentaIdsAsync(context, idUsuario);
 
-            return await context.Facturas
+            var facturaView = await context.Facturas
                 .AsNoTracking()
                 .Where(f =>
                     f.Codfactura == codfactura &&
@@ -2984,6 +3001,15 @@ IF @resultado < 0
                     Detalles = f.Detallefacturas.ToList()
                 })
                 .FirstOrDefaultAsync();
+
+            if (facturaView != null)
+            {
+                facturaView.ClienteCompra = await ObtenerClienteCompraAsync(
+                    context,
+                    facturaView.Factura.Notas);
+            }
+
+            return facturaView;
         }
 
         public async Task<string?> AsegurarXmlFacturaUsuarioAsync(int codfactura, int idUsuario, bool forzarRegeneracion = false)
@@ -3076,7 +3102,9 @@ IF @resultado < 0
                 facturaView.Factura.Numfactura,
                 formato);
 
-            var debeRegenerarPdf = !File.Exists(rutaPdf) || facturaView.Factura.Autorizado == true;
+            var debeRegenerarPdf = !File.Exists(rutaPdf) ||
+                                   facturaView.Factura.Autorizado == true ||
+                                   !string.IsNullOrWhiteSpace(facturaView.ClienteCompra);
 
             if (debeRegenerarPdf)
             {
@@ -3115,7 +3143,9 @@ IF @resultado < 0
                 facturaView.Factura.Numfactura,
                 formato);
 
-            var debeRegenerarPdf = !File.Exists(rutaPdf) || facturaView.Factura.Autorizado == true;
+            var debeRegenerarPdf = !File.Exists(rutaPdf) ||
+                                   facturaView.Factura.Autorizado == true ||
+                                   !string.IsNullOrWhiteSpace(facturaView.ClienteCompra);
 
             if (debeRegenerarPdf)
             {
@@ -3479,6 +3509,14 @@ IF @resultado < 0
                 .SingleOrDefaultAsync();
 
             await AplicarEmisorSistemaAFacturaViewAsync(context, facturaView);
+
+            if (facturaView != null)
+            {
+                facturaView.ClienteCompra = await ObtenerClienteCompraAsync(
+                    context,
+                    facturaView.Factura.Notas);
+            }
+
             return facturaView;
         }
 
@@ -3583,16 +3621,22 @@ IF @resultado < 0
             return "2";
         }
 
-        public string GenerarXmlFactura(Factura factura, List<Detallefactura> detalles, string codigoFormaPago)
+        public string GenerarXmlFactura(
+            Factura factura,
+            List<Detallefactura> detalles,
+            string codigoFormaPago,
+            string? clienteCompra = null,
+            Cliente? clienteReceptor = null)
         {
             var cultura = CultureInfo.InvariantCulture;
             string ambiente = ResolverAmbienteSriFactura(factura);
             string serieLimpia = factura.Serie?.Replace("-", "") ?? "001001";
             string secuencial = factura.Numfactura?.PadLeft(9, '0') ?? "000000001";
             var fechaEmision = (factura.Fechaentrega ?? factura.Fchautorizacion ?? DateTime.Now).Date;
-            var identificacionComprador = (factura.CodclientesNavigation?.Numeroidentificacion ?? string.Empty).Trim();
+            var receptor = clienteReceptor ?? factura.CodclientesNavigation;
+            var identificacionComprador = (receptor?.Numeroidentificacion ?? string.Empty).Trim();
             var tipoIdentificacionComprador = ResolverTipoIdentificacionCompradorXml(
-                factura.CodclientesNavigation?.Tipoidentificacion,
+                receptor?.Tipoidentificacion,
                 identificacionComprador);
             string? guiaRemisionXml = FormatearNumeroGuiaRemision(factura.Guiaremision);
             decimal baseDescuentoGlobal = detalles.Sum(d => Math.Round(d.Valortproducto, 2));
@@ -3662,9 +3706,10 @@ IF @resultado < 0
             factura.Ambiente = int.TryParse(ambiente, out var ambienteNumerico) ? ambienteNumerico : 2;
 
             var infoAdicional = new List<XElement>();
-            AgregarCampoAdicional(infoAdicional, "EmailCliente", factura.CodclientesNavigation?.Correo);
-            AgregarCampoAdicional(infoAdicional, "TelefonoCliente", factura.CodclientesNavigation?.Celular);
-            AgregarCampoAdicional(infoAdicional, "ReferenciaCliente", factura.CodclientesNavigation?.Referencia);
+            AgregarCampoAdicional(infoAdicional, "Cliente de la compra", clienteCompra);
+            AgregarCampoAdicional(infoAdicional, "EmailCliente", receptor?.Correo);
+            AgregarCampoAdicional(infoAdicional, "TelefonoCliente", receptor?.Celular);
+            AgregarCampoAdicional(infoAdicional, "ReferenciaCliente", receptor?.Referencia);
             AgregarCampoAdicional(infoAdicional, "EmailEmisor", factura.CodemisorNavigation?.Email);
             AgregarCampoAdicional(infoAdicional, "TelefonoEmisor", factura.CodemisorNavigation?.Telefono);
             AgregarCampoAdicional(infoAdicional, "DatosBancarios", factura.Notas);
@@ -3709,11 +3754,11 @@ IF @resultado < 0
                                 : factura.CodemisorNavigation.LlevaContabilidad),
                     new XElement("tipoIdentificacionComprador", tipoIdentificacionComprador),
                     new XElement("razonSocialComprador",
-                        !string.IsNullOrWhiteSpace(factura.CodclientesNavigation?.Nombrerazonsocial)
-                            ? factura.CodclientesNavigation.Nombrerazonsocial
-                            : ((factura.CodclientesNavigation?.Nombres ?? "") + " " + (factura.CodclientesNavigation?.Apellidos ?? "")).Trim()),
+                        !string.IsNullOrWhiteSpace(receptor?.Nombrerazonsocial)
+                            ? receptor.Nombrerazonsocial
+                            : ((receptor?.Nombres ?? "") + " " + (receptor?.Apellidos ?? "")).Trim()),
                     new XElement("identificacionComprador", identificacionComprador),
-                    new XElement("direccionComprador", factura.CodclientesNavigation?.Direccion ?? "SANTO DOMINGO"),
+                    new XElement("direccionComprador", receptor?.Direccion ?? "SANTO DOMINGO"),
                     !string.IsNullOrWhiteSpace(guiaRemisionXml)
                         ? new XElement("guiaRemision", guiaRemisionXml)
                         : null,
@@ -3792,6 +3837,59 @@ IF @resultado < 0
                 campos.Add(new XElement("campoAdicional", new XAttribute("nombre", nombre), valor.Trim()));
         }
 
+        private static int? ExtraerReporteVentaId(string? notas)
+        {
+            var inicio = notas?.IndexOf("BO-", StringComparison.OrdinalIgnoreCase) ?? -1;
+            if (inicio < 0)
+                return null;
+
+            inicio += 3;
+            var fin = inicio;
+            while (fin < notas!.Length && char.IsDigit(notas[fin]))
+                fin++;
+
+            return fin > inicio && int.TryParse(notas[inicio..fin], out var idReporte)
+                ? idReporte
+                : null;
+        }
+
+        private static async Task<string?> ObtenerClienteCompraAsync(
+            AppDbContext context,
+            string? notas)
+        {
+            if (string.IsNullOrWhiteSpace(notas) ||
+                !notas.Contains(MarcadorCompraDocumentosNotas, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var idReporte = ExtraerReporteVentaId(notas);
+            if (!idReporte.HasValue)
+                return null;
+
+            var clienteCompra = await context.ReporteVentasBackOffice
+                .AsNoTracking()
+                .Where(v => v.IdReporte == idReporte.Value)
+                .Select(v => v.Cliente)
+                .FirstOrDefaultAsync();
+
+            return string.IsNullOrWhiteSpace(clienteCompra)
+                ? null
+                : clienteCompra.Split('|', 2)[0].Trim();
+        }
+
+        private static bool EsFacturaBackOffice50(Factura factura)
+        {
+            if (factura.CodemisorNavigation?.EsEmisorSistema != true ||
+                string.IsNullOrWhiteSpace(factura.Notas) ||
+                !factura.Notas.Contains(MarcadorCompraDocumentosNotas, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return int.TryParse(factura.Numfactura, out var numero) && numero == 50;
+        }
+
         private static string NormalizarTextoUnaLineaXml(string? valor, string reemplazo)
         {
             var texto = string.IsNullOrWhiteSpace(valor) ? reemplazo : valor;
@@ -3852,6 +3950,18 @@ IF @resultado < 0
 
             factura.CodemisorNavigation = emisor;
             factura.Codemisor = emisor.Codigo;
+
+            Cliente? clienteReceptorXml = null;
+            if (EsFacturaBackOffice50(factura))
+            {
+                clienteReceptorXml = await context.Clientes
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.Numeroidentificacion == RucNumerosAsesoria);
+
+                if (clienteReceptorXml == null)
+                    return "Error: No se encontró el cliente receptor de Números Asesoría Legal.";
+            }
+
             if (factura.CodclientesNavigation != null)
             {
                 var identificacionComprador = new string((factura.CodclientesNavigation.Numeroidentificacion ?? string.Empty)
@@ -3864,8 +3974,30 @@ IF @resultado < 0
                     factura.CodclientesNavigation.Tipoidentificacion = "04";
             }
 
+            string? clienteCompra = null;
+            var identificacionReceptor = new string(((clienteReceptorXml ?? factura.CodclientesNavigation)?.Numeroidentificacion ?? string.Empty)
+                .Where(char.IsDigit)
+                .ToArray());
+            var idReporte = ExtraerReporteVentaId(factura.Notas);
+            if (identificacionReceptor == RucNumerosAsesoria && idReporte.HasValue)
+            {
+                clienteCompra = await context.ReporteVentasBackOffice
+                    .AsNoTracking()
+                    .Where(v => v.IdReporte == idReporte.Value)
+                    .Select(v => v.Cliente)
+                    .FirstOrDefaultAsync();
+
+                if (!string.IsNullOrWhiteSpace(clienteCompra))
+                    clienteCompra = clienteCompra.Split('|', 2)[0].Trim();
+            }
+
             string formaPago = !string.IsNullOrWhiteSpace(factura.Tipopago) ? factura.Tipopago : "01";
-            string xmlContenido = GenerarXmlFactura(factura, factura.Detallefacturas.ToList(), formaPago);
+            string xmlContenido = GenerarXmlFactura(
+                factura,
+                factura.Detallefacturas.ToList(),
+                formaPago,
+                clienteCompra,
+                clienteReceptorXml);
 
             if (context.ChangeTracker.HasChanges())
                 await context.SaveChangesAsync();

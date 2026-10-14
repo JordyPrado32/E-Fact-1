@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.Services;
+using Simetric.Services.ESign;
 
 namespace Simetric.Controllers;
 
@@ -16,24 +17,27 @@ public sealed class ESignMobileSignatureController : ControllerBase
     private const long MaxCertificadoSize = 5 * 1024 * 1024;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly IWebHostEnvironment _hostEnvironment;
-    private readonly EmisorCertificadoProtector _certificadoProtector;
     private readonly EmisorCertificadoValidator _certificadoValidator;
+    private readonly FirmaConfiguracionService _firmaConfiguracionService;
 
     public ESignMobileSignatureController(
         IDbContextFactory<AppDbContext> dbFactory,
         IWebHostEnvironment hostEnvironment,
-        EmisorCertificadoProtector certificadoProtector,
-        EmisorCertificadoValidator certificadoValidator)
+        EmisorCertificadoValidator certificadoValidator,
+        FirmaConfiguracionService firmaConfiguracionService)
     {
         _dbFactory = dbFactory;
         _hostEnvironment = hostEnvironment;
-        _certificadoProtector = certificadoProtector;
         _certificadoValidator = certificadoValidator;
+        _firmaConfiguracionService = firmaConfiguracionService;
     }
 
-    [HttpPost("{id:int}/firma/configurar")]
+    [HttpPost("firma/configurar")]
     [RequestSizeLimit(MaxCertificadoSize + 64 * 1024)]
-    public async Task<IActionResult> ConfigurarFirma(int id, [FromForm] IFormFile? certificado, [FromForm] string? clave, CancellationToken cancellationToken)
+    public async Task<IActionResult> ConfigurarFirmaCuenta(
+        [FromForm] IFormFile? certificado,
+        [FromForm] string? clave,
+        CancellationToken cancellationToken)
     {
         if (certificado is null || certificado.Length <= 0 || certificado.Length > MaxCertificadoSize ||
             !string.Equals(Path.GetExtension(certificado.FileName), ".p12", StringComparison.OrdinalIgnoreCase))
@@ -44,35 +48,57 @@ public sealed class ESignMobileSignatureController : ControllerBase
         var accountId = await GetAccountIdAsync(cancellationToken);
         if (accountId is null) return Unauthorized();
 
-        await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
-        var emisor = await db.Emisores.FirstOrDefaultAsync(e => e.Codigo == id && e.Estado && e.IdUsuario == accountId.Value, cancellationToken);
-        if (emisor is null) return NotFound(new { mensaje = "Emisor no encontrado." });
-
         var relativePath = $"certs/path/{Guid.NewGuid():N}.p12";
         var physicalPath = Path.Combine(_hostEnvironment.ContentRootPath, "App_Data", relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(physicalPath)!);
-        await using (var output = System.IO.File.Create(physicalPath))
-            await certificado.CopyToAsync(output, cancellationToken);
+        var persistida = false;
 
-        emisor.PathCertificado = relativePath;
-        emisor.ClaveCertificado = _certificadoProtector.ProtegerClave(clave.Trim());
-        var validacion = await _certificadoValidator.ValidarConApiAsync(emisor, cancellationToken);
-        if (!validacion.IsValid)
+        try
         {
-            System.IO.File.Delete(physicalPath);
-            return BadRequest(new { mensaje = validacion.Message });
+            await using (var output = System.IO.File.Create(physicalPath))
+                await certificado.CopyToAsync(output, cancellationToken);
+
+            var validacion = await _certificadoValidator.ConsultarArchivoConApiAsync(relativePath, clave.Trim(), cancellationToken);
+            if (!validacion.Success || validacion.Info is null ||
+                !validacion.Info.EsValida || !validacion.Info.TieneClavePrivada)
+            {
+                return BadRequest(new
+                {
+                    mensaje = validacion.Info is not null && !validacion.Info.TieneClavePrivada
+                        ? "El archivo no contiene la clave privada requerida para firmar."
+                        : string.IsNullOrWhiteSpace(validacion.Message)
+                        ? "El archivo o la clave no son válidos, o la firma no está vigente."
+                        : validacion.Message
+                });
+            }
+
+            await _firmaConfiguracionService.GuardarAsync(accountId.Value, relativePath, clave.Trim());
+            persistida = true;
+            var detalle = validacion.Info;
+            return Ok(new
+            {
+                mensaje = "Firma configurada correctamente.",
+                esValida = true,
+                detalle.FechaExpiracion,
+                detalle.DiasRestantes,
+                detalle.NombreTitular
+            });
         }
-
-        await db.SaveChangesAsync(cancellationToken);
-        return Ok(new
+        finally
         {
-            mensaje = "Firma configurada correctamente.",
-            esValida = true,
-            validacion.FechaExpiracion,
-            validacion.DiasRestantes,
-            validacion.NombreTitular
-        });
+            if (System.IO.File.Exists(physicalPath) && !persistida)
+                System.IO.File.Delete(physicalPath);
+        }
     }
+
+    [HttpPost("{id:int}/firma/configurar")]
+    [RequestSizeLimit(MaxCertificadoSize + 64 * 1024)]
+    public Task<IActionResult> ConfigurarFirma(
+        int id,
+        [FromForm] IFormFile? certificado,
+        [FromForm] string? clave,
+        CancellationToken cancellationToken) =>
+        ConfigurarFirmaCuenta(certificado, clave, cancellationToken);
 
     [HttpPost("firma/validar-temporal")]
     [RequestSizeLimit(MaxCertificadoSize + 64 * 1024)]
@@ -89,12 +115,6 @@ public sealed class ESignMobileSignatureController : ControllerBase
 
         var accountId = await GetAccountIdAsync(cancellationToken);
         if (accountId is null) return Unauthorized();
-
-        await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
-        var emisor = await db.Emisores.AsNoTracking()
-            .Where(item => item.IdUsuario == accountId.Value && item.Estado && !item.EsEmisorSistema)
-            .OrderByDescending(item => item.Codigo)
-            .FirstOrDefaultAsync(cancellationToken);
 
         var relativePath = $"certs/temp/{Guid.NewGuid():N}.p12";
         var physicalPath = Path.Combine(_hostEnvironment.ContentRootPath, "App_Data", relativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -120,17 +140,14 @@ public sealed class ESignMobileSignatureController : ControllerBase
 
         var detalle = apiResult.Info;
         var identificacion = string.IsNullOrWhiteSpace(detalle.Ruc) ? detalle.Cedula : detalle.Ruc;
-        var coincideCuenta = emisor is null || string.IsNullOrWhiteSpace(identificacion) || CoincideIdentificacionFirma(identificacion, emisor.Ruc);
-        var esValida = detalle.EsValida && coincideCuenta;
+        var esValida = detalle.EsValida;
         return Ok(new
         {
             esValida,
-            coincideCuenta,
+            coincideCuenta = true,
             mensaje = !detalle.EsValida
                 ? "El archivo o la clave no son válidos, o la firma no está vigente."
-                : !coincideCuenta
-                    ? $"La firma es válida, pero no corresponde al RUC {emisor!.Ruc} de la cuenta."
-                    : "La firma y la clave son correctas. El archivo no fue guardado.",
+                : "La firma y la clave son correctas. El archivo no fue guardado.",
             detalle.EstadoVigencia,
             detalle.NombreTitular,
             identificacion,
@@ -141,14 +158,6 @@ public sealed class ESignMobileSignatureController : ControllerBase
             detalle.FechaExpiracion,
             diasRestantes = detalle.FechaExpiracion is null ? (int?)null : (detalle.FechaExpiracion.Value.Date - DateTimeOffset.Now.Date).Days
         });
-    }
-
-    private static bool CoincideIdentificacionFirma(string? identificacionFirma, string? rucCuenta)
-    {
-        var firma = new string((identificacionFirma ?? string.Empty).Where(char.IsDigit).ToArray());
-        var ruc = new string((rucCuenta ?? string.Empty).Where(char.IsDigit).ToArray());
-        return !string.IsNullOrWhiteSpace(firma) && !string.IsNullOrWhiteSpace(ruc) &&
-            (firma == ruc || (firma.Length == 10 && ruc.StartsWith(firma, StringComparison.Ordinal)));
     }
 
     private int GetUserId()
@@ -166,4 +175,5 @@ public sealed class ESignMobileSignatureController : ControllerBase
             .Select(u => new { u.IdUsuario, u.idJefe, u.estadoAsociado }).FirstOrDefaultAsync(cancellationToken);
         return user is null ? null : user.estadoAsociado == true && user.idJefe > 0 ? user.idJefe : user.IdUsuario;
     }
+
 }

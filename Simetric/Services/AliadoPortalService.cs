@@ -370,17 +370,27 @@ public sealed class AliadoPortalService
         var vendedorIds = contexto.EsAdministrador
             ? (await ListarAliadosAsync()).Select(x => x.IdVendedor).ToList()
             : null;
+        var usuariosAliado = db.Usuarios
+            .AsNoTracking()
+            .Where(x => x.Estado != false &&
+                        (contexto.EsAdministrador
+                            ? x.IdVendedor.HasValue && vendedorIds!.Contains(x.IdVendedor.Value)
+                            : x.IdVendedor == contexto.IdVendedor));
         var clientes = await db.Clientes
             .AsNoTracking()
             .Where(x => x.Estado != false && x.Usuario != userId &&
-                        (contexto.EsAdministrador
-                            ? x.Idvendedor.HasValue && vendedorIds!.Contains(x.Idvendedor.Value)
-                            : x.Idvendedor == contexto.IdVendedor))
+                        usuariosAliado.Any(u => u.IdUsuario == x.Usuario))
             .Select(x => new AliadoClienteDto
             {
                 IdCliente = x.Codcliente,
                 IdUsuario = x.Usuario,
-                Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.Nombre).FirstOrDefault(),
+                Aliado = usuariosAliado
+                    .Where(u => u.IdUsuario == x.Usuario)
+                    .Select(u => db.VendedoresBackOffice
+                        .Where(v => v.IdVendedor == u.IdVendedor)
+                        .Select(v => v.Nombre)
+                        .FirstOrDefault())
+                    .FirstOrDefault(),
                 Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
                 Nombre = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.TipoCliente == 2 ? (u.NombreEmpresa ?? u.Nombres) : (u.Nombres + " " + u.Apellidos)).FirstOrDefault()
                     ?? x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
@@ -412,7 +422,8 @@ public sealed class AliadoPortalService
         {
             var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
             var compras = facturas
-                .Where(x => x.IdCliente == cliente.IdCliente ||
+                .Where(x => x.IdUsuario == cliente.IdUsuario ||
+                            x.IdCliente == cliente.IdCliente ||
                             (!string.IsNullOrWhiteSpace(identificacion) &&
                              string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)))
                 .OrderByDescending(x => x.Fecha)
@@ -452,12 +463,16 @@ public sealed class AliadoPortalService
         var vendedorIds = contexto.EsAdministrador
             ? (await ListarAliadosAsync()).Select(x => x.IdVendedor).ToList()
             : null;
+        var usuariosAliado = db.Usuarios
+            .AsNoTracking()
+            .Where(x => x.Estado != false &&
+                        (contexto.EsAdministrador
+                            ? x.IdVendedor.HasValue && vendedorIds!.Contains(x.IdVendedor.Value)
+                            : x.IdVendedor == contexto.IdVendedor));
         var cliente = await db.Clientes
             .AsNoTracking()
             .Where(x => x.Codcliente == idCliente && x.Usuario != userId &&
-                        (contexto.EsAdministrador
-                            ? x.Idvendedor.HasValue && vendedorIds!.Contains(x.Idvendedor.Value)
-                            : x.Idvendedor == contexto.IdVendedor))
+                        usuariosAliado.Any(u => u.IdUsuario == x.Usuario))
             .Select(x => new AliadoClienteDetalleDto
             {
                 IdCliente = x.Codcliente,
@@ -478,9 +493,7 @@ public sealed class AliadoPortalService
             var contactos = await db.Clientes
                 .AsNoTracking()
                 .Where(x => x.Estado != false && x.Usuario != userId &&
-                            (contexto.EsAdministrador
-                                ? x.Idvendedor.HasValue && vendedorIds!.Contains(x.Idvendedor.Value)
-                                : x.Idvendedor == contexto.IdVendedor))
+                            usuariosAliado.Any(u => u.IdUsuario == x.Usuario))
                 .Select(x => new
                 {
                     Identificacion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Identificacion).FirstOrDefault() ?? x.Numeroidentificacion,
@@ -495,7 +508,8 @@ public sealed class AliadoPortalService
 
         var identificacionCliente = NormalizarIdentificacionCliente(cliente.Identificacion);
         var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds))
-            .Where(x => x.IdCliente == idCliente ||
+            .Where(x => x.IdUsuario == cliente.IdUsuario ||
+                        x.IdCliente == idCliente ||
                         (!string.IsNullOrWhiteSpace(identificacionCliente) &&
                          string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacionCliente, StringComparison.OrdinalIgnoreCase)))
             .ToList();
@@ -527,10 +541,9 @@ public sealed class AliadoPortalService
         var clientes = (await ObtenerClientesAsync(userId))
             .GroupBy(cliente =>
             {
-                var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
-                return string.IsNullOrWhiteSpace(identificacion)
-                    ? $"cliente:{cliente.IdCliente}"
-                    : $"identificacion:{identificacion}";
+                return cliente.IdUsuario is int idUsuario && idUsuario > 0
+                    ? $"usuario:{idUsuario}"
+                    : $"cliente:{cliente.IdCliente}";
             }, StringComparer.OrdinalIgnoreCase)
             .Select(grupo => grupo
                 .OrderByDescending(cliente => cliente.FechaUltimaRecargaDocumentos)
@@ -543,7 +556,8 @@ public sealed class AliadoPortalService
             {
                 var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
                 var comprasPorServicio = facturas
-                    .Where(x => x.IdCliente == cliente.IdCliente ||
+                    .Where(x => x.IdUsuario == cliente.IdUsuario ||
+                                x.IdCliente == cliente.IdCliente ||
                                 (!string.IsNullOrWhiteSpace(identificacion) &&
                                  string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)))
                     .GroupBy(x => AliadoServicioHelper.Clasificar(x.Producto), StringComparer.OrdinalIgnoreCase)
@@ -2332,6 +2346,7 @@ public sealed class AliadoPortalService
             .Select(x => new FacturaPortalRow
             {
                 IdFactura = x.Codfactura,
+                IdUsuario = x.Idusuario,
                 Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.Nombre).FirstOrDefault() ?? string.Empty,
                 PorcentajeBase = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.PorcentajeBase).FirstOrDefault(),
                 IdCliente = x.Codclientes,
@@ -3585,7 +3600,22 @@ public sealed class AliadoClienteRegistroDto
         if (PermiteAlfanumerico(TipoDocumento))
             return Identificacion.Length is >= 3 and <= 20 && Identificacion.All(char.IsLetterOrDigit);
         if (TipoDocumento == "RUC")
-            return Identificacion.Length == 13 && Identificacion.EndsWith("001", StringComparison.Ordinal) && ValidarCedula(Identificacion[..10]);
+        {
+            if (Identificacion.Length != 13 || !Identificacion.All(char.IsDigit))
+                return false;
+
+            if (TipoCliente == 2)
+            {
+                return Identificacion[2] switch
+                {
+                    '6' => Identificacion[9..] != "0000",
+                    '9' => Identificacion[10..] != "000",
+                    _ => false
+                };
+            }
+
+            return Identificacion.EndsWith("001", StringComparison.Ordinal) && ValidarCedula(Identificacion[..10]);
+        }
         return Identificacion.Length == 10 && ValidarCedula(Identificacion);
     }
 
@@ -3661,6 +3691,7 @@ public sealed class AliadoVendedorDisponible
 internal sealed class FacturaPortalRow
 {
     public int IdFactura { get; init; }
+    public int? IdUsuario { get; init; }
     public int? IdCliente { get; init; }
     public string Aliado { get; init; } = string.Empty;
     public decimal PorcentajeBase { get; init; }

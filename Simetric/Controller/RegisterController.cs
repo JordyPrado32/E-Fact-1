@@ -193,7 +193,23 @@ public sealed class RegisterController : ControllerBase
             if (identificacion.Length != 13)
                 return "El RUC debe tener exactamente 13 dígitos.";
 
-            if (!identificacion.EndsWith("001", StringComparison.Ordinal) || !ValidarCedulaEcuatoriana(identificacion[..10]))
+            if (!identificacion.All(char.IsDigit))
+                return "El RUC debe contener únicamente dígitos.";
+
+            if (request.TipoCliente == 2)
+            {
+                var tercerDigito = identificacion[2];
+                var estructuraValida = tercerDigito switch
+                {
+                    '6' => identificacion[9..] != "0000",
+                    '9' => identificacion[10..] != "000",
+                    _ => false
+                };
+
+                if (!estructuraValida)
+                    return "La identificación no es un RUC de empresa válido.";
+            }
+            else if (!identificacion.EndsWith("001", StringComparison.Ordinal) || !ValidarCedulaEcuatoriana(identificacion[..10]))
                 return "La identificación no es un RUC ecuatoriano válido.";
         }
         else if (identificacion.Length != 10 || !ValidarCedulaEcuatoriana(identificacion))

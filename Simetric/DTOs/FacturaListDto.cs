@@ -30,6 +30,7 @@ public class FacturaListDto
     public decimal? DescuentoGlobalPct { get; set; }
     public decimal? DescuentoGlobalValor { get; set; }
     public string? IdentificacionCliente { get; set; }
+    public bool EsFacturaEmitidaANumeros { get; set; }
     public bool? Estado { get; set; }
 
     public string Servicio

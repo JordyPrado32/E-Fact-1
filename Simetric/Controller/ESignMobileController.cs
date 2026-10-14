@@ -33,6 +33,7 @@ public sealed class ESignMobileController : ControllerBase
     private readonly EmisorCertificadoValidator _certificadoValidator;
     private readonly EmisorCertificadoProtector _certificadoProtector;
     private readonly FirmaPathResolver _firmaPathResolver;
+    private readonly FirmaConfiguracionService _firmaConfiguracionService;
     private readonly FirmaStampApiService _firmaStampApiService;
     private readonly IESignMenuService _eSignMenuService;
     private readonly PagoService _pagoService;
@@ -48,6 +49,7 @@ public sealed class ESignMobileController : ControllerBase
         EmisorCertificadoValidator certificadoValidator,
         EmisorCertificadoProtector certificadoProtector,
         FirmaPathResolver firmaPathResolver,
+        FirmaConfiguracionService firmaConfiguracionService,
         FirmaStampApiService firmaStampApiService,
         IESignMenuService eSignMenuService,
         PagoService pagoService,
@@ -62,6 +64,7 @@ public sealed class ESignMobileController : ControllerBase
         _certificadoValidator = certificadoValidator;
         _certificadoProtector = certificadoProtector;
         _firmaPathResolver = firmaPathResolver;
+        _firmaConfiguracionService = firmaConfiguracionService;
         _firmaStampApiService = firmaStampApiService;
         _eSignMenuService = eSignMenuService;
         _pagoService = pagoService;
@@ -549,7 +552,7 @@ public sealed class ESignMobileController : ControllerBase
         {
             var firmaConfigurada = await CargarFirmaConfiguradaAsync(idEmisor, cancellationToken);
             if (firmaConfigurada is null)
-                return BadRequest(new { mensaje = "No existe una firma electrónica configurada para tu cuenta. Carga el certificado .p12 desde e-Fact." });
+                return BadRequest(new { mensaje = "No existe una firma electrónica configurada para tu cuenta. Carga el certificado .p12 desde E-Rúbrica." });
 
             certificadoBytes = firmaConfigurada.Contenido;
             nombreCertificado = firmaConfigurada.NombreArchivo;
@@ -683,6 +686,18 @@ public sealed class ESignMobileController : ControllerBase
         if (idCuenta is null)
             return null;
 
+        var configuracionCuenta = await _firmaConfiguracionService.ObtenerAsync(idCuenta.Value);
+        if (configuracionCuenta?.EsConfiguracionCuenta == true)
+        {
+            var credenciales = await _firmaConfiguracionService.ObtenerCredencialesAsync(idCuenta.Value);
+            return credenciales is null
+                ? null
+                : await CargarFirmaDesdeRutaAsync(
+                    credenciales.PathCertificado,
+                    credenciales.ClaveCertificado,
+                    cancellationToken);
+        }
+
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var consulta = db.Emisores.AsNoTracking()
             .Where(e => e.Estado && e.IdUsuario == idCuenta);
@@ -699,16 +714,24 @@ public sealed class ESignMobileController : ControllerBase
         if (emisor is null)
             return null;
 
-        var ruta = _firmaPathResolver.ResolverRutaExistente(emisor.PathCertificado);
-        var clave = _certificadoProtector.DesprotegerClave(emisor.ClaveCertificado)?.Trim();
+        var clave = _certificadoProtector.DesprotegerClave(emisor.ClaveCertificado);
+        return await CargarFirmaDesdeRutaAsync(emisor.PathCertificado, clave, cancellationToken);
+    }
+
+    private async Task<FirmaConfigurada?> CargarFirmaDesdeRutaAsync(
+        string? rutaCertificado,
+        string? clave,
+        CancellationToken cancellationToken)
+    {
+        var ruta = _firmaPathResolver.ResolverRutaExistente(rutaCertificado);
+        clave = clave?.Trim();
         if (string.IsNullOrWhiteSpace(ruta) || string.IsNullOrWhiteSpace(clave))
             return null;
 
         var contenido = await System.IO.File.ReadAllBytesAsync(ruta, cancellationToken);
-        if (contenido.Length == 0 || contenido.Length > 5 * 1024 * 1024)
-            return null;
-
-        return new FirmaConfigurada(contenido, Path.GetFileName(ruta), clave);
+        return contenido.Length is 0 or > 5 * 1024 * 1024
+            ? null
+            : new FirmaConfigurada(contenido, Path.GetFileName(ruta), clave);
     }
 
     private async Task<bool> TieneAccesoFirmaDocumentosAsync(int userId, CancellationToken cancellationToken)
