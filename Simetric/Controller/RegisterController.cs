@@ -71,8 +71,19 @@ public sealed class RegisterController : ControllerBase
                 await using var db = await _dbFactory.CreateDbContextAsync();
                 await using var transaction = await db.Database.BeginTransactionAsync();
 
-                if (await db.Usuarios.AsNoTracking().AnyAsync(u => u.Email == email))
-                    throw new InvalidOperationException("Esta persona ya tiene una cuenta activa de e-fact.");
+                var usuarioExistente = await db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Email == email)
+                    .Select(u => new { u.IdUsuario })
+                    .FirstOrDefaultAsync();
+
+                if (usuarioExistente is not null)
+                {
+                    throw new UsuarioYaRegistradoException(
+                        usuarioExistente.IdUsuario,
+                        vendedor?.IdVendedor,
+                        "Esta persona ya tiene una cuenta activa de e-fact.");
+                }
 
                 var usuario = new Usuario
                 {
@@ -122,6 +133,17 @@ public sealed class RegisterController : ControllerBase
                 idUsuario = usuarioId,
                 idVendedor = vendedor?.IdVendedor,
                 message = "Cuenta creada correctamente. Ya puedes iniciar sesion."
+            });
+        }
+        catch (UsuarioYaRegistradoException ex)
+        {
+            return BadRequest(new
+            {
+                status = "already_registered",
+                success = false,
+                idUsuario = ex.IdUsuario,
+                idVendedor = ex.IdVendedor,
+                message = ex.Message
             });
         }
         catch (InvalidOperationException ex)
@@ -284,5 +306,18 @@ public sealed class RegisterController : ControllerBase
         public string Password { get; set; } = string.Empty;
         public string? VendedorUrl { get; set; }
         public int TipoCliente { get; set; }
+    }
+
+    private sealed class UsuarioYaRegistradoException : Exception
+    {
+        public int IdUsuario { get; }
+        public int? IdVendedor { get; }
+
+        public UsuarioYaRegistradoException(int idUsuario, int? idVendedor, string message)
+            : base(message)
+        {
+            IdUsuario = idUsuario;
+            IdVendedor = idVendedor;
+        }
     }
 }

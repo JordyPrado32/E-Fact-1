@@ -198,6 +198,54 @@ public class CompraDocumentosController : UsuarioApiControllerBase
         return Ok(LeerHistorial(historialJson));
     }
 
+    [HttpGet("recargas/{purchaseId}")]
+    public async Task<IActionResult> GetEstadoRecarga(
+        string purchaseId,
+        [FromQuery] int idUsuario)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+        if (string.IsNullOrWhiteSpace(purchaseId)) return BadRequest("El purchaseId es obligatorio.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios
+            .AsNoTracking()
+            .Where(x => x.IdUsuario == idUsuario)
+            .Select(x => new { x.HistorialComprasDocumentosJson, x.SaldoDocumentos })
+            .FirstOrDefaultAsync();
+
+        if (usuario is null) return NotFound();
+
+        var compra = LeerHistorial(usuario.HistorialComprasDocumentosJson)
+            .FirstOrDefault(x => string.Equals(x.Id, purchaseId.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (compra is null) return NotFound("No se encontró la compra para ese usuario.");
+
+        return Ok(new
+        {
+            purchaseId = compra.Id,
+            idUsuario,
+            estado = compra.Estado,
+            aprobada = EsCompraAprobada(compra),
+            saldoAplicado = compra.SaldoAplicado,
+            documentos = compra.Documentos,
+            montoTotal = compra.MontoTotal,
+            fecha = compra.Fecha,
+            descripcion = compra.Descripcion,
+            referencia = compra.Reference,
+            codigoAutorizacion = compra.AuthorizationCode,
+            saldoDocumentosActual = usuario.SaldoDocumentos,
+            factura = new
+            {
+                codFactura = compra.CodFactura,
+                numeroFactura = compra.NumeroFactura,
+                fechaFactura = compra.FechaFactura,
+                autorizada = compra.FacturaAutorizada,
+                estado = compra.EstadoFactura,
+                mensaje = compra.MensajeFactura
+            }
+        });
+    }
+
     [HttpPost("compra/transferencia")]
     public async Task<IActionResult> RegistrarTransferenciaCompra([FromQuery] int idUsuario, [FromBody] CompraDocumentosTransferenciaDto model)
     {
@@ -291,6 +339,78 @@ public class CompraDocumentosController : UsuarioApiControllerBase
         return Ok(new { purchaseId = compraId, status = "Pendiente", message = "Tu transferencia fue registrada. Sera validada en un plazo maximo de 24 horas." });
     }
 
+    [HttpPost("solicitud-recarga-backoffice")]
+    public async Task<IActionResult> SolicitarRecargaBackOffice(
+        [FromQuery] int idUsuario,
+        [FromBody] CompraDocumentosSolicitudBackOfficeDto model)
+    {
+        idUsuario = ResolverIdUsuario(idUsuario);
+        if (idUsuario <= 0) return Unauthorized();
+        if (!model.EsIlimitado && model.Documentos < EFactDocumentPricing.DocumentosMinimosPersonalizados)
+            return BadRequest($"La recarga personalizada requiere al menos {EFactDocumentPricing.DocumentosMinimosPersonalizados} documentos.");
+        if (model.MontoTotal < EFactDocumentPricing.MontoMinimoPersonalizado || model.MontoTotal > EFactDocumentPricing.MontoMaximoPersonalizado)
+            return BadRequest("El monto de la recarga no es valido.");
+
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var usuario = await context.Usuarios.FirstOrDefaultAsync(x => x.IdUsuario == idUsuario);
+        if (usuario is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(usuario.Email)) return BadRequest("Tu perfil no tiene correo configurado.");
+
+        var total = decimal.Round(model.MontoTotal, 2, MidpointRounding.AwayFromZero);
+        var compraId = Guid.NewGuid().ToString("N");
+        var descripcion = model.EsIlimitado
+            ? "Plan de documentos ilimitados por 1 año"
+            : $"Recarga de {model.Documentos} documentos E-FACT";
+        var fecha = DateTime.Now;
+
+        var historial = LeerHistorial(usuario.HistorialComprasDocumentosJson);
+        historial.Insert(0, new CompraDocumentosHistorialItem
+        {
+            Id = compraId,
+            Fecha = fecha,
+            Documentos = model.EsIlimitado ? 0 : model.Documentos,
+            MontoTotal = total,
+            Estado = "Pendiente",
+            Descripcion = descripcion,
+            CustomValue = $"recarga-documentos|purchase:{compraId}|user:{idUsuario}|docs:{(model.EsIlimitado ? 0 : model.Documentos)}|total:{total.ToString("0.00", CultureInfo.InvariantCulture)}",
+            FormaPago = "Pendiente de verificación",
+            EmailDestino = usuario.Email.Trim().ToLowerInvariant(),
+            EsIlimitado = model.EsIlimitado,
+            EsPermanente = model.EsIlimitado
+        });
+        usuario.HistorialComprasDocumentosJson = JsonSerializer.Serialize(historial, HistorialJsonOptions);
+
+        var nombre = string.IsNullOrWhiteSpace(usuario.NombreEmpresa)
+            ? $"{usuario.Nombres} {usuario.Apellidos}".Trim()
+            : usuario.NombreEmpresa.Trim();
+        var solicitud = new ReporteVentaBackOffice
+        {
+            Cliente = Truncar($"{nombre} | {usuario.Email}", 150),
+            Producto = "e-fact",
+            PlanPaquete = Truncar(descripcion, 100),
+            Valor = total,
+            Fecha = fecha,
+            Canal = "Transferencia Web - Numeros One",
+            Vendedor = "Numeros One",
+            Estado = "pendiente",
+            FormaPago = "Pendiente de verificación",
+            Observacion = Truncar(
+                $"[CompraDocs:{compraId}] Esta solicitud fue creada desde Numeros One. Recuerda constatar el valor antes de aprobar. Valor solicitado: ${total:0.00}.",
+                500)
+        };
+        context.ReporteVentasBackOffice.Add(solicitud);
+        await context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            purchaseId = compraId,
+            idReporte = solicitud.IdReporte,
+            idUsuario,
+            status = "Pendiente",
+            message = "La solicitud fue creada correctamente y será validada por BackOffice."
+        });
+    }
+
     [HttpGet("paquetes")]
     public IActionResult GetPaquetes() => Ok(new[]
     {
@@ -354,4 +474,8 @@ public sealed class CompraDocumentosTransferenciaDto : CompraDocumentosMobileDto
     public string CuentaOrigen { get; set; } = string.Empty;
     public string NumeroComprobante { get; set; } = string.Empty;
     public string? ComprobanteBase64 { get; set; }
+}
+
+public sealed class CompraDocumentosSolicitudBackOfficeDto : CompraDocumentosMobileDto
+{
 }

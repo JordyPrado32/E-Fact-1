@@ -19,11 +19,16 @@ namespace Simetric.Controllers
     public class FacturasController : ControllerBase
     {
         private readonly FacturacionService _service;
+        private readonly EmisionControlService _emisionControlService;
         private readonly ILogger<FacturasController> _logger;
 
-        public FacturasController(FacturacionService service, ILogger<FacturasController> logger)
+        public FacturasController(
+            FacturacionService service,
+            EmisionControlService emisionControlService,
+            ILogger<FacturasController> logger)
         {
             _service = service;
+            _emisionControlService = emisionControlService;
             _logger = logger;
         }
 
@@ -39,6 +44,38 @@ namespace Simetric.Controllers
             public Cliente Cliente { get; set; } = null!;
             public List<Detallefactura> Detalles { get; set; } = new();
             public List<FacturaCorreoDestinoDto> CorreosFactura { get; set; } = new();
+        }
+
+        public sealed class FacturaApiCreateDto
+        {
+            public int IdUsuario { get; set; }
+            public string? RequestId { get; set; }
+            public string? FormaPago { get; set; }
+            public FacturaApiClienteDto Cliente { get; set; } = new();
+            public List<FacturaApiDetalleDto> Detalles { get; set; } = new();
+            public List<FacturaCorreoDestinoDto> CorreosFactura { get; set; } = new();
+        }
+
+        public sealed class FacturaApiClienteDto
+        {
+            public string? TipoIdentificacion { get; set; }
+            public string? Identificacion { get; set; }
+            public string? RazonSocial { get; set; }
+            public string? Nombres { get; set; }
+            public string? Apellidos { get; set; }
+            public string? Direccion { get; set; }
+            public string? Correo { get; set; }
+            public string? Celular { get; set; }
+            public string? ObligadoContabilidad { get; set; }
+        }
+
+        public sealed class FacturaApiDetalleDto
+        {
+            public string Descripcion { get; set; } = string.Empty;
+            public decimal Cantidad { get; set; }
+            public decimal PrecioUnitario { get; set; }
+            public decimal Descuento { get; set; }
+            public decimal Iva { get; set; }
         }
 
         public class ConfigurarSecuenciaFacturaDto
@@ -79,14 +116,28 @@ namespace Simetric.Controllers
             if (!string.IsNullOrWhiteSpace(dto.RequestId) && dto.RequestId.Trim().Length > 120)
                 return BadRequest(new { mensaje = "El identificador de solicitud no es válido." });
 
+            int idUsuario = ResolverIdUsuario(dto.IdUsuario);
+            if (idUsuario <= 0)
+                return Unauthorized(new { mensaje = "No se pudo identificar al usuario." });
+
             if (dto.Factura == null || dto.Cliente == null)
                 return BadRequest(new { mensaje = "Datos de factura o cliente incompletos." });
 
             if (dto.Detalles == null || !dto.Detalles.Any())
                 return BadRequest(new { mensaje = "La factura debe tener al menos un detalle de producto/servicio." });
 
+            var errores = ValidarSolicitudEmision(dto);
+            if (errores.Count > 0)
+                return UnprocessableEntity(new { mensaje = "La factura contiene datos inválidos.", errores });
+
             try
             {
+                await _emisionControlService.AsegurarPuedeEmitirAsync(idUsuario);
+                await _service.ValidarConfiguracionFacturaAsync(
+                    idUsuario,
+                    dto.Factura.Codemisor,
+                    dto.Factura.Serie);
+
                 // 2. Recalcular valores de servidor por seguridad antes de enviar al Service
                 // Esto evita que datos manipulados en el cliente lleguen a la base de datos
                 foreach (var detalle in dto.Detalles)
@@ -104,10 +155,6 @@ namespace Simetric.Controllers
 
                 // 3. Ejecución del servicio transaccional
                 // Pasamos los modelos directamente al service que ya conoce estas entidades
-                int idUsuario = ResolverIdUsuario(dto.IdUsuario);
-                if (idUsuario <= 0)
-                    return Unauthorized(new { mensaje = "No se pudo identificar al usuario." });
-
                 var ok = await _service.GuardarFacturaCompletaAsync(
                     idUsuario,
                     dto.Factura,
@@ -150,6 +197,14 @@ namespace Simetric.Controllers
                     sri = respuestaSri
                 });
             }
+            catch (EmisionBloqueadaException ex)
+            {
+                return UnprocessableEntity(new
+                {
+                    codigo = "EMISION_BLOQUEADA",
+                    mensaje = ex.Message
+                });
+            }
             catch (Exception ex)
             {
                 // Es vital capturar la inner exception para errores de base de datos
@@ -160,6 +215,147 @@ namespace Simetric.Controllers
                     detalle = errorInterno
                 });
             }
+        }
+
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+        [HttpPost("emitir")]
+        public async Task<IActionResult> EmitirApi([FromBody] FacturaApiCreateDto dto)
+        {
+            if (dto is null)
+                return BadRequest(new { mensaje = "El cuerpo de la solicitud no puede estar vacío." });
+
+            if (dto.IdUsuario <= 0)
+                return UnprocessableEntity(new { mensaje = "idUsuario debe ser mayor a cero." });
+
+            if (dto.Cliente is null)
+                return UnprocessableEntity(new { mensaje = "cliente es obligatorio." });
+
+            if (dto.Detalles is null || dto.Detalles.Count == 0)
+                return UnprocessableEntity(new { mensaje = "detalles debe contener al menos una línea." });
+
+            var emisor = (await _service.GetEmisoresActivosAsync(dto.IdUsuario)).FirstOrDefault();
+            if (emisor is null)
+                return UnprocessableEntity(new
+                {
+                    codigo = "EMISOR_NO_CONFIGURADO",
+                    mensaje = "La cuenta no tiene un emisor activo configurado."
+                });
+
+            string formaPago = "01";
+            if (!string.IsNullOrWhiteSpace(dto.FormaPago))
+            {
+                var formaSolicitada = dto.FormaPago.Trim();
+                var forma = (await _service.ObtenerFormasPagoAsync()).FirstOrDefault(x =>
+                    string.Equals(x.Codigo, formaSolicitada, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(x.Descripcion, formaSolicitada, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(x.DescripcionSri, formaSolicitada, StringComparison.OrdinalIgnoreCase));
+
+                if (forma is null)
+                    return UnprocessableEntity(new { mensaje = "La forma de pago indicada no existe o no está habilitada." });
+
+                formaPago = forma.Codigo;
+            }
+
+            string serie;
+            try
+            {
+                serie = await _service.GetSerieFacturaRawAsync(dto.IdUsuario);
+            }
+            catch (Exception ex)
+            {
+                return UnprocessableEntity(new
+                {
+                    codigo = "PUNTO_EMISION_NO_CONFIGURADO",
+                    mensaje = ex.Message
+                });
+            }
+
+            var factura = new Factura
+            {
+                Codemisor = emisor.Codigo,
+                Serie = serie,
+                Coddocumento = 1,
+                Tipopago = formaPago
+            };
+
+            var solicitudInterna = new FacturaCreateDto
+            {
+                IdUsuario = dto.IdUsuario,
+                RequestId = dto.RequestId,
+                Factura = factura,
+                Cliente = new Cliente
+                {
+                    Tipoidentificacion = dto.Cliente.TipoIdentificacion,
+                    Numeroidentificacion = dto.Cliente.Identificacion,
+                    Nombrerazonsocial = dto.Cliente.RazonSocial,
+                    Nombres = dto.Cliente.Nombres,
+                    Apellidos = dto.Cliente.Apellidos,
+                    Direccion = dto.Cliente.Direccion,
+                    Correo = dto.Cliente.Correo,
+                    Celular = dto.Cliente.Celular,
+                    Oblgconta = dto.Cliente.ObligadoContabilidad ?? "NO"
+                },
+                Detalles = dto.Detalles.Select(x => new Detallefactura
+                {
+                    Codproducto = 0,
+                    Descripproducto = x.Descripcion,
+                    Cantproducto = x.Cantidad,
+                    Precioproducto = x.PrecioUnitario,
+                    Descuento = x.Descuento,
+                    Tarifa = TaxRateHelper.NormalizePercentInt(x.Iva)
+                }).ToList(),
+                CorreosFactura = dto.CorreosFactura
+            };
+
+            return await GuardarCompleta(solicitudInterna);
+        }
+
+        private static List<string> ValidarSolicitudEmision(FacturaCreateDto dto)
+        {
+            var errores = new List<string>();
+            var factura = dto.Factura;
+            var cliente = dto.Cliente;
+
+            if (factura.Codemisor is not > 0)
+                errores.Add("Factura.Codemisor es obligatorio.");
+            if (string.IsNullOrWhiteSpace(factura.Serie))
+                errores.Add("Factura.Serie es obligatoria.");
+            if (factura.Coddocumento is not (null or 1))
+                errores.Add("Factura.Coddocumento debe corresponder a una factura electrónica.");
+            if (string.IsNullOrWhiteSpace(factura.Tipopago))
+                errores.Add("Factura.Tipopago es obligatorio.");
+
+            if (string.IsNullOrWhiteSpace(cliente.Tipoidentificacion))
+                errores.Add("Cliente.Tipoidentificacion es obligatorio.");
+            if (string.IsNullOrWhiteSpace(cliente.Numeroidentificacion))
+                errores.Add("Cliente.Numeroidentificacion es obligatorio.");
+            if (string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial) &&
+                string.IsNullOrWhiteSpace(cliente.Nombres))
+                errores.Add("El cliente debe tener razón social o nombres.");
+
+            if (dto.Detalles.Count > 500)
+                errores.Add("La factura no puede superar 500 detalles.");
+
+            var tarifasPermitidas = new HashSet<int> { 0, 5, 8, 12, 13, 14, 15 };
+            for (var i = 0; i < dto.Detalles.Count; i++)
+            {
+                var detalle = dto.Detalles[i];
+                var linea = i + 1;
+                var tarifa = TaxRateHelper.NormalizePercentInt(detalle.Tarifa);
+
+                if (detalle.Cantproducto <= 0)
+                    errores.Add($"Detalle {linea}: la cantidad debe ser mayor a cero.");
+                if (detalle.Precioproducto < 0)
+                    errores.Add($"Detalle {linea}: el precio no puede ser negativo.");
+                if (string.IsNullOrWhiteSpace(detalle.Descripproducto))
+                    errores.Add($"Detalle {linea}: la descripción es obligatoria.");
+                if ((detalle.Descuento ?? 0) < 0)
+                    errores.Add($"Detalle {linea}: el descuento no puede ser negativo.");
+                if (!tarifasPermitidas.Contains(tarifa))
+                    errores.Add($"Detalle {linea}: la tarifa de IVA no es válida para SRI.");
+            }
+
+            return errores;
         }
 
         [HttpGet("por-numero")]

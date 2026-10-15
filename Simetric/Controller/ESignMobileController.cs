@@ -335,7 +335,7 @@ public sealed class ESignMobileController : ControllerBase
             SolProvincia = NormalizarTexto(request.Provincia),
             SolCanton = NormalizarTexto(request.Canton),
             SolDireccion = NormalizarTexto(request.Direccion),
-            SolFormatoFirma = "ARCHIVO_P12",
+            SolFormatoFirma = NormalizarTexto(request.FormatoFirma).ToUpperInvariant(),
             SolVigencia = vigencia,
             SolMontoPago = subtotal,
             SolCompanyName = NormalizarTexto(request.RazonSocialEmpresa),
@@ -474,6 +474,223 @@ public sealed class ESignMobileController : ControllerBase
         }
 
         return Ok(new { solicitudId = solicitud.SolId, status = "TRANSFERENCIA_REGISTRADA" });
+    }
+
+    [AllowAnonymous]
+    [HttpPost("solicitudes/transferencia-numeros-one")]
+    [RequestSizeLimit(70 * 1024 * 1024)]
+    public async Task<IActionResult> CrearSolicitudTransferenciaNumerosOne(
+        [FromQuery] int idUsuario,
+        [FromBody] NumerosOneSolicitudFirmaRequest numerosRequest,
+        CancellationToken cancellationToken)
+    {
+        if (idUsuario <= 0) return Unauthorized();
+
+        var request = numerosRequest.ToMobileRequest();
+
+        await using var userDb = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        var usuario = await userDb.Usuarios.AsNoTracking().FirstOrDefaultAsync(
+            item => item.IdUsuario == idUsuario,
+            cancellationToken);
+        if (usuario is null) return NotFound(new { mensaje = "Usuario no encontrado." });
+
+        if (string.IsNullOrWhiteSpace(request.Vigencia) ||
+            string.IsNullOrWhiteSpace(request.FormatoFirma) ||
+            string.IsNullOrWhiteSpace(request.TipoPersona) ||
+            string.IsNullOrWhiteSpace(request.TipoDocumento) ||
+            string.IsNullOrWhiteSpace(request.Identificacion) ||
+            string.IsNullOrWhiteSpace(request.Nombres) ||
+            string.IsNullOrWhiteSpace(request.PrimerApellido) ||
+            string.IsNullOrWhiteSpace(request.FechaNacimiento) ||
+            string.IsNullOrWhiteSpace(request.Sexo) ||
+            string.IsNullOrWhiteSpace(request.Nacionalidad) ||
+            string.IsNullOrWhiteSpace(request.Celular) ||
+            string.IsNullOrWhiteSpace(request.Correo) ||
+            string.IsNullOrWhiteSpace(request.Provincia) ||
+            string.IsNullOrWhiteSpace(request.Canton) ||
+            string.IsNullOrWhiteSpace(request.Direccion))
+        {
+            return BadRequest(new { mensaje = "Todos los campos obligatorios del formulario de firma deben ser enviados." });
+        }
+
+        var vigencia = NormalizarVigencia(request.Vigencia);
+        var subtotal = ESignPricing.ObtenerSubtotal(vigencia);
+        if (subtotal <= 0) return BadRequest(new { mensaje = "La vigencia seleccionada no es válida." });
+
+        var tipoPersonaTexto = NormalizarTexto(request.TipoPersona).ToUpperInvariant();
+        if (tipoPersonaTexto is not ("NATURAL" or "PERSONA NATURAL" or "JURIDICA" or "JURÍDICA" or "REPRESENTANTE LEGAL"))
+            return BadRequest(new { mensaje = "El tipo de persona no es válido." });
+
+        var tipoPersona = EsRepresentanteLegal(tipoPersonaTexto) ? "JURIDICA" : "NATURAL";
+        var tipoDocumento = NormalizarTipoIdentificacion(request.TipoDocumento);
+        var identificacion = SoloDigitosOTexto(request.Identificacion);
+        var nombres = NormalizarTexto(request.Nombres);
+        var apellidos = NormalizarTexto(request.PrimerApellido);
+        var fechaNacimientoTexto = request.FechaNacimiento;
+        if (!TryParseDate(fechaNacimientoTexto, out var fechaNacimiento))
+            return BadRequest(new { mensaje = "Debe enviar una fecha de nacimiento válida." });
+
+        var celular = NormalizarTexto(request.Celular);
+        var correo = NormalizarTexto(request.Correo).ToLowerInvariant();
+        var direccion = NormalizarTexto(request.Direccion);
+        var tieneRuc = tipoPersona == "JURIDICA" || request.PoseeRuc;
+        var ruc = SoloDigitosOTexto(request.Ruc);
+        var provincia = NormalizarTexto(request.Provincia);
+        var canton = NormalizarTexto(request.Canton);
+        var sexo = NormalizarSexo(request.Sexo);
+        var codigoDactilar = NormalizarTexto(request.CodigoDactilar);
+
+        if (string.IsNullOrWhiteSpace(codigoDactilar))
+        {
+            return BadRequest(new { mensaje = "El código dactilar es obligatorio." });
+        }
+
+        var solicitud = new UsuSolicitudFirma
+        {
+            SolIdUsuarioCliente = idUsuario,
+            SolTipoPersona = tipoPersona,
+            SolTipoIdentificacion = tipoDocumento,
+            SolIdentificacion = identificacion,
+            SolCodigoDactilar = codigoDactilar,
+            SolNombres = nombres,
+            SolPrimerApellido = apellidos,
+            SolSegundoApellido = NormalizarTexto(request.SegundoApellido),
+            SolFechaNacimiento = fechaNacimiento,
+            SolSexo = sexo,
+            SolNacionalidad = string.IsNullOrWhiteSpace(request.Nacionalidad) ? "ECUATORIANA" : NormalizarTexto(request.Nacionalidad),
+            SolTelefono1 = celular,
+            SolTelefono2 = NormalizarTexto(request.TelefonoSecundario),
+            SolCorreo1 = correo,
+            SolCorreo2 = NormalizarTexto(request.CorreoSecundario).ToLowerInvariant(),
+            SolTieneRuc = tieneRuc,
+            SolNroRuc = tieneRuc ? ruc : null,
+            SolProvincia = provincia,
+            SolCanton = canton,
+            SolDireccion = direccion,
+            SolFormatoFirma = "ARCHIVO_P12",
+            SolVigencia = vigencia,
+            SolMontoPago = subtotal,
+            SolCompanyName = NormalizarTexto(request.RazonSocialEmpresa),
+            SolDepartment = NormalizarTexto(request.Departamento),
+            SolPosition = NormalizarTexto(request.Cargo),
+            SolReason = NormalizarTexto(request.MotivoFirma),
+            SolIdentificationTypeManager = NormalizarTipoIdentificacion(request.RepresentanteTipoDocumento),
+            SolIdentificationManager = SoloDigitosOTexto(request.RepresentanteIdentificacion),
+            SolNamesManager = NormalizarTexto(request.RepresentanteNombres),
+            SolLastNameManager = NormalizarTexto(request.RepresentanteApellidos),
+            SolEsMayor65 = CalcularEdad(fechaNacimiento) >= 65
+        };
+
+        var archivos = new List<(string TempFileName, string Tipo)>();
+        try
+        {
+            await AddTempBase64FileAsync(archivos, numerosRequest.CedulaFrontalBase64, "CEDULA_FRONTAL", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.CedulaPosteriorBase64, "CEDULA_POSTERIOR", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.SelfieCedulaBase64, "SELFIE_CEDULA", ImagenExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.VideoAceptacionBase64, "VIDEO_ACEPTACION", VideoExtensiones, MaxVideoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.RucFileBase64, "RUC_FILE", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.NombramientoBase64, "NOMBRAMIENTO", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.ConstitucionBase64, "CONSTITUCION", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.CedulaRepresentanteBase64, "CEDULA_REPRESENTANTE", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.AutorizacionBase64, "AUTORIZACION", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.AceptacionNombramientoBase64, "ACEPTACION_NOMBRAMIENTO", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+            await AddTempBase64FileAsync(archivos, numerosRequest.ArchivoAdicionalBase64, "ARCHIVO_ADICIONAL", DocumentoExtensiones, MaxDocumentoBytes, cancellationToken);
+
+            if (!await _solicitudService.CrearSolicitudFullAsync(solicitud, archivos))
+                return BadRequest(new { mensaje = _solicitudService.UltimoErrorCrearSolicitud ?? "No se pudo crear la solicitud." });
+
+            await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
+            var marcador = $"[SolicitudFirma:{solicitud.SolId}]";
+            var pendiente = await db.ReporteVentasBackOffice.AnyAsync(
+                item => item.Estado == "pendiente" && item.Observacion != null && item.Observacion.Contains(marcador),
+                cancellationToken);
+            if (pendiente)
+                return BadRequest(new { mensaje = "Ya existe una solicitud de pago pendiente para esta firma." });
+
+            var total = decimal.Round(subtotal * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
+            var venta = new ReporteVentaBackOffice
+            {
+                Cliente = Truncar($"{nombres} {apellidos} | {correo}", 150),
+                Producto = "e-sign",
+                PlanPaquete = Truncar($"Firma electrónica {vigencia}", 100),
+                Valor = total,
+                Fecha = DateTime.Now,
+                Canal = "Transferencia Web - Numeros One",
+                Vendedor = "Numeros One",
+                Estado = "pendiente",
+                FormaPago = "Transferencia Bancaria",
+                Observacion = Truncar(
+                    $"{marcador} Esta solicitud fue creada desde Numeros One. Por favor verificar el pago antes de aprobar.",
+                    500)
+            };
+            db.ReporteVentasBackOffice.Add(venta);
+            await db.SaveChangesAsync(cancellationToken);
+
+            solicitud.SolIdTransaccionPago = Truncar($"TRANSFERENCIA-PENDIENTE-NUMEROS-ONE-{venta.IdReporte}", 100);
+            solicitud.SolFechaActualizacion = DateTime.Now;
+            db.Entry(solicitud).State = EntityState.Modified;
+            await db.SaveChangesAsync(cancellationToken);
+
+            return Ok(new
+            {
+                solicitudId = solicitud.SolId,
+                idReporte = venta.IdReporte,
+                idUsuario,
+                status = "TRANSFERENCIA_REGISTRADA",
+                subtotal,
+                iva = total - subtotal,
+                total,
+                message = "La solicitud fue creada y quedó pendiente de verificar el pago en BackOffice."
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { mensaje = ex.Message });
+        }
+    }
+
+    [AllowAnonymous]
+    [HttpGet("solicitudes/{solicitudId:int}/estado-pago")]
+    public async Task<IActionResult> ObtenerEstadoPagoSolicitudNumerosOne(
+        int solicitudId,
+        [FromQuery] int idUsuario,
+        CancellationToken cancellationToken)
+    {
+        if (solicitudId <= 0 || idUsuario <= 0)
+            return BadRequest(new { mensaje = "Debe enviar un solicitudId e idUsuario válidos." });
+
+        await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        var solicitud = await db.UsuSolicitudFirma.AsNoTracking()
+            .FirstOrDefaultAsync(item => item.SolId == solicitudId && item.SolIdUsuarioCliente == idUsuario, cancellationToken);
+        if (solicitud is null)
+            return NotFound(new { mensaje = "Solicitud no encontrada para el usuario indicado." });
+
+        var marcador = $"[SolicitudFirma:{solicitudId}]";
+        var venta = await db.ReporteVentasBackOffice.AsNoTracking()
+            .Where(item => item.Observacion != null && item.Observacion.Contains(marcador))
+            .OrderByDescending(item => item.IdReporte)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var aprobado = solicitud.SolPagoExitoso == true ||
+            (venta?.Estado ?? string.Empty).Contains("pag", StringComparison.OrdinalIgnoreCase);
+        var rechazado = !aprobado && (venta?.Estado ?? string.Empty).Contains("anul", StringComparison.OrdinalIgnoreCase);
+
+        return Ok(new
+        {
+            solicitudId,
+            idUsuario,
+            idReporte = venta?.IdReporte,
+            estado = aprobado ? "APROBADO" : rechazado ? "RECHAZADO" : "PENDIENTE",
+            pagoAprobado = aprobado,
+            estadoBackOffice = venta?.Estado ?? "pendiente",
+            fechaSolicitud = solicitud.SolFechaSolicitud,
+            fechaPago = solicitud.SolFechaPago,
+            mensaje = aprobado
+                ? "El pago fue aprobado."
+                : rechazado
+                    ? "El pago fue rechazado."
+                    : "El pago sigue pendiente de verificación en BackOffice."
+        });
     }
 
     [HttpPost("documentos/firmar")]
@@ -808,6 +1025,61 @@ public sealed class ESignMobileController : ControllerBase
         archivos.Add((tempFileName, tipo));
     }
 
+    private async Task AddTempBase64FileAsync(
+        List<(string TempFileName, string Tipo)> archivos,
+        string? base64,
+        string tipo,
+        IReadOnlyCollection<string> extensionesPermitidas,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(base64))
+            return;
+
+        var contenido = base64.Trim();
+        var extension = ".bin";
+        var coma = contenido.IndexOf(',');
+        if (contenido.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && coma > 0)
+        {
+            var metadata = contenido[..coma].ToLowerInvariant();
+            extension = metadata.Contains("jpeg") || metadata.Contains("jpg") ? ".jpg" :
+                metadata.Contains("png") ? ".png" :
+                metadata.Contains("pdf") ? ".pdf" :
+                metadata.Contains("mp4") ? ".mp4" :
+                metadata.Contains("quicktime") ? ".mov" : ".bin";
+            contenido = contenido[(coma + 1)..];
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(contenido);
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException($"El documento {tipo} no contiene un Base64 válido.");
+        }
+
+        if (extension == ".bin")
+            extension = tipo == "VIDEO_ACEPTACION" ? ".mp4" : DetectarExtension(bytes);
+        if (!extensionesPermitidas.Contains(extension, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"El documento {tipo} tiene un formato no permitido.");
+        if (bytes.Length == 0 || bytes.Length > maxBytes)
+            throw new InvalidOperationException($"El documento {tipo} supera el tamaño permitido.");
+
+        var tempDir = Path.Combine(_hostEnvironment.WebRootPath, "uploads", "temp");
+        Directory.CreateDirectory(tempDir);
+        var tempFileName = $"{tipo}_{Guid.NewGuid():N}{extension}";
+        var path = Path.Combine(tempDir, tempFileName);
+        await System.IO.File.WriteAllBytesAsync(path, bytes, cancellationToken);
+        archivos.Add((tempFileName, tipo));
+    }
+
+    private static string DetectarExtension(byte[] bytes) =>
+        bytes.Length >= 4 && bytes[0] == 0x25 && bytes[1] == 0x50 && bytes[2] == 0x44 && bytes[3] == 0x46 ? ".pdf" :
+        bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF ? ".jpg" :
+        bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 ? ".png" : ".bin";
+
     private static object CrearSolicitudResponse(UsuSolicitudFirma solicitud)
     {
         var subtotal = solicitud.SolMontoPago ?? 0m;
@@ -1014,6 +1286,7 @@ public sealed class ESignMobileController : ControllerBase
 
     public sealed class MobileSolicitudFirmaRequest
     {
+        public string? FormatoFirma { get; set; }
         public string? Vigencia { get; set; }
         public string? TipoPersona { get; set; }
         public string? TipoDocumento { get; set; }
@@ -1053,5 +1326,83 @@ public sealed class ESignMobileController : ControllerBase
         public IFormFile? Autorizacion { get; set; }
         public IFormFile? AceptacionNombramiento { get; set; }
         public IFormFile? ArchivoAdicional { get; set; }
+    }
+
+    // Nombres alineados con el modelo real del formulario NuevaSolicitud.razor.
+    public sealed class NumerosOneSolicitudFirmaRequest
+    {
+        public string? SolFormatoFirma { get; set; }
+        public string? SolVigencia { get; set; }
+        public string? SolTipoPersona { get; set; }
+        public string? SolTipoIdentificacion { get; set; }
+        public string? SolIdentificacion { get; set; }
+        public string? SolCodigoDactilar { get; set; }
+        public bool SolTieneRuc { get; set; }
+        public string? SolNroRuc { get; set; }
+        public string? SolNombres { get; set; }
+        public string? SolPrimerApellido { get; set; }
+        public string? SolSegundoApellido { get; set; }
+        public string? SolFechaNacimiento { get; set; }
+        public string? SolSexo { get; set; }
+        public string? SolNacionalidad { get; set; }
+        public string? SolTelefono1 { get; set; }
+        public string? SolTelefono2 { get; set; }
+        public string? SolCorreo1 { get; set; }
+        public string? SolCorreo2 { get; set; }
+        public string? SolProvincia { get; set; }
+        public string? SolCanton { get; set; }
+        public string? SolDireccion { get; set; }
+        public string? SolCompanyName { get; set; }
+        public string? SolDepartment { get; set; }
+        public string? SolPosition { get; set; }
+        public string? SolReason { get; set; }
+        public string? SolIdentificationTypeManager { get; set; }
+        public string? SolIdentificationManager { get; set; }
+        public string? SolNamesManager { get; set; }
+        public string? SolLastNameManager { get; set; }
+        public string? CedulaFrontalBase64 { get; set; }
+        public string? CedulaPosteriorBase64 { get; set; }
+        public string? SelfieCedulaBase64 { get; set; }
+        public string? VideoAceptacionBase64 { get; set; }
+        public string? RucFileBase64 { get; set; }
+        public string? NombramientoBase64 { get; set; }
+        public string? ConstitucionBase64 { get; set; }
+        public string? CedulaRepresentanteBase64 { get; set; }
+        public string? AutorizacionBase64 { get; set; }
+        public string? AceptacionNombramientoBase64 { get; set; }
+        public string? ArchivoAdicionalBase64 { get; set; }
+
+        public MobileSolicitudFirmaRequest ToMobileRequest() => new()
+        {
+            FormatoFirma = SolFormatoFirma,
+            Vigencia = SolVigencia,
+            TipoPersona = SolTipoPersona,
+            TipoDocumento = SolTipoIdentificacion,
+            Identificacion = SolIdentificacion,
+            CodigoDactilar = SolCodigoDactilar,
+            PoseeRuc = SolTieneRuc,
+            Ruc = SolNroRuc,
+            Nombres = SolNombres,
+            PrimerApellido = SolPrimerApellido,
+            SegundoApellido = SolSegundoApellido,
+            FechaNacimiento = SolFechaNacimiento,
+            Sexo = SolSexo,
+            Nacionalidad = SolNacionalidad,
+            Celular = SolTelefono1,
+            TelefonoSecundario = SolTelefono2,
+            Correo = SolCorreo1,
+            CorreoSecundario = SolCorreo2,
+            Provincia = SolProvincia,
+            Canton = SolCanton,
+            Direccion = SolDireccion,
+            RazonSocialEmpresa = SolCompanyName,
+            Departamento = SolDepartment,
+            Cargo = SolPosition,
+            MotivoFirma = SolReason,
+            RepresentanteTipoDocumento = SolIdentificationTypeManager,
+            RepresentanteIdentificacion = SolIdentificationManager,
+            RepresentanteNombres = SolNamesManager,
+            RepresentanteApellidos = SolLastNameManager,
+        };
     }
 }

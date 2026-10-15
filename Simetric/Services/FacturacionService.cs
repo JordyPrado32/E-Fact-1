@@ -683,6 +683,38 @@ namespace Simetric.Services
             return estado.Initialized != true;
         }
 
+        public async Task ValidarConfiguracionFacturaAsync(int idUsuario, int? codEmisor, string? serieRaw)
+        {
+            CajaSerieResolucion resolucion;
+            try
+            {
+                resolucion = await ResolverSerieFacturaAsync(idUsuario, serieRaw);
+            }
+            catch (Exception ex)
+            {
+                throw new EmisionBloqueadaException(ex.Message);
+            }
+
+            if (string.IsNullOrWhiteSpace(resolucion.Establecimiento) ||
+                string.IsNullOrWhiteSpace(resolucion.PuntoEmision))
+            {
+                throw new EmisionBloqueadaException(
+                    "La cuenta no tiene un punto de emisión válido configurado para la serie seleccionada.");
+            }
+
+            var estado = await _initialSequencePromptService.GetStateAsync(
+                idUsuario,
+                "factura",
+                resolucion.SerieRaw,
+                codEmisor);
+
+            if (estado.Initialized != true)
+            {
+                throw new EmisionBloqueadaException(
+                    "La secuencia inicial de facturas no está configurada para la serie seleccionada.");
+            }
+        }
+
         public async Task ConfigurarSecuenciaInicialFacturaAsync(int idUsuario, bool yaFacturoAntes, string? secuenciaAnterior, int? codEmisor = null, string? serieRaw = null)
         {
             var resolucion = await ResolverSerieFacturaAsync(idUsuario, serieRaw);

@@ -394,10 +394,10 @@
                                             <div class="actions-cell">
                                                 @if (EsSolicitudTransferenciaPendiente(row))
                                                 {
-                                                    @if (HasComprobanteImage(row))
+                                                    @if (HasComprobanteImage(row) || EsSolicitudNumerosOne(row))
                                                     {
                                                         <button type="button" class="btn-action evidence" title="Ver comprobante" @onclick="() => ShowEvidencePreview(row)">
-                                                            <i class="bi bi-image"></i> Ver
+                                                            <i class="bi @(HasComprobanteImage(row) ? "bi-image" : "bi-info-circle")"></i> Ver
                                                         </button>
                                                     }
                                                     @if (puedeAprobarTransferencias)
@@ -630,7 +630,7 @@
 }
 
 <!-- Modal: Vista Previa Comprobante -->
-@if (!string.IsNullOrEmpty(previewImageUrl))
+@if (!string.IsNullOrEmpty(previewImageUrl) || !string.IsNullOrEmpty(previewMessage))
 {
     <div class="modal-overlay" @onclick="CloseEvidencePreview">
         <div class="modal-content-container large animate__animated animate__zoomIn" @onclick:stopPropagation>
@@ -639,14 +639,24 @@
                 <button type="button" class="btn-close-n" @onclick="CloseEvidencePreview">&times;</button>
             </header>
             <div class="modal-body-n">
-                <div class="preview-image-wrap">
-                    <img src="@previewImageUrl" class="preview-img-tag" alt="Comprobante de cobro" />
-                </div>
+                @if (!string.IsNullOrEmpty(previewImageUrl))
+                {
+                    <div class="preview-image-wrap">
+                        <img src="@previewImageUrl" class="preview-img-tag" alt="Comprobante de cobro" />
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-warning mb-0">@previewMessage</div>
+                }
             </div>
             <footer class="modal-footer-n">
-                <a href="@previewImageUrl" target="_blank" class="btn-save-n text-decoration-none" style="display: inline-flex; align-items: center; gap: 0.5rem;">
-                    <i class="bi bi-box-arrow-up-right"></i> Abrir en pestaña nueva
-                </a>
+                @if (!string.IsNullOrEmpty(previewImageUrl))
+                {
+                    <a href="@previewImageUrl" target="_blank" class="btn-save-n text-decoration-none" style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                        <i class="bi bi-box-arrow-up-right"></i> Abrir en pestaña nueva
+                    </a>
+                }
                 <button type="button" class="btn-cancel-n" @onclick="CloseEvidencePreview">Cerrar</button>
             </footer>
         </div>
@@ -748,6 +758,7 @@
 
     // Preview Image Url
     private string? previewImageUrl;
+    private string? previewMessage;
 
     private string? modalError;
     private string? modalSuccess;
@@ -2373,14 +2384,17 @@
     }
 
     private static decimal ObtenerSubtotalVenta(ReporteVentaBackOffice venta) =>
-        !venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase)
-            ? ObtenerTotalVenta(venta)
-            : decimal.Round(ObtenerTotalVenta(venta) / (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
+        venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase)
+            ? decimal.Round(ObtenerTotalVenta(venta) / (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero)
+            : venta.Producto.Equals("e-fact", StringComparison.OrdinalIgnoreCase)
+                ? decimal.Round(ObtenerTotalVenta(venta) / (1m + EFactDocumentPricing.IvaRate), 2, MidpointRounding.AwayFromZero)
+                : ObtenerTotalVenta(venta);
 
     private static decimal ObtenerIvaVenta(ReporteVentaBackOffice venta) =>
-        !venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase)
-            ? 0m
-            : decimal.Round(ObtenerTotalVenta(venta) - ObtenerSubtotalVenta(venta), 2, MidpointRounding.AwayFromZero);
+        venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase) ||
+        venta.Producto.Equals("e-fact", StringComparison.OrdinalIgnoreCase)
+            ? decimal.Round(ObtenerTotalVenta(venta) - ObtenerSubtotalVenta(venta), 2, MidpointRounding.AwayFromZero)
+            : 0m;
 
     private static decimal ObtenerTotalVenta(ReporteVentaBackOffice venta) =>
         venta.Producto.Equals("e-sign", StringComparison.OrdinalIgnoreCase) && Math.Abs(venta.Valor - 20m) < 0.01m
@@ -2388,14 +2402,17 @@
             : venta.Valor;
 
     private static decimal ObtenerSubtotalMonto(decimal monto, string? producto) =>
-        !string.Equals(producto, "e-sign", StringComparison.OrdinalIgnoreCase)
-            ? monto
-            : decimal.Round(monto / (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
+        string.Equals(producto, "e-sign", StringComparison.OrdinalIgnoreCase)
+            ? decimal.Round(monto / (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero)
+            : string.Equals(producto, "e-fact", StringComparison.OrdinalIgnoreCase)
+                ? decimal.Round(monto / (1m + EFactDocumentPricing.IvaRate), 2, MidpointRounding.AwayFromZero)
+                : monto;
 
     private static decimal ObtenerIvaMonto(decimal monto, string? producto) =>
-        !string.Equals(producto, "e-sign", StringComparison.OrdinalIgnoreCase)
-            ? 0m
-            : decimal.Round(monto - ObtenerSubtotalMonto(monto, producto), 2, MidpointRounding.AwayFromZero);
+        string.Equals(producto, "e-sign", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(producto, "e-fact", StringComparison.OrdinalIgnoreCase)
+            ? decimal.Round(monto - ObtenerSubtotalMonto(monto, producto), 2, MidpointRounding.AwayFromZero)
+            : 0m;
 
     private static string FormatearMonto(decimal monto) =>
         monto.ToString("N2", System.Globalization.CultureInfo.InvariantCulture);
@@ -2409,6 +2426,10 @@
 
     private static bool EsSolicitudTransferenciaPendiente(ReporteVentaBackOffice? row) =>
         EsSolicitudTransferenciaDocumentos(row) || EsSolicitudTransferenciaFirma(row);
+
+    private static bool EsSolicitudNumerosOne(ReporteVentaBackOffice? row) =>
+        row is not null &&
+        row.Observacion?.Contains("creada desde Numeros One", StringComparison.OrdinalIgnoreCase) == true;
 
     private static int? ObtenerSolicitudFirmaId(ReporteVentaBackOffice row)
     {
@@ -2592,6 +2613,8 @@
 
     private async Task ShowEvidencePreview(ReporteVentaBackOffice row)
     {
+        previewImageUrl = null;
+        previewMessage = null;
         if (ventasConComprobanteArchivo.Contains(row.IdReporte))
         {
             await using var context = await DbFactory.CreateDbContextAsync();
@@ -2608,11 +2631,18 @@
         }
 
         previewImageUrl = GetEvidenceImageUrl(row.Observacion);
+        if (string.IsNullOrEmpty(previewImageUrl) && EsSolicitudNumerosOne(row))
+        {
+            previewMessage = EsSolicitudTransferenciaFirma(row)
+                ? "Esta solicitud fue creada desde Numeros One. Por favor verificar el pago antes de aprobar."
+                : "Esta solicitud fue creada desde Numeros One. Recuerda constatar el valor antes de aprobar.";
+        }
     }
 
     private void CloseEvidencePreview()
     {
         previewImageUrl = null;
+        previewMessage = null;
     }
 
     private void ShowFeedback(string message, bool isSuccess)
