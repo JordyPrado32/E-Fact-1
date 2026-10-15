@@ -341,7 +341,9 @@ public sealed class ESignMobileController : ControllerBase
             SolCompanyName = NormalizarTexto(request.RazonSocialEmpresa),
             SolDepartment = NormalizarTexto(request.Departamento),
             SolPosition = NormalizarTexto(request.Cargo),
-            SolReason = NormalizarTexto(request.MotivoFirma),
+            SolReason = tipoPersona == "JURIDICA" && string.IsNullOrWhiteSpace(request.MotivoFirma)
+                ? "Uso personal"
+                : NormalizarTexto(request.MotivoFirma),
             SolIdentificationTypeManager = NormalizarTipoIdentificacion(request.RepresentanteTipoDocumento),
             SolIdentificationManager = SoloDigitosOTexto(request.RepresentanteIdentificacion),
             SolNamesManager = NormalizarTexto(request.RepresentanteNombres),

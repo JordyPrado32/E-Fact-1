@@ -2413,6 +2413,13 @@ namespace Simetric.Services
                 .Where(d => d.DocVigente)
                 .ToDictionary(d => d.DocTipo.ToUpperInvariant(), StringComparer.OrdinalIgnoreCase);
 
+            var esRepresentanteLegal = EsSolicitudPersonaJuridica(solicitud);
+            var constitucion = esRepresentanteLegal ? await BuildOptionalFilePayloadAsync(documentos, "CONSTITUCION", cancellationToken) : null;
+            var nombramiento = esRepresentanteLegal ? await BuildOptionalFilePayloadAsync(documentos, "NOMBRAMIENTO", cancellationToken) : null;
+            var aceptacionNombramiento = esRepresentanteLegal ? await BuildOptionalFilePayloadAsync(documentos, "ACEPTACION_NOMBRAMIENTO", cancellationToken) : null;
+            var autorizacion = esRepresentanteLegal ? await BuildOptionalFilePayloadAsync(documentos, "AUTORIZACION", cancellationToken) : null;
+            var cedulaRepresentante = esRepresentanteLegal ? await BuildOptionalFilePayloadAsync(documentos, "CEDULA_REPRESENTANTE", cancellationToken) : null;
+
             return new BesCreateCertificateRequestDto
             {
                 IdentificationType = MapIdentificationType(solicitud.SolTipoIdentificacion),
@@ -2438,16 +2445,16 @@ namespace Simetric.Services
                     ? null
                     : solicitud.SolUanatacaOfferUuid ?? _configuration["UanatacaApi:DefaultOfferUuid"],
                 Ruc = solicitud.SolTieneRuc ? solicitud.SolNroRuc : null,
-                Company = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolCompanyName : null,
-                Department = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolDepartment : null,
-                Position = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolPosition : null,
-                Reason = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolReason : null,
-                IdentificationTypeManager = EsSolicitudPersonaJuridica(solicitud) && !string.IsNullOrWhiteSpace(solicitud.SolIdentificationTypeManager)
+                Company = esRepresentanteLegal ? solicitud.SolCompanyName : null,
+                Department = esRepresentanteLegal ? solicitud.SolDepartment : null,
+                Position = esRepresentanteLegal ? solicitud.SolPosition : null,
+                Reason = esRepresentanteLegal ? solicitud.SolReason : null,
+                IdentificationTypeManager = esRepresentanteLegal && !string.IsNullOrWhiteSpace(solicitud.SolIdentificationTypeManager)
                     ? MapIdentificationType(solicitud.SolIdentificationTypeManager)
                     : null,
-                IdentificationManager = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolIdentificationManager : null,
-                NamesManager = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolNamesManager : null,
-                LastNameManager = EsSolicitudPersonaJuridica(solicitud) ? solicitud.SolLastNameManager : null,
+                IdentificationManager = esRepresentanteLegal ? solicitud.SolIdentificationManager : null,
+                NamesManager = esRepresentanteLegal ? solicitud.SolNamesManager : null,
+                LastNameManager = esRepresentanteLegal ? solicitud.SolLastNameManager : null,
                 FrontIdentification = await BuildFilePayloadAsync(documentos, "CEDULA_FRONTAL", cancellationToken),
                 BackIdentification = await BuildFilePayloadAsync(documentos, "CEDULA_POSTERIOR", cancellationToken),
                 Selfie = await BuildFilePayloadAsync(documentos, "SELFIE_CEDULA", cancellationToken),
@@ -2455,12 +2462,25 @@ namespace Simetric.Services
                 RucFile = solicitud.SolTieneRuc
                     ? await BuildFilePayloadAsync(documentos, "RUC_FILE", cancellationToken)
                     : null,
-                Constitution = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "CONSTITUCION", cancellationToken) : null,
-                Appointment = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "NOMBRAMIENTO", cancellationToken) : null,
-                AcceptanceAppointment = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "ACEPTACION_NOMBRAMIENTO", cancellationToken) : null,
-                Authorization = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "AUTORIZACION", cancellationToken) : null,
-                ManagerIdentification = EsSolicitudPersonaJuridica(solicitud) ? await BuildOptionalFilePayloadAsync(documentos, "CEDULA_REPRESENTANTE", cancellationToken) : null,
-                AdditionalFile = await BuildOptionalFilePayloadAsync(documentos, "ARCHIVO_ADICIONAL", cancellationToken)
+                Constitution = constitucion,
+                Appointment = nombramiento,
+                AcceptanceAppointment = aceptacionNombramiento,
+                Authorization = autorizacion,
+                ManagerIdentification = cedulaRepresentante,
+                AdditionalFile = await BuildOptionalFilePayloadAsync(documentos, "ARCHIVO_ADICIONAL", cancellationToken),
+                SolCompanyName = esRepresentanteLegal ? solicitud.SolCompanyName ?? string.Empty : null,
+                SolDepartment = esRepresentanteLegal ? solicitud.SolDepartment ?? string.Empty : null,
+                SolPosition = esRepresentanteLegal ? solicitud.SolPosition ?? string.Empty : null,
+                SolReason = esRepresentanteLegal ? solicitud.SolReason ?? "Uso personal" : null,
+                SolIdentificationTypeManager = esRepresentanteLegal ? solicitud.SolIdentificationTypeManager ?? string.Empty : null,
+                SolIdentificationManager = esRepresentanteLegal ? solicitud.SolIdentificationManager ?? string.Empty : null,
+                SolNamesManager = esRepresentanteLegal ? solicitud.SolNamesManager ?? string.Empty : null,
+                SolLastNameManager = esRepresentanteLegal ? solicitud.SolLastNameManager ?? string.Empty : null,
+                NombramientoBase64 = esRepresentanteLegal ? nombramiento?.Base64 ?? string.Empty : null,
+                ConstitucionBase64 = esRepresentanteLegal ? constitucion?.Base64 ?? string.Empty : null,
+                CedulaRepresentanteBase64 = esRepresentanteLegal ? cedulaRepresentante?.Base64 ?? string.Empty : null,
+                AutorizacionBase64 = esRepresentanteLegal ? autorizacion?.Base64 ?? string.Empty : null,
+                AceptacionNombramientoBase64 = esRepresentanteLegal ? aceptacionNombramiento?.Base64 ?? string.Empty : null
             };
         }
 
