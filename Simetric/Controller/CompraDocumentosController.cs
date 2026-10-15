@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
@@ -37,6 +38,7 @@ public class CompraDocumentosController : UsuarioApiControllerBase
     }
 
     [HttpGet("compra")]
+    [AllowAnonymous]
     public async Task<IActionResult> GetCompra([FromQuery] int idUsuario)
     {
         idUsuario = ResolverIdUsuario(idUsuario);
@@ -183,6 +185,7 @@ public class CompraDocumentosController : UsuarioApiControllerBase
     }
 
     [HttpGet("recargas")]
+    [AllowAnonymous]
     public async Task<IActionResult> GetRecargas([FromQuery] int idUsuario)
     {
         idUsuario = ResolverIdUsuario(idUsuario);
@@ -199,6 +202,7 @@ public class CompraDocumentosController : UsuarioApiControllerBase
     }
 
     [HttpGet("recargas/{purchaseId}")]
+    [AllowAnonymous]
     public async Task<IActionResult> GetEstadoRecarga(
         string purchaseId,
         [FromQuery] int idUsuario)
@@ -340,6 +344,7 @@ public class CompraDocumentosController : UsuarioApiControllerBase
     }
 
     [HttpPost("solicitud-recarga-backoffice")]
+    [AllowAnonymous]
     public async Task<IActionResult> SolicitarRecargaBackOffice(
         [FromQuery] int idUsuario,
         [FromBody] CompraDocumentosSolicitudBackOfficeDto model)
