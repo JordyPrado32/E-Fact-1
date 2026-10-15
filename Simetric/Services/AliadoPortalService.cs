@@ -417,15 +417,13 @@ public sealed class AliadoPortalService
             cliente.Email = correosPorIdentificacion.GetValueOrDefault(identificacion);
         }
 
-        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
+        var facturasDesdeHistorial = ObtenerIdsFacturasDesdeHistorial(clientes);
+        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds, facturaIds: facturasDesdeHistorial);
         foreach (var cliente in clientes)
         {
             var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
             var compras = facturas
-                .Where(x => x.IdUsuario == cliente.IdUsuario ||
-                            x.IdCliente == cliente.IdCliente ||
-                            (!string.IsNullOrWhiteSpace(identificacion) &&
-                             string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)))
+                .Where(x => FacturaPerteneceACliente(x, cliente, identificacion))
                 .OrderByDescending(x => x.Fecha)
                 .ToList();
             if (compras.Count == 0)
@@ -481,7 +479,8 @@ public sealed class AliadoPortalService
                     ?? x.Nombrerazonsocial ?? x.Nombrecomercial ?? ((x.Nombres ?? "") + " " + (x.Apellidos ?? "")),
                 Email = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Email).FirstOrDefault() ?? x.Correo,
                 Telefono = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.Celular).FirstOrDefault() ?? x.Celular ?? x.Telefonoconvencional,
-                Direccion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.DireccionEmpresa).FirstOrDefault() ?? x.Direccion
+                Direccion = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.DireccionEmpresa).FirstOrDefault() ?? x.Direccion,
+                HistorialComprasDocumentosJson = db.Usuarios.Where(u => u.IdUsuario == x.Usuario).Select(u => u.HistorialComprasDocumentosJson).FirstOrDefault()
             })
             .FirstOrDefaultAsync();
 
@@ -507,11 +506,9 @@ public sealed class AliadoPortalService
         }
 
         var identificacionCliente = NormalizarIdentificacionCliente(cliente.Identificacion);
-        var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds))
-            .Where(x => x.IdUsuario == cliente.IdUsuario ||
-                        x.IdCliente == idCliente ||
-                        (!string.IsNullOrWhiteSpace(identificacionCliente) &&
-                         string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacionCliente, StringComparison.OrdinalIgnoreCase)))
+        var facturasDesdeHistorial = ObtenerIdsFacturasDesdeHistorial(new[] { cliente });
+        var facturas = (await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds, facturaIds: facturasDesdeHistorial))
+            .Where(x => FacturaPerteneceACliente(x, cliente, identificacionCliente))
             .ToList();
         cliente.Productos = facturas
             .OrderByDescending(x => x.Fecha)
@@ -550,16 +547,14 @@ public sealed class AliadoPortalService
                 .ThenByDescending(cliente => cliente.SaldoDocumentos)
                 .First())
             .ToList();
-        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds);
+        var facturasDesdeHistorial = ObtenerIdsFacturasDesdeHistorial(clientes);
+        var facturas = await ObtenerFacturasAsync(contexto.IdVendedor, vendedores: vendedorIds, facturaIds: facturasDesdeHistorial);
         var renovacionesPorServicio = clientes
             .SelectMany(cliente =>
             {
                 var identificacion = NormalizarIdentificacionCliente(cliente.Identificacion);
                 var comprasPorServicio = facturas
-                    .Where(x => x.IdUsuario == cliente.IdUsuario ||
-                                x.IdCliente == cliente.IdCliente ||
-                                (!string.IsNullOrWhiteSpace(identificacion) &&
-                                 string.Equals(NormalizarIdentificacionCliente(x.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)))
+                    .Where(x => FacturaPerteneceACliente(x, cliente, identificacion))
                     .GroupBy(x => AliadoServicioHelper.Clasificar(x.Producto), StringComparer.OrdinalIgnoreCase)
                     .Select(x => x.OrderByDescending(y => y.Fecha).First())
                     .ToList();
@@ -2336,17 +2331,20 @@ public sealed class AliadoPortalService
         return (true, "Cuenta creada. El cliente deberá cambiar la clave en su primer ingreso.");
     }
 
-    private async Task<List<FacturaPortalRow>> ObtenerFacturasAsync(int idVendedor, int? idCliente = null, IReadOnlyCollection<int>? vendedores = null)
+    private async Task<List<FacturaPortalRow>> ObtenerFacturasAsync(int idVendedor, int? idCliente = null, IReadOnlyCollection<int>? vendedores = null, IReadOnlyCollection<int>? facturaIds = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         return await db.Facturas
             .AsNoTracking()
-            .Where(x => (vendedores == null ? x.Idvendedor == idVendedor : x.Idvendedor.HasValue && vendedores.Contains(x.Idvendedor.Value)) && (!idCliente.HasValue || x.Codclientes == idCliente) && (x.Estado == true || x.Estado == null))
+            .Where(x => ((vendedores == null ? x.Idvendedor == idVendedor : x.Idvendedor.HasValue && vendedores.Contains(x.Idvendedor.Value)) ||
+                         (facturaIds != null && facturaIds.Contains(x.Codfactura))) &&
+                        (!idCliente.HasValue || x.Codclientes == idCliente) && (x.Estado == true || x.Estado == null))
             .OrderByDescending(x => x.Fchautorizacion ?? x.Fechaentrega)
             .Select(x => new FacturaPortalRow
             {
                 IdFactura = x.Codfactura,
                 IdUsuario = x.Idusuario,
+                Notas = x.Notas,
                 Aliado = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.Nombre).FirstOrDefault() ?? string.Empty,
                 PorcentajeBase = db.VendedoresBackOffice.Where(v => v.IdVendedor == x.Idvendedor).Select(v => v.PorcentajeBase).FirstOrDefault(),
                 IdCliente = x.Codclientes,
@@ -3020,6 +3018,65 @@ public sealed class AliadoPortalService
             ? string.Empty
             : new string(identificacion.Where(char.IsLetterOrDigit).ToArray());
 
+    private static bool FacturaPerteneceACliente(FacturaPortalRow factura, AliadoClienteDto cliente, string identificacion)
+        => factura.IdUsuario == cliente.IdUsuario ||
+           factura.IdCliente == cliente.IdCliente ||
+           (!string.IsNullOrWhiteSpace(identificacion) &&
+            string.Equals(NormalizarIdentificacionCliente(factura.IdentificacionCliente), identificacion, StringComparison.OrdinalIgnoreCase)) ||
+           FacturaRegistradaEnHistorial(factura, cliente.HistorialComprasDocumentosJson);
+
+    private static bool FacturaRegistradaEnHistorial(FacturaPortalRow factura, string? historialJson)
+    {
+        if (string.IsNullOrWhiteSpace(historialJson))
+            return false;
+
+        try
+        {
+            var historial = JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(
+                historialJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            return historial?.Any(compra =>
+                compra.CodFactura == factura.IdFactura ||
+                (!string.IsNullOrWhiteSpace(compra.Id) &&
+                 factura.Notas?.Contains($"[COMPRA_DOCS:{compra.Id}]", StringComparison.OrdinalIgnoreCase) == true) ||
+                (!string.IsNullOrWhiteSpace(compra.Reference) &&
+                 factura.Notas?.Contains($"[COMPRA_DOCS:REF:{compra.Reference}]", StringComparison.OrdinalIgnoreCase) == true)) == true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static HashSet<int> ObtenerIdsFacturasDesdeHistorial(IEnumerable<AliadoClienteDto> clientes)
+    {
+        var ids = new HashSet<int>();
+        foreach (var cliente in clientes)
+        {
+            if (string.IsNullOrWhiteSpace(cliente.HistorialComprasDocumentosJson))
+                continue;
+
+            try
+            {
+                var historial = JsonSerializer.Deserialize<List<CompraDocumentosHistorialItem>>(
+                    cliente.HistorialComprasDocumentosJson,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                foreach (var compra in historial ?? Enumerable.Empty<CompraDocumentosHistorialItem>())
+                {
+                    if (compra.CodFactura is > 0)
+                        ids.Add(compra.CodFactura.Value);
+                }
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+        }
+
+        return ids;
+    }
+
     private static bool EsCorreoDisponible(string? correo)
         => !string.IsNullOrWhiteSpace(correo) &&
            !correo.EndsWith("@deleted.local", StringComparison.OrdinalIgnoreCase);
@@ -3692,6 +3749,7 @@ internal sealed class FacturaPortalRow
 {
     public int IdFactura { get; init; }
     public int? IdUsuario { get; init; }
+    public string? Notas { get; init; }
     public int? IdCliente { get; init; }
     public string Aliado { get; init; } = string.Empty;
     public decimal PorcentajeBase { get; init; }

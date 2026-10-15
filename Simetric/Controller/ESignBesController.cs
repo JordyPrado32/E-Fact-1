@@ -57,4 +57,22 @@ public sealed class ESignUanatacaController : ControllerBase
         var result = await _solicitudService.SincronizarSolicitudUanatacaAsync(solId, cancellationToken: cancellationToken);
         return result.Success ? Ok(result) : BadRequest(result);
     }
+
+    [AllowAnonymous]
+    [HttpGet("solicitudes/{solId:int}/estado")]
+    public async Task<IActionResult> ConsultarEstadoSolicitud(int solId, CancellationToken cancellationToken)
+    {
+        var result = await _solicitudService.SincronizarSolicitudUanatacaAsync(solId, cancellationToken: cancellationToken);
+        var response = new
+        {
+            result.Success,
+            result.Created,
+            result.StatusCode,
+            result.Message,
+            result.ProviderStatus,
+            result.ProviderStatusText
+        };
+
+        return result.Success ? Ok(response) : BadRequest(response);
+    }
 }

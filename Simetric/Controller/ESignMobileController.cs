@@ -395,7 +395,17 @@ public sealed class ESignMobileController : ControllerBase
         var urlPago = await _pagoService.GenerarSolicitudPago(solicitud, notifyUrl);
         return string.IsNullOrWhiteSpace(urlPago)
             ? BadRequest(new { mensaje = "No se pudo conectar con la pasarela de pagos." })
-            : Ok(new { solicitudId = solicitud.SolId, paymentUrl = urlPago, checkoutUrl = urlPago, status = "PENDIENTE_PAGO" });
+            : Ok(new
+            {
+                solicitudId = solicitud.SolId,
+                paymentUrl = urlPago,
+                checkoutUrl = urlPago,
+                status = "PENDIENTE_PAGO",
+                imagenBase64 = PaymentNotificationImageBuilder.CompraGenerada(
+                    "FIRMA ELECTRONICA",
+                    (solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate),
+                    solicitud.SolVigencia ?? "Servicio de firma electrónica")
+            });
     }
 
     [HttpPost("solicitudes/transferencia")]
@@ -676,6 +686,7 @@ public sealed class ESignMobileController : ControllerBase
         var aprobado = solicitud.SolPagoExitoso == true ||
             (venta?.Estado ?? string.Empty).Contains("pag", StringComparison.OrdinalIgnoreCase);
         var rechazado = !aprobado && (venta?.Estado ?? string.Empty).Contains("anul", StringComparison.OrdinalIgnoreCase);
+        var total = Math.Round((solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
 
         return Ok(new
         {
@@ -687,8 +698,15 @@ public sealed class ESignMobileController : ControllerBase
             estadoBackOffice = venta?.Estado ?? "pendiente",
             fechaSolicitud = solicitud.SolFechaSolicitud,
             fechaPago = solicitud.SolFechaPago,
+            imagenBase64 = aprobado
+                ? PaymentNotificationImageBuilder.PagoAprobado(
+                    "FIRMA ELECTRONICA",
+                    total,
+                    solicitud.SolVigencia ?? "Solicitud de firma electrónica",
+                    "Tu solicitud de firma electrónica ha sido agregada a tu cuenta y continuará su proceso.")
+                : null,
             mensaje = aprobado
-                ? "El pago fue aprobado."
+                ? "El pago fue aprobado y tu solicitud de firma electrónica fue agregada a tu cuenta."
                 : rechazado
                     ? "El pago fue rechazado."
                     : "El pago sigue pendiente de verificación en BackOffice."
