@@ -12,6 +12,7 @@ namespace Simetric.Services.ESign;
 public sealed class FirmaStampApiService
 {
     private const long MaxFileBytes = 15 * 1024 * 1024;
+    private const double FixedStampWidthMm = 40;
     private static readonly SemaphoreSlim DiagnosticLogLock = new(1, 1);
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
@@ -93,6 +94,9 @@ public sealed class FirmaStampApiService
         using var pdfContent = CreateFileContent(pdfStream, "application/pdf");
         using var certificadoContent = CreateFileContent(certificado.Content, "application/x-pkcs12");
         var certificadoFileName = NormalizeCertificateFileName(certificado.FileName);
+        var fixedPositions = posiciones?
+            .Select(posicion => posicion with { AnchoMm = FixedStampWidthMm })
+            .ToArray();
 
         form.Add(pdfContent, "pdf", pdfFileName);
         form.Add(certificadoContent, "certificado", certificadoFileName);
@@ -104,11 +108,11 @@ public sealed class FirmaStampApiService
         form.Add(new StringContent(pagina.ToString(CultureInfo.InvariantCulture)), "pagina");
         form.Add(new StringContent(xMm.ToString(CultureInfo.InvariantCulture)), "xMm");
         form.Add(new StringContent(yMm.ToString(CultureInfo.InvariantCulture)), "yMm");
-        form.Add(new StringContent(anchoMm.ToString(CultureInfo.InvariantCulture)), "anchoMm");
-        if (posiciones is { Count: > 0 })
+        form.Add(new StringContent(FixedStampWidthMm.ToString(CultureInfo.InvariantCulture)), "anchoMm");
+        if (fixedPositions is { Length: > 0 })
         {
             form.Add(
-                new StringContent(JsonSerializer.Serialize(posiciones, JsonOptions)),
+                new StringContent(JsonSerializer.Serialize(fixedPositions, JsonOptions)),
                 "posiciones");
         }
 

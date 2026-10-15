@@ -705,7 +705,7 @@ public sealed class ESignMobileController : ControllerBase
         [FromForm] int pagina = 1,
         [FromForm] double xMm = 20,
         [FromForm] double yMm = 20,
-        [FromForm] double anchoMm = 50,
+        [FromForm] double anchoMm = 40,
         [FromForm] string? posiciones = null,
         [FromForm] string? documentoPendiente = null,
         [FromForm] string? nombreOriginal = null,
