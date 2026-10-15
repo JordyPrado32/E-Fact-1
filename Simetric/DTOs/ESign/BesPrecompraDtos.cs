@@ -149,6 +149,45 @@ public sealed class BesCreateCertificateRequestDto
     public BesArchivoAdjuntoDto? Authorization { get; set; }
     public BesArchivoAdjuntoDto? ManagerIdentification { get; set; }
     public BesArchivoAdjuntoDto? AdditionalFile { get; set; }
+
+    [JsonPropertyName("solCompanyName")]
+    public string? SolCompanyName { get; set; }
+
+    [JsonPropertyName("solDepartment")]
+    public string? SolDepartment { get; set; }
+
+    [JsonPropertyName("solPosition")]
+    public string? SolPosition { get; set; }
+
+    [JsonPropertyName("solReason")]
+    public string? SolReason { get; set; }
+
+    [JsonPropertyName("solIdentificationTypeManager")]
+    public string? SolIdentificationTypeManager { get; set; }
+
+    [JsonPropertyName("solIdentificationManager")]
+    public string? SolIdentificationManager { get; set; }
+
+    [JsonPropertyName("solNamesManager")]
+    public string? SolNamesManager { get; set; }
+
+    [JsonPropertyName("solLastNameManager")]
+    public string? SolLastNameManager { get; set; }
+
+    [JsonPropertyName("nombramientoBase64")]
+    public string? NombramientoBase64 { get; set; }
+
+    [JsonPropertyName("constitucionBase64")]
+    public string? ConstitucionBase64 { get; set; }
+
+    [JsonPropertyName("cedulaRepresentanteBase64")]
+    public string? CedulaRepresentanteBase64 { get; set; }
+
+    [JsonPropertyName("autorizacionBase64")]
+    public string? AutorizacionBase64 { get; set; }
+
+    [JsonPropertyName("aceptacionNombramientoBase64")]
+    public string? AceptacionNombramientoBase64 { get; set; }
 }
 
 public sealed class BesCreateCertificateResponseDto
