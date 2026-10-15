@@ -341,7 +341,9 @@ public sealed class ESignMobileController : ControllerBase
             SolCompanyName = NormalizarTexto(request.RazonSocialEmpresa),
             SolDepartment = NormalizarTexto(request.Departamento),
             SolPosition = NormalizarTexto(request.Cargo),
-            SolReason = NormalizarTexto(request.MotivoFirma),
+            SolReason = tipoPersona == "JURIDICA" && string.IsNullOrWhiteSpace(request.MotivoFirma)
+                ? "Uso personal"
+                : NormalizarTexto(request.MotivoFirma),
             SolIdentificationTypeManager = NormalizarTipoIdentificacion(request.RepresentanteTipoDocumento),
             SolIdentificationManager = SoloDigitosOTexto(request.RepresentanteIdentificacion),
             SolNamesManager = NormalizarTexto(request.RepresentanteNombres),
@@ -393,7 +395,17 @@ public sealed class ESignMobileController : ControllerBase
         var urlPago = await _pagoService.GenerarSolicitudPago(solicitud, notifyUrl);
         return string.IsNullOrWhiteSpace(urlPago)
             ? BadRequest(new { mensaje = "No se pudo conectar con la pasarela de pagos." })
-            : Ok(new { solicitudId = solicitud.SolId, paymentUrl = urlPago, checkoutUrl = urlPago, status = "PENDIENTE_PAGO" });
+            : Ok(new
+            {
+                solicitudId = solicitud.SolId,
+                paymentUrl = urlPago,
+                checkoutUrl = urlPago,
+                status = "PENDIENTE_PAGO",
+                imagenBase64 = PaymentNotificationImageBuilder.CompraGenerada(
+                    "FIRMA ELECTRONICA",
+                    (solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate),
+                    solicitud.SolVigencia ?? "Servicio de firma electrónica")
+            });
     }
 
     [HttpPost("solicitudes/transferencia")]
@@ -674,6 +686,7 @@ public sealed class ESignMobileController : ControllerBase
         var aprobado = solicitud.SolPagoExitoso == true ||
             (venta?.Estado ?? string.Empty).Contains("pag", StringComparison.OrdinalIgnoreCase);
         var rechazado = !aprobado && (venta?.Estado ?? string.Empty).Contains("anul", StringComparison.OrdinalIgnoreCase);
+        var total = Math.Round((solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero);
 
         return Ok(new
         {
@@ -685,8 +698,15 @@ public sealed class ESignMobileController : ControllerBase
             estadoBackOffice = venta?.Estado ?? "pendiente",
             fechaSolicitud = solicitud.SolFechaSolicitud,
             fechaPago = solicitud.SolFechaPago,
+            imagenBase64 = aprobado
+                ? PaymentNotificationImageBuilder.PagoAprobado(
+                    "FIRMA ELECTRONICA",
+                    total,
+                    solicitud.SolVigencia ?? "Solicitud de firma electrónica",
+                    "Tu solicitud de firma electrónica ha sido agregada a tu cuenta y continuará su proceso.")
+                : null,
             mensaje = aprobado
-                ? "El pago fue aprobado."
+                ? "El pago fue aprobado y tu solicitud de firma electrónica fue agregada a tu cuenta."
                 : rechazado
                     ? "El pago fue rechazado."
                     : "El pago sigue pendiente de verificación en BackOffice."
@@ -705,7 +725,7 @@ public sealed class ESignMobileController : ControllerBase
         [FromForm] int pagina = 1,
         [FromForm] double xMm = 20,
         [FromForm] double yMm = 20,
-        [FromForm] double anchoMm = 50,
+        [FromForm] double anchoMm = 40,
         [FromForm] string? posiciones = null,
         [FromForm] string? documentoPendiente = null,
         [FromForm] string? nombreOriginal = null,

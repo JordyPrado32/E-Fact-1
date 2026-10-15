@@ -181,7 +181,16 @@ public class CompraDocumentosController : UsuarioApiControllerBase
             return BadRequest(new { message = payment.ErrorMessage ?? "Pagomedios no pudo generar el checkout.", purchaseId = compraId });
         }
 
-        return Ok(new { paymentUrl = payment.PaymentUrl, purchaseId = compraId, status = "Pendiente" });
+        return Ok(new
+        {
+            paymentUrl = payment.PaymentUrl,
+            purchaseId = compraId,
+            status = "Pendiente",
+            imagenBase64 = PaymentNotificationImageBuilder.CompraGenerada(
+                "E-FACT",
+                total,
+                model.EsIlimitado ? "Plan ilimitado por 1 año" : $"{model.Documentos} documentos")
+        });
     }
 
     [HttpGet("recargas")]
@@ -224,12 +233,14 @@ public class CompraDocumentosController : UsuarioApiControllerBase
             .FirstOrDefault(x => string.Equals(x.Id, purchaseId.Trim(), StringComparison.OrdinalIgnoreCase));
         if (compra is null) return NotFound("No se encontró la compra para ese usuario.");
 
+        var aprobada = EsCompraAprobada(compra);
+
         return Ok(new
         {
             purchaseId = compra.Id,
             idUsuario,
             estado = compra.Estado,
-            aprobada = EsCompraAprobada(compra),
+            aprobada,
             saldoAplicado = compra.SaldoAplicado,
             documentos = compra.Documentos,
             montoTotal = compra.MontoTotal,
@@ -238,6 +249,15 @@ public class CompraDocumentosController : UsuarioApiControllerBase
             referencia = compra.Reference,
             codigoAutorizacion = compra.AuthorizationCode,
             saldoDocumentosActual = usuario.SaldoDocumentos,
+            imagenBase64 = aprobada
+                ? PaymentNotificationImageBuilder.PagoAprobado(
+                    "E-FACT",
+                    compra.MontoTotal,
+                    compra.EsIlimitado ? "Plan ilimitado activado" : $"{compra.Documentos} documentos agregados",
+                    compra.EsIlimitado
+                        ? "Tu plan de documentos ilimitados ha sido activado en tu cuenta."
+                        : "Tus documentos han sido agregados a tu cuenta.")
+                : null,
             factura = new
             {
                 codFactura = compra.CodFactura,
@@ -340,7 +360,16 @@ public class CompraDocumentosController : UsuarioApiControllerBase
             // La solicitud ya fue registrada y el BackOffice puede validarla aunque falle el aviso.
         }
 
-        return Ok(new { purchaseId = compraId, status = "Pendiente", message = "Tu transferencia fue registrada. Sera validada en un plazo maximo de 24 horas." });
+        return Ok(new
+        {
+            purchaseId = compraId,
+            status = "Pendiente",
+            message = "Tu transferencia fue registrada. Sera validada en un plazo maximo de 24 horas.",
+            imagenBase64 = PaymentNotificationImageBuilder.CompraGenerada(
+                "E-FACT",
+                total,
+                model.EsIlimitado ? "Plan ilimitado por 1 año" : $"{model.Documentos} documentos")
+        });
     }
 
     [HttpPost("solicitud-recarga-backoffice")]
@@ -412,7 +441,11 @@ public class CompraDocumentosController : UsuarioApiControllerBase
             idReporte = solicitud.IdReporte,
             idUsuario,
             status = "Pendiente",
-            message = "La solicitud fue creada correctamente y será validada por BackOffice."
+            message = "La solicitud fue creada correctamente y será validada por BackOffice.",
+            imagenBase64 = PaymentNotificationImageBuilder.CompraGenerada(
+                "E-FACT",
+                total,
+                model.EsIlimitado ? "Plan ilimitado por 1 año" : $"{model.Documentos} documentos")
         });
     }
 

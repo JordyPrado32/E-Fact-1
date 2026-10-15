@@ -70,6 +70,35 @@ public class UsuariosAdminController : ControllerBase
         return Ok(data);
     }
 
+    [HttpGet("buscar-id")]
+    public async Task<IActionResult> BuscarId([FromQuery] string? valor = null)
+    {
+        var term = Clean(valor).ToLowerInvariant();
+        if (term == "") return BadRequest("El parámetro 'valor' es obligatorio.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var usuarios = await db.Usuarios
+            .AsNoTracking()
+            .Where(x => x.Estado == true &&
+                ((x.Nombres + " " + x.Apellidos).ToLower().Contains(term) ||
+                 x.Apellidos.ToLower().Contains(term) ||
+                 (x.Identificacion ?? "").ToLower().Contains(term) ||
+                 x.Email.ToLower().Contains(term)))
+            .OrderBy(x => x.Nombres)
+            .ThenBy(x => x.Apellidos)
+            .Select(x => new
+            {
+                idUsuario = x.IdUsuario,
+                nombres = x.Nombres,
+                apellidos = x.Apellidos,
+                identificacion = x.Identificacion,
+                correo = x.Email
+            })
+            .ToListAsync();
+
+        return usuarios.Count == 0 ? NotFound() : Ok(usuarios);
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] UsuarioAdminDto model)
     {
