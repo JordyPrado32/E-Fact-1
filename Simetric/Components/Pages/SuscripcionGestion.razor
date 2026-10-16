@@ -1,6 +1,7 @@
 @page "/e-declara/configuracion/suscripcion"
 @using Microsoft.AspNetCore.Components.Authorization
 @using Simetric.Models
+@using Simetric.DTOs
 @using Simetric.Services
 @using Simetric.Services.EDeclara
 @using Microsoft.EntityFrameworkCore
@@ -12,6 +13,7 @@
 @inject AppAccessService AppAccessService
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject PagoService PagoService
+@inject IEmailService EmailService
 
 <PageTitle>Mi Suscripción | E-Declara</PageTitle>
 
@@ -378,6 +380,47 @@
             <div><i class="ri-refresh-line"></i><span><strong>Siempre actualizado</strong><small>Con la normativa tributaria</small></span></div>
             <div><i class="ri-customer-service-2-line"></i><span><strong>Soporte especializado</strong><small>Cuando lo necesites</small></span></div>
         </section>
+
+        @if (mostrarModalPago)
+        {
+            <div class="subscription-payment-overlay" role="dialog" aria-modal="true" aria-labelledby="subscriptionPaymentTitle" @onclick="CerrarModalPago">
+                <section class="subscription-payment-modal" @onclick:stopPropagation>
+                    <header>
+                        <div><span class="block-kicker-purple">Método de pago</span><h3 id="subscriptionPaymentTitle">@GetPlanFriendlyName(planSeleccionado)</h3></div>
+                        <button type="button" class="payment-modal-close" @onclick="CerrarModalPago" disabled="@procesandoAccion" aria-label="Cerrar"><i class="ri-close-line"></i></button>
+                    </header>
+                    <div class="payment-summary"><span>@GetCicloFriendlyName(cicloPagoSeleccionado)</span><strong>USD $@GetTotalPlan(planSeleccionado, cicloPagoSeleccionado).ToString("F2")</strong><small>IVA incluido</small></div>
+                    <div class="payment-method-grid">
+                        <button type="button" class="payment-method-card @(metodoPago == "deuna" ? "active" : "")" @onclick='() => metodoPago = "deuna"' disabled="@procesandoAccion">
+                            <i class="ri-smartphone-line"></i><span><strong>DeUna</strong><small>Pago inmediato mediante el checkout seguro.</small></span>
+                        </button>
+                        <button type="button" class="payment-method-card @(metodoPago == "transferencia" ? "active" : "")" @onclick='() => metodoPago = "transferencia"' disabled="@procesandoAccion">
+                            <i class="ri-bank-line"></i><span><strong>Transferencia bancaria</strong><small>Validación manual en un plazo máximo de 24 horas.</small></span>
+                        </button>
+                    </div>
+                    @if (metodoPago == "transferencia")
+                    {
+                        <div class="transfer-payment-grid">
+                            <div class="transfer-form">
+                                <label>Banco de origen *<select @bind="transferBanco"><option value="">Seleccione...</option>@foreach (var banco in BancosTransferencia){<option value="@banco">@banco</option>}</select></label>
+                                <label>Titular *<input @bind="transferTitular" placeholder="Nombre del titular" /></label>
+                                <label>Cuenta de origen *<input @bind="transferCuenta" inputmode="numeric" placeholder="Número de cuenta" /></label>
+                                <label>N.º comprobante *<input @bind="transferComprobante" maxlength="50" placeholder="Código del comprobante" /></label>
+                                <label class="transfer-file">Comprobante JPG o PNG *<InputFile OnChange="OnTransferFileSelected" accept=".jpg,.jpeg,.png,image/jpeg,image/png" /></label>
+                                @if (!string.IsNullOrWhiteSpace(transferArchivoNombre)){<small class="file-ready"><i class="ri-checkbox-circle-line"></i> @transferArchivoNombre</small>}
+                            </div>
+                            <aside class="bank-data"><strong>Transferir a</strong><span>Banco Pichincha</span><span>Cuenta corriente: 2100346647</span><span>RUC: 1793233799001</span><span>NUMERICASOFTWARE S.A.S.</span><span>contabilidad@numericasoftware.com</span></aside>
+                        </div>
+                    }
+                    <footer>
+                        <button type="button" class="payment-cancel" @onclick="CerrarModalPago" disabled="@procesandoAccion">Cancelar</button>
+                        <button type="button" class="payment-confirm" @onclick="ConfirmarMetodoPagoAsync" disabled="@procesandoAccion">
+                            @(procesandoAccion ? "Procesando..." : metodoPago == "transferencia" ? "Enviar transferencia" : "Pagar con DeUna")
+                        </button>
+                    </footer>
+                </section>
+            </div>
+        }
     }
 </div>
 
@@ -394,9 +437,23 @@
     private UsuarioServicioSuscripcion? subActiva;
     private List<EdeclareTarjeta> tarjetas = new();
     private int edeclaraServiceId;
+    private bool mostrarModalPago;
+    private string planSeleccionado = string.Empty;
+    private string cicloPagoSeleccionado = string.Empty;
+    private string metodoPago = "deuna";
+    private string transferBanco = string.Empty;
+    private string transferTitular = string.Empty;
+    private string transferCuenta = string.Empty;
+    private string transferComprobante = string.Empty;
+    private string? transferArchivoNombre;
+    private byte[]? transferArchivoBytes;
+    private static readonly string[] BancosTransferencia = ["Banco Pichincha", "Banco Guayaquil", "Banco del Pacífico", "Produbanco", "Banco Internacional", "Banco Bolivariano", "Banco del Austro", "Cooperativa JEP", "Otro"];
 
     [SupplyParameterFromQuery(Name = "registro")]
     public string? Registro { get; set; }
+
+    [SupplyParameterFromQuery(Name = "pago")]
+    public string? Pago { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -421,6 +478,16 @@
         else if (string.Equals(Registro, "error", StringComparison.OrdinalIgnoreCase))
         {
             errorMensaje = "Hubo un problema al registrar la tarjeta. Por favor inténtalo de nuevo.";
+        }
+
+        if (string.Equals(Pago, "exito", StringComparison.OrdinalIgnoreCase))
+        {
+            successMensaje = "¡Pago aprobado! Tu suscripción de E-Declara está activa.";
+            await LoadDataAsync();
+        }
+        else if (string.Equals(Pago, "error", StringComparison.OrdinalIgnoreCase))
+        {
+            errorMensaje = "El pago con DeUna no fue aprobado. Puedes intentarlo nuevamente.";
         }
     }
 
@@ -569,10 +636,13 @@
 
     private async Task AgendarCambioPlanAsync(string plan, string ciclo)
     {
-        // Si no hay suscripción en absoluto, o si está pendiente de pago, redirigir a checkout
+        // Las suscripciones nuevas se pagan directamente con DeUna/Pagomedios.
         if (subActiva is null || string.Equals(subActiva.Estado, "PENDIENTE_PAGO", StringComparison.OrdinalIgnoreCase))
         {
-            NavManager.NavigateTo($"/suscripciones?servicio=e-declara&plan={plan}&ciclo={ciclo}");
+            planSeleccionado = plan;
+            cicloPagoSeleccionado = ciclo;
+            metodoPago = "deuna";
+            mostrarModalPago = true;
             return;
         }
 
@@ -599,6 +669,162 @@
         catch (Exception ex)
         {
             errorMensaje = $"Error al agendar el plan: {ex.Message}";
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private decimal GetTotalPlan(string plan, string ciclo)
+    {
+        var subtotalPlan = GetPlanPrice(plan, ciclo);
+        return subtotalPlan + Math.Round(subtotalPlan * 0.15m, 2);
+    }
+
+    private void CerrarModalPago()
+    {
+        if (!procesandoAccion) mostrarModalPago = false;
+    }
+
+    private async Task ConfirmarMetodoPagoAsync()
+    {
+        if (metodoPago == "transferencia")
+            await RegistrarTransferenciaAsync();
+        else
+            await IniciarPagoDeUnaAsync(planSeleccionado, cicloPagoSeleccionado);
+    }
+
+    private async Task OnTransferFileSelected(InputFileChangeEventArgs e)
+    {
+        var archivo = e.File;
+        var extension = Path.GetExtension(archivo.Name).ToLowerInvariant();
+        if (archivo.Size > 5 * 1024 * 1024 || extension is not (".jpg" or ".jpeg" or ".png"))
+        {
+            errorMensaje = "El comprobante debe ser una imagen JPG o PNG de máximo 5 MB.";
+            return;
+        }
+
+        await using var stream = archivo.OpenReadStream(5 * 1024 * 1024);
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+        transferArchivoBytes = memory.ToArray();
+        transferArchivoNombre = archivo.Name;
+    }
+
+    private async Task RegistrarTransferenciaAsync()
+    {
+        if (usuarioObj is null || string.IsNullOrWhiteSpace(transferBanco) || string.IsNullOrWhiteSpace(transferTitular) ||
+            string.IsNullOrWhiteSpace(transferCuenta) || string.IsNullOrWhiteSpace(transferComprobante) || transferArchivoBytes is null)
+        {
+            errorMensaje = "Completa todos los datos y adjunta el comprobante de transferencia.";
+            return;
+        }
+
+        procesandoAccion = true;
+        errorMensaje = null;
+        try
+        {
+            await using var context = await DbFactory.CreateDbContextAsync();
+            var solicitud = new ReporteVentaBackOffice
+            {
+                Cliente = $"{usuarioObj.NombreCompleto} | {usuarioObj.Email}",
+                Producto = "e-declara",
+                PlanPaquete = $"{planSeleccionado}|{cicloPagoSeleccionado}",
+                Valor = GetTotalPlan(planSeleccionado, cicloPagoSeleccionado),
+                Fecha = DateTime.Now,
+                Canal = "Transferencia Web",
+                Vendedor = "Solicitud en línea",
+                Estado = "pendiente",
+                FormaPago = "Transferencia Bancaria",
+                Observacion = $"Banco: {transferBanco}. Cuenta origen: {transferCuenta}. N. comprobante: {transferComprobante}. Titular: {transferTitular}. Solicitud pendiente de aprobación.",
+                ComprobanteArchivo = transferArchivoBytes
+            };
+            context.ReporteVentasBackOffice.Add(solicitud);
+            await context.SaveChangesAsync();
+
+            try
+            {
+                await EmailService.EnviarAvisoCobroPendienteAsync(usuarioObj.Email, usuarioObj.NombreCompleto, "E-Declara", GetPlanFriendlyName(planSeleccionado), solicitud.Valor, solicitud.FormaPago, transferComprobante);
+            }
+            catch { }
+
+            mostrarModalPago = false;
+            successMensaje = "Tu transferencia fue registrada y será validada en un plazo máximo de 24 horas.";
+            transferBanco = transferTitular = transferCuenta = transferComprobante = string.Empty;
+            transferArchivoBytes = null;
+            transferArchivoNombre = null;
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"No se pudo registrar la transferencia: {ex.Message}";
+        }
+        finally
+        {
+            procesandoAccion = false;
+        }
+    }
+
+    private async Task IniciarPagoDeUnaAsync(string plan, string ciclo)
+    {
+        if (usuarioObj is null || string.IsNullOrWhiteSpace(usuarioObj.Identificacion) ||
+            string.IsNullOrWhiteSpace(usuarioObj.Email))
+        {
+            errorMensaje = "Completa la identificación y el correo de tu perfil antes de pagar.";
+            return;
+        }
+
+        procesandoAccion = true;
+        errorMensaje = null;
+        successMensaje = null;
+
+        try
+        {
+            var documento = new string(usuarioObj.Identificacion.Where(char.IsLetterOrDigit).ToArray());
+            var subtotalPago = GetPlanPrice(plan, ciclo);
+            var ivaPago = Math.Round(subtotalPago * 0.15m, 2);
+            var notifyUrl = NavManager.ToAbsoluteUri("/api/pagomedios/notificacion-suscripcion-edeclara").ToString();
+            var request = new PagomediosRequest
+            {
+                Integration = true,
+                Third = new ThirdParty
+                {
+                    Document = documento,
+                    DocumentType = documento.Length == 13 ? "04" : "05",
+                    Name = usuarioObj.NombreCompleto,
+                    Email = usuarioObj.Email,
+                    Phones = string.IsNullOrWhiteSpace(usuarioObj.Celular) ? "0999999999" : usuarioObj.Celular,
+                    Address = string.IsNullOrWhiteSpace(usuarioObj.DireccionEmpresa) ? "Quito" : usuarioObj.DireccionEmpresa,
+                    Type = usuarioObj.TipoCliente == 2 ? "Company" : "Individual"
+                },
+                GenerateInvoice = 0,
+                Description = $"Suscripción E-Declara {GetPlanFriendlyName(plan)} ({GetCicloFriendlyName(ciclo)})",
+                Amount = subtotalPago + ivaPago,
+                AmountWithTax = subtotalPago,
+                AmountWithoutTax = 0m,
+                TaxValue = ivaPago,
+                NotifyUrl = notifyUrl,
+                CustomValue = $"user-{usuarioId}-plan-{plan}-ciclo-{ciclo}",
+                HasCards = 0,
+                HasDeUna = 1,
+                HasPaypal = 0,
+                HasSafetypay = false
+            };
+
+            var result = await PagoService.SendJsonAsync(HttpMethod.Post, "/payment-requests", request);
+            if (result.IsSuccess && !string.IsNullOrWhiteSpace(result.PaymentUrl))
+            {
+                NavManager.NavigateTo(result.PaymentUrl, forceLoad: true);
+                return;
+            }
+
+            errorMensaje = result.IsSuccess
+                ? "Pagomedios respondió, pero no devolvió la URL de pago."
+                : result.ErrorMessage ?? "No se pudo iniciar el pago con DeUna.";
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"No se pudo iniciar el pago con DeUna: {ex.Message}";
         }
         finally
         {

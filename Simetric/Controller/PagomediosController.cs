@@ -518,6 +518,96 @@ namespace Simetric.Controllers
                 saldoAplicadoAhora);
         }
 
+        [HttpGet("notificacion-suscripcion-edeclara")]
+        public async Task<IActionResult> NotificacionSuscripcionEDeclaraGet()
+        {
+            var data = Request.Query.ToDictionary(
+                item => item.Key,
+                item => item.Value.ToString(),
+                StringComparer.OrdinalIgnoreCase);
+
+            return await ProcesarNotificacionSuscripcionEDeclaraAsync(data);
+        }
+
+        [HttpPost("notificacion-suscripcion-edeclara")]
+        public async Task<IActionResult> NotificacionSuscripcionEDeclaraPost()
+        {
+            var data = await LeerDatosAsync();
+            return await ProcesarNotificacionSuscripcionEDeclaraAsync(data);
+        }
+
+        private async Task<IActionResult> ProcesarNotificacionSuscripcionEDeclaraAsync(Dictionary<string, string> data)
+        {
+            var customValue = ObtenerValor(data, "customValue", "custom_value", "customvalue", "merchantData", "merchant_data");
+            var status = ObtenerValor(data, "status", "paymentStatus", "payment_status", "transactionStatus", "transaction_status", "state");
+            var reference = ObtenerValor(data, "reference", "transactionReference", "transaction_reference");
+            var authorizationCode = ObtenerValor(data, "authorizationCode", "authorization_code", "authorization");
+            var (userId, plan, ciclo) = ParseSuscripcionCustomValue(customValue);
+
+            var datosValidos = userId > 0 &&
+                new[] { "individual", "asesor", "empresarial" }.Contains(plan, StringComparer.OrdinalIgnoreCase) &&
+                new[] { "mensual", "anual" }.Contains(ciclo, StringComparer.OrdinalIgnoreCase);
+            var pagoAprobado = datosValidos && EsPagoAprobado(status);
+
+            if (pagoAprobado)
+            {
+                await using var context = await _dbFactory.CreateDbContextAsync();
+                var servicio = await context.AppServicios.FirstOrDefaultAsync(x => x.Clave == "e-declara");
+                if (servicio is null)
+                {
+                    _logger.LogError("No se encontró el servicio e-declara al procesar el pago de suscripción.");
+                    pagoAprobado = false;
+                }
+                else
+                {
+                    var suscripcion = await context.UsuarioServicioSuscripciones
+                        .FirstOrDefaultAsync(x => x.IdUsuario == userId && x.ServicioId == servicio.ServicioId);
+                    var yaAplicado = suscripcion is not null &&
+                        string.Equals(suscripcion.Estado, "ACTIVA", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(suscripcion.PlanActual, plan, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(suscripcion.CicloActual, ciclo, StringComparison.OrdinalIgnoreCase) &&
+                        suscripcion.FechaInicio == DateTime.Today;
+
+                    if (!yaAplicado)
+                    {
+                        if (suscripcion is null)
+                        {
+                            suscripcion = new UsuarioServicioSuscripcion
+                            {
+                                IdUsuario = userId,
+                                ServicioId = servicio.ServicioId,
+                                FechaCreacion = DateTime.Now
+                            };
+                            context.UsuarioServicioSuscripciones.Add(suscripcion);
+                        }
+
+                        suscripcion.Estado = "ACTIVA";
+                        suscripcion.FechaInicio = DateTime.Today;
+                        suscripcion.FechaFin = string.Equals(ciclo, "anual", StringComparison.OrdinalIgnoreCase)
+                            ? DateTime.Today.AddYears(1)
+                            : DateTime.Today.AddMonths(1);
+                        suscripcion.EsVitalicia = false;
+                        suscripcion.PlanActual = plan;
+                        suscripcion.CicloActual = ciclo;
+                        suscripcion.PlanAgendado = null;
+                        suscripcion.CicloAgendado = null;
+                        suscripcion.FechaActualizacion = DateTime.Now;
+                        suscripcion.Observacion = Truncate(
+                            $"Pago DeUna/Pagomedios aprobado. Ref: {reference}. Autorización: {authorizationCode}.", 250);
+                        await context.SaveChangesAsync();
+                    }
+                }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Pago de suscripción E-Declara no aprobado. Usuario: {UserId}, plan: {Plan}, ciclo: {Ciclo}, estado: {Status}",
+                    userId, plan, ciclo, status);
+            }
+
+            return Redirect($"/e-declara/configuracion/suscripcion?pago={(pagoAprobado ? "exito" : "error")}");
+        }
+
         [HttpGet("notificacion-registro-tarjeta")]
         public async Task<IActionResult> NotificacionRegistroTarjetaGet()
         {
