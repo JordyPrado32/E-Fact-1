@@ -1467,9 +1467,6 @@ namespace Simetric.Services
                             if (d.Cantproducto <= 0)
                                 throw new Exception($"Cantidad inválida para producto ID {d.Codproducto}");
 
-                            if (d.Cantproducto != decimal.Truncate(d.Cantproducto))
-                                throw new Exception($"La cantidad del producto ID {d.Codproducto} debe ser un número entero.");
-
                             d.Valortproducto = Math.Round(d.Valortproducto, 2);
                             d.Valoriva = Math.Round(d.Valoriva, 2);
                             d.Valortotal = Math.Round(d.Valortotal, 2);
