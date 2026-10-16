@@ -845,13 +845,13 @@
                                     </td>
 
                                     <td>
-                                        <input type="number"
+                                        <input type="text"
                                                class="n-input-sm text-center fw-bold border-primary"
                                                style="background-color: #f3f4f6;"
-                                               step="1"
-                                               min="1"
+                                               inputmode="decimal"
                                                value="@GetCantidadVisual(d)"
-                                               @oninput="@((ChangeEventArgs e) => OnCantidadDetalleInput(d, e.Value?.ToString()))" />
+                                               @oninput="@((ChangeEventArgs e) => OnCantidadDetalleInput(d, e.Value?.ToString()))"
+                                               @onblur="@(() => OnCantidadDetalleBlur(d))" />
                                     </td>
 
                                     <td>
@@ -2955,18 +2955,33 @@
     private bool TryParseDecimalFlexible(string? s, out decimal value)
     {
         value = 0m;
-        if (string.IsNullOrWhiteSpace(s)) return false;
+        if (string.IsNullOrWhiteSpace(s))
+            return false;
+
+        var texto = s.Trim().Replace(" ", string.Empty);
+        var ultimaComa = texto.LastIndexOf(',');
+        var ultimoPunto = texto.LastIndexOf('.');
+
+        // Acepta ambas convenciones sin dejar que la cultura trate la coma
+        // decimal como separador de miles (1,5 no debe convertirse en 15).
+        if (ultimaComa >= 0 && ultimoPunto >= 0)
+        {
+            var separadorDecimal = Math.Max(ultimaComa, ultimoPunto);
+            var separadorMiles = separadorDecimal == ultimaComa ? '.' : ',';
+            texto = texto.Replace(separadorMiles.ToString(), string.Empty);
+            texto = texto.Replace(separadorDecimal == ultimaComa ? ',' : '.', '.');
+        }
+        else if (ultimaComa >= 0)
+        {
+            texto = texto.Replace(',', '.');
+        }
 
         return decimal.TryParse(
-            s,
-            System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.CurrentCulture,
-            out value)
-            || decimal.TryParse(
-                s,
-                System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out value);
+            texto,
+            System.Globalization.NumberStyles.AllowLeadingSign |
+            System.Globalization.NumberStyles.AllowDecimalPoint,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out value);
     }
 
     // ===================== DETALLE VISUAL =====================
@@ -3118,7 +3133,7 @@
     private string GetCantidadVisual(DetalleFacturaDto d)
     {
         if (valoresTemporalesCantidad.TryGetValue(d, out var v)) return v;
-        return d.Cantidad.ToString("0", CultureInfo.InvariantCulture);
+        return d.Cantidad.ToString("0.##", CultureInfo.InvariantCulture);
     }
 
     private string GetPrecioVisual(DetalleFacturaDto d)
@@ -3219,9 +3234,7 @@
         if (!TryParseDecimalFlexible(v, out var cant))
             return;
 
-        var cantidadEntera = Math.Max(1m, decimal.Truncate(cant));
-        d.Cantidad = cantidadEntera;
-        valoresTemporalesCantidad[d] = cantidadEntera.ToString("0", CultureInfo.InvariantCulture);
+        d.Cantidad = Math.Max(0.01m, decimal.Round(cant, 2, MidpointRounding.AwayFromZero));
 
         if (d.PorcentajeDescuento > 0)
         {
@@ -3236,6 +3249,12 @@
 
         AsegurarFilaVaciaDetalle();
         CalcularTotalesFactura();
+        StateHasChanged();
+    }
+
+    private void OnCantidadDetalleBlur(DetalleFacturaDto d)
+    {
+        valoresTemporalesCantidad[d] = d.Cantidad.ToString("0.##", CultureInfo.InvariantCulture);
         StateHasChanged();
     }
 
@@ -4705,12 +4724,6 @@
             return;
         }
 
-        if (nuevoCantidad != decimal.Truncate(nuevoCantidad))
-        {
-            await AlertService.ShowWarningAsync("La cantidad debe ser un numero entero.");
-            return;
-        }
-
         if (nuevoPrecio <= 0)
         {
             await AlertService.ShowWarningAsync("El precio debe ser mayor a 0.");
@@ -5410,9 +5423,6 @@
 
             if (d.Cantidad <= 0)
                 return $"En la línea #{i + 1} la cantidad debe ser mayor a 0.";
-
-            if (d.Cantidad != decimal.Truncate(d.Cantidad))
-                return $"En la línea #{i + 1} la cantidad debe ser un número entero.";
 
             if (d.Precio <= 0)
                 return $"En la línea #{i + 1} el precio debe ser mayor a 0.";

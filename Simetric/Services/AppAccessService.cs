@@ -116,7 +116,7 @@ public sealed class AppAccessService
 
         await using var context = await _dbFactory.CreateDbContextAsync();
         isSuperAdmin |= await EsSuperAdminAsync(context, userId);
-        var normalizedKey = serviceKey.Trim().ToLowerInvariant();
+        var normalizedKey = NormalizeServiceKey(serviceKey);
         var service = await context.AppServicios
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Estado && x.Clave == normalizedKey);
@@ -176,7 +176,7 @@ public sealed class AppAccessService
         await EnsureSchemaAsync();
 
         await using var context = await _dbFactory.CreateDbContextAsync();
-        var normalizedKey = serviceKey.Trim().ToLowerInvariant();
+        var normalizedKey = NormalizeServiceKey(serviceKey);
         var service = await context.AppServicios
             .FirstOrDefaultAsync(x => x.Estado && x.Clave == normalizedKey);
 
@@ -234,8 +234,10 @@ public sealed class AppAccessService
     }
 
     public static string ResolveRoute(AppServicio service) =>
-        string.Equals(service.Clave, FreeServiceKey, StringComparison.OrdinalIgnoreCase)
+        string.Equals(NormalizeServiceKey(service.Clave), FreeServiceKey, StringComparison.OrdinalIgnoreCase)
             ? "/dashboard"
+            : string.Equals(NormalizeServiceKey(service.Clave), ESignFreeServiceKey, StringComparison.OrdinalIgnoreCase)
+                ? "/e-rubrica"
             : string.Equals(service.Clave, AllyPortalServiceKey, StringComparison.OrdinalIgnoreCase)
                 ? AliadoPortalService.HomeRoute
                 : string.IsNullOrWhiteSpace(service.RutaAcceso)
@@ -522,8 +524,19 @@ public sealed class AppAccessService
     }
 
     private static bool IsFreeServiceKey(string? serviceKey) =>
-        string.Equals(serviceKey, FreeServiceKey, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(serviceKey, ESignFreeServiceKey, StringComparison.OrdinalIgnoreCase);
+        string.Equals(NormalizeServiceKey(serviceKey), FreeServiceKey, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(NormalizeServiceKey(serviceKey), ESignFreeServiceKey, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeServiceKey(string? serviceKey)
+    {
+        var key = serviceKey?.Trim().ToLowerInvariant() ?? string.Empty;
+
+        return key switch
+        {
+            "esign" or "e-rubrica" or "erubrica" or "rubrica" => ESignFreeServiceKey,
+            _ => key
+        };
+    }
 
     // ── ÚNICO método BuildEnsureSchemaStatements, completo y correcto ──────────
     private static IEnumerable<string> BuildEnsureSchemaStatements()
@@ -630,6 +643,17 @@ BEGIN
     BEGIN
         ALTER TABLE [dbo].[USUARIO_SERVICIO_SUSCRIPCION] ADD [CicloAgendado] NVARCHAR(20) NULL;
     END;
+END;
+""";
+
+        // Unifica nombres históricos de E-Rúbrica para que el servicio no
+        // quede inaccesible si la base fue creada con una clave anterior.
+        yield return """
+IF NOT EXISTS (SELECT 1 FROM [dbo].[APP_SERVICIOS] WHERE LOWER(LTRIM(RTRIM([Clave]))) = N'e-sign')
+BEGIN
+    UPDATE TOP (1) [dbo].[APP_SERVICIOS]
+    SET [Clave] = N'e-sign'
+    WHERE LOWER(LTRIM(RTRIM([Clave]))) IN (N'esign', N'e-rubrica', N'erubrica', N'rubrica');
 END;
 """;
 
