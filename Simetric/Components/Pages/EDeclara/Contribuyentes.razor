@@ -1,9 +1,11 @@
 @page "/e-declara/contribuyentes"
 @rendermode InteractiveServer
+@implements IAsyncDisposable
 @using Microsoft.AspNetCore.Components.Authorization
 @using Simetric.Controllers
 @using Simetric.Components
 @using Simetric.Models
+@using System.Text
 @inject AuthenticationStateProvider AuthStateProvider
 @inject HttpClient Http
 @inject NavigationManager NavManager
@@ -12,19 +14,43 @@
 <PageTitle>Contribuyentes | E-Declara</PageTitle>
 
 <div class="entity-shell edeclara-contribuyentes">
-    <section class="toolbar-card">
-        <div class="toolbar-copy">
-            <span class="toolbar-kicker" style="color:#6C63FF">Búsqueda y control</span>
-            <h3>Consulta y administra tus contribuyentes</h3>
+    <section class="plan-quota-strip" aria-label="Cupo de contribuyentes del plan">
+        <span class="quota-icon"><i class="ri-group-line"></i></span>
+        <div class="quota-copy"><small>Cupo de contribuyentes</small><strong>@actualContribuyentesActivos de @limiteContribuyentes utilizados</strong></div>
+        <div class="quota-progress"><i style="width:@PorcentajeCupo%"></i></div>
+        <span class="quota-remaining"><strong>@CuposDisponibles</strong><small>disponibles</small></span>
+    </section>
+
+    <section class="quick-action-bar" aria-label="Acciones rápidas de contribuyentes">
+        <button type="button" class="quick-action-card" @onclick="AbrirAsistenteAsync">
+            <span class="quick-action-icon"><i class="ri-sparkling-line"></i></span>
+            <span><strong>Crear contribuyente con IA</strong><small>Abre el bot para asistirte</small></span>
+        </button>
+        <button type="button" class="quick-action-card" @onclick="InformarImportacion">
+            <span class="quick-action-icon quick-action-icon-green"><i class="ri-file-excel-2-line"></i></span>
+            <span><strong>Importar desde Excel</strong><small>Carga masiva de contribuyentes</small></span>
+        </button>
+        <button type="button" class="quick-action-card" @onclick="ExportarContribuyentesAsync">
+            <span class="quick-action-icon quick-action-icon-blue"><i class="ri-download-line"></i></span>
+            <span><strong>Exportar todos</strong><small>Descargar archivo CSV</small></span>
+        </button>
+        <div class="quick-action-search">
+            <i class="ri-search-line"></i>
+            <input placeholder="Buscar por nombre, identificación o correo..." value="@filtro" @oninput='e => { filtro = e.Value?.ToString() ?? ""; paginaActual = 1; }' />
         </div>
-        <div class="toolbar-actions">
-            <div class="search-box">
-                <span class="search-icon"><i class="ri-search-line"></i></span>
-                <input class="search-input"
-                       placeholder="Buscar por nombre o identificación"
-                       value="@filtro"
-                       @oninput='e => { filtro = e.Value?.ToString() ?? ""; paginaActual = 1; }' />
-            </div>
+        <button type="button" class="filter-toggle-btn is-enabled @(mostrarPanelFiltros ? "active" : "")" @onclick="AlternarPanelFiltros">
+            <i class="ri-filter-3-line"></i>
+            <span>Filtros</span>
+            @if (HayFiltrosActivos)
+            {
+                <span class="filter-indicator" aria-label="Filtros activos"></span>
+            }
+        </button>
+    </section>
+
+    @if (mostrarPanelFiltros)
+    {
+        <section class="toolbar-card filters-panel">
             <div class="toolbar-secondary-actions">
                 <div class="filter-box">
                     <label class="filter-label" style="color:#6C63FF">Tipo</label>
@@ -47,9 +73,12 @@
                 <button type="button" class="secondary-btn" @onclick="() => CargarTodo(true)">
                     <i class="ri-refresh-line"></i> Refrescar
                 </button>
+                <button type="button" class="secondary-btn" @onclick="LimpiarFiltros" disabled="@(!HayFiltrosActivos)">
+                    <i class="ri-eraser-line"></i> Limpiar filtros
+                </button>
             </div>
-        </div>
-    </section>
+        </section>
+    }
 
     <section class="entity-grid">
 
@@ -61,9 +90,12 @@
                         <span class="table-kicker" style="color:#6C63FF">Listado activo</span>
                         <h3>Contribuyentes registrados</h3>
                     </div>
-                    <span class="table-badge" style="background:rgba(108,99,255,0.1);color:#6C63FF">
-                        @ContribuFiltrados.Count() registros
-                    </span>
+                    <div class="table-head-actions">
+                        <span class="table-badge" style="background:rgba(108,99,255,0.1);color:#6C63FF">@ContribuFiltrados.Count() registros</span>
+                        <button type="button" class="primary-btn" @onclick="PrepararNuevoContribuyente" disabled="@limiteExcedido">
+                            <i class="ri-add-line"></i><span>Nuevo contribuyente</span>
+                        </button>
+                    </div>
                 </div>
 
                 @if (!string.IsNullOrWhiteSpace(mensaje))
@@ -152,7 +184,7 @@
                                         <td class="text-center col-acciones">
                                             <div class="action-group">
                                                 <button type="button" class="action-btn action-view" title="Ver"
-                                                        @onclick="() => { enVista = c; }">
+                                                        @onclick="() => AbrirDetalleAsync(c)">
                                                     <i class="ri-eye-line"></i>
                                                 </button>
                                                 <button type="button" class="action-btn action-edit" title="Editar"
@@ -199,8 +231,11 @@
             </section>
         </div>
 
-        @* ── Columna Derecha (Formulario O Vista de Detalle) ── *@
-        <div class="grid-right-col">
+        @* ── Modal de formulario o detalle ── *@
+        @if (mostrarEditor || enVista is not null)
+        {
+        <div class="contribuyente-modal-overlay" @onclick="CerrarEditor">
+        <div class="grid-right-col contribuyente-modal" role="dialog" aria-modal="true" aria-label="Contribuyente" @onclick:stopPropagation>
             @if (enVista is not null)
             {
                 @* Vista de Detalle (Reemplaza al formulario) *@
@@ -211,7 +246,7 @@
                             <h3>@NombreCompleto(enVista)</h3>
                             <p>Código contribuyente: #@enVista.CodContribuyente</p>
                         </div>
-                        <button class="detail-close-btn" @onclick="() => enVista = null">&times;</button>
+                        <button class="detail-close-btn" @onclick="CerrarEditor">&times;</button>
                     </div>
 
                     <div class="editor-body">
@@ -322,23 +357,20 @@
                     </div>
                     <div class="detail-modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid rgba(108, 99, 255, 0.15); display: flex; justify-content: flex-end; gap: 0.75rem;">
                         <button class="secondary-btn" @onclick="() => CargarEdicion(enVista)">Editar Datos</button>
-                        <button class="primary-btn" style="background:#6C63FF" @onclick="() => enVista = null">Cerrar</button>
+                        <button class="primary-btn" style="background:#6C63FF" @onclick="CerrarEditor">Cerrar</button>
                     </div>
                 </section>
             }
             else
             {
                 @* Formulario de Registro / Edición *@
-                <section class="editor-card entity-editor-card">
-                    <div class="editor-head">
+                <section class="editor-card entity-editor-card contribuyente-form-card">
+                    <div class="editor-head contribuyente-form-head">
                         <div>
-                            <span class="panel-kicker" style="color:#6C63FF">Formulario</span>
+                            <span class="panel-kicker">Catálogo tributario</span>
                             <h3>@(editando ? "Editar contribuyente" : "Registrar contribuyente")</h3>
-                            <p>Completa la información del contribuyente para el módulo tributario.</p>
                         </div>
-                        <span class="editor-badge @(editando ? "editor-badge-edit" : "editor-badge-new")">
-                            @(editando ? "Edición" : "Nuevo")
-                        </span>
+                        <button type="button" class="contribuyente-modal-close" @onclick="CerrarEditor" aria-label="Cerrar">&times;</button>
                     </div>
 
                     <div class="editor-body entity-form-legacy">
@@ -346,6 +378,11 @@
                             <DataAnnotationsValidator />
                             <ValidationSummary class="text-danger small mb-3 fw-semibold" />
 
+                            <section class="contribuyente-form-section">
+                            <button type="button" class="contribuyente-section-title" @onclick="() => AlternarSeccionFormulario(1)" aria-expanded="@seccionesFormularioAbiertas.Contains(1)"><span>1</span><strong>Información básica</strong><i class="ri-@(seccionesFormularioAbiertas.Contains(1) ? "arrow-up-s-line" : "arrow-down-s-line")"></i></button>
+                            @if (seccionesFormularioAbiertas.Contains(1))
+                            {
+                            <div class="contribuyente-section-body">
                             <div class="mb-3">
                                 <label class="form-label small fw-bold">Tipo de Contribuyente *</label>
                                 <InputSelect class="form-select form-select-sm" @bind-Value="modeloPersonaNaturalString" style="border-color:#6C63FF">
@@ -417,8 +454,16 @@
                                     </div>
                                 </div>
                             }
+                            </div>
+                            }
+                            </section>
 
                             @* Sección de correos múltiples *@
+                            <section class="contribuyente-form-section">
+                            <button type="button" class="contribuyente-section-title" @onclick="() => AlternarSeccionFormulario(2)" aria-expanded="@seccionesFormularioAbiertas.Contains(2)"><span>2</span><strong>Contacto</strong><i class="ri-@(seccionesFormularioAbiertas.Contains(2) ? "arrow-up-s-line" : "arrow-down-s-line")"></i></button>
+                            @if (seccionesFormularioAbiertas.Contains(2))
+                            {
+                            <div class="contribuyente-section-body">
                             <div class="email-fields-shell mb-3">
                                 <div class="form-group">
                                     <label class="form-label small fw-bold">Correo Principal *</label>
@@ -456,23 +501,25 @@
                                 }
                             </div>
 
-                            <div class="row mb-2">
-                                <div class="col">
-                                    <label class="form-label small">Teléfono Convencional</label>
-                                    <InputText class="form-control form-control-sm"
-                                               @bind-Value="modelo.Telefonoconvencional"
-                                               autocomplete="tel" />
-                                    <ValidationMessage For="@(() => modelo.Telefonoconvencional)" class="text-danger small" />
-                                </div>
-                                <div class="col">
-                                    <label class="form-label small fw-bold">Celular *</label>
-                                    <InputText class="form-control form-control-sm"
-                                               @bind-Value="modelo.Celular"
-                                               autocomplete="tel" />
-                                    <ValidationMessage For="@(() => modelo.Celular)" class="text-danger small" />
+                            <div class="mb-2">
+                                <label class="form-label small">Teléfono (opcional)</label>
+                                <div class="phone-selector-row">
+                                    <div class="phone-type-toggle" role="group" aria-label="Tipo de teléfono">
+                                        <button type="button" class="@(tipoTelefono == "celular" ? "active" : "")" @onclick='() => tipoTelefono = "celular"'>Celular</button>
+                                        <button type="button" class="@(tipoTelefono == "convencional" ? "active" : "")" @onclick='() => tipoTelefono = "convencional"'>Convencional</button>
+                                    </div>
+                                    <input class="form-control form-control-sm" type="tel" autocomplete="tel" placeholder="@(tipoTelefono == "celular" ? "Ej: 0998765432" : "Ej: 022345678")" @bind="TelefonoSeleccionado" />
                                 </div>
                             </div>
+                            </div>
+                            }
+                            </section>
 
+                            <section class="contribuyente-form-section">
+                            <button type="button" class="contribuyente-section-title" @onclick="() => AlternarSeccionFormulario(3)" aria-expanded="@seccionesFormularioAbiertas.Contains(3)"><span>3</span><strong>Información tributaria</strong><i class="ri-@(seccionesFormularioAbiertas.Contains(3) ? "arrow-up-s-line" : "arrow-down-s-line")"></i></button>
+                            @if (seccionesFormularioAbiertas.Contains(3))
+                            {
+                            <div class="contribuyente-section-body">
                             <div class="row mb-2">
                                 <div class="col">
                                     <label class="form-label small fw-bold">Obligado contabilidad *</label>
@@ -521,7 +568,15 @@
                                 <InputDate class="form-control form-control-sm" @bind-Value="modelo.FechaDeclaracion" />
                                 <ValidationMessage For="@(() => modelo.FechaDeclaracion)" class="text-danger small" />
                             </div>
+                            </div>
+                            }
+                            </section>
 
+                            <section class="contribuyente-form-section">
+                            <button type="button" class="contribuyente-section-title" @onclick="() => AlternarSeccionFormulario(4)" aria-expanded="@seccionesFormularioAbiertas.Contains(4)"><span>4</span><strong>Dirección</strong><i class="ri-@(seccionesFormularioAbiertas.Contains(4) ? "arrow-up-s-line" : "arrow-down-s-line")"></i></button>
+                            @if (seccionesFormularioAbiertas.Contains(4))
+                            {
+                            <div class="contribuyente-section-body">
                             <div class="row mb-2">
                                 <div class="col">
                                     <label class="form-label small fw-bold">País *</label>
@@ -573,7 +628,30 @@
                                 <InputText class="form-control form-control-sm" @bind-Value="modelo.Direccion" />
                                 <ValidationMessage For="@(() => modelo.Direccion)" class="text-danger small" />
                             </div>
+                            </div>
+                            }
+                            </section>
 
+                            <section class="contribuyente-form-section">
+                            <button type="button" class="contribuyente-section-title" @onclick="() => AlternarSeccionFormulario(5)" aria-expanded="@seccionesFormularioAbiertas.Contains(5)"><span>5</span><strong>Información adicional</strong><i class="ri-@(seccionesFormularioAbiertas.Contains(5) ? "arrow-up-s-line" : "arrow-down-s-line")"></i></button>
+                            @if (seccionesFormularioAbiertas.Contains(5))
+                            {
+                            <div class="contribuyente-section-body">
+                            <div class="mb-3">
+                                <label class="form-label">Clave del SRI @(editando ? "(opcional)" : "*")</label>
+                                <div class="sri-password-field">
+                                    <input type="@(mostrarClaveSri ? "text" : "password")"
+                                           class="form-control form-control-sm"
+                                           autocomplete="new-password"
+                                           maxlength="200"
+                                           placeholder="@(claveSriConfiguradaEdicion ? "Escribe una nueva clave para reemplazarla" : "Ingresa la clave del SRI")"
+                                           @bind="modelo.ClaveSri" />
+                                    <button type="button" @onclick="() => mostrarClaveSri = !mostrarClaveSri" aria-label="Mostrar u ocultar clave SRI">
+                                        <i class="ri-@(mostrarClaveSri ? "eye-off-line" : "eye-line")"></i>
+                                    </button>
+                                </div>
+                                <small class="sri-password-help">La clave se almacena protegida y nunca se muestra nuevamente.</small>
+                            </div>
                             <div class="mb-2 d-flex align-items-center gap-3 pt-2">
                                 <div class="form-check">
                                     <InputCheckbox class="form-check-input" @bind-Value="modeloEspecial" id="chkEspecial" />
@@ -592,6 +670,9 @@
                                 <InputTextArea class="form-control form-control-sm" rows="2"
                                                @bind-Value="modelo.Observaciones" />
                             </div>
+                            </div>
+                            }
+                            </section>
 
                             @if (!editando && limiteExcedido)
                             {
@@ -602,7 +683,7 @@
                             }
 
                             <div class="form-actions entity-form-actions">
-                                <button type="button" class="secondary-btn" @onclick="Limpiar">Limpiar</button>
+                                <button type="button" class="secondary-btn" @onclick="CerrarEditor">Cancelar</button>
                                 <button type="submit" class="primary-btn"
                                         disabled="@(!editando && limiteExcedido)"
                                         style="background:#6C63FF;background-image:linear-gradient(135deg,#6C63FF,#8c85ff)">
@@ -615,544 +696,21 @@
                 </section>
             }
         </div>
+        </div>
+        }
+    </section>
+
+    <section class="contributor-tips" aria-label="Consejos rápidos">
+        <div class="tips-heading">
+            <i class="ri-lightbulb-line"></i>
+            <div><strong>Consejos rápidos</strong><span>Pequeñas acciones para mantener tu cartera tributaria al día.</span></div>
+        </div>
+        <div class="tips-grid">
+            <article><span class="tip-icon"><i class="ri-shield-check-line"></i></span><div><strong>Verifica los datos tributarios</strong><small>Mantén identificación, correo y ubicación actualizados antes de declarar.</small></div></article>
+            <article><span class="tip-icon tip-icon-purple"><i class="ri-pie-chart-line"></i></span><div><strong>Controla el cupo de tu plan</strong><small>Revisa la capacidad disponible antes de registrar otro contribuyente.</small></div></article>
+        </div>
     </section>
 </div>
-
-@* Estilos en línea para evitar problemas de caché de CSS y forzar el diseño idéntico al de Clientes *@
-<style>
-    .edeclara-contribuyentes.entity-shell {
-        display: flex;
-        flex-direction: column;
-        gap: 1.25rem;
-        padding-bottom: 2rem;
-        font-family: 'Montserrat', sans-serif;
-    }
-
-    .edeclara-contribuyentes .entity-hero {
-        display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
-        gap: 1.5rem;
-        padding: 1.5rem;
-        border: 1px solid rgba(108, 99, 255, 0.15);
-        border-radius: 28px;
-        background: radial-gradient(circle at top left, rgba(108, 99, 255, 0.08), transparent 34%), #ffffff;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
-    }
-
-    .edeclara-contribuyentes .hero-copy h2 {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #1e293b;
-        margin: 0.25rem 0 0.5rem;
-    }
-
-    .edeclara-contribuyentes .hero-summary {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 0.75rem;
-    }
-
-    .edeclara-contribuyentes .summary-card {
-        padding: 1rem;
-        border-radius: 20px;
-        border: 1px solid rgba(108, 99, 255, 0.15);
-        background: linear-gradient(180deg, #ffffff, #fdfdff);
-        box-shadow: 0 8px 20px rgba(108, 99, 255, 0.02);
-    }
-
-    .edeclara-contribuyentes .summary-card strong {
-        font-size: 1.5rem;
-        font-weight: 800;
-    }
-
-    .edeclara-contribuyentes .toolbar-card {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 1.25rem;
-        border-radius: 24px;
-        border: 1px solid rgba(108, 99, 255, 0.15);
-        background: #ffffff;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.03);
-    }
-
-    .edeclara-contribuyentes .toolbar-copy h3 {
-        font-size: 1.2rem;
-        font-weight: 800;
-        margin: 0.25rem 0 0;
-        color: #1e293b;
-    }
-
-    .edeclara-contribuyentes .toolbar-actions {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-    }
-
-    .edeclara-contribuyentes .search-box {
-        display: flex;
-        align-items: center;
-        padding: 0.5rem 1rem;
-        border-radius: 18px;
-        border: 1px solid rgba(108, 99, 255, 0.2);
-        background: #ffffff;
-        width: 320px;
-    }
-
-    .edeclara-contribuyentes .search-input {
-        border: none;
-        outline: none;
-        width: 100%;
-        margin-left: 0.5rem;
-        font-size: 0.9rem;
-    }
-
-    .edeclara-contribuyentes .toolbar-secondary-actions {
-        display: flex;
-        gap: 0.75rem;
-        align-items: center;
-    }
-
-    .edeclara-contribuyentes .filter-box {
-        display: flex;
-        flex-direction: column;
-        padding: 0.25rem 0.75rem;
-        border: 1px solid rgba(108, 99, 255, 0.2);
-        border-radius: 16px;
-        background: #ffffff;
-    }
-
-    .edeclara-contribuyentes .filter-label {
-        font-size: 0.65rem;
-        font-weight: 800;
-        text-transform: uppercase;
-        color: #64748b;
-    }
-
-    .edeclara-contribuyentes .filter-select {
-        border: none;
-        outline: none;
-        font-weight: 700;
-        font-size: 0.85rem;
-        color: #1e293b;
-        background: transparent;
-    }
-
-    /* Diseño Grid de Dos Columnas Estilo Clientes */
-    .edeclara-contribuyentes .entity-grid {
-        display: grid;
-        grid-template-columns: 1.15fr 0.85fr;
-        gap: 1.5rem;
-        align-items: start;
-    }
-
-    .edeclara-contribuyentes .table-card, 
-    .edeclara-contribuyentes .editor-card {
-        border-radius: 24px;
-        border: 1px solid rgba(108, 99, 255, 0.15);
-        background: #ffffff;
-        box-shadow: 0 12px 36px rgba(108, 99, 255, 0.03);
-        overflow: hidden;
-    }
-
-    .edeclara-contribuyentes .editor-card {
-        border-top: 5px solid #6C63FF;
-    }
-
-    .edeclara-contribuyentes .table-card-head,
-    .edeclara-contribuyentes .editor-head {
-        padding: 1.25rem;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #edf2f7;
-    }
-
-    .edeclara-contribuyentes .table-badge,
-    .edeclara-contribuyentes .editor-badge {
-        padding: 0.35rem 0.9rem;
-        border-radius: 99px;
-        font-size: 0.75rem;
-        font-weight: 700;
-    }
-
-    .edeclara-contribuyentes .table-badge {
-        background: rgba(108, 99, 255, 0.1);
-        color: #6C63FF;
-    }
-
-    .edeclara-contribuyentes .editor-badge-new {
-        background: rgba(108, 99, 255, 0.1);
-        color: #6C63FF;
-    }
-
-    .edeclara-contribuyentes .editor-badge-edit {
-        background: rgba(245, 158, 11, 0.14);
-        color: #b45309;
-    }
-
-    .edeclara-contribuyentes .entity-table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-
-    .edeclara-contribuyentes .entity-table th {
-        background: #fcfdfe;
-        color: #475569;
-        font-size: 0.75rem;
-        font-weight: 800;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        padding: 1rem 1.25rem;
-        border-bottom: 1px solid #edf2f7;
-    }
-
-    .edeclara-contribuyentes .entity-table td {
-        padding: 1rem 1.25rem;
-        border-bottom: 1px solid #edf2f7;
-        vertical-align: middle;
-    }
-
-    .edeclara-contribuyentes .entity-table th.text-center,
-    .edeclara-contribuyentes .entity-table td.text-center {
-        text-align: center;
-    }
-
-    .edeclara-contribuyentes .entity-table tbody tr:hover td {
-        background: rgba(108, 99, 255, 0.02);
-    }
-
-    .edeclara-contribuyentes .code-pill {
-        padding: 0.25rem 0.75rem;
-        border-radius: 99px;
-        font-size: 0.8rem;
-        font-weight: 700;
-        background: #f1f5f9;
-        color: #334155;
-    }
-
-    .edeclara-contribuyentes .code-pill-id {
-        background: rgba(108, 99, 255, 0.1);
-        color: #6C63FF;
-    }
-
-    .edeclara-contribuyentes .mini-status {
-        padding: 0.25rem 0.6rem;
-        border-radius: 99px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        background: #dcfce7;
-        color: #15803d;
-    }
-
-    .edeclara-contribuyentes .mini-status-inactive {
-        background: #fee2e2;
-        color: #b91c1c;
-    }
-
-    .edeclara-contribuyentes .action-group {
-        display: inline-flex;
-        gap: 0.35rem;
-        padding: 0.25rem;
-        border: 1px solid rgba(108, 99, 255, 0.12);
-        border-radius: 14px;
-        background: #ffffff;
-        box-shadow: 0 4px 12px rgba(108, 99, 255, 0.03);
-    }
-
-    .edeclara-contribuyentes .action-btn {
-        width: 36px;
-        height: 36px;
-        border-radius: 10px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border: none;
-        cursor: pointer;
-        transition: all 0.2s ease;
-    }
-
-    .edeclara-contribuyentes .action-btn i {
-        font-size: 1.15rem;
-        line-height: 1;
-        display: inline-flex;
-    }
-
-    .edeclara-contribuyentes .action-view {
-        background: rgba(108, 99, 255, 0.08);
-        color: #6C63FF;
-    }
-    .edeclara-contribuyentes .action-view:hover {
-        background: rgba(108, 99, 255, 0.16);
-        color: #554ae0;
-    }
-
-    .edeclara-contribuyentes .action-edit {
-        background: rgba(25, 135, 84, 0.08);
-        color: #198754;
-    }
-    .edeclara-contribuyentes .action-edit:hover {
-        background: rgba(25, 135, 84, 0.16);
-        color: #146c43;
-    }
-
-    .edeclara-contribuyentes .action-delete {
-        background: rgba(220, 53, 69, 0.08);
-        color: #dc3545;
-    }
-    .edeclara-contribuyentes .action-delete:hover {
-        background: rgba(220, 53, 69, 0.16);
-        color: #b02a37;
-    }
-
-    .edeclara-contribuyentes .action-activate {
-        background: rgba(13, 110, 253, 0.08);
-        color: #0d6efd;
-    }
-    .edeclara-contribuyentes .action-activate:hover {
-        background: rgba(13, 110, 253, 0.16);
-        color: #0a58ca;
-    }
-
-    .edeclara-contribuyentes .table-pagination {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 1rem 1.25rem;
-        background: #fafafa;
-        border-top: 1px solid #edf2f7;
-        font-size: 0.8rem;
-        color: #64748b;
-    }
-
-    .edeclara-contribuyentes .pagination-btn {
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        border: 1px solid #e2e8f0;
-        background: #ffffff;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .edeclara-contribuyentes .pagination-btn:hover:not(:disabled) {
-        border-color: #6C63FF;
-        color: #6C63FF;
-    }
-
-    .edeclara-contribuyentes .editor-body {
-        padding: 1.5rem;
-        background: #ffffff;
-    }
-
-    .edeclara-contribuyentes .form-label {
-        color: #334155;
-        margin-bottom: 0.25rem;
-    }
-
-    .edeclara-contribuyentes .form-control,
-    .edeclara-contribuyentes .form-select {
-        border: 1px solid #cbd5e1;
-        border-radius: 12px;
-        padding: 0.5rem 0.75rem;
-        font-size: 0.88rem;
-        transition: all 0.2s;
-    }
-
-    .edeclara-contribuyentes .form-control:focus,
-    .edeclara-contribuyentes .form-select:focus {
-        border-color: #6C63FF;
-        box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.15);
-    }
-
-    /* Correos Múltiples UI Estilo Clientes */
-    .edeclara-contribuyentes .email-fields-shell {
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
-    }
-
-    .edeclara-contribuyentes .email-primary-row {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 0.5rem;
-        align-items: center;
-    }
-
-    .edeclara-contribuyentes .email-add-icon-btn {
-        width: 34px;
-        height: 34px;
-        border-radius: 10px;
-        background: rgba(108, 99, 255, 0.1);
-        color: #6C63FF;
-        border: none;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-    }
-
-    .edeclara-contribuyentes .email-extra-shell {
-        border: 1px solid rgba(108, 99, 255, 0.15);
-        border-radius: 14px;
-        padding: 0.75rem;
-        background: #fcfcff;
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
-        margin-top: 0.5rem;
-    }
-
-    .edeclara-contribuyentes .email-extra-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .edeclara-contribuyentes .email-add-btn {
-        background: rgba(108, 99, 255, 0.1);
-        color: #6C63FF;
-        border: none;
-        padding: 0.25rem 0.75rem;
-        border-radius: 8px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 0.25rem;
-    }
-
-    .edeclara-contribuyentes .email-extra-row {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 0.5rem;
-        align-items: center;
-    }
-
-    .edeclara-contribuyentes .email-remove-btn {
-        width: 34px;
-        height: 34px;
-        border-radius: 10px;
-        background: rgba(239, 68, 68, 0.1);
-        color: #ef4444;
-        border: none;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-    }
-
-    .edeclara-contribuyentes .confirm-card {
-        background: #fff8f8;
-        border: 1px solid #fee2e2;
-        border-radius: 18px;
-        padding: 1rem;
-        margin-top: 1rem;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .edeclara-contribuyentes .detail-card-interactive {
-        border-top: 5px solid #6C63FF;
-    }
-
-    .edeclara-contribuyentes .detail-close-btn {
-        background: transparent;
-        border: none;
-        font-size: 1.5rem;
-        color: #64748b;
-        cursor: pointer;
-    }
-
-    .edeclara-contribuyentes .detail-close-btn:hover {
-        color: #ef4444;
-    }
-
-    .edeclara-contribuyentes .detail-sections {
-        display: flex;
-        flex-direction: column;
-        gap: 1.25rem;
-    }
-
-    .edeclara-contribuyentes .detail-section {
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-    }
-
-    .edeclara-contribuyentes .detail-section-title {
-        font-size: 0.85rem;
-        font-weight: 800;
-        text-transform: uppercase;
-        color: #64748b;
-        margin: 0;
-        letter-spacing: 0.05em;
-    }
-
-    .edeclara-contribuyentes .detail-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.75rem;
-    }
-
-    .edeclara-contribuyentes .detail-item {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 14px;
-        padding: 0.75rem;
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-    }
-
-    .edeclara-contribuyentes .detail-item span {
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: #64748b;
-        text-transform: uppercase;
-    }
-
-    .edeclara-contribuyentes .detail-item strong {
-        font-size: 0.85rem;
-        color: #1e293b;
-    }
-
-    .edeclara-contribuyentes .detail-item-full {
-        grid-column: 1 / -1;
-    }
-
-    .edeclara-contribuyentes .detail-note {
-        background: #fcfcff;
-        border: 1px dashed rgba(108, 99, 255, 0.3);
-        border-radius: 14px;
-        padding: 0.75rem;
-    }
-
-    .edeclara-contribuyentes .detail-note span {
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: #6C63FF;
-        text-transform: uppercase;
-        display: block;
-        margin-bottom: 0.25rem;
-    }
-
-    .edeclara-contribuyentes .detail-note strong {
-        font-size: 0.85rem;
-        color: #1e293b;
-    }
-
-    /* Responsividad */
-    @@media (max-width: 1024px) {
-        .edeclara-contribuyentes .entity-grid {
-            grid-template-columns: 1fr;
-        }
-    }
-</style>
 
 @code {
     private int userId;
@@ -1163,13 +721,18 @@
     private int limiteContribuyentes = 0;
     private int actualContribuyentesActivos = 0;
     private bool limiteExcedido = false;
+    private int CuposDisponibles => Math.Max(0, limiteContribuyentes - actualContribuyentesActivos);
+    private int PorcentajeCupo => limiteContribuyentes <= 0 ? 0 : Math.Min(100, actualContribuyentesActivos * 100 / limiteContribuyentes);
 
     private string filtro = "";
     private int registrosPorPagina = 10;
     private int paginaActual = 1;
+    private bool mostrarPanelFiltros = true;
+    private bool HayFiltrosActivos => filtroTipoContribuyente != "todos" || registrosPorPagina != 10;
 
     private ContribuyenteDto? enVista;
     private bool editando;
+    private bool mostrarEditor;
 
     private List<ContribuyenteDto> contribuyentes = new();
 
@@ -1177,6 +740,19 @@
     private ContribuyenteUpsertDto modelo = new();
     private bool modeloPersonaNatural = true;
     private bool modeloEspecial;
+    private bool mostrarClaveSri;
+    private bool claveSriConfiguradaEdicion;
+    private readonly HashSet<int> seccionesFormularioAbiertas = new() { 1 };
+    private string tipoTelefono = "celular";
+    private string? TelefonoSeleccionado
+    {
+        get => tipoTelefono == "celular" ? modelo.Celular : modelo.Telefonoconvencional;
+        set
+        {
+            if (tipoTelefono == "celular") modelo.Celular = value;
+            else modelo.Telefonoconvencional = value;
+        }
+    }
 
     private EditContext? editContext;
     private ValidationMessageStore? messageStore;
@@ -1458,7 +1034,7 @@
         }
     }
 
-    private void CargarEdicion(ContribuyenteDto c)
+    private async Task CargarEdicion(ContribuyenteDto c)
     {
         // Al cargar edición cerramos vista detallada
         enVista = null;
@@ -1489,12 +1065,19 @@
             NumContribuyente = c.NumContribuyente,
             PeriodicidadIva = c.PeriodicidadIva,
             PeriodicidadRenta = c.PeriodicidadRenta,
+            ClaveSri = null,
             FechaDeclaracion = c.FechaDeclaracion,
         };
+        claveSriConfiguradaEdicion = c.ClaveSriConfigurada;
+        mostrarClaveSri = false;
         modeloPersonaNatural = c.PersonaNatural ?? true;
         modeloEspecial = c.ContribuyenteEspecial ?? false;
         _editandoId = c.CodContribuyente;
         editando = true;
+        mostrarEditor = true;
+        ReiniciarSeccionesFormulario();
+        tipoTelefono = !string.IsNullOrWhiteSpace(c.Celular) ? "celular" : "convencional";
+        await CambiarEstadoVisualModalAsync(true);
 
         TriggerLoadingLocationDataForModel();
 
@@ -1525,6 +1108,12 @@
         modelo.ContribuyenteEspecial = modeloEspecial;
         modelo.Oblgconta = (modelo.Oblgconta ?? "").Trim().ToUpperInvariant();
 
+        if (!editando && string.IsNullOrWhiteSpace(modelo.ClaveSri))
+        {
+            await JS.ShowAlertAsync("Clave requerida", "Ingresa la clave del SRI del contribuyente.", "warning");
+            return;
+        }
+
         var isValid = editContext?.Validate() ?? false;
         if (!isValid)
         {
@@ -1551,6 +1140,8 @@
             var msjExito = editando ? "Contribuyente actualizado con éxito." : "Contribuyente creado con éxito.";
             await JS.ShowAlertAsync("Completado", msjExito, "success");
             Limpiar();
+            mostrarEditor = false;
+            await CambiarEstadoVisualModalAsync(false);
             await CargarTodo();
         }
         catch (Exception ex)
@@ -1629,12 +1220,116 @@
 
         modeloPersonaNatural = true;
         modeloEspecial = false;
+        mostrarClaveSri = false;
+        claveSriConfiguradaEdicion = false;
         editando = false;
         _editandoId = 0;
         mensaje = null;
         errorMsg = null;
         enVista = null;
         ReinitValidation();
+    }
+
+    private async Task PrepararNuevoContribuyente()
+    {
+        if (limiteExcedido) return;
+        Limpiar();
+        mostrarEditor = true;
+        ReiniciarSeccionesFormulario();
+        await CambiarEstadoVisualModalAsync(true);
+    }
+
+    private async Task AbrirDetalleAsync(ContribuyenteDto contribuyente)
+    {
+        enVista = contribuyente;
+        await CambiarEstadoVisualModalAsync(true);
+    }
+
+    private void AlternarPanelFiltros() => mostrarPanelFiltros = !mostrarPanelFiltros;
+
+    private void AlternarSeccionFormulario(int seccion)
+    {
+        if (!seccionesFormularioAbiertas.Add(seccion))
+            seccionesFormularioAbiertas.Remove(seccion);
+    }
+
+    private void ReiniciarSeccionesFormulario()
+    {
+        seccionesFormularioAbiertas.Clear();
+        seccionesFormularioAbiertas.Add(1);
+        tipoTelefono = "celular";
+    }
+
+    private async Task AbrirAsistenteAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("numericaUi.openAsistenteFacturacion");
+        }
+        catch
+        {
+            await JS.ShowAlertAsync("Asistente no disponible", "No se pudo abrir el asistente en este momento.", "warning");
+        }
+    }
+
+    private async Task InformarImportacion()
+    {
+        await JS.ShowAlertAsync("Importación de contribuyentes", "La carga masiva desde Excel aún no está habilitada para E-Declara.", "info");
+    }
+
+    private async Task ExportarContribuyentesAsync()
+    {
+        var csv = new StringBuilder();
+        csv.AppendLine("Tipo;Identificación;Nombre o razón social;Correo;Celular;Estado");
+        foreach (var item in ContribuFiltrados)
+        {
+            csv.AppendLine(string.Join(';',
+                EscaparCsv(item.PersonaNatural == true ? "Persona Natural" : "Sociedad / Persona Jurídica"),
+                EscaparCsv(item.Numeroidentificacion),
+                EscaparCsv(NombreCompleto(item)),
+                EscaparCsv(item.Correo),
+                EscaparCsv(item.Celular),
+                EscaparCsv(item.Estado == true ? "Activo" : "Inactivo")));
+        }
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv.ToString())).ToArray());
+        using var reference = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", $"contribuyentes-{DateTime.Now:yyyyMMdd-HHmm}.csv", reference, "text/csv;charset=utf-8");
+    }
+
+    private static string EscaparCsv(string? valor)
+    {
+        var comilla = '"';
+        return string.Concat(comilla, (valor ?? string.Empty).Replace("\"", "\"\""), comilla);
+    }
+
+    private void LimpiarFiltros()
+    {
+        filtroTipoContribuyente = "todos";
+        registrosPorPagina = 10;
+        paginaActual = 1;
+    }
+
+    private async Task CerrarEditor()
+    {
+        mostrarEditor = false;
+        enVista = null;
+        editando = false;
+        await CambiarEstadoVisualModalAsync(false);
+    }
+
+    private ValueTask CambiarEstadoVisualModalAsync(bool abierto) =>
+        JS.InvokeVoidAsync("numericaUi.setEDeclaraModalOpen", abierto);
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await CambiarEstadoVisualModalAsync(false);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
     }
 
     private void AgregarCorreoCampo()

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Simetric.Models;
 using Simetric.Services;
+using Simetric.Services.EDeclara;
 using System.ComponentModel.DataAnnotations;
 
 namespace Simetric.Controllers;
@@ -11,13 +12,16 @@ public class ContribuyentesEdeclaraController : ControllerBase
 {
     private readonly ContribuyenteEdeclaraService _service;
     private readonly ClienteService _clienteService; // reutilizamos lookups
+    private readonly EDeclaraSriCredentialService _sriCredentialService;
 
     public ContribuyentesEdeclaraController(
         ContribuyenteEdeclaraService service,
-        ClienteService clienteService)
+        ClienteService clienteService,
+        EDeclaraSriCredentialService sriCredentialService)
     {
         _service = service;
         _clienteService = clienteService;
+        _sriCredentialService = sriCredentialService;
     }
 
     [HttpGet("limite-estado")]
@@ -33,7 +37,8 @@ public class ContribuyentesEdeclaraController : ControllerBase
     {
         if (userId <= 0) return BadRequest("userId requerido");
         var lista = await _service.ObtenerContribuyentesAsync(userId);
-        return Ok(lista.Select(MapToDto));
+        var configurados = await _sriCredentialService.ObtenerContribuyentesConClaveAsync(userId);
+        return Ok(lista.Select(x => MapToDto(x, configurados.Contains(x.CodContribuyente))));
     }
 
     [HttpGet("{id:int}")]
@@ -41,7 +46,8 @@ public class ContribuyentesEdeclaraController : ControllerBase
     {
         var item = await _service.ObtenerPorIdAsync(id, userId);
         if (item is null) return NotFound();
-        return Ok(MapToDto(item));
+        var claveConfigurada = await _sriCredentialService.TieneClaveContribuyenteAsync(userId, id);
+        return Ok(MapToDto(item, claveConfigurada));
     }
 
     [HttpPost]
@@ -68,7 +74,9 @@ public class ContribuyentesEdeclaraController : ControllerBase
 
         var entidad = MapToEntity(dto, userId);
         var creado = await _service.CrearAsync(entidad);
-        return Ok(MapToDto(creado));
+        if (!string.IsNullOrWhiteSpace(dto.ClaveSri))
+            await _sriCredentialService.GuardarClaveContribuyenteAsync(userId, creado.CodContribuyente, dto.ClaveSri);
+        return Ok(MapToDto(creado, !string.IsNullOrWhiteSpace(dto.ClaveSri)));
     }
 
     [HttpPut("{id:int}")]
@@ -99,6 +107,8 @@ public class ContribuyentesEdeclaraController : ControllerBase
         var entidad = MapToEntity(dto, userId);
         entidad.CodContribuyente = id;
         var ok = await _service.ActualizarAsync(entidad);
+        if (ok && !string.IsNullOrWhiteSpace(dto.ClaveSri))
+            await _sriCredentialService.GuardarClaveContribuyenteAsync(userId, id, dto.ClaveSri);
         return ok ? Ok() : NotFound();
     }
 
@@ -123,7 +133,7 @@ public class ContribuyentesEdeclaraController : ControllerBase
         return ok ? Ok() : NotFound();
     }
 
-    private static ContribuyenteDto MapToDto(ContribuyenteEdeclare e)
+    private static ContribuyenteDto MapToDto(ContribuyenteEdeclare e, bool claveSriConfigurada = false)
     {
         var emails = (e.Correo ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         var primaryEmail = emails.FirstOrDefault();
@@ -157,6 +167,7 @@ public class ContribuyentesEdeclaraController : ControllerBase
             PeriodicidadIva = e.PeriodicidadIva,
             PeriodicidadRenta = e.PeriodicidadRenta,
             FechaDeclaracion = e.FechaDeclaracion,
+            ClaveSriConfigurada = claveSriConfigurada,
         };
     }
 
@@ -229,10 +240,12 @@ public class ContribuyenteDto
     public string? PeriodicidadIva { get; set; }
     public string? PeriodicidadRenta { get; set; }
     public DateOnly? FechaDeclaracion { get; set; }
+    public bool ClaveSriConfigurada { get; set; }
 }
 
 public class ContribuyenteUpsertDto : IValidatableObject
 {
+    public string? ClaveSri { get; set; }
     public string? Apellidos { get; set; }
     public string? Nombres { get; set; }
     public string? Nombrecomercial { get; set; }
