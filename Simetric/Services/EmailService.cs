@@ -17,7 +17,7 @@ using MimeKit.Utils;
 
 public interface IEmailService
 {
-    Task EnviarInvitacionEContaxAsync(string emailDestino, string empresa, string url);
+    Task EnviarInvitacionEContaxAsync(string emailDestino, string empresa, string sucursal, string rol, string url);
     Task EnviarClaveTemporal(string emailDestino, string claveTemporal);
     Task EnviarClaveTemporal(string emailDestino, string claveTemporal, int minutosExpira, string motivo);
     Task EnviarBienvenidaVendedorBackOfficeAsync(string emailDestino, string nombreVendedor, string loginUrl, string usuario, string? codigoAcceso = null, string? setupUrl = null, int? minutosExpira = null);
@@ -2188,18 +2188,19 @@ Atentamente,
         </table>";
     }
 
-    public async Task EnviarInvitacionEContaxAsync(string emailDestino, string empresa, string url)
+    public async Task EnviarInvitacionEContaxAsync(string emailDestino, string empresa, string sucursal, string rol, string url)
     {
         var mensaje = new MimeMessage();
         mensaje.From.Add(new MailboxAddress(_nombreRemitente, _usuario));
         mensaje.To.Add(MailboxAddress.Parse(NormalizarEmail(emailDestino)));
-        mensaje.Subject = "Invitación a E-Contax";
+        mensaje.Subject = $"Invitación a {empresa} en E-Contax";
         mensaje.Body = new BodyBuilder
         {
-            HtmlBody = $"<p>Te invitaron a la empresa <strong>{WebUtility.HtmlEncode(empresa)}</strong> en E-Contax.</p>" +
-                $"<p><a href='{WebUtility.HtmlEncode(url)}'>Aceptar invitación e iniciar sesión</a></p>" +
-                "<p>Usa la cuenta que recibió este correo. La invitación vence en 48 horas y se utiliza una sola vez.</p>",
-            TextBody = $"Invitación a {empresa} en E-Contax. Inicia sesión con este correo: {url}. Vence en 48 horas."
+            HtmlBody = $"<p>Te invitaron a unirte a <strong>{WebUtility.HtmlEncode(empresa)}</strong> en E-Contax.</p>" +
+                $"<p>A partir de ahora tendrás acceso a la información de esta empresa dentro de E-Contax, limitado a la sucursal <strong>{WebUtility.HtmlEncode(sucursal)}</strong> y al rol <strong>{WebUtility.HtmlEncode(rol)}</strong>.</p>" +
+                $"<p><a href='{WebUtility.HtmlEncode(url)}'>Ver invitación y aceptar acceso</a></p>" +
+                "<p>Usa la cuenta de E-Fact asociada a este correo. La invitación vence en 48 horas y se utiliza una sola vez.</p>",
+            TextBody = $"Te invitaron a unirte a {empresa} en E-Contax. Tendrás acceso a la información de la empresa en la sucursal {sucursal}, con el rol {rol}. Abre este enlace para aceptar: {url}. Vence en 48 horas."
         }.ToMessageBody();
         await SendMessageAsync(mensaje);
     }

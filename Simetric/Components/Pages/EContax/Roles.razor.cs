@@ -19,6 +19,7 @@ public partial class Roles
     [Inject] private MenuStateService MenuState { get; set; } = null!;
     [Parameter, SupplyParameterFromQuery(Name = "codigo")] public string? Codigo { get; set; }
     private EContaxSeguridadResumen? resumen;
+    private EContaxInvitacionDetalle? invitacion;
     private HashSet<int> seleccion = new();
     private Dictionary<int, EContaxAccion> acciones = new(), accesoEfectivo = new();
     private List<Simetric.Models.Auditoria> historial = new();
@@ -26,16 +27,26 @@ public partial class Roles
         { EContaxAccion.Ver, EContaxAccion.Crear, EContaxAccion.Editar, EContaxAccion.Eliminar, EContaxAccion.Exportar };
     private int userId, sucursalId, perfilId, perfilAsignado, usuarioEditando, nuevoTitular;
     private string tab = "Mi cuenta", nombrePerfil = "", nombreSucursal = "", nombres = "", apellidos = "", email = "", clave = "";
-    private string? error, mensaje, codigoProcesado;
+    private string? error, mensaje, codigoProcesado, ultimoEnlaceInvitacion;
     private bool cargando = true, ocupado, adminSucursal, permisosUnicos, confirmarAbandono, confirmarTransferencia, confirmarImpacto;
     private bool RolCompartido => perfilId > 0 && resumen?.Contexto.EsJefeEmpresa != true &&
         resumen?.Perfiles.FirstOrDefault(x => x.IdPerfil == perfilId)?.IdSucursal is null;
+    private bool EsRutaUsuarios => Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0].TrimEnd('/')
+        .Equals(EContaxRoutes.Usuarios.TrimStart('/'), StringComparison.OrdinalIgnoreCase);
+    private IEnumerable<EContaxPerfil> PerfilesSucursal => resumen?.Perfiles
+        .Where(x => x.Estado && x.IdSucursal.HasValue && x.IdSucursal.Value == sucursalId)
+        .OrderBy(x => x.Nombre) ?? Enumerable.Empty<EContaxPerfil>();
+    private string SucursalActual => resumen?.Contexto.IdSucursal is int id
+        ? resumen.Sucursales.FirstOrDefault(x => x.IdSucursal == id)?.Nombre ?? "Sucursal asignada"
+        : "Todas las sucursales";
     private int UsuariosAfectados => resumen?.Usuarios.Count(x => x.IdPerfil == perfilId && x.MenusJson is null && !x.EsAdminSucursal &&
         x.IdUsuario != resumen.Empresa.IdTitular) ?? 0;
     private bool UsuarioEditable => usuarioEditando == 0 || (usuarioEditando != resumen?.Empresa.IdTitular &&
         (resumen?.Contexto.EsJefeEmpresa == true || resumen?.Usuarios.FirstOrDefault(x => x.IdUsuario == usuarioEditando)?.EsAdminSucursal != true));
-    private IEnumerable<string> Tabs => resumen?.EsAdmin == true
-        ? new[] { "Sucursales", "Roles", "Usuarios", "Invitaciones", "Historial", "Mi cuenta" } : new[] { "Mi cuenta" };
+    private IEnumerable<string> Tabs => EsRutaUsuarios
+        ? new[] { "Usuarios", "Invitaciones" }
+        : resumen?.EsAdmin == true
+        ? new[] { "Sucursales", "Roles", "Usuarios", "Historial", "Mi cuenta" } : new[] { "Mi cuenta" };
 
     protected override async Task OnParametersSetAsync()
     {
@@ -49,17 +60,23 @@ public partial class Roles
         userId = int.TryParse(user.FindFirst("IdUsuario")?.Value ?? user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 0;
         if (Codigo is not null && Codigo != codigoProcesado)
         {
+            invitacion = await Seguridad.GetInvitacionAsync(Codigo);
+            if (invitacion is null) error = "La invitación no existe o el enlace no es válido.";
             cargando = false;
             return;
         }
-        else await CargarAsync();
+        else
+        {
+            tab = EsRutaUsuarios ? "Usuarios" : "Mi cuenta";
+            await CargarAsync();
+        }
     }
 
     private Task AceptarInvitacionAsync() => EjecutarAsync(async () =>
     {
         await Seguridad.AceptarAsync(userId, Codigo!);
         codigoProcesado = Codigo;
-    }, "Invitación aceptada. Ya estás vinculado a la empresa.");
+    }, $"Invitación aceptada. Desde ahora tienes acceso a E-Contax de {invitacion?.Empresa ?? "la empresa"} y a la información habilitada para tu sucursal.");
 
     private async Task CargarAsync()
     {
@@ -86,7 +103,7 @@ public partial class Roles
 
     private async Task CambiarTab(string item)
     {
-        tab = item; error = null; mensaje = null; seleccion.Clear();
+        tab = item; error = null; mensaje = null; ultimoEnlaceInvitacion = null; seleccion.Clear();
         sucursalId = resumen?.Contexto.EsJefeEmpresa == true ? 0 : resumen?.Contexto.IdSucursal ?? 0;
         perfilId = perfilAsignado = usuarioEditando = 0; nombrePerfil = email = clave = "";
         adminSucursal = permisosUnicos = confirmarImpacto = false; acciones.Clear(); accesoEfectivo.Clear();
@@ -152,7 +169,9 @@ public partial class Roles
         usuarioEditando = int.TryParse(args.Value?.ToString(), out var id) ? id : 0;
         var usuario = resumen!.Usuarios.FirstOrDefault(x => x.IdUsuario == usuarioEditando);
         if (usuario is null) { NuevaCuenta(); return; }
-        sucursalId = usuario.IdSucursal ?? 0; perfilAsignado = usuario.IdPerfil ?? 0;
+        sucursalId = usuario.IdSucursal ?? 0;
+        perfilAsignado = usuario.IdPerfil is int idPerfil && resumen.Perfiles.Any(x =>
+            x.IdPerfil == idPerfil && x.Estado && x.IdSucursal == sucursalId) ? idPerfil : 0;
         adminSucursal = usuario.EsAdminSucursal; permisosUnicos = usuario.MenusJson is not null;
         seleccion = EContaxSeguridadService.LeerMenus(usuario.MenusJson ?? resumen.Perfiles.FirstOrDefault(x => x.IdPerfil == usuario.IdPerfil)?.MenusJson);
         CargarAcciones(usuario.MenusJson is not null ? usuario.AccionesJson : resumen.Perfiles.FirstOrDefault(x => x.IdPerfil == usuario.IdPerfil)?.AccionesJson);
@@ -163,13 +182,13 @@ public partial class Roles
     private void CambiarPerfilAsignado()
     {
         if (permisosUnicos) return;
-        var perfil = resumen!.Perfiles.FirstOrDefault(x => x.IdPerfil == perfilAsignado);
+        var perfil = resumen!.Perfiles.FirstOrDefault(x => x.IdPerfil == perfilAsignado && x.Estado && x.IdSucursal == sucursalId);
         seleccion = EContaxSeguridadService.LeerMenus(perfil?.MenusJson);
         CargarAcciones(perfil?.AccionesJson);
     }
     private void CambiarSucursalAsignada()
     {
-        if (!resumen!.Perfiles.Any(x => x.IdPerfil == perfilAsignado && (x.IdSucursal is null || x.IdSucursal == sucursalId)))
+        if (!resumen!.Perfiles.Any(x => x.IdPerfil == perfilAsignado && x.Estado && x.IdSucursal == sucursalId))
             perfilAsignado = 0;
         CambiarPerfilAsignado();
     }
@@ -194,9 +213,14 @@ public partial class Roles
     private Task InvitarAsync() => EjecutarAsync(async () =>
     {
         var token = await Seguridad.InvitarAsync(userId, email, sucursalId, perfilAsignado, adminSucursal);
-        try { await Correo.EnviarInvitacionEContaxAsync(email, resumen!.Empresa.Nombre, new Uri(new Uri(Nav.BaseUri), "/invitaciones/e-contax?codigo=" + token).AbsoluteUri); }
+        var sucursal = resumen!.Sucursales.FirstOrDefault(x => x.IdSucursal == sucursalId)?.Nombre ?? "Sucursal asignada";
+        var perfil = PerfilesSucursal.FirstOrDefault(x => x.IdPerfil == perfilAsignado)?.Nombre ?? "Rol de la sucursal";
+        var enlace = new Uri(new Uri(Nav.BaseUri), "/invitaciones/e-contax?codigo=" + token).AbsoluteUri;
+        ultimoEnlaceInvitacion = enlace;
+        try { await Correo.EnviarInvitacionEContaxAsync(email, resumen.Empresa.Nombre, sucursal, perfil, enlace); }
         catch (Exception ex)
         {
+            ultimoEnlaceInvitacion = null;
             await CargarAsync();
             var pendiente = resumen?.Invitaciones.FirstOrDefault(x => string.Equals(x.Email, email.Trim(), StringComparison.OrdinalIgnoreCase));
             if (pendiente is not null) await Seguridad.CancelarInvitacionAsync(userId, pendiente.IdInvitacion);

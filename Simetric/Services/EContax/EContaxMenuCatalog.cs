@@ -43,6 +43,7 @@ public static class EContaxMenuCatalog
         new("logs-inicio", "Logs de Inicio", EContaxRoutes.AdministracionLogsInicio, "ri-history-line", 7, "administracion"),
         new("retenciones", "Retenciones", EContaxRoutes.AdministracionRetenciones, "ri-inbox-archive-line", 8, "administracion"),
         new("auditoria-sql", "SQL Auditoria", EContaxRoutes.AdministracionAuditoriaSql, "ri-shield-check-line", 9, "administracion"),
+        new("usuarios-empresa", "Usuarios", EContaxRoutes.Usuarios, "ri-user-settings-line", 10),
         new("documentos-generados", "Documentos Generados", null, "ri-folder-history-line", 11),
         new("notas-credito-generadas", "Mis Notas de Crédito", EContaxRoutes.FacturacionNotasCreditoGeneradas, "ri-file-list-2-line", 1, "documentos-generados"),
         new("retenciones-generadas", "Mis Retenciones", EContaxRoutes.FacturacionRetencionesGeneradas, "ri-file-list-2-line", 2, "documentos-generados"),

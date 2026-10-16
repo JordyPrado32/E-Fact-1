@@ -123,8 +123,14 @@ namespace Simetric.Services
                     .OrderBy(x => x.TclCodigo)
                     .ToListAsync();
 
-                cliente.TipoCliente = tiposCliente.FirstOrDefault(x => TipoClienteClasificacion.EsJuridica(x.TclDescripcion))?.TclCodigo
-                    ?? tiposCliente.FirstOrDefault(x => !TipoClienteClasificacion.EsNatural(x.TclDescripcion))?.TclCodigo
+                var tipoNatural = tiposCliente.FirstOrDefault(x => TipoClienteClasificacion.EsNatural(x.TclDescripcion))?.TclCodigo;
+                var tipoJuridica = tiposCliente.FirstOrDefault(x => TipoClienteClasificacion.EsJuridica(x.TclDescripcion))?.TclCodigo;
+                var tieneNombresNaturales = !string.IsNullOrWhiteSpace(cliente.Nombres) ||
+                                            !string.IsNullOrWhiteSpace(cliente.Apellidos);
+
+                cliente.TipoCliente = (tieneNombresNaturales ? tipoNatural : tipoJuridica)
+                    ?? tipoNatural
+                    ?? tiposCliente.FirstOrDefault(x => !TipoClienteClasificacion.EsJuridica(x.TclDescripcion))?.TclCodigo
                     ?? tiposCliente.FirstOrDefault()?.TclCodigo;
 
                 if (cliente.TipoCliente is null or <= 0)

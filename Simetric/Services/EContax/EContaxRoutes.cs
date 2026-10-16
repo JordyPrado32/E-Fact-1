@@ -36,6 +36,7 @@ public static class EContaxRoutes
     public const string SolicitudPagoResultado = "/e-contax/solicitud/pago/resultado";
     public const string Suscripciones = "/e-contax/suscripciones";
     public const string Organizacion = "/e-contax/organizacion";
+    public const string Usuarios = "/e-contax/usuarios";
     public const string Clientes = "/e-contax/clientes";
     public const string Emisor = "/e-contax/emisor";
     public const string Productos = "/e-contax/productos";

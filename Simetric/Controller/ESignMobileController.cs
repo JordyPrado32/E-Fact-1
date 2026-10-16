@@ -652,7 +652,11 @@ public sealed class ESignMobileController : ControllerBase
                 subtotal,
                 iva = total - subtotal,
                 total,
-                message = "La solicitud fue creada y quedó pendiente de verificar el pago en BackOffice."
+                message = "La solicitud fue creada y quedó pendiente de verificar el pago en BackOffice.",
+                imagenBase64 = PaymentNotificationImageBuilder.SolicitudEnviada(
+                    "FIRMA ELECTRONICA",
+                    total,
+                    $"Firma electrónica {vigencia}")
             });
         }
         catch (InvalidOperationException ex)
@@ -673,6 +677,8 @@ public sealed class ESignMobileController : ControllerBase
 
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var solicitud = await db.UsuSolicitudFirma.AsNoTracking()
+            .Include(item => item.EstadoNumerica)
+            .Include(item => item.EstadoUanataca)
             .FirstOrDefaultAsync(item => item.SolId == solicitudId && item.SolIdUsuarioCliente == idUsuario, cancellationToken);
         if (solicitud is null)
             return NotFound(new { mensaje = "Solicitud no encontrada para el usuario indicado." });
@@ -696,6 +702,13 @@ public sealed class ESignMobileController : ControllerBase
             estado = aprobado ? "APROBADO" : rechazado ? "RECHAZADO" : "PENDIENTE",
             pagoAprobado = aprobado,
             estadoBackOffice = venta?.Estado ?? "pendiente",
+            estadoInternoId = solicitud.SolIdEstadoNumerica,
+            estadoInterno = solicitud.EstadoNumerica?.EstNombre,
+            estadoUanatacaId = solicitud.SolIdEstadoUanataca,
+            estadoUanataca = solicitud.SolUanatacaStatusText ?? solicitud.SolUanatacaStatus,
+            estadoUanatacaCodigo = solicitud.SolUanatacaStatus,
+            estadoUanatacaComentarios = solicitud.SolUanatacaComments,
+            uanatacaUuid = solicitud.SolUanatacaUuid,
             fechaSolicitud = solicitud.SolFechaSolicitud,
             fechaPago = solicitud.SolFechaPago,
             imagenBase64 = aprobado

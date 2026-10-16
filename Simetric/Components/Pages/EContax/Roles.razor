@@ -1,22 +1,44 @@
 @page "/invitaciones/e-contax"
 @page "/e-contax/administracion/roles-internos"
+@page "/e-contax/usuarios"
 @using Simetric.Models.EContax
 @using Simetric.Services.EContax
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
 
-<PageTitle>Roles y permisos | E-Contax</PageTitle>
+<PageTitle>@(EsRutaUsuarios ? "Usuarios | E-Contax" : "Roles y permisos | E-Contax")</PageTitle>
 <div class="security-shell">
-    <section class="security-hero"><div class="hero-copy"><span class="hero-eyebrow">Control de accesos</span><h2>Roles y permisos</h2><p>@resumen?.Empresa.Nombre</p></div></section>
+    <section class="security-hero"><div class="hero-copy"><span class="hero-eyebrow">@(EsRutaUsuarios ? "Equipo de la empresa" : "Control de accesos")</span><h2>@(EsRutaUsuarios ? "Usuarios E-Contax" : "Roles y permisos")</h2><p>@resumen?.Empresa.Nombre</p></div></section>
     @if (error is not null) { <div class="alert alert-danger" role="alert">@error</div> }
     @if (mensaje is not null) { <div class="alert alert-success" role="status">@mensaje</div> }
     @if (cargando) { <p>Cargando…</p> }
-    else if (Codigo is not null && Codigo != codigoProcesado)
+    else if (Codigo is not null && Codigo != codigoProcesado && invitacion is not null)
     {
-        <section class="roles-panel p-3">
-            <h3>Afiliar mi cuenta como empleado</h3>
-            <p>Acepta con la cuenta del correo invitado. Iniciarás sesión con tu propia contraseña y accederás a la empresa según la sucursal y el rol asignados.</p>
-            <button class="primary-btn" disabled="@ocupado" @onclick="AceptarInvitacionAsync">Aceptar invitación</button>
+        <section class="roles-panel invitation-preview">
+            <div class="invitation-preview-head">
+                <div><span class="panel-kicker">Invitación de empresa</span><h3>Acceso a E-Contax de @invitacion.Empresa</h3></div>
+                <span class="assignment-badge"><i class="bi bi-building-check"></i> Acceso por empresa</span>
+            </div>
+            <p class="invitation-intro">Al aceptar, tu cuenta de E-Fact quedará vinculada a esta empresa. Desde ahora verás en E-Contax la información y operación habilitadas para la sucursal asignada.</p>
+            <div class="invitation-details">
+                <div class="invitation-detail"><span>Empresa</span><strong>@invitacion.Empresa</strong><small>@(invitacion.IdentificacionEmpresa ?? "Información empresarial")</small></div>
+                <div class="invitation-detail"><span>Sucursal</span><strong>@invitacion.Sucursal</strong><small>Alcance de tu acceso</small></div>
+                <div class="invitation-detail"><span>Rol asignado</span><strong>@invitacion.Rol</strong><small>@(invitacion.EsAdminSucursal ? "Administrador de sucursal" : "Permisos definidos por la empresa")</small></div>
+            </div>
+            <p class="invitation-account"><i class="bi bi-envelope"></i> Cuenta invitada: <strong>@invitacion.Email</strong>. Inicia sesión con ese correo para aceptar.</p>
+            @if (invitacion.Vigente)
+            {
+                <button class="primary-btn" disabled="@ocupado" @onclick="AceptarInvitacionAsync"><i class="bi bi-check2-circle"></i> Aceptar y acceder a la empresa</button>
+                <small class="invitation-expiry">Este enlace vence el @invitacion.Vence.ToLocalTime().ToString("dd/MM/yyyy HH:mm") y solo puede utilizarse una vez.</small>
+            }
+            else
+            {
+                <div class="assignment-note"><i class="bi bi-exclamation-triangle"></i> Esta invitación venció, fue cancelada o el rol ya no está disponible.</div>
+            }
         </section>
+    }
+    else if (Codigo is not null && Codigo != codigoProcesado && invitacion is null)
+    {
+        <section class="roles-panel invitation-preview"><h3>Invitación no disponible</h3><p>Solicita al administrador de la empresa que genere una nueva invitación.</p></section>
     }
     else if (resumen is not null)
     {
@@ -27,6 +49,15 @@
         <section class="roles-panel p-3">
         @if (tab == "Mi cuenta")
         {
+            <div class="account-access-card">
+                <div class="account-access-head"><div><span class="panel-kicker">Contexto activo</span><strong>Información de la empresa</strong></div><span class="assignment-badge"><i class="bi bi-shield-check"></i> Acceso habilitado</span></div>
+                <p>Tu sesión está vinculada a la información de <strong>@resumen.Empresa.Nombre</strong>. En E-Contax solo verás los módulos y datos permitidos para tu alcance.</p>
+                <div class="account-access-grid">
+                    <div><span>Empresa</span><strong>@resumen.Empresa.Nombre</strong></div>
+                    <div><span>Sucursal</span><strong>@SucursalActual</strong></div>
+                    <div><span>Rol</span><strong>@resumen.Contexto.Rol</strong></div>
+                </div>
+            </div>
             <h3>Vínculo con la empresa</h3><p>Al abandonar pierdes todo acceso a esta empresa y sucursal. La información permanece en la empresa.</p>
             @if (resumen.Contexto.EsJefeEmpresa)
             {
@@ -92,20 +123,37 @@
             }
             else if (tab == "Usuarios")
             {
-                <button class="secondary-btn mb-3" @onclick="NuevaCuenta">Crear cuenta</button>
-                <select class="form-select mb-3" value="@usuarioEditando" @onchange="SeleccionarUsuario">
-                    <option value="0">Nueva cuenta</option>
-                    @foreach (var miembro in resumen.Usuarios)
-                    { <option @key="miembro.IdUsuario" value="@miembro.IdUsuario">@miembro.Usuario?.NombreCompleto — @(miembro.IdUsuario == resumen.Empresa.IdTitular ? "Titular" : miembro.EsAdminSucursal ? "Administrador sucursal" : "Empleado") @(miembro.Suspendido ? "(Suspendido)" : "")</option> }
-                </select>
-                @if (usuarioEditando == 0)
-                {
-                    <label>Nombres</label><input class="form-control mb-2" @bind="nombres" maxlength="100" />
-                    <label>Apellidos</label><input class="form-control mb-2" @bind="apellidos" maxlength="100" />
-                    <label>Correo</label><input class="form-control mb-2" type="email" @bind="email" maxlength="320" />
-                    <label>Contraseña temporal</label><input class="form-control mb-3" type="password" @bind="clave" autocomplete="new-password" />
-                }
-                @Asignacion()
+                <div class="user-management-head">
+                    <div>
+                        <span class="panel-kicker">Equipo de la empresa</span>
+                        <h3>Usuarios y asignaciones</h3>
+                        <p>Crea cuentas y vincúlalas a un rol específico de la sucursal correspondiente.</p>
+                    </div>
+                    <button class="secondary-btn" @onclick="NuevaCuenta"><i class="bi bi-person-plus"></i> Crear cuenta</button>
+                </div>
+
+                <div class="user-management-body">
+                    <div class="roles-field roles-field-full">
+                        <span>Usuario</span>
+                        <select class="roles-input" value="@usuarioEditando" @onchange="SeleccionarUsuario">
+                            <option value="0">Nueva cuenta</option>
+                            @foreach (var miembro in resumen.Usuarios)
+                            { <option @key="miembro.IdUsuario" value="@miembro.IdUsuario">@miembro.Usuario?.NombreCompleto — @(miembro.IdUsuario == resumen.Empresa.IdTitular ? "Titular" : miembro.EsAdminSucursal ? "Administrador sucursal" : "Empleado") @(miembro.Suspendido ? "(Suspendido)" : "")</option> }
+                        </select>
+                    </div>
+
+                    @if (usuarioEditando == 0)
+                    {
+                        <div class="roles-form-grid">
+                            <div class="roles-field"><span>Nombres</span><input class="roles-input" @bind="nombres" maxlength="100" /></div>
+                            <div class="roles-field"><span>Apellidos</span><input class="roles-input" @bind="apellidos" maxlength="100" /></div>
+                            <div class="roles-field"><span>Correo</span><input class="roles-input" type="email" @bind="email" maxlength="320" /></div>
+                            <div class="roles-field"><span>Contraseña temporal</span><input class="roles-input" type="password" @bind="clave" autocomplete="new-password" /></div>
+                        </div>
+                    }
+
+                    @Asignacion()
+                </div>
                 @if (usuarioEditando > 0)
                 {
                     <label class="d-block my-3"><input type="checkbox" @bind="permisosUnicos" disabled="@(ocupado || !UsuarioEditable)" /> Usar permisos individuales en lugar de los del rol</label>
@@ -134,11 +182,15 @@
             }
             else if (tab == "Invitaciones")
             {
-                <h3>Afiliar empleado por correo</h3>
-                <p>El empleado debe iniciar sesión con este correo y aceptar el enlace recibido. Si aún no tiene cuenta, debe registrarse primero y luego abrir la invitación. Conserva su propia contraseña.</p>
+                <h3>Invitar a una cuenta de E-Fact</h3>
+                <p>Envía el enlace al correo de una cuenta existente de E-Fact. Al aceptarlo, esa persona conservará su contraseña y verá en E-Contax la información de tu empresa, limitada a la sucursal y al rol asignados.</p>
                 <label>Correo</label><input class="form-control mb-3" type="email" @bind="email" maxlength="320" />
                 @Asignacion()
                 <button class="primary-btn my-3" disabled="@ocupado" @onclick="InvitarAsync">Enviar invitación</button>
+                @if (ultimoEnlaceInvitacion is not null)
+                {
+                    <div class="invitation-link-card"><i class="bi bi-link-45deg"></i><div><strong>Enlace generado y enviado</strong><small>También puedes compartirlo directamente con la cuenta invitada.</small><a href="@ultimoEnlaceInvitacion" target="_blank" rel="noopener">Abrir enlace de invitación</a></div></div>
+                }
                 <table class="table"><thead><tr><th>Correo</th><th>Vencimiento (UTC)</th><th></th></tr></thead><tbody>
                 @foreach (var invitacion in resumen.Invitaciones)
                 {
@@ -190,16 +242,32 @@
             </fieldset>
         }
     </div>;
-    private RenderFragment Asignacion() => @<div>
-        <label>Sucursal</label><select class="form-select mb-3" @bind="sucursalId" @bind:after="CambiarSucursalAsignada" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))"><option value="0">Selecciona una sucursal</option>
-            @foreach (var sucursal in resumen!.Sucursales)
-            { <option @key="sucursal.IdSucursal" value="@sucursal.IdSucursal">@sucursal.Nombre</option> }
-        </select>
-        <label>Rol</label><select class="form-select mb-3" @bind="perfilAsignado" @bind:after="CambiarPerfilAsignado" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))"><option value="0">Selecciona un rol</option>
-            @foreach (var perfil in resumen.Perfiles.Where(x => x.IdSucursal == null || x.IdSucursal == sucursalId))
-            { <option @key="perfil.IdPerfil" value="@perfil.IdPerfil">@perfil.Nombre</option> }
-        </select>
+    private RenderFragment Asignacion() => @<div class="assignment-card">
+        <div class="assignment-card-head">
+            <div><span class="panel-kicker">Alcance operativo</span><strong>Sucursal y rol</strong></div>
+            <span class="assignment-badge"><i class="bi bi-shield-check"></i> Por sucursal</span>
+        </div>
+        <div class="roles-form-grid">
+            <div class="roles-field">
+                <span>Sucursal</span>
+                <select class="roles-input" @bind="sucursalId" @bind:after="CambiarSucursalAsignada" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))">
+                    <option value="0">Selecciona una sucursal</option>
+                    @foreach (var sucursal in resumen!.Sucursales)
+                    { <option @key="sucursal.IdSucursal" value="@sucursal.IdSucursal">@sucursal.Nombre</option> }
+                </select>
+            </div>
+            <div class="roles-field">
+                <span>Rol de la sucursal</span>
+                <select class="roles-input" @bind="perfilAsignado" @bind:after="CambiarPerfilAsignado" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable) || sucursalId <= 0)">
+                    <option value="0">@(sucursalId > 0 ? "Selecciona un rol" : "Selecciona primero la sucursal")</option>
+                    @foreach (var perfil in PerfilesSucursal)
+                    { <option @key="perfil.IdPerfil" value="@perfil.IdPerfil">@perfil.Nombre</option> }
+                </select>
+            </div>
+        </div>
+        @if (sucursalId > 0 && !PerfilesSucursal.Any())
+        { <div class="assignment-note"><i class="bi bi-info-circle"></i> Esta sucursal todavía no tiene roles propios. Créalo primero desde “Roles y permisos”.</div> }
         @if (resumen.Contexto.EsJefeEmpresa)
-        { <label class="d-block mb-3"><input type="checkbox" @bind="adminSucursal" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))" /> Administrador de sucursal</label> }
+        { <label class="assignment-check"><input type="checkbox" @bind="adminSucursal" disabled="@(ocupado || (tab == "Usuarios" && !UsuarioEditable))" /> <span>Administrador de sucursal <small>Puede administrar la operación de esta sucursal.</small></span></label> }
     </div>;
 }

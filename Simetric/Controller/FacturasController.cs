@@ -58,9 +58,11 @@ namespace Simetric.Controllers
 
         public sealed class FacturaApiClienteDto
         {
+            public int? TipoCliente { get; set; }
             public string? TipoIdentificacion { get; set; }
             public string? Identificacion { get; set; }
             public string? RazonSocial { get; set; }
+            public string? NombreComercial { get; set; }
             public string? Nombres { get; set; }
             public string? Apellidos { get; set; }
             public string? Direccion { get; set; }
@@ -246,12 +248,10 @@ namespace Simetric.Controllers
             {
                 var formaSolicitada = dto.FormaPago.Trim();
                 var forma = (await _service.ObtenerFormasPagoAsync()).FirstOrDefault(x =>
-                    string.Equals(x.Codigo, formaSolicitada, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(x.Descripcion, formaSolicitada, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(x.DescripcionSri, formaSolicitada, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(x.Codigo, formaSolicitada, StringComparison.OrdinalIgnoreCase));
 
                 if (forma is null)
-                    return UnprocessableEntity(new { mensaje = "La forma de pago indicada no existe o no está habilitada." });
+                    return UnprocessableEntity(new { mensaje = "La forma de pago debe enviarse mediante un código habilitado, por ejemplo \"01\" o \"20\"." });
 
                 formaPago = forma.Codigo;
             }
@@ -285,9 +285,11 @@ namespace Simetric.Controllers
                 Factura = factura,
                 Cliente = new Cliente
                 {
+                    TipoCliente = dto.Cliente.TipoCliente,
                     Tipoidentificacion = dto.Cliente.TipoIdentificacion,
                     Numeroidentificacion = dto.Cliente.Identificacion,
                     Nombrerazonsocial = dto.Cliente.RazonSocial,
+                    Nombrecomercial = dto.Cliente.NombreComercial,
                     Nombres = dto.Cliente.Nombres,
                     Apellidos = dto.Cliente.Apellidos,
                     Direccion = dto.Cliente.Direccion,
