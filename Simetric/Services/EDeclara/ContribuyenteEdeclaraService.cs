@@ -229,8 +229,8 @@ END");
         int limite = planName switch
         {
             "individual" => 1,
-            "asesor" => 100,
-            "empresarial" => 500,
+            "asesor" => 25,
+            "empresarial" => 75,
             _ => 1 // Por defecto fallback a 1
         };
 
