@@ -80,8 +80,8 @@ public sealed class FacturasExcelService : IFacturasExcelService
                 new ExcelCellData(item.FechaEmisionSri?.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture) ?? string.Empty),
                 new ExcelCellData(item.NumeroCompleto ?? string.Empty),
                 new ExcelCellData(string.Empty),
-                new ExcelCellData(item.Servicio),
-                new ExcelCellData(item.Detalle ?? string.Empty),
+                new ExcelCellData(ObtenerServicio(item)),
+                new ExcelCellData(ObtenerDetalle(item)),
                 new ExcelCellData(item.Cliente ?? string.Empty),
                 new ExcelCellData(item.IdentificacionCliente ?? string.Empty),
                 new ExcelCellData(ObtenerEstadoFactura(item, facturasConNotaCredito)),
@@ -158,6 +158,30 @@ public sealed class FacturasExcelService : IFacturasExcelService
 
     private static ExcelCellData Monto(decimal? value, int styleIndex = 5) =>
         new((value ?? 0m).ToString("0.00", CultureInfo.InvariantCulture), styleIndex, ExcelCellType.Number);
+
+    private static string ObtenerServicio(FacturaListDto factura)
+    {
+        if (!string.IsNullOrWhiteSpace(factura.Servicio))
+            return factura.Servicio.Trim();
+
+        return string.IsNullOrWhiteSpace(factura.Detalle) ? "Sin servicio" : factura.Detalle.Trim();
+    }
+
+    private static string ObtenerDetalle(FacturaListDto factura)
+    {
+        var detalle = (factura.Detalle ?? string.Empty).Trim();
+        var servicio = (factura.Servicio ?? string.Empty).Trim();
+        if (detalle.Length == 0 || servicio.Length == 0)
+            return detalle;
+
+        if (detalle.Equals(servicio, StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+
+        var prefijo = servicio + " - ";
+        return detalle.StartsWith(prefijo, StringComparison.OrdinalIgnoreCase)
+            ? detalle[prefijo.Length..].Trim()
+            : detalle;
+    }
 
     private static int? ObtenerFacturaModificadaId(
         NotaCreditoListDto nota,

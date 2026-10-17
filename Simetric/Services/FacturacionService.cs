@@ -2739,6 +2739,18 @@ IF @resultado < 0
                     Codfactura = f.Codfactura,
                     Numfactura = f.Numfactura,
                     Total = f.Valortotal,
+                    Subtotal = f.Subtotal ??
+                        ((f.Subtotal12 ?? 0m) +
+                         (f.Subtotal0 ?? f.Subcerototal ?? 0m) +
+                         (f.Noimp ?? f.Subnoimptotal ?? 0m) +
+                         (f.Exiva ?? f.Subexivatotal ?? 0m)),
+                    SubtotalIva = f.Subtotal12,
+                    SubtotalCero = f.Subtotal0 ?? f.Subcerototal,
+                    SubtotalNoObjeto = f.Noimp ?? f.Subnoimptotal,
+                    SubtotalExento = f.Exiva ?? f.Subexivatotal,
+                    Descuentos = f.Descuentos,
+                    Iva = f.Iva,
+                    Ice = f.Valorice,
                     Tipopago = f.Tipopago,
                     Cliente = f.CodclientesNavigation != null
                         ? ((f.CodclientesNavigation.Nombres ?? "") + " " + (f.CodclientesNavigation.Apellidos ?? "")).Trim()
@@ -2746,6 +2758,13 @@ IF @resultado < 0
                     IdentificacionCliente = f.CodclientesNavigation != null
                         ? f.CodclientesNavigation.Numeroidentificacion
                         : null,
+                    Servicio = f.Detallefacturas
+                        .OrderBy(d => d.Codlinea)
+                        .Select(d => context.Productos
+                            .Where(p => p.Codigo == d.Codproducto)
+                            .Select(p => p.Nombre)
+                            .FirstOrDefault())
+                        .FirstOrDefault(),
                     Detalle = f.Detallefacturas
                         .OrderBy(d => d.Codlinea)
                         .Select(d => d.Descripproducto)
@@ -2808,6 +2827,18 @@ IF @resultado < 0
                     MensajeSri = f.Mensaje,
                     FechaAutorizacion = f.Fchautorizacion,
                     Total = f.Valortotal,
+                    Subtotal = f.Subtotal ??
+                        ((f.Subtotal12 ?? 0m) +
+                         (f.Subtotal0 ?? f.Subcerototal ?? 0m) +
+                         (f.Noimp ?? f.Subnoimptotal ?? 0m) +
+                         (f.Exiva ?? f.Subexivatotal ?? 0m)),
+                    SubtotalIva = f.Subtotal12,
+                    SubtotalCero = f.Subtotal0 ?? f.Subcerototal,
+                    SubtotalNoObjeto = f.Noimp ?? f.Subnoimptotal,
+                    SubtotalExento = f.Exiva ?? f.Subexivatotal,
+                    Descuentos = f.Descuentos,
+                    Iva = f.Iva,
+                    Ice = f.Valorice,
                     TotalAbonado = context.Abonos
                         .Where(a => a.codFactura == f.Codfactura && a.estado == true)
                         .Sum(a => (decimal?)a.abono) ?? 0m,
@@ -2822,6 +2853,13 @@ IF @resultado < 0
                     IdentificacionCliente = f.CodclientesNavigation != null
                         ? f.CodclientesNavigation.Numeroidentificacion
                         : null,
+                    Servicio = f.Detallefacturas
+                        .OrderBy(d => d.Codlinea)
+                        .Select(d => context.Productos
+                            .Where(p => p.Codigo == d.Codproducto)
+                            .Select(p => p.Nombre)
+                            .FirstOrDefault())
+                        .FirstOrDefault(),
                     Detalle = f.Detallefacturas
                         .OrderBy(d => d.Codlinea)
                         .Select(d => d.Descripproducto)
@@ -2924,6 +2962,18 @@ IF @resultado < 0
                     MensajeSri = f.Mensaje,
                     FechaAutorizacion = f.Fchautorizacion,
                     Total = f.Valortotal,
+                    Subtotal = f.Subtotal ??
+                        ((f.Subtotal12 ?? 0m) +
+                         (f.Subtotal0 ?? f.Subcerototal ?? 0m) +
+                         (f.Noimp ?? f.Subnoimptotal ?? 0m) +
+                         (f.Exiva ?? f.Subexivatotal ?? 0m)),
+                    SubtotalIva = f.Subtotal12,
+                    SubtotalCero = f.Subtotal0 ?? f.Subcerototal,
+                    SubtotalNoObjeto = f.Noimp ?? f.Subnoimptotal,
+                    SubtotalExento = f.Exiva ?? f.Subexivatotal,
+                    Descuentos = f.Descuentos,
+                    Iva = f.Iva,
+                    Ice = f.Valorice,
                     Tipopago = f.Tipopago,
                     Cliente = f.CodclientesNavigation != null
                         ? ((f.CodclientesNavigation.Nombrerazonsocial != null && f.CodclientesNavigation.Nombrerazonsocial != string.Empty)
@@ -2933,6 +2983,13 @@ IF @resultado < 0
                     IdentificacionCliente = f.CodclientesNavigation != null
                         ? f.CodclientesNavigation.Numeroidentificacion
                         : null,
+                    Servicio = f.Detallefacturas
+                        .OrderBy(d => d.Codlinea)
+                        .Select(d => context.Productos
+                            .Where(p => p.Codigo == d.Codproducto)
+                            .Select(p => p.Nombre)
+                            .FirstOrDefault())
+                        .FirstOrDefault(),
                     Detalle = f.Detallefacturas
                         .OrderBy(d => d.Codlinea)
                         .Select(d => d.Descripproducto)
