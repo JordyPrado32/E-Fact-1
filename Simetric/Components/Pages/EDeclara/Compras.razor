@@ -1,5 +1,6 @@
 @page "/e-declara/compras"
 @rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Simetric.Models
@@ -10,7 +11,7 @@
 @inject NavigationManager Navigation
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
-@inject IUsuarioService UsuarioService
+@inject ContribuyenteEdeclaraService ContribuyentesService
 @inject EDeclaraComprasService ComprasService
 @inject EDeclaraClasificacionIaService ClasificacionIaService
 @inject EDeclaraSriCredentialService SriCredentialService
@@ -78,7 +79,7 @@
                 <span class="ec-kicker">Contexto de trabajo</span>
                 <strong>Selecciona el período</strong>
             </div>
-            <label><span>Cuenta E-Declara</span><strong>@perfilNombre</strong><small>@perfilIdentificacion</small></label>
+            <label><span>Contribuyente</span><select value="@contribuyenteId" @onchange="CambiarContribuyenteAsync">@foreach (var contribuyente in contribuyentes){<option value="@contribuyente.CodContribuyente">@NombreContribuyente(contribuyente) · @contribuyente.Numeroidentificacion</option>}</select></label>
             <label><span>Año</span>
                 <select value="@anio" @onchange="CambiarAnioAsync">
                     @for (var value = DateTime.Today.Year; value >= DateTime.Today.Year - 6; value--)
@@ -250,15 +251,19 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "contribuyenteId")]
+    private int? ContribuyenteIdQuery { get; set; }
+
     private IReadOnlyList<EDeclaraCompraDocumento> documentos = Array.Empty<EDeclaraCompraDocumento>();
     private EDeclaraComprasCatalogos catalogos = new();
     private readonly HashSet<long> seleccionados = new();
     private EDeclaraCompraDocumento edicion = new();
-    private int userId, anio = DateTime.Today.Year, periodo = DateTime.Today.Month, tipoDocumento = 1, pagina = 1;
+    private int userId, contribuyenteId, anio = DateTime.Today.Year, periodo = DateTime.Today.Month, tipoDocumento = 1, pagina = 1;
     private const int TamanoPagina = 12;
     private string filtro = string.Empty, mensaje = string.Empty, errorInicial = string.Empty, orden = "ruc", perfilNombre = string.Empty, perfilIdentificacion = string.Empty;
     private bool cargando = true, ocupado, sincronizando, clasificandoIa, guardando, mostrarFormulario, mensajeError, claveSriConfigurada, ordenDescendente;
     private long? detalleAbierto;
+    private List<ContribuyenteEdeclare> contribuyentes = new();
 
     private List<EDeclaraCompraDocumento> DocumentosFiltrados
     {
@@ -292,18 +297,24 @@
             var access=await AppAccessService.CanAccessAsync(userId,EDeclaraRoutes.ServiceKey,superAdmin);
             if(!access.HasAccess){Navigation.NavigateTo($"/suscripciones?servicio={EDeclaraRoutes.ServiceKey}",true);return;}
             await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
-            claveSriConfigurada=await SriCredentialService.TieneClaveAsync(userId);
-            var cuenta=await UsuarioService.ObtenerUsuarioPorId(userId);
-            perfilNombre=cuenta is null ? string.Empty : (!string.IsNullOrWhiteSpace(cuenta.NombreEmpresa) ? cuenta.NombreEmpresa : cuenta.NombreCompleto);
-            perfilIdentificacion=cuenta?.Identificacion?.Trim()??string.Empty;
+            contribuyentes=(await ContribuyentesService.ObtenerContribuyentesAsync(userId)).Where(x=>x.Estado==true).ToList();
+            var seleccionado=ContribuyenteIdQuery.HasValue
+                ? contribuyentes.FirstOrDefault(x=>x.CodContribuyente==ContribuyenteIdQuery.Value)
+                : contribuyentes.FirstOrDefault();
+            if(seleccionado is null) throw new InvalidOperationException("Registra al menos un contribuyente activo antes de administrar compras.");
+            contribuyenteId=seleccionado.CodContribuyente;
+            perfilNombre=NombreContribuyente(seleccionado);
+            perfilIdentificacion=seleccionado.Numeroidentificacion?.Trim()??string.Empty;
+            claveSriConfigurada=await SriCredentialService.TieneClaveContribuyenteAsync(userId,contribuyenteId);
             catalogos=await ComprasService.ObtenerCatalogosAsync();
-            if(!string.IsNullOrWhiteSpace(perfilIdentificacion)) await CargarAsync(); else errorInicial="Configura tu identificación en Mi perfil de E-Declara antes de administrar compras.";
+            await CargarAsync();
         }
         catch(Exception ex){errorInicial=$"No se pudo abrir el módulo de compras: {ex.Message}";}
         finally{cargando=false;}
     }
 
-    private async Task CargarAsync(){documentos=await ComprasService.ListarAsync(userId,userId,anio,periodo,tipoDocumento);seleccionados.Clear();pagina=1;detalleAbierto=null;}
+    private async Task CambiarContribuyenteAsync(ChangeEventArgs e){if(!int.TryParse(e.Value?.ToString(),out var value)||!contribuyentes.Any(x=>x.CodContribuyente==value))return;contribuyenteId=value;var seleccionado=contribuyentes.First(x=>x.CodContribuyente==value);perfilNombre=NombreContribuyente(seleccionado);perfilIdentificacion=seleccionado.Numeroidentificacion?.Trim()??string.Empty;claveSriConfigurada=await SriCredentialService.TieneClaveContribuyenteAsync(userId,contribuyenteId);CerrarFormulario();await EjecutarCargaAsync();}
+    private async Task CargarAsync(){documentos=await ComprasService.ListarAsync(userId,contribuyenteId,anio,periodo,tipoDocumento);seleccionados.Clear();pagina=1;detalleAbierto=null;}
     private async Task CambiarAnioAsync(ChangeEventArgs e){anio=int.Parse(e.Value?.ToString()??DateTime.Today.Year.ToString());await EjecutarCargaAsync();}
     private async Task CambiarPeriodoAsync(ChangeEventArgs e){periodo=int.Parse(e.Value?.ToString()??DateTime.Today.Month.ToString());await EjecutarCargaAsync();}
     private async Task CambiarTipoAsync(int value){tipoDocumento=value;CerrarFormulario();await EjecutarCargaAsync();}
@@ -314,7 +325,7 @@
         ocupado = clasificandoIa = true;
         try
         {
-            var resultado = await ClasificacionIaService.ClasificarAsync(userId, anio, periodo);
+            var resultado = await ClasificacionIaService.ClasificarAsync(userId, contribuyenteId, anio, periodo);
             var detalle = resultado.Errores.Count > 0 ? $" {string.Join(" | ", resultado.Errores.Take(3))}" : string.Empty;
             if (resultado.Clasificados == 0) MostrarError($"No se clasificaron documentos automáticamente.{detalle}");
             else MostrarExito($"IA clasificó {resultado.Clasificados} documento(s). Pendientes: {resultado.Pendientes}.{detalle}");
@@ -328,7 +339,7 @@
         if (tipoDocumento == 6) return;
         try
         {
-            var resultado = await ClasificacionIaService.ClasificarAsync(userId, anio, periodo);
+            var resultado = await ClasificacionIaService.ClasificarAsync(userId, contribuyenteId, anio, periodo);
             if (resultado.Clasificados > 0)
             {
                 await CargarAsync();
@@ -345,19 +356,19 @@
     private void Nuevo(){edicion=CrearModeloBase();mostrarFormulario=true;}
     private void Editar(EDeclaraCompraDocumento item){edicion=Copiar(item);mostrarFormulario=true;}
     private void CerrarFormulario(){mostrarFormulario=false;edicion=CrearModeloBase();}
-    private EDeclaraCompraDocumento CrearModeloBase()=>new(){IdContribuyente=userId,Anio=anio,Periodo=periodo,TipoDocumento=tipoDocumento,FechaEmision=FechaInicialPeriodo(),Origen="MANUAL"};
+    private EDeclaraCompraDocumento CrearModeloBase()=>new(){IdContribuyente=contribuyenteId,Anio=anio,Periodo=periodo,TipoDocumento=tipoDocumento,FechaEmision=FechaInicialPeriodo(),Origen="MANUAL"};
     private DateTime FechaInicialPeriodo()=>anio==DateTime.Today.Year && ((periodo<=12&&periodo==DateTime.Today.Month)||(periodo==13&&DateTime.Today.Month<=6)||(periodo==14&&DateTime.Today.Month>=7))?DateTime.Today:new DateTime(anio,periodo switch{13=>1,14=>7,_=>periodo},1);
     private static EDeclaraCompraDocumento Copiar(EDeclaraCompraDocumento x)=>new(){Id=x.Id,IdContribuyente=x.IdContribuyente,Anio=x.Anio,Periodo=x.Periodo,TipoDocumento=x.TipoDocumento,TipoFacturacion=x.TipoFacturacion,Serie=x.Serie,Numero=x.Numero,FechaEmision=x.FechaEmision,Ruc=x.Ruc,RazonSocial=x.RazonSocial,IdentificacionComprador=x.IdentificacionComprador,Concepto=x.Concepto,Casilla=x.Casilla,Tarifa=x.Tarifa,BaseImponible=x.BaseImponible,Iva=x.Iva,SerieDocumentoModificado=x.SerieDocumentoModificado,NumeroDocumentoModificado=x.NumeroDocumentoModificado,NumeroAutorizacion=x.NumeroAutorizacion,Origen=x.Origen,EsFaltante=x.EsFaltante,Detalles=x.Detalles};
 
-    private async Task GuardarAsync(){LimpiarMensaje();guardando=true;try{edicion.IdContribuyente=userId;edicion.Anio=anio;edicion.Periodo=periodo;edicion.TipoDocumento=tipoDocumento;await ComprasService.GuardarAsync(userId,edicion);CerrarFormulario();await CargarAsync();await EjecutarClasificacionAutomaticaAsync();if(string.IsNullOrWhiteSpace(mensaje))MostrarExito("Documento guardado correctamente.");}catch(Exception ex){MostrarError(ex.Message);}finally{guardando=false;}}
+    private async Task GuardarAsync(){LimpiarMensaje();guardando=true;try{edicion.IdContribuyente=contribuyenteId;edicion.Anio=anio;edicion.Periodo=periodo;edicion.TipoDocumento=tipoDocumento;await ComprasService.GuardarAsync(userId,edicion);CerrarFormulario();await CargarAsync();await EjecutarClasificacionAutomaticaAsync();if(string.IsNullOrWhiteSpace(mensaje))MostrarExito("Documento guardado correctamente.");}catch(Exception ex){MostrarError(ex.Message);}finally{guardando=false;}}
     private void CambiarTarifaEdicion(ChangeEventArgs e){edicion.Tarifa=Decimal(e.Value);edicion.Iva=Math.Round(edicion.BaseImponible*edicion.Tarifa/100m,2);}
     private void CambiarBaseEdicion(ChangeEventArgs e){edicion.BaseImponible=Decimal(e.Value);edicion.Iva=Math.Round(edicion.BaseImponible*edicion.Tarifa/100m,2);}
     private static decimal Decimal(object? value)=>decimal.TryParse(value?.ToString(),System.Globalization.NumberStyles.Any,System.Globalization.CultureInfo.InvariantCulture,out var n)?n:0m;
-    private async Task BuscarProveedorAsync(){if(string.IsNullOrWhiteSpace(edicion.Ruc)||!string.IsNullOrWhiteSpace(edicion.RazonSocial))return;try{var local=await ComprasService.BuscarRazonSocialAsync(userId,edicion.Ruc);if(!string.IsNullOrWhiteSpace(local)){edicion.RazonSocial=local;return;}if(!claveSriConfigurada)return;var result=await CedulaLookupService.ConsultarAsync(edicion.Ruc);if(result.Success&&result.Found)edicion.RazonSocial=result.RazonSocial??result.NombreCompleto??string.Empty;}catch{}}
+    private async Task BuscarProveedorAsync(){if(string.IsNullOrWhiteSpace(edicion.Ruc)||!string.IsNullOrWhiteSpace(edicion.RazonSocial))return;try{var local=await ComprasService.BuscarRazonSocialAsync(userId,contribuyenteId,edicion.Ruc);if(!string.IsNullOrWhiteSpace(local)){edicion.RazonSocial=local;return;}if(!claveSriConfigurada)return;var result=await CedulaLookupService.ConsultarAsync(edicion.Ruc);if(result.Success&&result.Found)edicion.RazonSocial=result.RazonSocial??result.NombreCompleto??string.Empty;}catch{}}
     private async Task BuscarFacturaRelacionadaAsync()
     {
         if (tipoDocumento is not (3 or 4) || string.IsNullOrWhiteSpace(edicion.Ruc) || string.IsNullOrWhiteSpace(edicion.SerieDocumentoModificado) || string.IsNullOrWhiteSpace(edicion.NumeroDocumentoModificado)) return;
-        var factura = await ComprasService.BuscarFacturaRelacionadaAsync(userId, userId, anio, periodo, edicion.SerieDocumentoModificado, edicion.NumeroDocumentoModificado, edicion.Ruc, tipoDocumento == 4 ? 2 : 1);
+        var factura = await ComprasService.BuscarFacturaRelacionadaAsync(userId, contribuyenteId, anio, periodo, edicion.SerieDocumentoModificado, edicion.NumeroDocumentoModificado, edicion.Ruc, tipoDocumento == 4 ? 2 : 1);
         if (factura is null) { MostrarError("No se encontró la factura relacionada en el período."); return; }
         edicion.RazonSocial = factura.RazonSocial;
         edicion.Concepto = string.IsNullOrWhiteSpace(edicion.Concepto) ? factura.Concepto : edicion.Concepto;
@@ -366,14 +377,14 @@
         LimpiarMensaje();
     }
 
-    private async Task ImportarXmlAsync(InputFileChangeEventArgs e){LimpiarMensaje();ocupado=true;try{var archivos=new List<(string Nombre,string Xml)>();foreach(var file in e.GetMultipleFiles(100)){if(file.Size>10*1024*1024){MostrarError($"{file.Name} supera 10 MB.");continue;}using var reader=new StreamReader(file.OpenReadStream(10*1024*1024));archivos.Add((file.Name,await reader.ReadToEndAsync()));}var result=await ComprasService.ImportarXmlAsync(userId,userId,anio,periodo,archivos,"XML",tipoDocumento is 2 or 4 ? 2 : 1);MostrarResultado(result,"Importación XML");await CargarAsync();await EjecutarClasificacionAutomaticaAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=false;}}
-    private async Task SincronizarVentasEFactAsync(){LimpiarMensaje();ocupado=sincronizando=true;await InvokeAsync(StateHasChanged);try{var result=await ComprasService.SincronizarVentasEFactAsync(userId,anio,periodo,tipoDocumento);MostrarResultado(result,"Sincronización E-Fact");await CargarAsync();await EjecutarClasificacionAutomaticaAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=sincronizando=false;}}
+    private async Task ImportarXmlAsync(InputFileChangeEventArgs e){LimpiarMensaje();ocupado=true;try{var archivos=new List<(string Nombre,string Xml)>();foreach(var file in e.GetMultipleFiles(100)){if(file.Size>10*1024*1024){MostrarError($"{file.Name} supera 10 MB.");continue;}using var reader=new StreamReader(file.OpenReadStream(10*1024*1024));archivos.Add((file.Name,await reader.ReadToEndAsync()));}var result=await ComprasService.ImportarXmlAsync(userId,contribuyenteId,anio,periodo,archivos,"XML",tipoDocumento is 2 or 4 ? 2 : 1);MostrarResultado(result,"Importación XML");await CargarAsync();await EjecutarClasificacionAutomaticaAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=false;}}
+    private async Task SincronizarVentasEFactAsync(){LimpiarMensaje();ocupado=sincronizando=true;await InvokeAsync(StateHasChanged);try{var result=await ComprasService.SincronizarVentasEFactAsync(userId,contribuyenteId,anio,periodo,tipoDocumento);MostrarResultado(result,"Sincronización E-Fact");await CargarAsync();await EjecutarClasificacionAutomaticaAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=sincronizando=false;}}
     private string TiempoEstimadoConsulta => periodo is 13 or 14 ? "18 a 30 minutos" : "3 a 5 minutos";
-    private async Task ConsultarSriAsync(){LimpiarMensaje();ocupado=sincronizando=true;await InvokeAsync(StateHasChanged);try{var result=await ComprasService.ConsultarSriAsync(userId,userId,anio,periodo,tipoDocumento);MostrarResultado(result,"Consulta SRI");await CargarAsync();await EjecutarClasificacionAutomaticaAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=sincronizando=false;}}
+    private async Task ConsultarSriAsync(){LimpiarMensaje();ocupado=sincronizando=true;await InvokeAsync(StateHasChanged);try{var result=await ComprasService.ConsultarSriAsync(userId,contribuyenteId,anio,periodo,tipoDocumento);MostrarResultado(result,"Consulta SRI");await CargarAsync();await EjecutarClasificacionAutomaticaAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=sincronizando=false;}}
     private void MostrarResultado(EDeclaraImportacionResultado x,string proceso){var detalle=x.Errores.Count>0?$" Errores: {string.Join(" | ",x.Errores.Take(4))}":string.Empty;var texto=$"{proceso}: {x.Importados} registro(s) importado(s) y {x.Omitidos} duplicado(s) omitido(s).{detalle}";if(x.Errores.Count>0&&x.Importados==0)MostrarError(texto);else MostrarExito(texto);}
-    private async Task RegistrarFaltantesAsync(){if(!await JS.InvokeAsync<bool>("confirm","¿Registrar los secuenciales faltantes entre los documentos existentes?"))return;ocupado=true;try{var count=await ComprasService.RegistrarFaltantesAsync(userId,userId,anio,periodo,tipoDocumento);MostrarExito($"Se registraron {count} secuencial(es) faltante(s).");await CargarAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=false;}}
-    private async Task EliminarAsync(EDeclaraCompraDocumento item){if(!await JS.ConfirmDeleteAsync("Eliminar compra",$"Se eliminará el documento {item.Serie}-{item.Numero}.","Sí, eliminar"))return;await ComprasService.EliminarAsync(userId,new[]{item.Id});MostrarExito("Registro eliminado.");await CargarAsync();}
-    private async Task EliminarSeleccionadosAsync(){if(!await JS.ConfirmDeleteAsync("Eliminar compras",$"Se eliminarán {seleccionados.Count} registro(s) seleccionado(s).","Sí, eliminar"))return;await ComprasService.EliminarAsync(userId,seleccionados);MostrarExito("Registros eliminados.");await CargarAsync();}
+    private async Task RegistrarFaltantesAsync(){if(!await JS.InvokeAsync<bool>("confirm","¿Registrar los secuenciales faltantes entre los documentos existentes?"))return;ocupado=true;try{var count=await ComprasService.RegistrarFaltantesAsync(userId,contribuyenteId,anio,periodo,tipoDocumento);MostrarExito($"Se registraron {count} secuencial(es) faltante(s).");await CargarAsync();}catch(Exception ex){MostrarError(ex.Message);}finally{ocupado=false;}}
+    private async Task EliminarAsync(EDeclaraCompraDocumento item){if(!await JS.ConfirmDeleteAsync("Eliminar compra",$"Se eliminará el documento {item.Serie}-{item.Numero}.","Sí, eliminar"))return;await ComprasService.EliminarAsync(userId,contribuyenteId,new[]{item.Id});MostrarExito("Registro eliminado.");await CargarAsync();}
+    private async Task EliminarSeleccionadosAsync(){if(!await JS.ConfirmDeleteAsync("Eliminar compras",$"Se eliminarán {seleccionados.Count} registro(s) seleccionado(s).","Sí, eliminar"))return;await ComprasService.EliminarAsync(userId,contribuyenteId,seleccionados);MostrarExito("Registros eliminados.");await CargarAsync();}
     private void Seleccionar(long id,ChangeEventArgs e){if(e.Value is true)seleccionados.Add(id);else seleccionados.Remove(id);}
     private void SeleccionarTodos(ChangeEventArgs e){foreach(var x in DocumentosPagina){if(e.Value is true)seleccionados.Add(x.Id);else seleccionados.Remove(x.Id);}}
     private void AlternarDetalle(long id)=>detalleAbierto=detalleAbierto==id?null:id;
@@ -381,6 +392,7 @@
     private void CambiarDireccionOrden(){ordenDescendente=!ordenDescendente;pagina=1;}
 
     private async Task ExportarAsync(){try{var headers=new[]{"Tipo","Actividad","Serie","Número","Fecha","RUC","Razón social","Concepto","Serie relacionada","Número relacionado","Casilla","Tarifa","Base","IVA","Origen"};var rows=DocumentosFiltrados.Select(x=>(IReadOnlyList<string>)new[]{NombreTipoDocumentoSingular(),catalogos.Actividades.FirstOrDefault(a=>a.Id==x.TipoFacturacion)?.Descripcion??"",x.Serie,x.Numero,x.FechaEmision.ToString("dd/MM/yyyy"),x.Ruc,x.RazonSocial,x.Concepto,x.SerieDocumentoModificado,x.NumeroDocumentoModificado,x.Casilla,x.Tarifa.ToString("0.##"),x.BaseImponible.ToString("0.00"),x.Iva.ToString("0.00"),x.Origen}).ToList();var file=ExcelService.Create($"compras-{anio}-{periodo:00}.xlsx",new ExcelSheetData(NombreTipoDocumentoPlural(),headers,rows));await using var stream=new MemoryStream(file.Content);using var reference=new DotNetStreamReference(stream);await JS.InvokeVoidAsync("downloadFileFromStream",file.FileName,reference,file.ContentType);}catch(Exception ex){MostrarError($"No se pudo exportar: {ex.Message}");}}
+    private static string NombreContribuyente(ContribuyenteEdeclare contribuyente)=>!string.IsNullOrWhiteSpace(contribuyente.Nombrerazonsocial)?contribuyente.Nombrerazonsocial.Trim():$"{contribuyente.Apellidos} {contribuyente.Nombres}".Trim();
     private void IrAPerfil()=>Navigation.NavigateTo(EDeclaraRoutes.Profile);
     private void MostrarError(string value){mensaje=value;mensajeError=true;}
     private void MostrarExito(string value){mensaje=value;mensajeError=false;}

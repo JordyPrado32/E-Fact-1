@@ -1,6 +1,8 @@
 using Dapper;
 using Microsoft.Data.SqlClient;
 using Simetric.Models.EDeclara;
+using Simetric.Services;
+using System.Text.Json;
 
 namespace Simetric.Services.EDeclara;
 
@@ -10,6 +12,7 @@ public sealed class EDeclaraDeclaracionesService
     private static bool _schemaEnsured;
     private readonly string _connectionString;
     private readonly EDeclaraComprasService _comprasService;
+    private readonly ContribuyenteEdeclaraService _contribuyenteService;
 
     private sealed class DocumentoAnalisis
     {
@@ -28,21 +31,35 @@ public sealed class EDeclaraDeclaracionesService
         public decimal Iva { get; set; }
     }
 
+    private sealed class DeclaracionPersistida
+    {
+        public long Id { get; set; }
+        public string Estado { get; set; } = string.Empty;
+        public int VersionCalculo { get; set; }
+        public string? SnapshotCalculo { get; set; }
+        public DateTime FechaActualizacion { get; set; }
+    }
+
     public EDeclaraDeclaracionesService(
         IConfiguration configuration,
-        EDeclaraComprasService comprasService)
+        EDeclaraComprasService comprasService,
+        ContribuyenteEdeclaraService contribuyenteService)
     {
         _connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("No se encontró la cadena de conexión 'DefaultConnection'.");
         _comprasService = comprasService;
+        _contribuyenteService = contribuyenteService;
     }
 
-    public async Task<EDeclaraDeclaracionAnalisis> AnalizarAsync(int userId, int anio, int periodo)
+    public async Task<EDeclaraDeclaracionAnalisis> AnalizarAsync(int userId, int contribuyenteId, int anio, int periodo)
     {
         await _comprasService.EnsureSchemaAsync();
         await EnsureSchemaAsync();
         ValidarPeriodo(anio, periodo);
-        var identificacion = await ObtenerIdentificacionAsync(userId);
+        var contribuyente = await _contribuyenteService.ObtenerActivoPorIdAsync(contribuyenteId, userId);
+        var identificacion = SoloDigitos(contribuyente.Numeroidentificacion);
+        if (string.IsNullOrWhiteSpace(identificacion))
+            throw new InvalidOperationException("Configura la identificación del contribuyente antes de analizar la declaración.");
 
         await using var db = new SqlConnection(_connectionString);
         var documentos = (await db.QueryAsync<DocumentoAnalisis>("""
@@ -58,10 +75,10 @@ public sealed class EDeclaraDeclaracionesService
                    ISNULL(d.IVA, 0) AS Iva
               FROM EDECLARA_COMPRA_DOCUMENTOS d
               LEFT JOIN EDECLARA_COMPRA_CASILLAS c ON c.ID=d.CASILLA AND c.ESTADO=1
-             WHERE d.IDUSUARIO=@userId AND d.IDCONTRIBUYENTE=@userId
+             WHERE d.IDUSUARIO=@userId AND d.IDCONTRIBUYENTE=@contribuyenteId
                AND d.ANIO=@anio AND d.PERIODO=@periodo AND d.TIPODOCUMENTO IN (1,2,3,4,6) AND d.ESTADO=1
              ORDER BY TRY_CONVERT(INT, d.CASILLA), d.ID
-            """, new { userId, anio, periodo })).ToList();
+            """, new { userId, contribuyenteId, anio, periodo })).ToList();
 
         var compras = documentos.Where(x => x.TipoDocumento == 1).ToList();
         var ventas = documentos.Where(x => x.TipoDocumento == 2).ToList();
@@ -99,10 +116,10 @@ public sealed class EDeclaraDeclaracionesService
 
         var validaciones = new[]
         {
-            Validacion("CUENTA", !string.IsNullOrWhiteSpace(identificacion), "La cuenta E-Declara tiene identificación configurada.", "Configura la identificación de la cuenta en Mi perfil de E-Declara.", true),
+            Validacion("CUENTA", !string.IsNullOrWhiteSpace(identificacion), "El contribuyente tiene identificación configurada.", "Configura la identificación del contribuyente antes de continuar.", true),
             Validacion("DOCUMENTOS", documentos.Count > 0, "El período tiene documentos descargados.", "No hay documentos descargados para el período seleccionado.", true),
             Validacion("PERIODO", !documentosFueraDePeriodo, "Las fechas corresponden al período seleccionado.", "Hay documentos cuya fecha no corresponde al período seleccionado.", true),
-            Validacion("IDENTIFICACION", !identificacionInvalida, "Los documentos pertenecen a la identificación de la cuenta.", "Hay documentos que no pertenecen a la identificación de la cuenta.", true),
+            Validacion("IDENTIFICACION", !identificacionInvalida, "Los documentos pertenecen al contribuyente.", "Hay documentos que no pertenecen al contribuyente seleccionado.", true),
             Validacion("IMPORTES", !importesInvalidos, "Los importes tributarios son válidos.", "Hay documentos con importes tributarios negativos.", true),
             Validacion("DUPLICADOS", !duplicados, "No se encontraron documentos duplicados.", "Hay documentos duplicados dentro del período.", true),
             Validacion("NOTAS", notasSinFactura == 0, "Las notas de crédito tienen factura relacionada.", $"Hay {notasSinFactura} nota(s) de crédito sin factura relacionada.", true),
@@ -111,6 +128,7 @@ public sealed class EDeclaraDeclaracionesService
 
         return new EDeclaraDeclaracionAnalisis
         {
+            ContribuyenteId = contribuyenteId,
             Anio = anio,
             Periodo = periodo,
             TotalDocumentos = documentos.Count,
@@ -132,9 +150,37 @@ public sealed class EDeclaraDeclaracionesService
         };
     }
 
-    public async Task GuardarAsync(int userId, EDeclaraDeclaracionAnalisis analisis)
+    public async Task<EDeclaraDeclaracionAnalisis> ObtenerBorradorAsync(int userId, int contribuyenteId, int anio, int periodo)
     {
-        var calculado = await AnalizarAsync(userId, analisis.Anio, analisis.Periodo);
+        await EnsureSchemaAsync();
+        ValidarPeriodo(anio, periodo);
+        await _contribuyenteService.ObtenerActivoPorIdAsync(contribuyenteId, userId);
+
+        await using var db = new SqlConnection(_connectionString);
+        var registro = await db.QuerySingleOrDefaultAsync<DeclaracionPersistida>("""
+            SELECT ID, ESTADODECLARACION AS Estado, VERSIONCALCULO AS VersionCalculo,
+                   SNAPSHOTCALCULO AS SnapshotCalculo, FECHAACTUALIZACION AS FechaActualizacion
+              FROM EDECLARA_DECLARACIONES
+             WHERE IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ANIO=@anio AND PERIODO=@periodo AND ESTADO=1
+            """, new { userId, contribuyenteId, anio, periodo });
+
+        if (registro?.SnapshotCalculo is null)
+            return new EDeclaraDeclaracionAnalisis { ContribuyenteId = contribuyenteId, Anio = anio, Periodo = periodo };
+
+        var analisis = JsonSerializer.Deserialize<EDeclaraDeclaracionAnalisis>(registro.SnapshotCalculo)
+            ?? new EDeclaraDeclaracionAnalisis { ContribuyenteId = contribuyenteId, Anio = anio, Periodo = periodo };
+        analisis.DeclaracionId = registro.Id;
+        analisis.Estado = Enum.TryParse<EDeclaraEstadoDeclaracion>(registro.Estado, true, out var estado)
+            ? estado
+            : EDeclaraEstadoDeclaracion.Borrador;
+        analisis.VersionCalculo = registro.VersionCalculo;
+        analisis.FechaActualizacion = registro.FechaActualizacion;
+        return analisis;
+    }
+
+    public async Task<EDeclaraDeclaracionAnalisis> GuardarAsync(int userId, int contribuyenteId, EDeclaraDeclaracionAnalisis analisis)
+    {
+        var calculado = await AnalizarAsync(userId, contribuyenteId, analisis.Anio, analisis.Periodo);
         if (!calculado.PuedeGuardarBorrador)
         {
             var bloqueos = calculado.Validaciones.Where(x => !x.EsValida && x.EsBloqueante).Select(x => x.Mensaje);
@@ -145,28 +191,40 @@ public sealed class EDeclaraDeclaracionesService
         await db.OpenAsync();
         await using var transaction = await db.BeginTransactionAsync();
 
-        var id = await db.ExecuteScalarAsync<long?>("""
-            SELECT ID FROM EDECLARA_DECLARACIONES
-             WHERE IDUSUARIO=@userId AND ANIO=@Anio AND PERIODO=@Periodo AND ESTADO=1
-            """, new { userId, Anio = calculado.Anio, Periodo = calculado.Periodo }, transaction);
+        var registro = await db.QuerySingleOrDefaultAsync<DeclaracionPersistida>("""
+            SELECT ID, ESTADODECLARACION AS Estado, VERSIONCALCULO AS VersionCalculo
+              FROM EDECLARA_DECLARACIONES
+             WHERE IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ANIO=@Anio AND PERIODO=@Periodo AND ESTADO=1
+            """, new { userId, contribuyenteId, Anio = calculado.Anio, Periodo = calculado.Periodo }, transaction);
 
-        if (id is null)
+        if (registro is not null && string.Equals(registro.Estado, nameof(EDeclaraEstadoDeclaracion.Presentada), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("La declaración ya fue presentada y no puede modificarse.");
+
+        var version = (registro?.VersionCalculo ?? 0) + 1;
+        calculado.Estado = EDeclaraEstadoDeclaracion.Borrador;
+        calculado.VersionCalculo = version;
+        var snapshot = JsonSerializer.Serialize(calculado);
+        long id;
+
+        if (registro is null)
         {
             id = await db.ExecuteScalarAsync<long>("""
                 INSERT INTO EDECLARA_DECLARACIONES
-                    (IDUSUARIO,ANIO,PERIODO,BASECOMPRAS,IVACOMPRAS,BASENOTASCREDITO,IVANOTASCREDITO,BASEVENTAS,IVAVENTAS,BASENOTASCREDVENTAS,IVANOTASCREDVENTAS,
-                     RETENCIONESIVA,TOTALDOCUMENTOS,PENDIENTESCLASIFICACION,PUEDEGUARDAR,ESTADO,FECHACREACION,FECHAACTUALIZACION)
+                    (IDUSUARIO,IDCONTRIBUYENTE,ANIO,PERIODO,BASECOMPRAS,IVACOMPRAS,BASENOTASCREDITO,IVANOTASCREDITO,BASEVENTAS,IVAVENTAS,BASENOTASCREDVENTAS,IVANOTASCREDVENTAS,
+                     RETENCIONESIVA,TOTALDOCUMENTOS,PENDIENTESCLASIFICACION,PUEDEGUARDAR,ESTADO,ESTADODECLARACION,VERSIONCALCULO,SNAPSHOTCALCULO,FECHACREACION,FECHAACTUALIZACION)
                 OUTPUT INSERTED.ID
-                VALUES (@userId,@Anio,@Periodo,@ComprasBase,@ComprasIva,@NotasCreditoBase,@NotasCreditoIva,@VentasBase,@VentasIva,@NotasCreditoVentasBase,@NotasCreditoVentasIva,
-                        @RetencionesIva,@TotalDocumentos,@PendientesClasificacion,@PuedeGuardar,1,SYSUTCDATETIME(),SYSUTCDATETIME())
-                """, new { userId, Anio = calculado.Anio, Periodo = calculado.Periodo,
+                VALUES (@userId,@contribuyenteId,@Anio,@Periodo,@ComprasBase,@ComprasIva,@NotasCreditoBase,@NotasCreditoIva,@VentasBase,@VentasIva,@NotasCreditoVentasBase,@NotasCreditoVentasIva,
+                        @RetencionesIva,@TotalDocumentos,@PendientesClasificacion,@PuedeGuardar,1,@Estado,@VersionCalculo,@SnapshotCalculo,SYSUTCDATETIME(),SYSUTCDATETIME())
+                """, new { userId, contribuyenteId, Anio = calculado.Anio, Periodo = calculado.Periodo,
                     ComprasBase = calculado.ComprasBase, ComprasIva = calculado.ComprasIva,
                     calculado.NotasCreditoBase, calculado.NotasCreditoIva, VentasBase = calculado.VentasBase, VentasIva = calculado.VentasIva,
                     NotasCreditoVentasBase = calculado.NotasCreditoVentasBase, NotasCreditoVentasIva = calculado.NotasCreditoVentasIva, calculado.RetencionesIva,
-                    calculado.TotalDocumentos, calculado.PendientesClasificacion, PuedeGuardar = calculado.PuedeGuardarBorrador }, transaction);
+                    calculado.TotalDocumentos, calculado.PendientesClasificacion, PuedeGuardar = calculado.PuedeGuardarBorrador,
+                    Estado = calculado.Estado.ToString().ToUpperInvariant(), VersionCalculo = version, SnapshotCalculo = snapshot }, transaction);
         }
         else
         {
+            id = registro.Id;
             await db.ExecuteAsync("""
                 UPDATE EDECLARA_DECLARACIONES SET
                        BASECOMPRAS=@ComprasBase, IVACOMPRAS=@ComprasIva,
@@ -174,12 +232,15 @@ public sealed class EDeclaraDeclaracionesService
                        BASEVENTAS=@VentasBase, IVAVENTAS=@VentasIva, BASENOTASCREDVENTAS=@NotasCreditoVentasBase, IVANOTASCREDVENTAS=@NotasCreditoVentasIva,
                        RETENCIONESIVA=@RetencionesIva, TOTALDOCUMENTOS=@TotalDocumentos,
                        PENDIENTESCLASIFICACION=@PendientesClasificacion, PUEDEGUARDAR=@PuedeGuardar,
+                       ESTADODECLARACION=@Estado, VERSIONCALCULO=@VersionCalculo, SNAPSHOTCALCULO=@SnapshotCalculo,
                        FECHAACTUALIZACION=SYSUTCDATETIME()
-                 WHERE ID=@id
+                  WHERE ID=@id AND IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId
                 """, new { id, ComprasBase = calculado.ComprasBase, ComprasIva = calculado.ComprasIva,
+                    userId, contribuyenteId,
                     calculado.NotasCreditoBase, calculado.NotasCreditoIva, VentasBase = calculado.VentasBase, VentasIva = calculado.VentasIva,
                     NotasCreditoVentasBase = calculado.NotasCreditoVentasBase, NotasCreditoVentasIva = calculado.NotasCreditoVentasIva, calculado.RetencionesIva,
-                    calculado.TotalDocumentos, calculado.PendientesClasificacion, PuedeGuardar = calculado.PuedeGuardarBorrador }, transaction);
+                     calculado.TotalDocumentos, calculado.PendientesClasificacion, PuedeGuardar = calculado.PuedeGuardarBorrador,
+                     Estado = calculado.Estado.ToString().ToUpperInvariant(), VersionCalculo = version, SnapshotCalculo = snapshot }, transaction);
         }
 
         await db.ExecuteAsync("DELETE FROM EDECLARA_DECLARACION_CASILLAS WHERE IDDECLARACION=@id", new { id }, transaction);
@@ -192,6 +253,60 @@ public sealed class EDeclaraDeclaracionesService
         }
 
         await transaction.CommitAsync();
+        calculado.DeclaracionId = id;
+        calculado.FechaActualizacion = DateTime.UtcNow;
+        return calculado;
+    }
+
+    public async Task<EDeclaraDeclaracionAnalisis> ValidarAsync(int userId, int contribuyenteId, EDeclaraDeclaracionAnalisis analisis)
+    {
+        var guardado = await GuardarAsync(userId, contribuyenteId, analisis);
+        await using var db = new SqlConnection(_connectionString);
+        await db.ExecuteAsync("""
+            UPDATE EDECLARA_DECLARACIONES
+               SET ESTADODECLARACION='VALIDADA', FECHAVALIDACION=SYSUTCDATETIME(),
+                   FECHACONFIRMACION=SYSUTCDATETIME(), USUARIOCONFIRMO=@userId,
+                   FECHAACTUALIZACION=SYSUTCDATETIME()
+             WHERE ID=@id AND IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ESTADO=1
+            """, new { id = guardado.DeclaracionId, userId, contribuyenteId });
+        guardado.Estado = EDeclaraEstadoDeclaracion.Validada;
+        guardado.FechaActualizacion = DateTime.UtcNow;
+        return guardado;
+    }
+
+    public async Task RegistrarPresentacionAsync(int userId, int contribuyenteId, int anio, int periodo, string numeroDeclaracion, string respuestaSri)
+    {
+        if (string.IsNullOrWhiteSpace(numeroDeclaracion))
+            throw new InvalidOperationException("El SRI no devolvió el número de declaración.");
+
+        await EnsureSchemaAsync();
+        await using var db = new SqlConnection(_connectionString);
+        var id = await db.ExecuteScalarAsync<long?>("""
+            SELECT ID FROM EDECLARA_DECLARACIONES
+             WHERE IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ANIO=@anio AND PERIODO=@periodo AND ESTADODECLARACION='VALIDADA' AND ESTADO=1
+            """, new { userId, contribuyenteId, anio, periodo });
+        if (id is null)
+            throw new InvalidOperationException("La declaración debe estar validada antes de registrarse como presentada.");
+
+        await db.ExecuteAsync("""
+            UPDATE EDECLARA_DECLARACIONES
+               SET ESTADODECLARACION='PRESENTADA', NUMERODECLARACION=@numeroDeclaracion,
+                   RESPUESTASRI=@respuestaSri, FECHAPRESENTACION=SYSUTCDATETIME(),
+                   FECHAACTUALIZACION=SYSUTCDATETIME()
+             WHERE ID=@id AND IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId
+            """, new { id, userId, contribuyenteId, numeroDeclaracion = numeroDeclaracion.Trim(), respuestaSri });
+    }
+
+    public async Task RegistrarRechazoAsync(int userId, int contribuyenteId, int anio, int periodo, string respuestaSri)
+    {
+        await EnsureSchemaAsync();
+        await using var db = new SqlConnection(_connectionString);
+        await db.ExecuteAsync("""
+            UPDATE EDECLARA_DECLARACIONES
+               SET ESTADODECLARACION='RECHAZADA', RESPUESTASRI=@respuestaSri,
+                   FECHARECHAZO=SYSUTCDATETIME(), FECHAACTUALIZACION=SYSUTCDATETIME()
+             WHERE IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ANIO=@anio AND PERIODO=@periodo AND ESTADO=1
+            """, new { userId, contribuyenteId, anio, periodo, respuestaSri });
     }
 
     public async Task<(int Total, IReadOnlyList<EDeclaraDeclaracionResumen> Items)> ObtenerResumenAsync(int userId, int top = 10)
@@ -232,7 +347,7 @@ public sealed class EDeclaraDeclaracionesService
                 BEGIN
                     CREATE TABLE dbo.EDECLARA_DECLARACIONES(
                         ID BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_EDECLARA_DECLARACIONES PRIMARY KEY,
-                        IDUSUARIO INT NOT NULL, ANIO INT NOT NULL, PERIODO INT NOT NULL,
+                        IDUSUARIO INT NOT NULL, IDCONTRIBUYENTE INT NOT NULL, ANIO INT NOT NULL, PERIODO INT NOT NULL,
                         BASECOMPRAS DECIMAL(18,2) NOT NULL DEFAULT 0, IVACOMPRAS DECIMAL(18,2) NOT NULL DEFAULT 0,
                         BASENOTASCREDITO DECIMAL(18,2) NOT NULL DEFAULT 0, IVANOTASCREDITO DECIMAL(18,2) NOT NULL DEFAULT 0,
                         BASEVENTAS DECIMAL(18,2) NOT NULL DEFAULT 0, IVAVENTAS DECIMAL(18,2) NOT NULL DEFAULT 0,
@@ -240,11 +355,42 @@ public sealed class EDeclaraDeclaracionesService
                         RETENCIONESIVA DECIMAL(18,2) NOT NULL DEFAULT 0, TOTALDOCUMENTOS INT NOT NULL DEFAULT 0,
                         PENDIENTESCLASIFICACION INT NOT NULL DEFAULT 0, PUEDEGUARDAR BIT NOT NULL DEFAULT 0,
                         ESTADO BIT NOT NULL DEFAULT 1,
+                        ESTADODECLARACION NVARCHAR(20) NOT NULL DEFAULT 'BORRADOR',
+                        VERSIONCALCULO INT NOT NULL DEFAULT 0,
+                        SNAPSHOTCALCULO NVARCHAR(MAX) NULL,
+                        FECHAVALIDACION DATETIME2 NULL,
+                        FECHACONFIRMACION DATETIME2 NULL,
+                        FECHAPRESENTACION DATETIME2 NULL,
+                        FECHARECHAZO DATETIME2 NULL,
+                        NUMERODECLARACION NVARCHAR(50) NULL,
+                        RESPUESTASRI NVARCHAR(MAX) NULL,
+                        USUARIOCONFIRMO INT NULL,
                         FECHACREACION DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
                         FECHAACTUALIZACION DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                        CONSTRAINT UX_EDECLARA_DECLARACION_PERIODO UNIQUE(IDUSUARIO,ANIO,PERIODO)
+                        CONSTRAINT UX_EDECLARA_DECLARACION_CONTRIBUYENTE_PERIODO UNIQUE(IDUSUARIO,IDCONTRIBUYENTE,ANIO,PERIODO)
                     );
                 END;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','IDCONTRIBUYENTE') IS NULL
+                    ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD IDCONTRIBUYENTE INT NULL;
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.EDECLARA_DECLARACIONES') AND name='IDCONTRIBUYENTE' AND is_nullable=1)
+                BEGIN
+                    EXEC sys.sp_executesql N'UPDATE dbo.EDECLARA_DECLARACIONES SET IDCONTRIBUYENTE=IDUSUARIO WHERE IDCONTRIBUYENTE IS NULL';
+                    EXEC sys.sp_executesql N'ALTER TABLE dbo.EDECLARA_DECLARACIONES ALTER COLUMN IDCONTRIBUYENTE INT NOT NULL';
+                END;
+                IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('dbo.EDECLARA_DECLARACIONES') AND name='UX_EDECLARA_DECLARACION_PERIODO')
+                    ALTER TABLE dbo.EDECLARA_DECLARACIONES DROP CONSTRAINT UX_EDECLARA_DECLARACION_PERIODO;
+                IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('dbo.EDECLARA_DECLARACIONES') AND name='UX_EDECLARA_DECLARACION_CONTRIBUYENTE_PERIODO')
+                    EXEC sys.sp_executesql N'ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD CONSTRAINT UX_EDECLARA_DECLARACION_CONTRIBUYENTE_PERIODO UNIQUE(IDUSUARIO,IDCONTRIBUYENTE,ANIO,PERIODO)';
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','ESTADODECLARACION') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD ESTADODECLARACION NVARCHAR(20) NOT NULL CONSTRAINT DF_EDECLARA_DEC_ESTADODECLARACION DEFAULT 'BORRADOR';
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','VERSIONCALCULO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD VERSIONCALCULO INT NOT NULL CONSTRAINT DF_EDECLARA_DEC_VERSION DEFAULT 0;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','SNAPSHOTCALCULO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD SNAPSHOTCALCULO NVARCHAR(MAX) NULL;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','FECHAVALIDACION') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD FECHAVALIDACION DATETIME2 NULL;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','FECHACONFIRMACION') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD FECHACONFIRMACION DATETIME2 NULL;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','FECHAPRESENTACION') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD FECHAPRESENTACION DATETIME2 NULL;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','FECHARECHAZO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD FECHARECHAZO DATETIME2 NULL;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','NUMERODECLARACION') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD NUMERODECLARACION NVARCHAR(50) NULL;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','RESPUESTASRI') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD RESPUESTASRI NVARCHAR(MAX) NULL;
+                IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','USUARIOCONFIRMO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD USUARIOCONFIRMO INT NULL;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','BASECOMPRAS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD BASECOMPRAS DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_BASECOMPRAS DEFAULT 0;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','IVACOMPRAS') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD IVACOMPRAS DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_IVACOMPRAS DEFAULT 0;
                 IF COL_LENGTH('dbo.EDECLARA_DECLARACIONES','BASENOTASCREDITO') IS NULL ALTER TABLE dbo.EDECLARA_DECLARACIONES ADD BASENOTASCREDITO DECIMAL(18,2) NOT NULL CONSTRAINT DF_EDECLARA_DEC_BASENC DEFAULT 0;
@@ -275,15 +421,6 @@ public sealed class EDeclaraDeclaracionesService
         {
             SchemaLock.Release();
         }
-    }
-
-    private async Task<string> ObtenerIdentificacionAsync(int userId)
-    {
-        await using var db = new SqlConnection(_connectionString);
-        var identificacion = await db.QuerySingleOrDefaultAsync<string>("""
-            SELECT ISNULL(IDENTIFICACION,'') FROM Usuarios WHERE IdUsuario=@userId AND ESTADO=1
-            """, new { userId });
-        return SoloDigitos(identificacion);
     }
 
     private static EDeclaraDeclaracionValidacion Validacion(string codigo, bool valida, string ok, string error, bool bloqueante) => new()

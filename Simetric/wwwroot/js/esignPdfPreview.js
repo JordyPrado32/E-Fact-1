@@ -240,6 +240,24 @@ export async function init(options) {
         }
     };
 
+    const clearPdf = () => {
+        if (renderTask) {
+            renderTask.cancel();
+            renderTask = null;
+        }
+
+        pdfDocument = null;
+        pageNumber = 1;
+        zoomPercent = 100;
+        pdfInput.value = "";
+        canvas.hidden = true;
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+        if (placeholder) placeholder.hidden = false;
+        clearThumbnails();
+        setStatus("Carga un PDF para visualizarlo.");
+        updateNavigation();
+    };
+
     const onPrevious = async () => {
         if (!pdfDocument || pageNumber <= 1) return;
         pageNumber -= 1;
@@ -261,8 +279,12 @@ export async function init(options) {
     clearThumbnails();
 
     return {
+        clear() {
+            clearPdf();
+        },
         async loadFromUrl(url) {
             if (!url) {
+                clearPdf();
                 return;
             }
 

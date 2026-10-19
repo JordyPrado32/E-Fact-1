@@ -85,6 +85,27 @@ public sealed class EDeclaraSriCredentialService
             new { userId, contribuyenteId }) > 0;
     }
 
+    public async Task<string?> ObtenerClaveContribuyenteAsync(int userId, int contribuyenteId)
+    {
+        await EnsureSchemaAsync();
+        await using var connection = new SqlConnection(_connectionString);
+        var claveProtegida = await connection.QuerySingleOrDefaultAsync<string>(
+            "SELECT CLAVEPROTEGIDA FROM EDECLARA_CONTRIBUYENTE_CREDENCIALES_SRI WHERE IDUSUARIO = @userId AND IDCONTRIBUYENTE = @contribuyenteId",
+            new { userId, contribuyenteId });
+
+        if (string.IsNullOrWhiteSpace(claveProtegida))
+            return null;
+
+        try
+        {
+            return _protector.Unprotect(claveProtegida);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task<HashSet<int>> ObtenerContribuyentesConClaveAsync(int userId)
     {
         await EnsureSchemaAsync();

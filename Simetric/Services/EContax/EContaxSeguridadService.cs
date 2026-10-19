@@ -411,29 +411,49 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
         });
     }
 
-    public async Task GuardarUsuarioAsync(int actorId, int userId, int sucursalId, int perfilId, bool admin, string? menusJson,
-        string? accionesJson = null)
+    public async Task GuardarUsuarioAsync(int actorId, int userId, int sucursalId, int perfilId, bool admin,
+        string? nombres, string? apellidos, string? email, DateTime? fechaNacimiento, int? tipoCliente, int? tipoIdentificacion,
+        string? identificacion, string? celular,
+        string? avatarUrl, string? menusJson, string? accionesJson = null)
     {
+        if (string.IsNullOrWhiteSpace(nombres) || string.IsNullOrWhiteSpace(apellidos) || string.IsNullOrWhiteSpace(email))
+            throw new InvalidOperationException("Completa nombres, apellidos y correo electrónico.");
+        email = new MailAddress(email.Trim()).Address;
         var json = menusJson is null ? null : await ValidarMenusAsync(actorId, LeerMenus(menusJson));
         if (json is not null) await ValidarAccionesAsync(actorId, json, accionesJson);
         await MutarAsync(async db =>
         {
             var actor = await ValidarAdminAsync(db, actorId, sucursalId);
             await ValidarPerfilAsync(db, actor.IdEmpresa, sucursalId, perfilId, soloPerfilSucursal: true);
-            var miembro = await db.EContaxUsuariosContexto.SingleAsync(x => x.IdUsuario == userId && x.IdEmpresa == actor.IdEmpresa && x.Estado);
+            var miembro = await db.EContaxUsuariosContexto.Include(x => x.Usuario)
+                .SingleAsync(x => x.IdUsuario == userId && x.IdEmpresa == actor.IdEmpresa && x.Estado);
             if (userId == actor.IdUsuarioTitular) throw new InvalidOperationException("Transfiere la titularidad para cambiar al propietario.");
             if (!actor.EsJefeEmpresa && (miembro.IdSucursal != actor.IdSucursal || miembro.EsAdminSucursal || admin))
                 throw new InvalidOperationException("No puedes modificar administradores ni usuarios de otra sucursal.");
+            if (await db.Usuarios.AnyAsync(x => x.IdUsuario != userId && x.Email == email))
+                throw new InvalidOperationException("El correo ya está asociado a otra cuenta.");
+            var usuario = miembro.Usuario ?? throw new InvalidOperationException("La cuenta del usuario no está disponible.");
             RegistrarCambio(db, actorId, actor.IdEmpresa, miembro.IdSucursal == sucursalId ? sucursalId : null, "Asignación de usuario",
                 new { miembro.IdUsuario, miembro.IdSucursal, miembro.IdPerfil, miembro.EsAdminSucursal, miembro.MenusJson, miembro.AccionesJson },
                 new { IdUsuario = userId, IdSucursal = sucursalId, IdPerfil = perfilId, EsAdminSucursal = admin, MenusJson = json, AccionesJson = accionesJson });
+            usuario.Nombres = nombres.Trim();
+            usuario.Apellidos = apellidos.Trim();
+            usuario.Email = email;
+            usuario.FechaNacimiento = fechaNacimiento;
+            usuario.TipoCliente = tipoCliente;
+            usuario.IdTipoIdentificacion = tipoIdentificacion;
+            usuario.Identificacion = string.IsNullOrWhiteSpace(identificacion) ? null : identificacion.Trim();
+            usuario.Celular = string.IsNullOrWhiteSpace(celular) ? null : celular.Trim();
+            usuario.AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl.Trim();
             miembro.IdSucursal = sucursalId; miembro.IdPerfil = perfilId; miembro.EsAdminSucursal = admin;
             miembro.MenusJson = json; miembro.AccionesJson = json is null ? null : accionesJson; miembro.FechaActualizacion = DateTime.UtcNow;
             await db.SaveChangesAsync();
         });
     }
 
-    public async Task CrearCuentaAsync(int actorId, string nombres, string apellidos, string email, string clave, int sucursalId, int perfilId, bool admin)
+    public async Task CrearCuentaAsync(int actorId, string nombres, string apellidos, string email, string clave,
+        DateTime? fechaNacimiento, int? tipoCliente, int? tipoIdentificacion, string? identificacion, string? celular,
+        string? avatarUrl, int sucursalId, int perfilId, bool admin)
     {
         email = new MailAddress(email.Trim()).Address;
         if (string.IsNullOrWhiteSpace(nombres) || string.IsNullOrWhiteSpace(apellidos) || clave.Length < 8)
@@ -447,6 +467,12 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             var usuario = new Usuario
             {
                 Nombres = nombres.Trim(), Apellidos = apellidos.Trim(), Email = email,
+                FechaNacimiento = fechaNacimiento,
+                TipoCliente = tipoCliente,
+                IdTipoIdentificacion = tipoIdentificacion,
+                Identificacion = string.IsNullOrWhiteSpace(identificacion) ? null : identificacion.Trim(),
+                Celular = string.IsNullOrWhiteSpace(celular) ? null : celular.Trim(),
+                AvatarUrl = string.IsNullOrWhiteSpace(avatarUrl) ? null : avatarUrl.Trim(),
                 PasswordHash = SecurityHelper.HashPassword(clave), Estado = true, IdTipoUsuario = 3,
                 FechaCreacion = DateTime.UtcNow, ClaveTemporal = true, IntentosFallidos = 0, CuentaBloqueada = false,
                 idJefe = actor.IdUsuarioTitular, estadoAsociado = true

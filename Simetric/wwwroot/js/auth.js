@@ -20,9 +20,13 @@ window.authInterop.check = window.authInterop.check || async function () {
             signal: controller.signal
         });
 
+        if (!response.ok) {
+            return { authenticated: false, idUsuario: 0, transientError: true };
+        }
+
         return await response.json();
     } catch {
-        return { authenticated: false, idUsuario: 0 };
+        return { authenticated: false, idUsuario: 0, transientError: true };
     } finally {
         if (timeoutId) {
             window.clearTimeout(timeoutId);

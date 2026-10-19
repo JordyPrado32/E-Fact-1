@@ -1,5 +1,7 @@
 @page "/e-declara/declaraciones"
+@using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Models
 @using Simetric.Models.EDeclara
 @using Simetric.Services
 @using Simetric.Services.EDeclara
@@ -8,7 +10,7 @@
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject EDeclaraDeclaracionesService DeclaracionesService
 @inject EDeclaraClasificacionIaService ClasificacionIaService
-@inject IUsuarioService UsuarioService
+@inject ContribuyenteEdeclaraService ContribuyentesService
 @inject NavigationManager Navigation
 
 <PageTitle>Declaraciones | E-Declara</PageTitle>
@@ -39,8 +41,8 @@
     else
     {
         <section class="ec-context-card">
-            <div class="ec-context-copy"><span class="ec-kicker">Cuenta E-Declara</span><strong>@perfilNombre</strong><small>@perfilIdentificacion</small></div>
-            <div class="ec-context-period"><label><span>Período a declarar</span><select value="@anio" @onchange="CambiarAnioAsync">@for (var value = DateTime.Today.Year; value >= DateTime.Today.Year - 6; value--){<option value="@value">@value</option>}</select></label><label><span>&nbsp;</span><select value="@periodo" @onchange="CambiarPeriodoAsync">@for (var value = 1; value <= 12; value++){<option value="@value">@NombrePeriodo(value)</option>}<option value="13">Primer semestre</option><option value="14">Segundo semestre</option></select></label></div>
+            <div class="ec-context-copy"><span class="ec-kicker">Contribuyente seleccionado</span><strong>@perfilNombre</strong><small>@perfilIdentificacion</small><small>@EstadoTexto(analisis.Estado) · versión @analisis.VersionCalculo</small></div>
+            <div class="ec-context-period"><label><span>Contribuyente</span><select value="@contribuyenteId" @onchange="CambiarContribuyenteAsync">@foreach (var contribuyente in contribuyentes){<option value="@contribuyente.CodContribuyente">@NombreContribuyente(contribuyente) · @contribuyente.Numeroidentificacion</option>}</select></label><label><span>Período a declarar</span><select value="@anio" @onchange="CambiarAnioAsync">@for (var value = DateTime.Today.Year; value >= DateTime.Today.Year - 6; value--){<option value="@value">@value</option>}</select></label><label><span>&nbsp;</span><select value="@periodo" @onchange="CambiarPeriodoAsync">@for (var value = 1; value <= 12; value++){<option value="@value">@NombrePeriodo(value)</option>}<option value="13">Primer semestre</option><option value="14">Segundo semestre</option></select></label></div>
             <button type="button" class="ec-btn ec-btn-light" disabled="@ocupado" @onclick="AnalizarAsync"><i class="ri-refresh-line"></i> Actualizar análisis</button>
         </section>
 
@@ -142,7 +144,7 @@
         @if (pasoActual == 3)
         {
         <section class="ec-workspace">
-            <div class="ec-editor-head"><div><span class="ec-kicker">Paso 3 · Revisar</span><h2>Casillas de la declaración</h2><p class="ec-subtitle">Los valores se calculan desde los documentos clasificados del período.</p></div><button type="button" class="ec-btn ec-btn-primary" disabled="@(ocupado || !analisis.PuedeGuardarBorrador)" @onclick="SolicitarGuardado"><i class="ri-save-3-line"></i> Guardar borrador</button></div>
+            <div class="ec-editor-head"><div><span class="ec-kicker">Paso 3 · Revisar</span><h2>Casillas de la declaración</h2><p class="ec-subtitle">Los valores se calculan desde los documentos clasificados del período.</p></div><div><button type="button" class="ec-btn ec-btn-light" disabled="@(ocupado || !analisis.PuedeGuardarBorrador || analisis.Estado == EDeclaraEstadoDeclaracion.Presentada)" @onclick="SolicitarGuardado"><i class="ri-save-3-line"></i> Guardar borrador</button><button type="button" class="ec-btn ec-btn-primary" disabled="@(ocupado || !analisis.PuedeGuardarBorrador || analisis.Estado == EDeclaraEstadoDeclaracion.Presentada)" @onclick="ValidarDeclaracionAsync"><i class="ri-shield-check-line"></i> Validar declaración</button></div></div>
             <div class="ec-table-wrap">
                 <table class="ec-table">
                     <thead><tr><th>Origen</th><th>Casilla</th><th class="number">Base</th><th class="number">IVA</th><th>Documentos</th></tr></thead>
@@ -192,7 +194,11 @@
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "contribuyenteId")]
+    private int? ContribuyenteIdQuery { get; set; }
+
     private int userId;
+    private int contribuyenteId;
     private int anio = DateTime.Today.Year;
     private int periodo = DateTime.Today.Month;
     private bool cargando = true;
@@ -207,6 +213,7 @@
     private string mensaje = string.Empty;
     private string perfilNombre = string.Empty;
     private string perfilIdentificacion = string.Empty;
+    private List<ContribuyenteEdeclare> contribuyentes = new();
     private EDeclaraDeclaracionAnalisis analisis = new();
     private int ValidacionesTotal => analisis.Validaciones.Count;
     private int ValidacionesCorrectas => analisis.Validaciones.Count(x => x.EsValida);
@@ -232,11 +239,19 @@
             }
 
             await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
-            var cuenta = await UsuarioService.ObtenerUsuarioPorId(userId);
-            perfilNombre = cuenta is null ? "Cuenta E-Declara" : (!string.IsNullOrWhiteSpace(cuenta.NombreEmpresa) ? cuenta.NombreEmpresa : cuenta.NombreCompleto);
-            perfilIdentificacion = cuenta?.Identificacion?.Trim() ?? string.Empty;
-            await AnalizarAsync();
-            await ClasificarPendientesAutomaticamenteAsync();
+            contribuyentes = (await ContribuyentesService.ObtenerContribuyentesAsync(userId))
+                .Where(x => x.Estado == true)
+                .ToList();
+            var seleccionado = ContribuyenteIdQuery.HasValue
+                ? contribuyentes.FirstOrDefault(x => x.CodContribuyente == ContribuyenteIdQuery.Value)
+                : contribuyentes.FirstOrDefault();
+            if (seleccionado is null)
+                throw new InvalidOperationException("Registra al menos un contribuyente activo antes de analizar declaraciones.");
+
+            contribuyenteId = seleccionado.CodContribuyente;
+            perfilNombre = NombreContribuyente(seleccionado);
+            perfilIdentificacion = seleccionado.Numeroidentificacion?.Trim() ?? string.Empty;
+            await CargarAnalisisGuardadoOActualizarAsync();
         }
         catch (Exception ex)
         {
@@ -248,8 +263,33 @@
         }
     }
 
-    private async Task CambiarAnioAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) anio = value; pasoActual = 1; clasificacionAutomaticaIntentada = false; await AnalizarAsync(); await ClasificarPendientesAutomaticamenteAsync(); }
-    private async Task CambiarPeriodoAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) periodo = value; pasoActual = 1; clasificacionAutomaticaIntentada = false; await AnalizarAsync(); await ClasificarPendientesAutomaticamenteAsync(); }
+    private async Task CambiarContribuyenteAsync(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var value) || !contribuyentes.Any(x => x.CodContribuyente == value)) return;
+        contribuyenteId = value;
+        var seleccionado = contribuyentes.First(x => x.CodContribuyente == value);
+        perfilNombre = NombreContribuyente(seleccionado);
+        perfilIdentificacion = seleccionado.Numeroidentificacion?.Trim() ?? string.Empty;
+        pasoActual = 1;
+        clasificacionAutomaticaIntentada = false;
+        await CargarAnalisisGuardadoOActualizarAsync();
+    }
+
+    private async Task CambiarAnioAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) anio = value; pasoActual = 1; clasificacionAutomaticaIntentada = false; await CargarAnalisisGuardadoOActualizarAsync(); }
+    private async Task CambiarPeriodoAsync(ChangeEventArgs e) { if (int.TryParse(e.Value?.ToString(), out var value)) periodo = value; pasoActual = 1; clasificacionAutomaticaIntentada = false; await CargarAnalisisGuardadoOActualizarAsync(); }
+
+    private async Task CargarAnalisisGuardadoOActualizarAsync()
+    {
+        var borrador = await DeclaracionesService.ObtenerBorradorAsync(userId, contribuyenteId, anio, periodo);
+        if (borrador.DeclaracionId > 0)
+        {
+            analisis = borrador;
+            return;
+        }
+
+        await AnalizarAsync();
+        await ClasificarPendientesAutomaticamenteAsync();
+    }
 
     private async Task IrAValidacionAsync() { pasoActual = 2; await AnalizarAsync(); }
     private void IrPaso(int paso) { if (paso == 3 && !analisis.PuedeGuardarBorrador) { pasoActual = 2; return; } pasoActual = paso; }
@@ -257,7 +297,7 @@
     private void CerrarModal() => validacionSeleccionada = null;
     private void SolicitarGuardado() => mostrarConfirmacionGuardado = analisis.PuedeGuardarBorrador;
     private void CancelarGuardado() => mostrarConfirmacionGuardado = false;
-    private void IrACompras() { CerrarModal(); Navigation.NavigateTo(EDeclaraRoutes.Compras); }
+    private void IrACompras() { CerrarModal(); Navigation.NavigateTo($"{EDeclaraRoutes.Compras}?contribuyenteId={contribuyenteId}"); }
     private async Task ConfirmarGuardadoAsync() { mostrarConfirmacionGuardado = false; await GuardarAsync(); }
 
     private static string TituloValidacion(EDeclaraDeclaracionValidacion item) => item.Codigo switch
@@ -293,7 +333,7 @@
         error = string.Empty;
         mensaje = string.Empty;
         mensajeError = false;
-        try { analisis = await DeclaracionesService.AnalizarAsync(userId, anio, periodo); }
+        try { analisis = await DeclaracionesService.AnalizarAsync(userId, contribuyenteId, anio, periodo); }
         catch (Exception ex) { error = ex.Message; }
         finally { ocupado = false; }
     }
@@ -304,7 +344,22 @@
         error = string.Empty;
         mensaje = string.Empty;
         mensajeError = false;
-        try { await DeclaracionesService.GuardarAsync(userId, analisis); mensaje = "Borrador guardado correctamente."; }
+        try { analisis = await DeclaracionesService.GuardarAsync(userId, contribuyenteId, analisis); mensaje = $"Borrador guardado correctamente. Versión {analisis.VersionCalculo}."; }
+        catch (Exception ex) { error = ex.Message; }
+        finally { ocupado = false; }
+    }
+
+    private async Task ValidarDeclaracionAsync()
+    {
+        ocupado = true;
+        error = string.Empty;
+        mensaje = string.Empty;
+        mensajeError = false;
+        try
+        {
+            analisis = await DeclaracionesService.ValidarAsync(userId, contribuyenteId, analisis);
+            mensaje = $"Declaración validada correctamente. Versión {analisis.VersionCalculo}.";
+        }
         catch (Exception ex) { error = ex.Message; }
         finally { ocupado = false; }
     }
@@ -317,7 +372,7 @@
         mensajeError = false;
         try
         {
-            var resultado = await ClasificacionIaService.ClasificarAsync(userId, anio, periodo);
+            var resultado = await ClasificacionIaService.ClasificarAsync(userId, contribuyenteId, anio, periodo);
             var detalle = resultado.Errores.Count > 0 ? $" {string.Join(" | ", resultado.Errores.Take(3))}" : string.Empty;
             await AnalizarAsync();
             mensajeError = resultado.Clasificados == 0 && resultado.TieneErrores;
@@ -337,5 +392,16 @@
     }
 
     private static string NombrePeriodo(int value) => System.Globalization.CultureInfo.GetCultureInfo("es-EC").DateTimeFormat.GetMonthName(value);
+    private static string NombreContribuyente(ContribuyenteEdeclare contribuyente) =>
+        !string.IsNullOrWhiteSpace(contribuyente.Nombrerazonsocial)
+            ? contribuyente.Nombrerazonsocial.Trim()
+            : $"{contribuyente.Apellidos} {contribuyente.Nombres}".Trim();
+    private static string EstadoTexto(EDeclaraEstadoDeclaracion estado) => estado switch
+    {
+        EDeclaraEstadoDeclaracion.Validada => "Validada",
+        EDeclaraEstadoDeclaracion.Presentada => "Presentada",
+        EDeclaraEstadoDeclaracion.Rechazada => "Rechazada",
+        _ => "Borrador"
+    };
     private static string Dinero(decimal value) => value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("es-EC"));
 }

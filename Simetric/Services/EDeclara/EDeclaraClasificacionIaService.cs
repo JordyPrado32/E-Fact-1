@@ -34,12 +34,12 @@ public sealed class EDeclaraClasificacionIaService
             ?? throw new InvalidOperationException("No se encontró la cadena de conexión 'DefaultConnection'.");
     }
 
-    public async Task<EDeclaraClasificacionIaResultado> ClasificarAsync(int userId, int anio, int periodo)
+    public async Task<EDeclaraClasificacionIaResultado> ClasificarAsync(int userId, int contribuyenteId, int anio, int periodo)
     {
         var catalogos = await _comprasService.ObtenerCatalogosAsync();
         var documentos = new List<EDeclaraCompraDocumento>();
         foreach (var tipoDocumento in new[] { 1, 2, 3, 4 })
-            documentos.AddRange((await _comprasService.ListarAsync(userId, userId, anio, periodo, tipoDocumento))
+            documentos.AddRange((await _comprasService.ListarAsync(userId, contribuyenteId, anio, periodo, tipoDocumento))
                 .Where(x => x.RequiereClasificacion));
 
         if (documentos.Count == 0)
@@ -64,7 +64,7 @@ public sealed class EDeclaraClasificacionIaService
             }
         }
 
-        var clasificados = await GuardarClasificacionesAsync(userId, anio, periodo, actualizaciones);
+        var clasificados = await GuardarClasificacionesAsync(userId, contribuyenteId, anio, periodo, actualizaciones);
         return new(documentos.Count, clasificados, documentos.Count - clasificados, errores.Distinct().Take(8).ToList());
     }
 
@@ -201,7 +201,7 @@ public sealed class EDeclaraClasificacionIaService
         }
     }
 
-    private async Task<int> GuardarClasificacionesAsync(int userId, int anio, int periodo, IReadOnlyList<ActualizacionIa> actualizaciones)
+    private async Task<int> GuardarClasificacionesAsync(int userId, int contribuyenteId, int anio, int periodo, IReadOnlyList<ActualizacionIa> actualizaciones)
     {
         if (actualizaciones.Count == 0) return 0;
         await _comprasService.EnsureSchemaAsync();
@@ -214,10 +214,10 @@ public sealed class EDeclaraClasificacionIaService
             clasificados += await db.ExecuteAsync("""
                 UPDATE EDECLARA_COMPRA_DOCUMENTOS
                    SET TIPOFACTURACION=@Actividad,CASILLA=@Casilla,ORIGEN='IA',FECHAACTUALIZACION=SYSUTCDATETIME()
-                 WHERE ID=@Id AND IDUSUARIO=@userId AND IDCONTRIBUYENTE=@userId AND ANIO=@anio AND PERIODO=@periodo
+                 WHERE ID=@Id AND IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ANIO=@anio AND PERIODO=@periodo
                    AND TIPODOCUMENTO=@TipoDocumento AND ESTADO=1
                    AND (TIPOFACTURACION IS NULL OR TIPOFACTURACION<=0 OR LTRIM(RTRIM(ISNULL(CASILLA,'')))='')
-                """, new { item.Id, userId, anio, periodo, item.TipoDocumento, item.Actividad, item.Casilla }, transaction);
+                """, new { item.Id, userId, contribuyenteId, anio, periodo, item.TipoDocumento, item.Actividad, item.Casilla }, transaction);
         }
         await transaction.CommitAsync();
         return clasificados;

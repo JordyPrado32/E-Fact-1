@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.Models;
 using Simetric.Models.EDeclara;
+using Simetric.Services;
 
 namespace Simetric.Services.EDeclara;
 
@@ -19,17 +20,20 @@ public sealed class EDeclaraComprasService
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly EDeclaraSriCredentialService _credentialService;
+    private readonly ContribuyenteEdeclaraService _contribuyenteService;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
     public EDeclaraComprasService(
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         EDeclaraSriCredentialService credentialService,
+        ContribuyenteEdeclaraService contribuyenteService,
         IDbContextFactory<AppDbContext> dbFactory)
     {
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
         _credentialService = credentialService;
+        _contribuyenteService = contribuyenteService;
         _dbFactory = dbFactory;
         _connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("No se encontró la cadena de conexión 'DefaultConnection'.");
@@ -39,8 +43,7 @@ public sealed class EDeclaraComprasService
         int userId, int contribuyenteId, int anio, int periodo, int tipoDocumento)
     {
         await EnsureSchemaAsync();
-        await ValidarPerfilAsync(userId);
-        contribuyenteId = userId;
+        await ValidarContribuyenteAsync(userId, contribuyenteId);
         await using var db = new SqlConnection(_connectionString);
         const string sql = """
             SELECT d.ID AS Id, d.IDCONTRIBUYENTE AS IdContribuyente, d.ANIO AS Anio,
@@ -108,8 +111,7 @@ public sealed class EDeclaraComprasService
     public async Task<long> GuardarAsync(int userId, EDeclaraCompraDocumento documento)
     {
         await EnsureSchemaAsync();
-        var identificacion = await ValidarPerfilAsync(userId);
-        documento.IdContribuyente = userId;
+        var identificacion = await ValidarContribuyenteAsync(userId, documento.IdContribuyente);
         ValidarDocumento(documento, identificacion);
         documento.Numero = NormalizarNumero(documento.Numero);
         documento.Serie = NormalizarSerie(documento.Serie);
@@ -181,13 +183,13 @@ public sealed class EDeclaraComprasService
         return id;
     }
 
-    public async Task<EDeclaraImportacionResultado> SincronizarVentasEFactAsync(int userId, int anio, int periodo, int tipoDocumento)
+    public async Task<EDeclaraImportacionResultado> SincronizarVentasEFactAsync(int userId, int contribuyenteId, int anio, int periodo, int tipoDocumento)
     {
         if (tipoDocumento is not (2 or 4))
             throw new InvalidOperationException("La sincronización E-Fact solo aplica a ventas y notas de crédito de ventas.");
 
         await EnsureSchemaAsync();
-        await ValidarPerfilAsync(userId);
+        await ValidarContribuyenteAsync(userId, contribuyenteId);
         var (desde, hasta) = ObtenerRangoPeriodo(anio, periodo);
         var importados = 0;
         var omitidos = 0;
@@ -231,6 +233,7 @@ public sealed class EDeclaraComprasService
                     NumeroAutorizacion = venta.Numautorizacion ?? venta.Codclave ?? string.Empty,
                     Origen = "EFACT"
                 };
+                documento.IdContribuyente = contribuyenteId;
                 var resultado = await GuardarSincronizadoAsync(userId, documento);
                 if (resultado.Importado) importados++;
                 else if (resultado.Omitido) omitidos++;
@@ -280,6 +283,7 @@ public sealed class EDeclaraComprasService
                     NumeroAutorizacion = nota.NumAutorizacion ?? nota.CodClave ?? string.Empty,
                     Origen = "EFACT"
                 };
+                documento.IdContribuyente = contribuyenteId;
                 var resultado = await GuardarSincronizadoAsync(userId, documento);
                 if (resultado.Importado) importados++;
                 else if (resultado.Omitido) omitidos++;
@@ -307,18 +311,18 @@ public sealed class EDeclaraComprasService
         }
     }
 
-    public async Task ActualizarClasificacionAsync(int userId, long id, int? actividad, string? casilla)
+    public async Task ActualizarClasificacionAsync(int userId, int contribuyenteId, long id, int? actividad, string? casilla)
     {
         await EnsureSchemaAsync();
         await using var db = new SqlConnection(_connectionString);
         var count = await db.ExecuteAsync("""
             UPDATE EDECLARA_COMPRA_DOCUMENTOS SET TIPOFACTURACION=@actividad,CASILLA=@casilla,
-                   FECHAACTUALIZACION=SYSUTCDATETIME() WHERE ID=@id AND IDUSUARIO=@userId AND ESTADO=1
-            """, new { userId, id, actividad, casilla = casilla?.Trim() ?? string.Empty });
+                   FECHAACTUALIZACION=SYSUTCDATETIME() WHERE ID=@id AND IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ESTADO=1
+            """, new { userId, contribuyenteId, id, actividad, casilla = casilla?.Trim() ?? string.Empty });
         if (count == 0) throw new InvalidOperationException("No se encontró el documento.");
     }
 
-    public async Task EliminarAsync(int userId, IEnumerable<long> ids)
+    public async Task EliminarAsync(int userId, int contribuyenteId, IEnumerable<long> ids)
     {
         await EnsureSchemaAsync();
         var values = ids.Distinct().ToArray();
@@ -326,13 +330,13 @@ public sealed class EDeclaraComprasService
         await using var db = new SqlConnection(_connectionString);
         await db.ExecuteAsync("""
             UPDATE EDECLARA_COMPRA_DOCUMENTOS SET ESTADO=0,IDUSUARIOELIMINA=@userId,
-                   FECHAACTUALIZACION=SYSUTCDATETIME() WHERE IDUSUARIO=@userId AND ID IN @values
-            """, new { userId, values });
+                   FECHAACTUALIZACION=SYSUTCDATETIME() WHERE IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND ID IN @values
+            """, new { userId, contribuyenteId, values });
     }
 
     public async Task<int> RegistrarFaltantesAsync(int userId, int contribuyenteId, int anio, int periodo, int tipoDocumento)
     {
-        contribuyenteId = userId;
+        await ValidarContribuyenteAsync(userId, contribuyenteId);
         var documentos = (await ListarAsync(userId, contribuyenteId, anio, periodo, tipoDocumento))
             .Where(x => !x.EsFaltante).GroupBy(x => x.Serie).ToList();
         var creados = 0;
@@ -359,8 +363,7 @@ public sealed class EDeclaraComprasService
     public async Task<EDeclaraImportacionResultado> ImportarXmlAsync(
         int userId, int contribuyenteId, int anio, int periodo, IEnumerable<(string Nombre, string Xml)> archivos, string origen = "XML", int tipoFactura = 1)
     {
-        var identificacion = await ValidarPerfilAsync(userId);
-        contribuyenteId = userId;
+        var identificacion = await ValidarContribuyenteAsync(userId, contribuyenteId);
         var importados = 0;
         var omitidos = 0;
         var errores = new List<string>();
@@ -386,12 +389,11 @@ public sealed class EDeclaraComprasService
     public async Task<EDeclaraImportacionResultado> ConsultarSriAsync(
         int userId, int contribuyenteId, int anio, int periodo, int tipoDocumento)
     {
-        var clave = await _credentialService.ObtenerClaveAsync(userId);
+        var clave = await _credentialService.ObtenerClaveContribuyenteAsync(userId, contribuyenteId);
         if (string.IsNullOrWhiteSpace(clave))
-            throw new InvalidOperationException("Configura tu clave SRI en el perfil de E-Declara antes de consultar.");
-        var ruc = await ValidarPerfilAsync(userId);
-        contribuyenteId = userId;
-        if (string.IsNullOrWhiteSpace(ruc)) throw new InvalidOperationException("La cuenta no tiene identificación configurada en Mi perfil.");
+            throw new InvalidOperationException("Configura la clave SRI del contribuyente antes de consultar.");
+        var ruc = await ValidarContribuyenteAsync(userId, contribuyenteId);
+        if (string.IsNullOrWhiteSpace(ruc)) throw new InvalidOperationException("El contribuyente seleccionado no tiene identificación configurada.");
         var meses = periodo switch { 13 => Enumerable.Range(1, 6), 14 => Enumerable.Range(7, 6), >= 1 and <= 12 => new[] { periodo }, _ => throw new InvalidOperationException("Período inválido.") };
         var descarga = await DescargarXmlSriAsync(ruc, clave, anio, meses, tipoDocumento);
         var resultado = await ImportarXmlAsync(userId, contribuyenteId, anio, periodo, descarga.Archivos, "SRI");
@@ -402,21 +404,22 @@ public sealed class EDeclaraComprasService
         return resultado;
     }
 
-    public async Task<string?> BuscarRazonSocialAsync(int userId, string ruc)
+    public async Task<string?> BuscarRazonSocialAsync(int userId, int contribuyenteId, string ruc)
     {
         await EnsureSchemaAsync();
+        await ValidarContribuyenteAsync(userId, contribuyenteId);
         await using var db = new SqlConnection(_connectionString);
         return await db.QueryFirstOrDefaultAsync<string>("""
             SELECT TOP 1 RAZONSOCIAL FROM EDECLARA_COMPRA_DOCUMENTOS
-             WHERE IDUSUARIO=@userId AND RUC=@ruc AND RAZONSOCIAL<>'' ORDER BY ID DESC
-            """, new { userId, ruc = SoloDigitos(ruc) });
+             WHERE IDUSUARIO=@userId AND IDCONTRIBUYENTE=@contribuyenteId AND RUC=@ruc AND RAZONSOCIAL<>'' ORDER BY ID DESC
+            """, new { userId, contribuyenteId, ruc = SoloDigitos(ruc) });
     }
 
     public async Task<EDeclaraCompraDocumento?> BuscarFacturaRelacionadaAsync(
         int userId, int contribuyenteId, int anio, int periodo, string serie, string numero, string ruc, int tipoFactura = 1)
     {
         await EnsureSchemaAsync();
-        contribuyenteId = userId;
+        await ValidarContribuyenteAsync(userId, contribuyenteId);
         if (string.IsNullOrWhiteSpace(serie) || string.IsNullOrWhiteSpace(numero) || string.IsNullOrWhiteSpace(ruc)) return null;
         await using var db = new SqlConnection(_connectionString);
         return await db.QueryFirstOrDefaultAsync<EDeclaraCompraDocumento>("""
@@ -581,16 +584,13 @@ public sealed class EDeclaraComprasService
         }).ToList();
     }
 
-    private async Task<string> ValidarPerfilAsync(int userId)
+    private async Task<string> ValidarContribuyenteAsync(int userId, int contribuyenteId)
     {
-        await EnsureSchemaAsync();
-        await using var db = new SqlConnection(_connectionString);
-        var identificacion = await db.QuerySingleOrDefaultAsync<string>("""
-            SELECT ISNULL(IDENTIFICACION,'') FROM Usuarios WHERE IdUsuario=@userId AND ESTADO=1
-            """, new { userId });
+        var contribuyente = await _contribuyenteService.ObtenerActivoPorIdAsync(contribuyenteId, userId);
+        var identificacion = SoloDigitos(contribuyente.Numeroidentificacion);
         if (string.IsNullOrWhiteSpace(identificacion))
-            throw new InvalidOperationException("Configura tu identificación en Mi perfil de E-Declara antes de administrar compras.");
-        return SoloDigitos(identificacion);
+            throw new InvalidOperationException("Configura la identificación del contribuyente antes de administrar sus documentos.");
+        return identificacion;
     }
 
     private static void ValidarDocumento(EDeclaraCompraDocumento d, string identificacionPerfil)
@@ -602,7 +602,7 @@ public sealed class EDeclaraComprasService
         ValidarPeriodo(d.FechaEmision, d.Anio, d.Periodo);
         if (!d.EsFaltante && string.IsNullOrWhiteSpace(d.Ruc)) throw new InvalidOperationException(d.TipoDocumento is 2 or 4 ? "Ingresa la identificación del cliente." : "Ingresa la identificación del proveedor.");
         if (!d.EsFaltante && !string.IsNullOrWhiteSpace(d.IdentificacionComprador) && !CoincideIdentificacion(d.IdentificacionComprador, identificacionPerfil))
-            throw new InvalidOperationException("El documento no pertenece a la identificación configurada en Mi perfil.");
+            throw new InvalidOperationException("El documento no pertenece al contribuyente seleccionado.");
         if (d.BaseImponible < 0 || d.Iva < 0 || d.Tarifa < 0) throw new InvalidOperationException("Los valores tributarios no pueden ser negativos.");
     }
 

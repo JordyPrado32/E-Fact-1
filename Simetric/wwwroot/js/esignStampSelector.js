@@ -544,6 +544,7 @@ export async function init(options, dotNetRef) {
             if (!url) {
                 pdfDocument = null;
                 pdfPage = null;
+                pdfInput.value = "";
                 selectedPositions = [null, null];
                 footprints.forEach(footprint => {
                     if (footprint) {

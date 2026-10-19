@@ -68,6 +68,13 @@
                                 <span><i class="bi bi-file-earmark-text"></i> Páginas: ilimitado</span>
                             </small>
                         </label>
+                        @if (pdfValidacionFirmaFile is not null || documentoHistorialSeleccionado is not null)
+                        {
+                            <button type="button" class="validation-clear-btn" @onclick="QuitarDocumentoValidacionAsync">
+                                <i class="bi bi-x-circle"></i>
+                                <span>Quitar documento</span>
+                            </button>
+                        }
                     </div>
 
                     <div class="validation-pdf-viewer">
@@ -170,12 +177,18 @@
                         <dt>Documento completo</dt>
                         <dd>@(pdfFirmaResultado.DocumentoCompletoCubierto ? "Si" : "No")</dd>
                     </div>
+                    <div>
+                        <dt>Estado</dt>
+                        <dd class="@(pdfFirmaEsError ? "validation-status-invalid" : "validation-status-valid")">
+                            @(pdfFirmaEsError ? "No valida" : "Valida")
+                        </dd>
+                    </div>
                 </dl>
 
                 <div class="pdf-signature-list">
                     @foreach (var firma in pdfFirmaResultado.Firmas)
                     {
-                        <article class="pdf-signature-item @(firma.Valida ? "is-valid" : "is-error")">
+                        <article class="pdf-signature-item @(EsFirmaAceptable(firma) ? "is-valid" : "is-error")">
                             <div>
                                 <strong>@(string.IsNullOrWhiteSpace(firma.Firmante) ? "Firmante no identificado" : firma.Firmante)</strong>
                                 <span>@(firma.FechaFirma?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "Fecha de firma no disponible")</span>
@@ -191,14 +204,20 @@
                                 </div>
                                 <div>
                                     <dt>Revocacion</dt>
-                                    <dd>@firma.EstadoRevocacion</dd>
+                                    <dd>@TextoRevocacion(firma)</dd>
                                 </div>
                                 <div>
                                     <dt>Sello tiempo</dt>
                                     <dd>@TextoSelloTiempo(firma)</dd>
                                 </div>
+                                <div>
+                                    <dt>Estado</dt>
+                                    <dd class="@(EsFirmaAceptable(firma) ? "validation-status-valid" : "validation-status-invalid")">
+                                        @(EsFirmaAceptable(firma) ? "Valida" : "No valida")
+                                    </dd>
+                                </div>
                             </dl>
-                            @if (!string.IsNullOrWhiteSpace(firma.Error))
+                            @if (!EsFirmaAceptable(firma) && !string.IsNullOrWhiteSpace(firma.Error))
                             {
                                 <p>@firma.Error</p>
                             }
@@ -336,7 +355,7 @@
             return;
 
         pdfPreviewInitialized = true;
-        pdfPreviewModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignPdfPreview.js?v=20260820-1");
+        pdfPreviewModule = await JS.InvokeAsync<IJSObjectReference>("import", "/js/esignPdfPreview.js?v=20261019-2");
         pdfPreviewInstance = await pdfPreviewModule.InvokeAsync<IJSObjectReference>(
             "init",
             new
@@ -363,6 +382,18 @@
         documentoHistorialSeleccionado = null;
         pdfFirmaMensaje = null;
         pdfFirmaResultado = null;
+    }
+
+    private async Task QuitarDocumentoValidacionAsync()
+    {
+        pdfValidacionFirmaFile = null;
+        documentoHistorialSeleccionado = null;
+        pdfFirmaMensaje = null;
+        pdfFirmaResultado = null;
+        pdfFirmaEsError = false;
+
+        if (pdfPreviewInstance is not null)
+            await pdfPreviewInstance.InvokeVoidAsync("clear");
     }
 
     private async Task ValidarFirmaPdfAsync()
@@ -416,15 +447,15 @@
             pdfFirmaResultado = apiResult.Validation;
             if (pdfFirmaResultado.CantidadFirmas == 0)
             {
-                pdfFirmaEsError = false;
-                pdfFirmaMensaje = null;
+                pdfFirmaEsError = true;
+                pdfFirmaMensaje = "No valida: el documento no contiene firmas digitales.";
                 return;
             }
 
-            pdfFirmaEsError = !pdfFirmaResultado.Valido;
-            pdfFirmaMensaje = pdfFirmaResultado.Valido
-                ? "El PDF tiene una firma digital de e-Rúbrica válida."
-                : "La firma digital de e-Rúbrica no es válida.";
+            pdfFirmaEsError = TieneFalloDefinitivo(pdfFirmaResultado);
+            pdfFirmaMensaje = pdfFirmaEsError
+                ? ObtenerMotivoNoValida(pdfFirmaResultado)
+                : "Las firmas digitales no presentan problemas detectados.";
         }
         finally
         {
@@ -440,6 +471,48 @@
         return firma.SelloTiempoValido.Value
             ? firma.FechaSelloTiempo?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "Valido"
             : "No valido";
+    }
+
+    private static string TextoRevocacion(PdfSignatureDetailApiResponse firma) =>
+        firma.EstadoRevocacion is "NoDisponible" or "SinProblemasDetectados"
+            ? "Sin problemas detectados"
+            : firma.EstadoRevocacion;
+
+    private static bool EsFirmaAceptable(PdfSignatureDetailApiResponse firma) =>
+        firma.IntegridadValida
+        && !string.Equals(
+            firma.EstadoRevocacion,
+            "Revocado",
+            StringComparison.OrdinalIgnoreCase)
+        && firma.SelloTiempoValido != false;
+
+    private static bool TieneFalloDefinitivo(PdfSignatureValidationApiResponse resultado) =>
+        !resultado.DocumentoCompletoCubierto
+        || resultado.Firmas.Count == 0
+        || resultado.Firmas.Any(firma => !EsFirmaAceptable(firma));
+
+    private static string ObtenerMotivoNoValida(PdfSignatureValidationApiResponse resultado)
+    {
+        var motivos = new List<string>();
+
+        if (!resultado.DocumentoCompletoCubierto)
+            motivos.Add("la firma no cubre todo el documento");
+
+        foreach (var firma in resultado.Firmas.Where(firma => !EsFirmaAceptable(firma)))
+        {
+            if (!string.IsNullOrWhiteSpace(firma.Error))
+                motivos.Add(firma.Error);
+            else if (!firma.IntegridadValida)
+                motivos.Add("la integridad del documento no es válida");
+            else if (string.Equals(firma.EstadoRevocacion, "Revocado", StringComparison.OrdinalIgnoreCase))
+                motivos.Add("el certificado está revocado");
+            else if (firma.SelloTiempoValido == false)
+                motivos.Add("el sello de tiempo no es válido");
+        }
+
+        return motivos.Count == 0
+            ? "No valida: se detectó un problema en la firma digital."
+            : $"No valida porque {string.Join("; ", motivos.Distinct(StringComparer.OrdinalIgnoreCase))}.";
     }
 
     private static string TextoVigenciaCertificado(PdfSignatureDetailApiResponse firma)

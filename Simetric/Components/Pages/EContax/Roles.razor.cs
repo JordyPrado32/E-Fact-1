@@ -25,10 +25,13 @@ public partial class Roles
     private List<Simetric.Models.Auditoria> historial = new();
     private static readonly EContaxAccion[] AccionesEditables =
         { EContaxAccion.Ver, EContaxAccion.Crear, EContaxAccion.Editar, EContaxAccion.Eliminar, EContaxAccion.Exportar };
-    private int userId, sucursalId, perfilId, perfilAsignado, usuarioEditando, nuevoTitular;
-    private string tab = "Mi cuenta", nombrePerfil = "", nombreSucursal = "", nombres = "", apellidos = "", email = "", clave = "";
+    private static readonly string[] AvataresDisponibles =
+        { "images/avatars/avatar1.png", "images/avatars/avatar2.png", "images/avatars/avatar3.png", "images/avatars/avatar4.png", "images/avatars/avatar5.png", "images/avatars/avatar6.png", "images/avatars/avatar7.png", "images/avatars/avatar8.png", "images/avatars/avatar9.png", "images/avatars/avatar10.png", "images/avatars/avatar11.png", "images/avatars/Avatar-Boy.jpg", "images/avatars/numi-efact.jpg" };
+    private int userId, sucursalId, perfilId, perfilAsignado, usuarioEditando, nuevoTitular, tipoCliente = 1, tipoIdentificacion = 1;
+    private string tab = "Mi cuenta", nombrePerfil = "", nombreSucursal = "", nombres = "", apellidos = "", email = "", identificacion = "", celular = "", avatarUrl = "", clave = "";
+    private DateTime? fechaNacimiento;
     private string? error, mensaje, codigoProcesado, ultimoEnlaceInvitacion;
-    private bool cargando = true, ocupado, adminSucursal, permisosUnicos, confirmarAbandono, confirmarTransferencia, confirmarImpacto, confirmarDesvinculacion;
+    private bool cargando = true, ocupado, adminSucursal, permisosUnicos, avatarSelectorAbierto, confirmarAbandono, confirmarTransferencia, confirmarImpacto, confirmarDesvinculacion;
     private bool RolCompartido => perfilId > 0 && resumen?.Contexto.EsJefeEmpresa != true &&
         resumen?.Perfiles.FirstOrDefault(x => x.IdPerfil == perfilId)?.IdSucursal is null;
     private bool EsRutaUsuarios => Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0].TrimEnd('/')
@@ -105,8 +108,8 @@ public partial class Roles
     {
         tab = item; error = null; mensaje = null; ultimoEnlaceInvitacion = null; seleccion.Clear();
         sucursalId = resumen?.Contexto.EsJefeEmpresa == true ? 0 : resumen?.Contexto.IdSucursal ?? 0;
-        perfilId = perfilAsignado = usuarioEditando = 0; nombrePerfil = email = clave = "";
-        adminSucursal = permisosUnicos = confirmarImpacto = confirmarDesvinculacion = false; acciones.Clear(); accesoEfectivo.Clear();
+        perfilId = perfilAsignado = usuarioEditando = 0; nombrePerfil = email = nombres = apellidos = identificacion = celular = avatarUrl = clave = ""; fechaNacimiento = null; tipoCliente = tipoIdentificacion = 1;
+        adminSucursal = permisosUnicos = avatarSelectorAbierto = confirmarImpacto = confirmarDesvinculacion = false; acciones.Clear(); accesoEfectivo.Clear();
         if (item == "Historial") await EjecutarAsync(async () => historial = await Seguridad.GetHistorialAsync(userId), "Historial actualizado.");
     }
     private void ToggleMenu(int id, bool marcado)
@@ -162,13 +165,23 @@ public partial class Roles
         nombrePerfil = perfil.Nombre; sucursalId = perfil.IdSucursal ?? 0; seleccion = EContaxSeguridadService.LeerMenus(perfil.MenusJson);
         CargarAcciones(perfil.AccionesJson); confirmarImpacto = false;
     }
-    private void NuevaCuenta() { usuarioEditando = perfilAsignado = 0; nombres = apellidos = email = clave = "";
-        adminSucursal = permisosUnicos = confirmarDesvinculacion = false; seleccion.Clear(); acciones.Clear(); accesoEfectivo.Clear(); }
+    private void NuevaCuenta() { usuarioEditando = perfilAsignado = 0; nombres = apellidos = email = identificacion = celular = avatarUrl = clave = ""; fechaNacimiento = null; tipoCliente = tipoIdentificacion = 1;
+        adminSucursal = permisosUnicos = avatarSelectorAbierto = confirmarDesvinculacion = false; seleccion.Clear(); acciones.Clear(); accesoEfectivo.Clear(); }
     private async Task SeleccionarUsuario(ChangeEventArgs args)
     {
         usuarioEditando = int.TryParse(args.Value?.ToString(), out var id) ? id : 0;
         var usuario = resumen!.Usuarios.FirstOrDefault(x => x.IdUsuario == usuarioEditando);
         if (usuario is null) { NuevaCuenta(); return; }
+        nombres = usuario.Usuario?.Nombres ?? "";
+        apellidos = usuario.Usuario?.Apellidos ?? "";
+        email = usuario.Usuario?.Email ?? "";
+        fechaNacimiento = usuario.Usuario?.FechaNacimiento;
+        tipoCliente = usuario.Usuario?.TipoCliente ?? 1;
+        tipoIdentificacion = usuario.Usuario?.IdTipoIdentificacion ?? (tipoCliente == 2 ? 2 : 1);
+        identificacion = usuario.Usuario?.Identificacion ?? "";
+        celular = usuario.Usuario?.Celular ?? "";
+        avatarUrl = usuario.Usuario?.AvatarUrl ?? "";
+        avatarSelectorAbierto = false;
         sucursalId = usuario.IdSucursal ?? 0;
         perfilAsignado = usuario.IdPerfil is int idPerfil && resumen.Perfiles.Any(x =>
             x.IdPerfil == idPerfil && x.Estado && x.IdSucursal == sucursalId) ? idPerfil : 0;
@@ -192,6 +205,12 @@ public partial class Roles
             perfilAsignado = 0;
         CambiarPerfilAsignado();
     }
+    private void SeleccionarAvatar(string avatar)
+    {
+        avatarUrl = avatar;
+        avatarSelectorAbierto = false;
+    }
+    private void CambiarTipoCliente() => tipoIdentificacion = tipoCliente == 2 ? 2 : 1;
     private Task GuardarPerfilAsync() => EjecutarAsync(async () =>
     {
         if (RolCompartido) throw new InvalidOperationException("Solo el titular puede editar un rol compartido.");
@@ -206,8 +225,9 @@ public partial class Roles
     private Task GuardarUsuarioAsync() => EjecutarAsync(async () =>
     {
         if (usuarioEditando == 0)
-        { await Seguridad.CrearCuentaAsync(userId, nombres, apellidos, email, clave, sucursalId, perfilAsignado, adminSucursal); clave = ""; }
+        { await Seguridad.CrearCuentaAsync(userId, nombres, apellidos, email, clave, fechaNacimiento, tipoCliente, tipoIdentificacion, identificacion, celular, avatarUrl, sucursalId, perfilAsignado, adminSucursal); clave = ""; }
         else await Seguridad.GuardarUsuarioAsync(userId, usuarioEditando, sucursalId, perfilAsignado, adminSucursal,
+            nombres, apellidos, email, fechaNacimiento, tipoCliente, tipoIdentificacion, identificacion, celular, avatarUrl,
             permisosUnicos ? JsonSerializer.Serialize(seleccion) : null, permisosUnicos ? AccionesJson : null);
     }, "Cuenta y asignación guardadas.");
     private Task InvitarAsync() => EjecutarAsync(async () =>
@@ -244,7 +264,10 @@ public partial class Roles
     private Task RestablecerRolAsync() => EjecutarAsync(async () =>
     {
         var usuario = resumen!.Usuarios.Single(x => x.IdUsuario == usuarioEditando);
-        await Seguridad.GuardarUsuarioAsync(userId, usuario.IdUsuario, usuario.IdSucursal ?? 0, usuario.IdPerfil ?? 0, usuario.EsAdminSucursal, null);
+        await Seguridad.GuardarUsuarioAsync(userId, usuario.IdUsuario, usuario.IdSucursal ?? 0, usuario.IdPerfil ?? 0, usuario.EsAdminSucursal,
+            usuario.Usuario?.Nombres, usuario.Usuario?.Apellidos, usuario.Usuario?.Email, usuario.Usuario?.FechaNacimiento,
+            usuario.Usuario?.TipoCliente, usuario.Usuario?.IdTipoIdentificacion,
+            usuario.Usuario?.Identificacion, usuario.Usuario?.Celular, usuario.Usuario?.AvatarUrl, null);
         permisosUnicos = false;
         seleccion = EContaxSeguridadService.LeerMenus(resumen.Perfiles.FirstOrDefault(x => x.IdPerfil == usuario.IdPerfil)?.MenusJson);
         CargarAcciones(resumen.Perfiles.FirstOrDefault(x => x.IdPerfil == usuario.IdPerfil)?.AccionesJson);

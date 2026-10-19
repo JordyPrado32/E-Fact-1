@@ -24,7 +24,7 @@ namespace Simetric.Auth
             try
             {
                 var authCheck = await _jsRuntime.InvokeAsync<AuthCheckResponse>("authInterop.check");
-                if (authCheck?.Authenticated != true)
+                if (authCheck?.Authenticated != true && authCheck?.TransientError != true)
                 {
                     await _jsRuntime.InvokeVoidAsync("localStorage.removeItem", "userSession");
                     _currentUserContext.Clear();
@@ -118,6 +118,7 @@ namespace Simetric.Auth
         {
             public bool Authenticated { get; set; }
             public int IdUsuario { get; set; }
+            public bool TransientError { get; set; }
         }
     }
 }

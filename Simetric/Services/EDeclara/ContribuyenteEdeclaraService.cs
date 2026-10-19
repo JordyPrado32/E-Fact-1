@@ -107,6 +107,15 @@ END");
             .FirstOrDefaultAsync(x => x.CodContribuyente == id && x.Usuario == userId);
     }
 
+    public async Task<ContribuyenteEdeclare> ObtenerActivoPorIdAsync(int id, int userId)
+    {
+        var contribuyente = await ObtenerPorIdAsync(id, userId);
+        if (contribuyente is null || contribuyente.Estado != true)
+            throw new InvalidOperationException("El contribuyente no existe, está inactivo o no pertenece a la cuenta.");
+
+        return contribuyente;
+    }
+
     public async Task<ContribuyenteEdeclare> CrearAsync(ContribuyenteEdeclare contribuyente)
     {
         await EnsureSchemaAsync();

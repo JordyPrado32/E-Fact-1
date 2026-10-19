@@ -1,9 +1,22 @@
 namespace Simetric.Models.EDeclara;
 
+public enum EDeclaraEstadoDeclaracion
+{
+    Borrador,
+    Validada,
+    Presentada,
+    Rechazada
+}
+
 public sealed class EDeclaraDeclaracionAnalisis
 {
+    public long DeclaracionId { get; set; }
+    public int ContribuyenteId { get; init; }
     public int Anio { get; init; }
     public int Periodo { get; init; }
+    public EDeclaraEstadoDeclaracion Estado { get; set; } = EDeclaraEstadoDeclaracion.Borrador;
+    public int VersionCalculo { get; set; }
+    public DateTime? FechaActualizacion { get; set; }
     public int TotalDocumentos { get; init; }
     public int TotalFacturas { get; init; }
     public int TotalNotasCredito { get; init; }
