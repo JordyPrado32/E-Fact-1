@@ -319,10 +319,35 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                 (!actor.EsJefeEmpresa && miembro.EsAdminSucursal))
                 throw new InvalidOperationException("No puedes suspender al titular, tu propia cuenta ni administradores de otra jerarquía.");
             if (!suspendido)
-                await ValidarPerfilAsync(db, actor.IdEmpresa, miembro.IdSucursal ?? 0, miembro.IdPerfil ?? 0);
+                await ValidarPerfilAsync(db, actor.IdEmpresa, miembro.IdSucursal ?? 0, miembro.IdPerfil ?? 0, soloPerfilSucursal: true);
             RegistrarCambio(db, actorId, actor.IdEmpresa, miembro.IdSucursal, suspendido ? "Suspender usuario" : "Reactivar usuario",
                 new { miembro.IdUsuario, miembro.Suspendido }, new { IdUsuario = userId, Suspendido = suspendido });
             miembro.Suspendido = suspendido; miembro.FechaActualizacion = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        });
+    }
+
+    public async Task DesvincularUsuarioAsync(int actorId, int userId)
+    {
+        await MutarAsync(async db =>
+        {
+            var miembro = await db.EContaxUsuariosContexto.Include(x => x.Usuario)
+                .SingleOrDefaultAsync(x => x.IdUsuario == userId && x.Estado);
+            if (miembro is null) throw new InvalidOperationException("El usuario ya no está vinculado a la empresa.");
+            var actor = await ValidarAdminAsync(db, actorId, miembro.IdSucursal);
+            if (miembro.IdEmpresa != actor.IdEmpresa || userId == actor.IdUsuarioTitular || userId == actorId ||
+                (!actor.EsJefeEmpresa && miembro.EsAdminSucursal))
+                throw new InvalidOperationException("No puedes desvincular al titular, tu propia cuenta ni administradores de otra jerarquía.");
+            RegistrarCambio(db, actorId, actor.IdEmpresa, miembro.IdSucursal, "Desvincular usuario",
+                new { miembro.IdUsuario, miembro.IdSucursal, miembro.IdPerfil }, null);
+            miembro.Estado = false;
+            miembro.IdSucursal = null;
+            miembro.IdPerfil = null;
+            miembro.EsAdminSucursal = false;
+            miembro.MenusJson = null;
+            miembro.AccionesJson = null;
+            miembro.FechaActualizacion = DateTime.UtcNow;
+            if (miembro.Usuario is not null) miembro.Usuario.estadoAsociado = false;
             await db.SaveChangesAsync();
         });
     }
@@ -349,6 +374,24 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                 new { IdPerfil = perfilId, Nombre = nombre, MenusJson = json, AccionesJson = accionesJson, IdSucursal = sucursalId });
             perfil.Nombre = nombre; perfil.MenusJson = json; perfil.IdSucursal = sucursalId; perfil.AccionesJson = accionesJson;
             if (perfilId == 0) db.EContaxPerfiles.Add(perfil);
+            await db.SaveChangesAsync();
+        });
+    }
+
+    public async Task DesactivarPerfilAsync(int actorId, int perfilId)
+    {
+        await MutarAsync(async db =>
+        {
+            var perfil = await db.EContaxPerfiles.SingleOrDefaultAsync(x => x.IdPerfil == perfilId && x.Estado);
+            if (perfil is null) throw new InvalidOperationException("El rol ya no existe o está desactivado.");
+            var actor = await ValidarAdminAsync(db, actorId, perfil.IdSucursal);
+            if (!actor.EsJefeEmpresa && perfil.IdSucursal != actor.IdSucursal)
+                throw new InvalidOperationException("Solo puedes desactivar roles de tu sucursal.");
+            if (await db.EContaxUsuariosContexto.AnyAsync(x => x.IdEmpresa == actor.IdEmpresa && x.IdPerfil == perfilId && x.Estado))
+                throw new InvalidOperationException("Reasigna primero los usuarios que utilizan este rol.");
+            RegistrarCambio(db, actorId, actor.IdEmpresa, perfil.IdSucursal, "Desactivar rol",
+                new { perfil.IdPerfil, perfil.Nombre, perfil.IdSucursal }, null);
+            perfil.Estado = false;
             await db.SaveChangesAsync();
         });
     }

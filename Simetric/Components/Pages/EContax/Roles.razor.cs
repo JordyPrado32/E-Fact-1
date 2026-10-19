@@ -28,7 +28,7 @@ public partial class Roles
     private int userId, sucursalId, perfilId, perfilAsignado, usuarioEditando, nuevoTitular;
     private string tab = "Mi cuenta", nombrePerfil = "", nombreSucursal = "", nombres = "", apellidos = "", email = "", clave = "";
     private string? error, mensaje, codigoProcesado, ultimoEnlaceInvitacion;
-    private bool cargando = true, ocupado, adminSucursal, permisosUnicos, confirmarAbandono, confirmarTransferencia, confirmarImpacto;
+    private bool cargando = true, ocupado, adminSucursal, permisosUnicos, confirmarAbandono, confirmarTransferencia, confirmarImpacto, confirmarDesvinculacion;
     private bool RolCompartido => perfilId > 0 && resumen?.Contexto.EsJefeEmpresa != true &&
         resumen?.Perfiles.FirstOrDefault(x => x.IdPerfil == perfilId)?.IdSucursal is null;
     private bool EsRutaUsuarios => Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0].TrimEnd('/')
@@ -106,7 +106,7 @@ public partial class Roles
         tab = item; error = null; mensaje = null; ultimoEnlaceInvitacion = null; seleccion.Clear();
         sucursalId = resumen?.Contexto.EsJefeEmpresa == true ? 0 : resumen?.Contexto.IdSucursal ?? 0;
         perfilId = perfilAsignado = usuarioEditando = 0; nombrePerfil = email = clave = "";
-        adminSucursal = permisosUnicos = confirmarImpacto = false; acciones.Clear(); accesoEfectivo.Clear();
+        adminSucursal = permisosUnicos = confirmarImpacto = confirmarDesvinculacion = false; acciones.Clear(); accesoEfectivo.Clear();
         if (item == "Historial") await EjecutarAsync(async () => historial = await Seguridad.GetHistorialAsync(userId), "Historial actualizado.");
     }
     private void ToggleMenu(int id, bool marcado)
@@ -163,7 +163,7 @@ public partial class Roles
         CargarAcciones(perfil.AccionesJson); confirmarImpacto = false;
     }
     private void NuevaCuenta() { usuarioEditando = perfilAsignado = 0; nombres = apellidos = email = clave = "";
-        adminSucursal = permisosUnicos = false; seleccion.Clear(); acciones.Clear(); accesoEfectivo.Clear(); }
+        adminSucursal = permisosUnicos = confirmarDesvinculacion = false; seleccion.Clear(); acciones.Clear(); accesoEfectivo.Clear(); }
     private async Task SeleccionarUsuario(ChangeEventArgs args)
     {
         usuarioEditando = int.TryParse(args.Value?.ToString(), out var id) ? id : 0;
@@ -231,6 +231,16 @@ public partial class Roles
     private Task TransferirAsync() => EjecutarAsync(() => Seguridad.TransferirAsync(userId, nuevoTitular), "Titularidad transferida. Puedes abandonar la empresa.");
     private Task CambiarSuspensionAsync(bool suspendido) => EjecutarAsync(() => Seguridad.CambiarSuspensionAsync(userId, usuarioEditando, suspendido),
         suspendido ? "Acceso a E-Contax suspendido." : "Acceso a E-Contax reactivado.");
+    private Task DesvincularAsync() => EjecutarAsync(async () =>
+    {
+        await Seguridad.DesvincularUsuarioAsync(userId, usuarioEditando);
+        NuevaCuenta();
+    }, "Usuario desvinculado de la empresa.");
+    private Task DesactivarRolAsync() => EjecutarAsync(async () =>
+    {
+        await Seguridad.DesactivarPerfilAsync(userId, perfilId);
+        NuevoPerfil();
+    }, "Rol desactivado.");
     private Task RestablecerRolAsync() => EjecutarAsync(async () =>
     {
         var usuario = resumen!.Usuarios.Single(x => x.IdUsuario == usuarioEditando);
