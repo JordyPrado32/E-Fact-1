@@ -13,15 +13,27 @@
 
     function maskValue(value, includesTime) {
         const digits = value.replace(/\D/g, "").slice(0, includesTime ? 12 : 8);
-        const parts = [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)];
-        let result = parts.filter(Boolean).join("/");
+        if (!digits) return "";
 
-        if (includesTime && digits.length > 8) {
-            const time = [digits.slice(8, 10), digits.slice(10, 12)].filter(Boolean).join(":");
-            result += ` ${time}`;
-        }
+        const guide = [...(includesTime ? "dd/mm/aaaa hh:mm" : "dd/mm/aaaa")];
+        const positions = includesTime
+            ? [0, 1, 3, 4, 6, 7, 8, 9, 11, 12, 14, 15]
+            : [0, 1, 3, 4, 6, 7, 8, 9];
 
-        return result;
+        [...digits].forEach((digit, index) => {
+            guide[positions[index]] = digit;
+        });
+
+        return guide.join("");
+    }
+
+    function placeCaretAfterLastDigit(input, includesTime) {
+        const digitCount = input.value.replace(/\D/g, "").length;
+        const positions = includesTime
+            ? [0, 1, 3, 4, 6, 7, 8, 9, 11, 12, 14, 15]
+            : [0, 1, 3, 4, 6, 7, 8, 9];
+        const caretPosition = digitCount > 0 ? positions[Math.min(digitCount, positions.length) - 1] + 1 : 0;
+        input.setSelectionRange(caretPosition, caretPosition);
     }
 
     function parseValue(value, includesTime) {
@@ -60,9 +72,10 @@
         visible.removeAttribute("step");
         visible.removeAttribute("data-localized-date");
         visible.placeholder = includesTime ? "dd/mm/aaaa hh:mm" : "dd/mm/aaaa";
+        visible.title = includesTime ? "Formato: dd/mm/aaaa hh:mm" : "Formato: dd/mm/aaaa";
         visible.inputMode = "numeric";
         visible.autocomplete = "off";
-        visible.maxLength = includesTime ? 16 : 10;
+        visible.maxLength = includesTime ? 24 : 18;
         visible.value = formatValue(input.value, includesTime);
         visible.disabled = input.disabled;
         visible.readOnly = input.readOnly;
@@ -119,6 +132,16 @@
         visible.addEventListener("input", () => {
             visible.setCustomValidity("");
             visible.value = maskValue(visible.value, includesTime);
+            placeCaretAfterLastDigit(visible, includesTime);
+        });
+        visible.addEventListener("keydown", event => {
+            if (event.key !== "Backspace" && event.key !== "Delete") return;
+
+            event.preventDefault();
+            const digits = visible.value.replace(/\D/g, "").slice(0, -1);
+            visible.value = maskValue(digits, includesTime);
+            visible.setCustomValidity("");
+            placeCaretAfterLastDigit(visible, includesTime);
         });
         visible.addEventListener("change", commit);
         visible.addEventListener("blur", commit);
