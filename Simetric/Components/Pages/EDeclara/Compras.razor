@@ -1,4 +1,5 @@
 @page "/e-declara/compras"
+@page "/e-contax/compras"
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Authorization
@@ -7,6 +8,7 @@
 @using Simetric.Models.EDeclara
 @using Simetric.Services
 @using Simetric.Services.EDeclara
+@using Simetric.Services.EContax
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject AppAccessService AppAccessService
@@ -19,7 +21,7 @@
 @inject ISimpleExcelExportService ExcelService
 @inject IJSRuntime JS
 
-<PageTitle>Compras | E-Declara</PageTitle>
+<PageTitle>Compras | @NombreAplicacion</PageTitle>
 
 <style>
     .ec-shell .ec-table { min-width: 1120px; }
@@ -54,10 +56,10 @@
     @@media(max-width: 500px) { .ec-editor-modal .ec-form-grid { grid-template-columns: 1fr; } .ec-sri-loading-card { padding: 1.5rem 1rem; } .ec-sri-loading-steps { grid-template-columns: 1fr; gap: .45rem; } }
 </style>
 
-<div class="ec-shell">
+<div class="ec-shell @(EsContextoEContax ? "econtax-context" : string.Empty)">
     <section class="ec-hero">
         <div>
-            <span class="ec-kicker">Gestión tributaria · E-Declara</span>
+            <span class="ec-kicker">Gestión tributaria · @NombreAplicacion</span>
             <h1>Información de compras</h1>
             <p>Centraliza compras, notas de crédito y documentos recibidos desde el SRI.</p>
         </div>
@@ -161,7 +163,7 @@
                             <button type="button" class="ec-icon-btn" @onclick="CerrarFormulario"><i class="ri-close-line"></i></button>
                         </div>
                         <div class="ec-form-grid">
-                            <div class="ec-auto-field span-2"><span>Clasificación tributaria</span><strong>Se asigna automáticamente con IA</strong><small>Se valida contra el catálogo de E-Declara al procesar el período.</small></div>
+                            <div class="ec-auto-field span-2"><span>Clasificación tributaria</span><strong>Se asigna automáticamente con IA</strong><small>Se valida contra el catálogo de @NombreAplicacion al procesar el período.</small></div>
                             <label><span>Serie *</span><input maxlength="6" placeholder="001001" @bind="edicion.Serie" /></label>
                             <label><span>Número *</span><input maxlength="9" placeholder="000000001" @bind="edicion.Numero" /></label>
                             <label><span>Fecha de emisión *</span><input type="date" @bind="edicion.FechaEmision" @bind:format="yyyy-MM-dd" /></label>
@@ -255,6 +257,8 @@
     private int? ContribuyenteIdQuery { get; set; }
 
     private IReadOnlyList<EDeclaraCompraDocumento> documentos = Array.Empty<EDeclaraCompraDocumento>();
+    private bool EsContextoEContax => EContaxRoutes.IsEContaxPath(Navigation, Navigation.Uri);
+    private string NombreAplicacion => EsContextoEContax ? "E-Contax" : "E-Declara";
     private EDeclaraComprasCatalogos catalogos = new();
     private readonly HashSet<long> seleccionados = new();
     private EDeclaraCompraDocumento edicion = new();
@@ -294,9 +298,12 @@
             var state=await AuthStateProvider.GetAuthenticationStateAsync(); var user=state.User;
             if(user.Identity?.IsAuthenticated!=true || !int.TryParse(user.FindFirst("IdUsuario")?.Value,out userId)){Navigation.NavigateTo("/login",true);return;}
             var superAdmin=user.FindFirst("IdTipoUsuario")?.Value==AppAccessService.AdminRoleId;
-            var access=await AppAccessService.CanAccessAsync(userId,EDeclaraRoutes.ServiceKey,superAdmin);
-            if(!access.HasAccess){Navigation.NavigateTo($"/suscripciones?servicio={EDeclaraRoutes.ServiceKey}",true);return;}
-            await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
+            var serviceKey=EContaxRoutes.IsEContaxPath(Navigation,Navigation.Uri)
+                ? EContaxRoutes.ServiceKey
+                : EDeclaraRoutes.ServiceKey;
+            var access=await AppAccessService.CanAccessAsync(userId,serviceKey,superAdmin);
+            if(!access.HasAccess){Navigation.NavigateTo($"/suscripciones?servicio={serviceKey}",true);return;}
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(serviceKey);
             contribuyentes=(await ContribuyentesService.ObtenerContribuyentesAsync(userId)).Where(x=>x.Estado==true).ToList();
             var seleccionado=ContribuyenteIdQuery.HasValue
                 ? contribuyentes.FirstOrDefault(x=>x.CodContribuyente==ContribuyenteIdQuery.Value)
@@ -393,7 +400,10 @@
 
     private async Task ExportarAsync(){try{var headers=new[]{"Tipo","Actividad","Serie","Número","Fecha","RUC","Razón social","Concepto","Serie relacionada","Número relacionado","Casilla","Tarifa","Base","IVA","Origen"};var rows=DocumentosFiltrados.Select(x=>(IReadOnlyList<string>)new[]{NombreTipoDocumentoSingular(),catalogos.Actividades.FirstOrDefault(a=>a.Id==x.TipoFacturacion)?.Descripcion??"",x.Serie,x.Numero,x.FechaEmision.ToString("dd/MM/yyyy"),x.Ruc,x.RazonSocial,x.Concepto,x.SerieDocumentoModificado,x.NumeroDocumentoModificado,x.Casilla,x.Tarifa.ToString("0.##"),x.BaseImponible.ToString("0.00"),x.Iva.ToString("0.00"),x.Origen}).ToList();var file=ExcelService.Create($"compras-{anio}-{periodo:00}.xlsx",new ExcelSheetData(NombreTipoDocumentoPlural(),headers,rows));await using var stream=new MemoryStream(file.Content);using var reference=new DotNetStreamReference(stream);await JS.InvokeVoidAsync("downloadFileFromStream",file.FileName,reference,file.ContentType);}catch(Exception ex){MostrarError($"No se pudo exportar: {ex.Message}");}}
     private static string NombreContribuyente(ContribuyenteEdeclare contribuyente)=>!string.IsNullOrWhiteSpace(contribuyente.Nombrerazonsocial)?contribuyente.Nombrerazonsocial.Trim():$"{contribuyente.Apellidos} {contribuyente.Nombres}".Trim();
-    private void IrAPerfil()=>Navigation.NavigateTo(EDeclaraRoutes.Profile);
+    private void IrAPerfil()=>Navigation.NavigateTo(
+        EContaxRoutes.IsEContaxPath(Navigation,Navigation.Uri)
+            ? EContaxRoutes.Profile
+            : EDeclaraRoutes.Profile);
     private void MostrarError(string value){mensaje=value;mensajeError=true;}
     private void MostrarExito(string value){mensaje=value;mensajeError=false;}
     private void LimpiarMensaje(){mensaje=string.Empty;mensajeError=false;}
