@@ -130,7 +130,9 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             x.Usuario != null && x.Usuario.Estado == true && x.Empresa != null && x.Empresa.Estado &&
             (x.Empresa.IdTitular == userId || (x.Sucursal != null && x.Sucursal.Estado)))) return false;
         path = path.Split('?', '#')[0].TrimEnd('/');
-        if (path is EContaxRoutes.Root or EContaxRoutes.DashboardAlias or EContaxRoutes.Profile or EContaxRoutes.Soporte)
+        if (path is EContaxRoutes.Root or EContaxRoutes.DashboardAlias or EContaxRoutes.Profile or EContaxRoutes.Soporte or
+            EContaxRoutes.Contribuyentes or
+            EContaxRoutes.Compras or EContaxRoutes.Declaraciones)
             return accion == EContaxAccion.Ver;
         path = path.ToLowerInvariant() switch
         {

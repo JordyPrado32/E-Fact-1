@@ -21,6 +21,9 @@ public static class EContaxRoutes
     public const string FacturacionGuiasRemisionGeneradas = "/e-contax/facturacion/guias-remision-generadas";
     public const string FacturacionRetencionesGeneradas = "/e-contax/facturacion/retenciones-generadas";
     public const string Cotizaciones = "/e-contax/cotizaciones";
+    public const string Contribuyentes = "/e-contax/contribuyentes";
+    public const string Compras = "/e-contax/compras";
+    public const string Declaraciones = "/e-contax/declaraciones";
     public const string ComprasImportarXml = "/e-contax/compras/importar-xml";
     public const string ComprasOrdenes = "/e-contax/compras/ordenes";
     public const string ComprasOrdenNueva = "/e-contax/compras/ordenes/nueva";

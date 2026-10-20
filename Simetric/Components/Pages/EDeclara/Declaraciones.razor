@@ -1,10 +1,12 @@
 @page "/e-declara/declaraciones"
+@page "/e-contax/declaraciones"
 @using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Authorization
 @using Simetric.Models
 @using Simetric.Models.EDeclara
 @using Simetric.Services
 @using Simetric.Services.EDeclara
+@using Simetric.Services.EContax
 @inject AuthenticationStateProvider AuthStateProvider
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
@@ -13,13 +15,13 @@
 @inject ContribuyenteEdeclaraService ContribuyentesService
 @inject NavigationManager Navigation
 
-<PageTitle>Declaraciones | E-Declara</PageTitle>
+<PageTitle>Declaraciones | @NombreAplicacion</PageTitle>
 
-<div class="ec-shell">
+<div class="ec-shell @(EsContextoEContax ? "econtax-context" : string.Empty)">
     <section class="ec-hero">
         <div class="ec-hero-content">
             <span class="ec-kicker">Gestión tributaria</span>
-            <h1>Declaraciones <span>| E-Declara</span></h1>
+            <h1>Declaraciones <span>| @NombreAplicacion</span></h1>
             <p>Presenta, gestiona y controla tus declaraciones tributarias de forma rápida y segura.</p>
             <div class="ec-hero-features">
                 <div><i class="ri-file-shield-2-line"></i><span><strong>Información validada</strong><small>Con datos de tus documentos</small></span></div>
@@ -209,6 +211,8 @@
     private int pasoActual = 1;
     private bool mostrarConfirmacionGuardado;
     private EDeclaraDeclaracionValidacion? validacionSeleccionada;
+    private bool EsContextoEContax => EContaxRoutes.IsEContaxPath(Navigation, Navigation.Uri);
+    private string NombreAplicacion => EsContextoEContax ? "E-Contax" : "E-Declara";
     private string error = string.Empty;
     private string mensaje = string.Empty;
     private string perfilNombre = string.Empty;
@@ -231,14 +235,17 @@
             }
 
             var superAdmin = user.FindFirst("IdTipoUsuario")?.Value == AppAccessService.AdminRoleId;
-            var access = await AppAccessService.CanAccessAsync(userId, EDeclaraRoutes.ServiceKey, superAdmin);
+            var serviceKey = EContaxRoutes.IsEContaxPath(Navigation, Navigation.Uri)
+                ? EContaxRoutes.ServiceKey
+                : EDeclaraRoutes.ServiceKey;
+            var access = await AppAccessService.CanAccessAsync(userId, serviceKey, superAdmin);
             if (!access.HasAccess)
             {
-                Navigation.NavigateTo($"/suscripciones?servicio={EDeclaraRoutes.ServiceKey}", true);
+                Navigation.NavigateTo($"/suscripciones?servicio={serviceKey}", true);
                 return;
             }
 
-            await SelectedAppServiceState.SetCurrentServiceKeyAsync(EDeclaraRoutes.ServiceKey);
+            await SelectedAppServiceState.SetCurrentServiceKeyAsync(serviceKey);
             contribuyentes = (await ContribuyentesService.ObtenerContribuyentesAsync(userId))
                 .Where(x => x.Estado == true)
                 .ToList();
@@ -297,12 +304,19 @@
     private void CerrarModal() => validacionSeleccionada = null;
     private void SolicitarGuardado() => mostrarConfirmacionGuardado = analisis.PuedeGuardarBorrador;
     private void CancelarGuardado() => mostrarConfirmacionGuardado = false;
-    private void IrACompras() { CerrarModal(); Navigation.NavigateTo($"{EDeclaraRoutes.Compras}?contribuyenteId={contribuyenteId}"); }
+    private void IrACompras()
+    {
+        CerrarModal();
+        var ruta = EContaxRoutes.IsEContaxPath(Navigation, Navigation.Uri)
+            ? EContaxRoutes.Compras
+            : EDeclaraRoutes.Compras;
+        Navigation.NavigateTo($"{ruta}?contribuyenteId={contribuyenteId}");
+    }
     private async Task ConfirmarGuardadoAsync() { mostrarConfirmacionGuardado = false; await GuardarAsync(); }
 
-    private static string TituloValidacion(EDeclaraDeclaracionValidacion item) => item.Codigo switch
+    private string TituloValidacion(EDeclaraDeclaracionValidacion item) => item.Codigo switch
     {
-        "CUENTA" => "Cuenta E-Declara",
+        "CUENTA" => $"Cuenta {NombreAplicacion}",
         "DOCUMENTOS" => "Documentos del período",
         "PERIODO" => "Fechas del período",
         "IDENTIFICACION" => "Identificación del contribuyente",
@@ -313,16 +327,16 @@
         _ => "Validación"
     };
 
-    private static string AyudaValidacion(EDeclaraDeclaracionValidacion item) => item.Codigo switch
+    private string AyudaValidacion(EDeclaraDeclaracionValidacion item) => item.Codigo switch
     {
-        "CUENTA" => "La declaración solo puede trabajar con la identificación configurada en la cuenta E-Declara activa.",
+        "CUENTA" => $"La declaración solo puede trabajar con la identificación configurada en la cuenta {NombreAplicacion} activa.",
         "DOCUMENTOS" => "Descarga o importa las facturas, notas de crédito y retenciones desde el módulo Compras.",
         "PERIODO" => "Cada documento debe tener una fecha de emisión dentro del mes o semestre seleccionado.",
         "IDENTIFICACION" => "La identificación del comprador o sujeto retenido debe coincidir con la cuenta activa.",
         "IMPORTES" => "Revisa que la base imponible y el IVA de los documentos sean valores no negativos.",
         "DUPLICADOS" => "Elimina el registro repetido o conserva solo el comprobante válido antes de analizar nuevamente.",
         "NOTAS" => "Cada nota de crédito debe estar relacionada con una factura del mismo proveedor y período.",
-         "CLASIFICACION" => "Ejecuta la clasificación automática con IA. Solo se guardarán actividades y casillas existentes en el catálogo E-Declara.",
+         "CLASIFICACION" => $"Ejecuta la clasificación automática con IA. Solo se guardarán actividades y casillas existentes en el catálogo {NombreAplicacion}.",
         _ => "Revisa el detalle en el módulo Compras."
     };
 
