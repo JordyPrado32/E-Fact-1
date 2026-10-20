@@ -4,6 +4,7 @@
 @using Simetric.Services
 @using Simetric.Services.EContax
 @using Simetric.Models.EContax
+@using Simetric.DTOs.EContax
 @using System.Security.Claims
 @inject AuthenticationStateProvider AuthStateProvider
 @inject ConfiguracionService ConfigService
@@ -13,6 +14,7 @@
 @inject NavigationManager NavManager
 @inject IJSRuntime JS
 @inject EContaxSeguridadService SeguridadEContax
+@inject EContaxTenantService EContaxTenantService
 
 <PageTitle>Puntos de emision | Numerica E-Contax</PageTitle>
 
@@ -76,6 +78,14 @@
             <div class="points-alert @(StatusIsError ? "is-error" : "is-success")">
                 <i class="bi @(StatusIsError ? "bi-exclamation-triangle" : "bi-check2-circle")"></i>
                 <span>@mensajeStatus</span>
+            </div>
+        }
+
+        @if (SucursalesSinPunto.Count > 0)
+        {
+            <div class="points-alert is-error">
+                <i class="bi bi-exclamation-triangle"></i>
+                <span>Falta configurar un punto de emisión para: @string.Join(", ", SucursalesSinPunto.Select(x => x.Nombre)).</span>
             </div>
         }
 
@@ -295,6 +305,21 @@
                 }
 
                 <label class="point-field">
+                    <span>Sucursal</span>
+                    <div class="point-input-shell">
+                        <i class="bi bi-shop"></i>
+                        <select value="@sucursalInput" @onchange="OnSucursalInputChanged" disabled="@(!EsJefeEmpresa)">
+                            <option value="0">Selecciona una sucursal</option>
+                            @foreach (var sucursal in sucursales)
+                            {
+                                <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                            }
+                        </select>
+                    </div>
+                    <small>Cada sucursal debe tener un único punto de emisión activo.</small>
+                </label>
+
+                <label class="point-field">
                     <span>Codigo de establecimiento</span>
                     <div class="point-input-shell">
                         <i class="bi bi-building"></i>
@@ -359,12 +384,16 @@
     private string establecimientoSeleccionado = "001";
     private string establecimientoInput = "001";
     private string puntoEmisionInput = "001";
+    private int sucursalInput;
     private string? mensajeStatus;
     private string? errorModal;
+    private EContaxUserContext? contextoEContax;
+    private List<EContaxSucursalDto> sucursales = new();
 
     private bool StatusIsError => mensajeStatus?.StartsWith("Error", StringComparison.OrdinalIgnoreCase) == true;
     private string? CodigoEstablecimientoEmisor => NormalizarCodigo(emisorActivo?.CodEstablecimiento);
     private bool RequiereConfigurarEmisorAntesDePunto => string.IsNullOrWhiteSpace(CodigoEstablecimientoEmisor);
+    private bool EsJefeEmpresa => contextoEContax?.EsJefeEmpresa == true;
     private bool MostrarVolverInicioOnboarding =>
         EmisorOnboardingService.RequiresInitialSetup || emisionEstado?.PuedeEmitir == false;
     private string MensajeEstablecimientoModal =>
@@ -392,6 +421,9 @@
         .OrderBy(c => c.NumCaja)
         .ThenBy(c => c.Sec)
         .ToList();
+    private List<EContaxSucursalDto> SucursalesSinPunto => sucursales
+        .Where(s => !cajas.Any(c => c.IdSucursal == s.IdSucursal && c.Estado == true))
+        .ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -404,6 +436,13 @@
             NavManager.NavigateTo("/login", forceLoad: true);
             return;
         }
+
+        contextoEContax = await EContaxTenantService.GetContextAsync(idUsuarioActual);
+        var sucursalesEmpresa = await EContaxTenantService.GetSucursalesEmpresaAsync(contextoEContax.IdEmpresa);
+        sucursales = (contextoEContax.EsJefeEmpresa
+                ? sucursalesEmpresa
+                : sucursalesEmpresa.Where(x => x.IdSucursal == contextoEContax.IdSucursal))
+            .ToList();
 
         await CargarDatos();
     }
@@ -419,7 +458,9 @@
         try
         {
             cajas.Clear();
-            cajas.AddRange(await ConfigService.GetCajasCuentaActivasAsync(idUsuarioActual));
+            var idsSucursales = sucursales.Select(x => x.IdSucursal).ToHashSet();
+            cajas.AddRange((await ConfigService.GetCajasCuentaActivasAsync(idUsuarioActual))
+                .Where(x => x.IdEmpresa == contextoEContax?.IdEmpresa && x.IdSucursal is > 0 && idsSucursales.Contains(x.IdSucursal.Value)));
             emisorActivo = (await FacturacionService.GetEmisoresActivosAsync(idUsuarioActual)).FirstOrDefault();
 
             cajaSeleccionada = seleccionarSec.HasValue
@@ -465,6 +506,7 @@
         }
 
         cajaEditando = null;
+        sucursalInput = cajaSeleccionada?.IdSucursal ?? contextoEContax?.IdSucursal ?? sucursales.FirstOrDefault()?.IdSucursal ?? 0;
         establecimientoInput = ObtenerEstablecimientoBaseParaPuntos();
         puntoEmisionInput = SiguientePuntoSugerido(establecimientoInput);
         errorModal = null;
@@ -480,6 +522,7 @@
         }
 
         cajaEditando = null;
+        sucursalInput = contextoEContax?.IdSucursal ?? sucursales.FirstOrDefault()?.IdSucursal ?? 0;
         establecimientoInput = ObtenerEstablecimientoBaseParaPuntos();
         puntoEmisionInput = SiguientePuntoSugerido(establecimientoInput);
         errorModal = null;
@@ -489,6 +532,7 @@
     private void AbrirEdicion(Caja caja)
     {
         cajaEditando = caja;
+        sucursalInput = caja.IdSucursal ?? 0;
         establecimientoInput = ExtraerEstablecimiento(caja.SerieFactura);
         puntoEmisionInput = ExtraerPuntoEmision(caja.SerieFactura);
         errorModal = null;
@@ -517,6 +561,16 @@
 
         var establecimiento = NormalizarCodigo(establecimientoInput);
         var punto = NormalizarCodigo(puntoEmisionInput);
+        if (sucursalInput <= 0 || !sucursales.Any(x => x.IdSucursal == sucursalInput && x.Estado))
+        {
+            errorModal = "Selecciona una sucursal activa para asignar el punto de emisión.";
+            return;
+        }
+        if (!EsJefeEmpresa && sucursalInput != contextoEContax?.IdSucursal)
+        {
+            errorModal = "Solo puedes configurar el punto de emisión de tu sucursal.";
+            return;
+        }
         if (establecimiento is null)
         {
             errorModal = "El establecimiento debe contener tres digitos y no puede ser 000.";
@@ -534,12 +588,19 @@
             errorModal = $"La serie {serie} ya esta configurada.";
             return;
         }
+        if (cajas.Any(c => c.Sec != cajaEditando?.Sec && c.IdSucursal == sucursalInput && c.Estado == true))
+        {
+            errorModal = "La sucursal ya tiene un punto de emisión activo. Edita el punto existente.";
+            return;
+        }
 
         isSaving = true;
         errorModal = null;
         try
         {
             var caja = cajaEditando ?? CrearNuevaCajaBase();
+            caja.IdEmpresa = contextoEContax?.IdEmpresa;
+            caja.IdSucursal = sucursalInput;
             caja.SerieFactura = serie;
             caja.SerieNotasCred = serie;
             caja.SerieGuia = serie;
@@ -587,8 +648,14 @@
             NumCaja = siguienteNumero,
             idJefe = idUsuarioActual,
             IdEmpresa = principal?.IdEmpresa is > 0 ? principal.IdEmpresa : emisorActivo?.IdEmpresa is > 0 ? emisorActivo.IdEmpresa : 1,
-            IdSucursal = principal?.IdSucursal is > 0 ? principal.IdSucursal : emisorActivo?.IdSucursal is > 0 ? emisorActivo.IdSucursal : 1
+            IdSucursal = sucursalInput > 0 ? sucursalInput : principal?.IdSucursal is > 0 ? principal.IdSucursal : emisorActivo?.IdSucursal is > 0 ? emisorActivo.IdSucursal : 1
         };
+    }
+
+    private void OnSucursalInputChanged(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var id))
+            sucursalInput = id;
     }
 
     private async Task MarcarPrincipal(Caja caja)

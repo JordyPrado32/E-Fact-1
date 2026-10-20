@@ -18,6 +18,8 @@ public class LiquidacionCompraPreviewDto
     public DateTime? FechaEmision { get; set; } = DateTime.Today;
 
     public int? CodEmisor { get; set; }
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
     public string NombreEmisorEncontrado { get; set; } = "";
     public string RucEmisor { get; set; } = "";
     public string RazonSocialEmisor { get; set; } = "";

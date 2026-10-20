@@ -7,6 +7,8 @@ public class NotaDebitoListDto
     public int Sec { get; set; }
     public string NumeroNotaDebito { get; set; } = string.Empty;
     public string Serie { get; set; } = string.Empty;
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
     public string NumeroCompleto => FormatearNumeroCompleto(Serie, NumeroNotaDebito);
     public string TipoIdentificacionCliente { get; set; } = string.Empty;
     public string Cliente { get; set; } = string.Empty;

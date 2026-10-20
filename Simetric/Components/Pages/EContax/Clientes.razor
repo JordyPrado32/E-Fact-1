@@ -1,4 +1,5 @@
 @page "/e-contax/clientes"
+@page "/e-contax/proveedores"
 
 @using System.Net.Http.Json
 @using System.Text
@@ -36,7 +37,7 @@
     var ultimoRegistroVista = Math.Min(paginaActualVista * registrosPorPagina, TotalRegistrosFiltrados);
 }
 
-<PageTitle>Clientes / Proveedores | @PageBrandTitle</PageTitle>
+<PageTitle>@(EsModoProveedores ? "Proveedores" : "Clientes / Proveedores") | @PageBrandTitle</PageTitle>
 
 <div class="entity-shell @(EsModoCrudEmbebido ? "entity-shell-embedded-form" : null)" data-tour="clientes.page">
     @if (MostrarVolverInicioOnboarding)
@@ -83,7 +84,7 @@
         <button type="button" class="quick-action-card quick-action-primary" @onclick="AbrirBotAsync">
             <span class="quick-action-icon"><i class="bi bi-stars"></i></span>
             <span>
-                <strong>Crear cliente / proveedor con IA</strong>
+                <strong>@(EsModoProveedores ? "Crear proveedor con IA" : "Crear cliente / proveedor con IA")</strong>
                 <small>Abre el bot para asistirte</small>
             </span>
         </button>
@@ -92,7 +93,7 @@
             <span class="quick-action-icon quick-action-icon-green"><i class="bi bi-file-earmark-spreadsheet"></i></span>
             <span>
                 <strong>Importar desde Excel</strong>
-                <small>Carga masiva de clientes</small>
+                <small>Carga masiva de @(EsModoProveedores ? "proveedores" : "clientes")</small>
             </span>
         </button>
 
@@ -137,8 +138,8 @@
 
         <div class="toolbar-copy">
             <span class="toolbar-kicker">Búsqueda y control</span>
-            <h3>Consulta los datos y administra tus clientes / proveedores</h3>
-            <p>Aqui tienes una lista de tus clientes, donde puedes administrar tu negocio </p>
+            <h3>Consulta y administra tus @(EsModoProveedores ? "proveedores" : "clientes / proveedores")</h3>
+            <p>Gestiona la información comercial que utilizarás en la operación diaria.</p>
         </div>
 
         <div class="toolbar-actions">
@@ -191,13 +192,13 @@
             <div class="table-card-head">
                 <div>
                     <span class="table-kicker">Listado activo</span>
-                    <h3>Clientes / proveedores registrados</h3>
+                    <h3>@(EsModoProveedores ? "Proveedores registrados" : "Clientes / proveedores registrados")</h3>
                 </div>
                 <div class="table-head-actions">
                     <span class="table-badge">@filteredClientes.Count registros</span>
                 <button type="button" class="primary-btn" data-no-auto-loading="true" @onclick="AbrirNuevoClienteModal">
                         <i class="bi bi-plus-lg"></i>
-                        <span>Nuevo cliente / proveedor</span>
+                        <span>Nuevo @(EsModoProveedores ? "proveedor" : "cliente / proveedor")</span>
                     </button>
                 </div>
             </div>
@@ -1477,6 +1478,11 @@
     private int usuarioLogueadoId = 0;
     private bool isDemoMode;
     private string PageBrandTitle => "Numerica E-Contax";
+    private bool EsModoProveedores =>
+        NavManager.ToBaseRelativePath(NavManager.Uri)
+            .Split('?', '#')[0]
+            .TrimEnd('/')
+            .Equals("e-contax/proveedores", StringComparison.OrdinalIgnoreCase);
 
     private bool mostrarImportacion = false;
     private bool importandoClientes = false;
@@ -1538,6 +1544,15 @@
         public int FacturasEmitidas { get; set; }
         public decimal SaldoPendiente { get; set; }
         public List<string> CorreosAdicionales { get; set; } = new();
+        public bool EsProveedor { get; set; }
+        public string? CuentaContableProveedor { get; set; }
+        public string? CreditoTributarioProveedor { get; set; }
+        public string? CodigoProveedor { get; set; }
+        public bool EsSujetoRetencionProveedor { get; set; }
+        public bool RegistraInformacionBancariaProveedor { get; set; }
+        public string? BancoProveedor { get; set; }
+        public string? TipoCuentaProveedor { get; set; }
+        public string? NumeroCuentaProveedor { get; set; }
     }
 
     private class ClienteUpsertDto : IValidatableObject
@@ -1604,31 +1619,22 @@
         [JsonIgnore]
         public bool EsCliente { get; set; } = true;
 
-        [JsonIgnore]
         public bool EsProveedor { get; set; }
 
-        [JsonIgnore]
         public string? CuentaContableProveedor { get; set; } = "21311 - Proveedores";
 
-        [JsonIgnore]
         public string? CreditoTributarioProveedor { get; set; }
 
-        [JsonIgnore]
         public string? CodigoProveedor { get; set; }
 
-        [JsonIgnore]
         public bool EsSujetoRetencionProveedor { get; set; }
 
-        [JsonIgnore]
         public bool RegistraInformacionBancariaProveedor { get; set; }
 
-        [JsonIgnore]
         public string? BancoProveedor { get; set; }
 
-        [JsonIgnore]
         public string? TipoCuentaProveedor { get; set; }
 
-        [JsonIgnore]
         public string? NumeroCuentaProveedor { get; set; }
 
         private static string? NormalizarTelefono(string? valor) =>
@@ -2545,6 +2551,9 @@
         get
         {
             var query = clientes.AsEnumerable();
+
+            if (EsModoProveedores)
+                query = query.Where(c => c.EsProveedor);
 
             if (filtroTipoCliente != 0)
                 query = query.Where(c => c.TipoCliente == filtroTipoCliente);
@@ -3473,6 +3482,12 @@
             EsTipoEmpresa = false
         };
 
+        if (EsModoProveedores)
+        {
+            model.EsProveedor = true;
+            AsegurarDatosProveedorPorDefecto();
+        }
+
         estadoAux = true;
         mensajeConsultaCedula = null;
         consultaCedulaEsError = false;
@@ -3566,7 +3581,16 @@
                 Pais = itemDemo.Pais,
                 Provincia = itemDemo.Provincia,
                 Ciudad = itemDemo.Ciudad,
-                EsTipoEmpresa = EsTipoClienteEmpresa(itemDemo.TipoCliente)
+                EsTipoEmpresa = EsTipoClienteEmpresa(itemDemo.TipoCliente),
+                EsProveedor = itemDemo.EsProveedor,
+                CuentaContableProveedor = itemDemo.CuentaContableProveedor,
+                CreditoTributarioProveedor = itemDemo.CreditoTributarioProveedor,
+                CodigoProveedor = itemDemo.CodigoProveedor,
+                EsSujetoRetencionProveedor = itemDemo.EsSujetoRetencionProveedor,
+                RegistraInformacionBancariaProveedor = itemDemo.RegistraInformacionBancariaProveedor,
+                BancoProveedor = itemDemo.BancoProveedor,
+                TipoCuentaProveedor = itemDemo.TipoCuentaProveedor,
+                NumeroCuentaProveedor = itemDemo.NumeroCuentaProveedor
             };
 
             editando = true;
@@ -3640,13 +3664,21 @@
                 Pais = item.Pais is > 0 ? item.Pais : ecuadorPaisId,
                 Provincia = item.Provincia is > 0 ? item.Provincia : null,
                 Ciudad = item.Ciudad is > 0 ? item.Ciudad : null,
-                EsTipoEmpresa = EsTipoClienteEmpresa(item.TipoCliente)
+                EsTipoEmpresa = EsTipoClienteEmpresa(item.TipoCliente),
+                EsProveedor = item.EsProveedor,
+                CuentaContableProveedor = item.CuentaContableProveedor,
+                CreditoTributarioProveedor = item.CreditoTributarioProveedor,
+                CodigoProveedor = item.CodigoProveedor,
+                EsSujetoRetencionProveedor = item.EsSujetoRetencionProveedor,
+                RegistraInformacionBancariaProveedor = item.RegistraInformacionBancariaProveedor,
+                BancoProveedor = item.BancoProveedor,
+                TipoCuentaProveedor = item.TipoCuentaProveedor,
+                NumeroCuentaProveedor = item.NumeroCuentaProveedor
             };
 
             await PrepararLookupsUbicacionFormularioAsync();
             ActualizarTipoClienteForm();
             PrepararTipoContactoTelefonico();
-            await CargarProveedorEnFormularioAsync(model.Numeroidentificacion);
 
             estadoAux = model.Estado ?? true;
             mensajeConsultaCedula = null;
@@ -3665,37 +3697,17 @@
         }
     }
 
-    private async Task CargarProveedorEnFormularioAsync(string? identificacion)
-    {
-        if (string.IsNullOrWhiteSpace(identificacion))
-            return;
-
-        await using var context = await DbFactory.CreateDbContextAsync();
-        var proveedor = await context.Proveedores
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.ruc == identificacion.Trim() && x.estado != false);
-
-        if (proveedor is null)
-            return;
-
-        model.EsProveedor = true;
-        model.CuentaContableProveedor = string.IsNullOrWhiteSpace(proveedor.cuentaContable)
-            ? "21311 - Proveedores"
-            : proveedor.cuentaContable;
-        model.CreditoTributarioProveedor = proveedor.retIva1;
-        model.CodigoProveedor = proveedor.detalle;
-        model.EsSujetoRetencionProveedor = proveedor.llevaRetencion == true;
-        model.TipoCuentaProveedor = proveedor.tipoCuenta;
-        model.NumeroCuentaProveedor = proveedor.numeroCuenta;
-        model.BancoProveedor = proveedor.institucionFin?.ToString();
-        model.RegistraInformacionBancariaProveedor =
-            !string.IsNullOrWhiteSpace(model.TipoCuentaProveedor) ||
-            !string.IsNullOrWhiteSpace(model.NumeroCuentaProveedor) ||
-            !string.IsNullOrWhiteSpace(model.BancoProveedor);
-    }
-
     private string? ValidarDatosProveedorFormulario()
     {
+        if (!model.EsProveedor)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(model.Numeroidentificacion))
+            return "La identificación del proveedor es obligatoria.";
+
+        if (string.IsNullOrWhiteSpace(model.CuentaContableProveedor))
+            return "La cuenta contable del proveedor es obligatoria.";
+
         return null;
     }
 
@@ -3709,95 +3721,6 @@
             ? "01"
             : model.CreditoTributarioProveedor.Trim();
     }
-
-    private async Task SincronizarProveedorDesdeClienteAsync()
-    {
-        var identificacion = model.Numeroidentificacion?.Trim();
-        if (string.IsNullOrWhiteSpace(identificacion))
-            return;
-
-        await using var context = await DbFactory.CreateDbContextAsync();
-        var proveedor = await context.Proveedores
-            .FirstOrDefaultAsync(x => x.ruc == identificacion);
-
-        if (!model.EsProveedor)
-        {
-            if (proveedor is not null && proveedor.estado != false)
-            {
-                proveedor.estado = false;
-                proveedor.fechaActualizacion = DateTime.Now;
-                await context.SaveChangesAsync();
-            }
-
-            return;
-        }
-
-        AsegurarDatosProveedorPorDefecto();
-
-        if (proveedor is null)
-        {
-            proveedor = new Proveedor
-            {
-                ruc = identificacion,
-                estado = true
-            };
-            context.Proveedores.Add(proveedor);
-        }
-
-        proveedor.estado = true;
-
-        var nombres = SepararPartes(model.Nombres);
-        var apellidos = SepararPartes(model.Apellidos);
-
-        proveedor.tipoIdentificacion = ObtenerCodigoTipoIdentificacionProveedor();
-        proveedor.personaNatural = EsPersonaSeleccionada ? 'S' : 'N';
-        proveedor.primerNombre = EsPersonaSeleccionada ? nombres.ElementAtOrDefault(0) : null;
-        proveedor.segundoNombre = EsPersonaSeleccionada ? nombres.ElementAtOrDefault(1) : null;
-        proveedor.primerApellido = EsPersonaSeleccionada ? apellidos.ElementAtOrDefault(0) : null;
-        proveedor.segundoApellido = EsPersonaSeleccionada ? apellidos.ElementAtOrDefault(1) : null;
-        proveedor.nombreComercial = model.Nombrecomercial;
-        proveedor.nombre = ObtenerNombreProveedorDesdeFormulario();
-        proveedor.direccion = model.Direccion;
-        proveedor.telefono = model.Telefonoconvencional;
-        proveedor.telefonoMovil = model.Celular;
-        proveedor.email = model.Correo;
-        proveedor.obligado = string.Equals(model.Oblgconta, "SI", StringComparison.OrdinalIgnoreCase) ? 'S' : 'N';
-        proveedor.cuentaContable = model.CuentaContableProveedor?.Trim();
-        proveedor.retIva1 = model.CreditoTributarioProveedor?.Trim();
-        proveedor.llevaRetencion = model.EsSujetoRetencionProveedor;
-        proveedor.detalle = model.CodigoProveedor?.Trim();
-        proveedor.tipoCuenta = model.RegistraInformacionBancariaProveedor ? model.TipoCuentaProveedor?.Trim() : null;
-        proveedor.numeroCuenta = model.RegistraInformacionBancariaProveedor ? model.NumeroCuentaProveedor?.Trim() : null;
-        proveedor.institucionFin = model.RegistraInformacionBancariaProveedor && int.TryParse(model.BancoProveedor?.Trim(), out var bancoCodigo)
-            ? bancoCodigo
-            : null;
-        proveedor.fechaActualizacion = DateTime.Now;
-
-        await context.SaveChangesAsync();
-    }
-
-    private string? ObtenerCodigoTipoIdentificacionProveedor()
-    {
-        if (!model.Tipoidentificacion.HasValue)
-            return null;
-
-        return identificaciones.FirstOrDefault(x => x.Id == model.Tipoidentificacion.Value)?.Codigo;
-    }
-
-    private string ObtenerNombreProveedorDesdeFormulario()
-    {
-        if (EsEmpresaSeleccionada)
-            return (model.Nombrerazonsocial ?? model.Nombrecomercial ?? model.Numeroidentificacion ?? string.Empty).Trim();
-
-        return string.Join(" ", new[] { model.Nombres, model.Apellidos }
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x!.Trim()));
-    }
-
-    private static List<string> SepararPartes(string? texto) =>
-        (texto ?? string.Empty)
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToList();
 
     private void SetMensajeFormularioOListado(string? texto, string? detalle = null, bool esError = false)
     {
@@ -3901,8 +3824,6 @@
                 SetMensajeFormularioOListado($"Error API: {(int)resp.StatusCode}", body, esError: true);
                 return;
             }
-
-            await SincronizarProveedorDesdeClienteAsync();
 
             LimpiarMensajesFormularioOListado();
 

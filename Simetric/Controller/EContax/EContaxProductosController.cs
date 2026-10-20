@@ -129,6 +129,31 @@ public sealed class EContaxProductosController : EContaxApiControllerBase
         }
     }
 
+    [HttpPost("bulk")]
+    public async Task<ActionResult> BulkCreate([FromQuery] int userId, [FromBody] List<EContaxProductoUpsertDto> models)
+    {
+        if (userId <= 0)
+            return Unauthorized("Sesion no valida.");
+
+        var creados = 0;
+        var errores = new List<string>();
+        var items = models ?? new List<EContaxProductoUpsertDto>();
+        for (var index = 0; index < items.Count; index++)
+        {
+            try
+            {
+                await _catalogService.CrearProductoAsync(userId, items[index]);
+                creados++;
+            }
+            catch (InvalidOperationException ex)
+            {
+                errores.Add($"Fila {index + 2}: {ex.Message}");
+            }
+        }
+
+        return Ok(new { Creados = creados, Errores = errores });
+    }
+
     [HttpPut("{codigo:int}")]
     public async Task<ActionResult> Update(int codigo, [FromQuery] int userId, [FromBody] EContaxProductoUpsertDto model)
     {

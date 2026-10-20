@@ -372,6 +372,31 @@ namespace Simetric.Controllers
             return Ok(dto);
         }
 
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+        [HttpGet("estado/{codfactura:int}")]
+        public async Task<IActionResult> ObtenerEstado(int codfactura)
+        {
+            var factura = await _service.ObtenerEstadoFacturaAsync(codfactura);
+            if (factura is null)
+                return NotFound(new { mensaje = "No se encontró la factura." });
+
+            var autorizada = DocumentoAutorizacionHelper.EstaAutorizado(
+                factura.Autorizado,
+                factura.EstadoSri);
+
+            return Ok(new
+            {
+                codfactura = factura.Codfactura,
+                numeroComprobante = factura.Numfactura,
+                estado = DocumentoAutorizacionHelper.ObtenerEstadoVisual(factura.EstadoSri, autorizada),
+                autorizada,
+                estadoSri = factura.EstadoSri,
+                mensaje = factura.MensajeSri,
+                numeroAutorizacion = factura.NumeroAutorizacion,
+                fechaAutorizacion = factura.FechaAutorizacion
+            });
+        }
+
         [HttpGet("nc/next-secuencial")]
         public async Task<IActionResult> GetNextNc([FromQuery] int idUsuario, [FromQuery] string? serie = null, [FromQuery] int? codEmisor = null)
         {

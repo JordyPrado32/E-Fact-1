@@ -65,6 +65,8 @@ public class CompraXmlPreviewDto
 
     // Datos encontrados en sistema
     public int? CodEmisor { get; set; }
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
     public string NombreEmisorEncontrado { get; set; } = "";
     public int? CodProveedor { get; set; }
 

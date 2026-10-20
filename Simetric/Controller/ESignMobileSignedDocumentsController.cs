@@ -69,7 +69,11 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
         var physicalPath = Path.Combine(webRootPath, "uploads", "e-rubrica", "estampados", userId.ToString(), nombreArchivo);
         if (!System.IO.File.Exists(physicalPath)) return NotFound();
 
-        return PhysicalFile(physicalPath, "application/pdf", enableRangeProcessing: true);
+        return PhysicalFile(
+            physicalPath,
+            "application/pdf",
+            CrearNombreVisible(new FileInfo(physicalPath)),
+            enableRangeProcessing: true);
     }
 
     private int GetUserId()
@@ -119,8 +123,20 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
             return !string.IsNullOrWhiteSpace(nombreOriginal);
         }
         var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length >= 3 &&
+            Guid.TryParse(partes[0], out _) &&
+            partes[^1].Equals("firmado", StringComparison.OrdinalIgnoreCase))
+        {
+            nombreOriginal = string.Join("_", partes.Skip(1).Take(partes.Length - 2));
+            try { nombreOriginal = Uri.UnescapeDataString(nombreOriginal); }
+            catch (UriFormatException) { }
+            nombreOriginal = nombreOriginal.Trim();
+            return !string.IsNullOrWhiteSpace(nombreOriginal);
+        }
+
         if (partes.Length < 4 ||
-            partes[0].Length != 14 ||
+            !partes[0].All(char.IsDigit) ||
+            partes[0].Length < 7 ||
             partes[1].Length != 32 ||
             !partes[^1].Equals("firmado", StringComparison.OrdinalIgnoreCase))
         {
@@ -130,7 +146,7 @@ public sealed class ESignMobileSignedDocumentsController : ControllerBase
         nombreOriginal = string.Join("_", partes.Skip(2).Take(partes.Length - 3));
         try { nombreOriginal = Uri.UnescapeDataString(nombreOriginal); }
         catch (UriFormatException) { }
-        nombreOriginal = nombreOriginal.Replace('_', ' ').Trim();
+        nombreOriginal = nombreOriginal.Trim();
         return !string.IsNullOrWhiteSpace(nombreOriginal);
     }
 }

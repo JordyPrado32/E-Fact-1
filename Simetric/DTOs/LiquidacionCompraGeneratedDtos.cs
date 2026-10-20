@@ -6,6 +6,8 @@ public class LiquidacionCompraListDto
 {
     public int CodFactura { get; set; }
     public string Serie { get; set; } = "";
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
     public string Secuencial { get; set; } = "";
     public string NumeroDocumento => $"{SerieVisual}-{Secuencial.PadLeft(9, '0')}";
     public string SerieVisual => FormatearSerie(Serie);

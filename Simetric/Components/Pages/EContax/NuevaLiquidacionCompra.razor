@@ -5,12 +5,14 @@
 @implements IDisposable
 @using Simetric.DTOs
 @using Simetric.Services
+@using Simetric.Services.EContax
 @using System.Globalization
 @using System.Security.Claims
 @using System.Text
 @using Simetric.Models.Glogales
 @inject AuthenticationStateProvider AuthStateProvider
 @inject FacturacionService FacturacionService
+@inject EContaxFacturacionService EContaxFacturacionService
 @inject ComprasXmlService ComprasXmlService
 @inject InitialSequencePromptService InitialSequencePromptService
 @inject LiquidacionCompraService LiquidacionCompraService
@@ -1076,7 +1078,7 @@
         await CargarUsuarioActualAsync();
         await CargarEstadoEmisionAsync();
         await CargarCatalogosAsync();
-        seriesDocumento = await FacturacionService.GetSeriesComprasHabilitadasAsync(usuarioActual ?? 0);
+        seriesDocumento = await EContaxFacturacionService.GetSeriesComprasHabilitadasAsync(usuarioActual ?? 0);
         await ReiniciarFormularioAsync();
 
         var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(NavManager.ToAbsoluteUri(NavManager.Uri).Query);
@@ -1152,6 +1154,15 @@
         liquidacionGeneradaPdfUrl = null;
         liquidacionRetencionId = null;
         preview = await LiquidacionCompraService.CrearPreviewManualAsync(usuarioActual);
+        var cajaEContax = await EContaxFacturacionService.GetCajaUsuarioAsync(usuarioActual ?? 0);
+        preview.IdEmpresa = cajaEContax?.IdEmpresa;
+        preview.IdSucursal = cajaEContax?.IdSucursal;
+        AplicarSerieEContax();
+        if (preview != null)
+        {
+            preview.Secuencial = string.Empty;
+            await LiquidacionCompraService.ResolverDatosManualAsync(preview);
+        }
         textoBusquedaProducto = "";
         textoBusquedaProveedor = "";
         sugerenciasCatalogo = null;
@@ -1200,6 +1211,16 @@
         preview.Usuario = usuarioActual;
         await LiquidacionCompraService.ResolverDatosManualAsync(preview);
         await CargarSugerenciasProveedorAsync();
+    }
+
+    private void AplicarSerieEContax()
+    {
+        var serie = seriesDocumento.FirstOrDefault();
+        if (preview == null || serie == null)
+            return;
+
+        preview.Estab = serie.Establecimiento;
+        preview.PtoEmi = serie.PuntoEmision;
     }
 
     private async Task OnSerieDocumentoChangedAsync(ChangeEventArgs e)

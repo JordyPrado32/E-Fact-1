@@ -21,6 +21,7 @@ public sealed class EContaxProductoDto
     public int? Idempresa { get; set; }
     public int? Idsucursal { get; set; }
     public string? NombreSucursal { get; set; }
+    public List<int> Idsucursales { get; set; } = new();
 }
 
 public sealed class EContaxProductoUpsertDto
@@ -39,4 +40,5 @@ public sealed class EContaxProductoUpsertDto
     public bool? Estado { get; set; }
     public string? Observacion { get; set; }
     public int? Idsucursal { get; set; }
+    public List<int> Idsucursales { get; set; } = new();
 }

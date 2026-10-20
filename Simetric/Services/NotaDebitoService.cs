@@ -486,6 +486,8 @@ public class NotaDebitoService
                 Sec = nd.Sec,
                 NumeroNotaDebito = nd.NumNotaDebito ?? string.Empty,
                 Serie = nd.Serie ?? string.Empty,
+                IdEmpresa = nd.IdEmpresa,
+                IdSucursal = nd.IdSucursal,
                 Cliente = c != null
                     ? (!string.IsNullOrWhiteSpace(c.Nombrerazonsocial)
                         ? c.Nombrerazonsocial
@@ -514,6 +516,8 @@ public class NotaDebitoService
             Sec = x.Sec,
             NumeroNotaDebito = x.NumeroNotaDebito,
             Serie = x.Serie,
+            IdEmpresa = x.IdEmpresa,
+            IdSucursal = x.IdSucursal,
             Cliente = x.Cliente,
             IdentificacionCliente = x.IdentificacionCliente,
             TipoIdentificacionCliente = x.TipoIdentificacionCliente,

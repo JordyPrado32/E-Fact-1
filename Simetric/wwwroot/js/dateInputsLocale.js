@@ -82,19 +82,51 @@
         visible.required = input.required;
         visible.setAttribute("aria-label", input.getAttribute("aria-label") || visible.placeholder);
         visible.dataset.dateDisplayFor = "true";
+        visible.classList.add("localized-date-display");
+
+        const pickerButton = document.createElement("button");
+        pickerButton.type = "button";
+        pickerButton.className = "localized-date-picker";
+        pickerButton.setAttribute("aria-label", includesTime ? "Abrir calendario y hora" : "Abrir calendario");
+        pickerButton.innerHTML = '<i class="bi bi-calendar3" aria-hidden="true"></i>';
 
         input.dataset.localizedDate = "true";
+        input.dataset.localizedDateNative = "true";
         input.lang = "es-EC";
         input.classList.add("localized-native-date");
+        input.style.setProperty("position", "absolute", "important");
+        input.style.setProperty("width", "1px", "important");
+        input.style.setProperty("height", "1px", "important");
+        input.style.setProperty("padding", "0", "important");
+        input.style.setProperty("margin", "0", "important");
+        input.style.setProperty("opacity", "0", "important");
+        input.style.setProperty("pointer-events", "none", "important");
         input.setAttribute("aria-hidden", "true");
         input.tabIndex = -1;
         input.before(visible);
+        visible.after(pickerButton);
 
         const synchronizeState = () => {
             visible.disabled = input.disabled;
             visible.readOnly = input.readOnly;
             visible.required = input.required;
+            pickerButton.disabled = input.disabled || input.readOnly;
         };
+
+        pickerButton.addEventListener("click", () => {
+            if (input.disabled || input.readOnly) return;
+
+            if (typeof input.showPicker === "function") {
+                try {
+                    input.showPicker();
+                    return;
+                } catch {
+                    // Algunos navegadores no permiten abrir el selector desde un control oculto.
+                }
+            }
+
+            input.click();
+        });
 
         const commit = () => {
             visible.setCustomValidity("");
@@ -144,7 +176,10 @@
             placeCaretAfterLastDigit(visible, includesTime);
         });
         visible.addEventListener("change", commit);
-        visible.addEventListener("blur", commit);
+        visible.addEventListener("blur", () => {
+            commit();
+            input.dispatchEvent(new Event("blur"));
+        });
         input.addEventListener("input", () => {
             visible.value = formatValue(input.value, includesTime);
             synchronizeState();
@@ -153,6 +188,8 @@
             visible.value = formatValue(input.value, includesTime);
             synchronizeState();
         });
+
+        synchronizeState();
     }
 
     function apply(root) {

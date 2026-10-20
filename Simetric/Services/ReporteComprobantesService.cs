@@ -129,6 +129,8 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Codfactura,
                 TipoDocumento = "Facturas",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.Factura,
+                IdEmpresa = item.IdEmpresa,
+                IdSucursal = item.IdSucursal,
                 FechaEmision = estaAutorizado
                     ? header?.FechaAutorizacion ?? item.FechaAutorizacion
                     : null,
@@ -167,6 +169,8 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Notas de credito",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.NotaCredito,
+                IdEmpresa = item.IdEmpresa,
+                IdSucursal = item.IdSucursal,
                 FechaEmision = estaAutorizado ? header?.FechaAutorizacion : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Cliente,
@@ -202,6 +206,8 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Notas de debito",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.NotaDebito,
+                IdEmpresa = item.IdEmpresa,
+                IdSucursal = item.IdSucursal,
                 FechaEmision = estaAutorizado ? header?.FechaAutorizacion : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Cliente,
@@ -237,6 +243,8 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Guias de remision",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.GuiaRemision,
+                IdEmpresa = item.IdEmpresa,
+                IdSucursal = item.IdSucursal,
                 FechaEmision = estaAutorizado
                     ? ParseFechaAutorizacion(item.FechaAutorizacion)
                     : null,
@@ -276,6 +284,8 @@ public sealed class ReporteComprobantesService
                     DocumentoId = item.Sec,
                     TipoDocumento = "Retenciones",
                     TipoDocumentoCodigo = ReporteComprobantesTipos.Retencion,
+                    IdEmpresa = item.IdEmpresa,
+                    IdSucursal = item.IdSucursal,
                     FechaEmision = estaAutorizado ? header.FechaAutorizacion : null,
                     NumeroDocumento = item.NumeroCompleto,
                     TerceroNombre = item.Proveedor,
@@ -305,6 +315,8 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.Sec,
                 TipoDocumento = "Retenciones",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.Retencion,
+                IdEmpresa = item.IdEmpresa,
+                IdSucursal = item.IdSucursal,
                 FechaEmision = estaAutorizado ? header?.FechaAutorizacion : null,
                 NumeroDocumento = item.NumeroCompleto,
                 TerceroNombre = item.Proveedor,
@@ -335,6 +347,8 @@ public sealed class ReporteComprobantesService
                 DocumentoId = item.CodFactura,
                 TipoDocumento = "Liquidaciones de compra",
                 TipoDocumentoCodigo = ReporteComprobantesTipos.LiquidacionCompra,
+                IdEmpresa = item.IdEmpresa,
+                IdSucursal = item.IdSucursal,
                 FechaEmision = estaAutorizado
                     ? liquidacionFechasAutorizacion.GetValueOrDefault(item.CodFactura)
                     : null,
@@ -360,6 +374,27 @@ public sealed class ReporteComprobantesService
                 TieneServicio = detalle?.TieneServicio == true
             };
         }));
+
+        var clavesSucursales = items
+            .Where(x => x.IdEmpresa is > 0 && x.IdSucursal is > 0)
+            .Select(x => new { IdEmpresa = x.IdEmpresa!.Value, IdSucursal = x.IdSucursal!.Value })
+            .Distinct()
+            .ToList();
+        if (clavesSucursales.Count > 0)
+        {
+            var empresasSucursales = clavesSucursales.Select(x => x.IdEmpresa).Distinct().ToArray();
+            var idsSucursales = clavesSucursales.Select(x => x.IdSucursal).Distinct().ToArray();
+            var nombresSucursales = await context.EContaxSucursales
+                .AsNoTracking()
+                .Where(x => empresasSucursales.Contains(x.IdEmpresa) && idsSucursales.Contains(x.IdSucursal))
+                .ToDictionaryAsync(x => (x.IdEmpresa, x.IdSucursal), x => x.Nombre);
+
+            foreach (var item in items)
+            {
+                if (item.IdEmpresa is > 0 && item.IdSucursal is > 0)
+                    item.Sucursal = nombresSucursales.GetValueOrDefault((item.IdEmpresa.Value, item.IdSucursal.Value), string.Empty);
+            }
+        }
 
         items = items
             .OrderByDescending(x => x.FechaEmision ?? DateTime.MinValue)

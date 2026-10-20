@@ -94,6 +94,10 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             if (usuariosMenu is not null)
                 permitidos.Add(usuariosMenu.IdMenu);
         }
+        var afiliacionMenu = menus.FirstOrDefault(x =>
+            string.Equals(x.UrlMenu, EContaxRoutes.Afiliacion, StringComparison.OrdinalIgnoreCase));
+        if (afiliacionMenu is not null)
+            permitidos.Add(afiliacionMenu.IdMenu);
         // Los padres se incluyen para navegar, sin habilitar sus rutas por herencia.
         var visibles = menus.Where(x => permitidos.Contains(x.IdMenu)).ToList();
         var pendientes = new Queue<int>(visibles.Where(x => x.IdPadre is > 0).Select(x => x.IdPadre!.Value));
@@ -146,11 +150,15 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             EContaxRoutes.CuentasPorCobrarEstadoCuenta or
             EContaxRoutes.ReportesDocumentos or
             EContaxRoutes.ReportesLogs or
-            EContaxRoutes.Proveedores or
             EContaxRoutes.SolicitudNueva or
             EContaxRoutes.SolicitudPagos or
             EContaxRoutes.SolicitudPagoResultado => EContaxRoutes.FacturacionNueva,
+            EContaxRoutes.Proveedores or
             EContaxRoutes.ConfiguracionTiposCliente => EContaxRoutes.Clientes,
+            EContaxRoutes.ComprasOrdenes or
+            EContaxRoutes.ComprasOrdenNueva => EContaxRoutes.ComprasOrdenes,
+            EContaxRoutes.ComprasRecepciones or
+            EContaxRoutes.ComprasRecepcionNueva => EContaxRoutes.ComprasRecepciones,
             EContaxRoutes.AdministracionCajasSecuencias => EContaxRoutes.AdministracionRoles,
             EContaxRoutes.ConfiguracionSeguridad => EContaxRoutes.AdministracionRoles,
             EContaxRoutes.ConfiguracionFirma => EContaxRoutes.Emisor,
@@ -169,6 +177,8 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
                 x.IdUsuario == userId && x.Estado && x.Empresa != null && x.Empresa.Estado &&
                 x.Empresa.IdTitular == userId);
         }
+        if (path == EContaxRoutes.Afiliacion)
+            return accion == EContaxAccion.Ver;
         if (path == EContaxRoutes.AdministracionUsuarios)
         {
             var tipoUsuario = await db.Usuarios.AsNoTracking()
@@ -234,9 +244,13 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             Sucursales = await db.EContaxSucursales.AsNoTracking().Where(x => x.IdEmpresa == actor.IdEmpresa && x.Estado &&
                 (actor.EsJefeEmpresa || x.IdSucursal == actor.IdSucursal)).OrderBy(x => x.Nombre).ToListAsync(),
             Perfiles = esAdmin ? perfiles : new(),
-            Usuarios = await db.EContaxUsuariosContexto.AsNoTracking().Include(x => x.Usuario)
-                .Where(x => x.IdEmpresa == actor.IdEmpresa && x.Estado &&
-                    (actor.EsJefeEmpresa || (esAdmin && x.IdSucursal == actor.IdSucursal) || x.IdUsuario == userId)).ToListAsync(),
+            Usuarios = esAdmin
+                ? await db.EContaxUsuariosContexto.AsNoTracking().Include(x => x.Usuario)
+                    .Where(x => x.IdEmpresa == actor.IdEmpresa && x.Estado &&
+                        (x.IdUsuario == actor.IdUsuarioTitular ||
+                         (x.Usuario != null && x.Usuario.idJefe == actor.IdUsuarioTitular && x.Usuario.estadoAsociado == true)) &&
+                        (actor.EsJefeEmpresa || x.IdSucursal == actor.IdSucursal || x.IdUsuario == userId)).ToListAsync()
+                : new(),
             Invitaciones = esAdmin ? await db.EContaxInvitaciones.AsNoTracking().Where(x => x.IdEmpresa == actor.IdEmpresa &&
                 (actor.EsJefeEmpresa || x.IdSucursal == actor.IdSucursal) && !x.Cancelada && x.Aceptada == null && x.Vence > DateTime.UtcNow)
                 .OrderByDescending(x => x.IdInvitacion).ToListAsync() : new(),
@@ -347,7 +361,11 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             miembro.MenusJson = null;
             miembro.AccionesJson = null;
             miembro.FechaActualizacion = DateTime.UtcNow;
-            if (miembro.Usuario is not null) miembro.Usuario.estadoAsociado = false;
+            if (miembro.Usuario is not null)
+            {
+                miembro.Usuario.idJefe = null;
+                miembro.Usuario.estadoAsociado = false;
+            }
             await db.SaveChangesAsync();
         });
     }
@@ -586,18 +604,62 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
     {
         await MutarAsync(async db =>
         {
-            var miembro = await db.EContaxUsuariosContexto.SingleAsync(x => x.IdUsuario == userId && x.Estado);
+            var miembro = await db.EContaxUsuariosContexto.Include(x => x.Usuario)
+                .SingleAsync(x => x.IdUsuario == userId && x.Estado);
             var empresa = await db.EContaxEmpresas.SingleAsync(x => x.IdEmpresa == miembro.IdEmpresa);
-            if (empresa.IdTitular == userId) throw new InvalidOperationException("Transfiere primero la titularidad a otro miembro de la empresa.");
+            if (empresa.IdTitular is not > 0 || empresa.IdTitular == userId)
+                throw new InvalidOperationException("Transfiere primero la titularidad a otro miembro de la empresa.");
+            await TransferirDocumentosAlTitularAsync(db, userId, empresa.IdTitular!.Value, miembro.IdEmpresa);
             RegistrarCambio(db, userId, miembro.IdEmpresa, miembro.IdSucursal, "Abandonar empresa",
                 new { miembro.IdUsuario, miembro.IdSucursal, miembro.IdPerfil }, null);
             miembro.Estado = false; miembro.IdSucursal = null; miembro.IdPerfil = null;
             miembro.EsAdminSucursal = false; miembro.MenusJson = null; miembro.AccionesJson = null;
             miembro.FechaActualizacion = DateTime.UtcNow;
+            if (miembro.Usuario is not null)
+            {
+                miembro.Usuario.idJefe = null;
+                miembro.Usuario.estadoAsociado = false;
+            }
             foreach (var invitacion in await db.EContaxInvitaciones.Where(x => x.IdInvitador == userId && x.Aceptada == null).ToListAsync())
                 invitacion.Cancelada = true;
             await db.SaveChangesAsync();
         });
+    }
+
+    private static async Task TransferirDocumentosAlTitularAsync(
+        AppDbContext db, int usuarioSaliente, int titular, int empresaId)
+    {
+        await db.Clientes
+            .Where(x => x.Idempresa == empresaId && x.Usuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Usuario, titular));
+
+        await db.Productos
+            .Where(x => x.Idempresa == empresaId && x.Idusuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Idusuario, titular));
+
+        await db.Facturas
+            .Where(x => x.Idempresa == empresaId && x.Idusuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Idusuario, titular));
+
+        await db.NotaCreditos
+            .Where(x => x.IdEmpresa == empresaId && x.Usuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Usuario, titular));
+
+        await db.NotaDebitos
+            .Where(x => x.IdEmpresa == empresaId && x.Usuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Usuario, titular));
+
+        await db.GuiasRemision
+            .Where(x => x.IdEmpresa == empresaId && x.IdUsuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.IdUsuario, titular));
+
+        await db.ComprasFacturas
+            .Where(x => x.IdEmpresa == empresaId && x.Usuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Usuario, titular));
+
+        await db.RetencionInfo
+            .Where(x => x.IdEmpresa == empresaId && x.Usuario == usuarioSaliente)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Usuario, titular));
     }
 
     public async Task TransferirAsync(int actorId, int nuevoTitular)

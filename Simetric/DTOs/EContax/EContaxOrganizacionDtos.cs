@@ -21,6 +21,7 @@ public class EContaxSucursalDto
     public string Nombre { get; set; } = string.Empty;
     public string? Codigo { get; set; }
     public string? Direccion { get; set; }
+    public string? PuntoEmision { get; set; }
     public bool Estado { get; set; }
 }
 
@@ -30,6 +31,7 @@ public sealed class EContaxSucursalUpsertDto
     public string Nombre { get; set; } = string.Empty;
     public string? Codigo { get; set; }
     public string? Direccion { get; set; }
+    public string? PuntoEmision { get; set; }
 }
 
 public sealed class EContaxSucursalResumenDto : EContaxSucursalDto

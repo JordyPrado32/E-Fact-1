@@ -155,11 +155,6 @@ public sealed class FirmaStampApiService
             Razon = razon,
             Ubicacion = ubicacion
         });
-        await RegistrarAperturaLocalCertificadoAsync(
-            certificado,
-            clave,
-            correlationId);
-
         try
         {
             using var response = await _httpClient.SendAsync(request, cancellationToken);

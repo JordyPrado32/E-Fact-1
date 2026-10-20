@@ -7,6 +7,8 @@ public class NotaCreditoListDto
     public int Sec { get; set; }
     public string NumeroNotaCredito { get; set; } = "";
     public string Serie { get; set; } = "";
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
     public string NumeroCompleto => $"{FormatearSerie(Serie)}-{NumeroNotaCredito.PadLeft(9, '0')}";
     public string TipoIdentificacionCliente { get; set; } = "";
 

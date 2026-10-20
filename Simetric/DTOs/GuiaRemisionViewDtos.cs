@@ -7,6 +7,8 @@ public class GuiaRemisionListDto
     public int Sec { get; set; }
     public string NumeroGuiaRemision { get; set; } = "";
     public string Serie { get; set; } = "";
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
     public string NumeroCompleto => $"{FormatearSerie(Serie)}-{NumeroGuiaRemision.PadLeft(9, '0')}";
     public DateTime? FechaEmision { get; set; }
     public DateTime? FechaInicioTransporte { get; set; }

@@ -9,6 +9,7 @@ public static class EContaxRoutes
     public const string Dashboard = "/e-contax";
     public const string DashboardAlias = "/e-contax/dashboard";
     public const string Profile = "/e-contax/perfil";
+    public const string Afiliacion = "/e-contax/afiliacion";
     public const string Soporte = "/e-contax/soporte";
     public const string FacturacionNueva = "/e-contax/facturacion/nueva";
     public const string FacturacionDocumentos = "/e-contax/facturacion/documentos";
@@ -21,6 +22,10 @@ public static class EContaxRoutes
     public const string FacturacionRetencionesGeneradas = "/e-contax/facturacion/retenciones-generadas";
     public const string Cotizaciones = "/e-contax/cotizaciones";
     public const string ComprasImportarXml = "/e-contax/compras/importar-xml";
+    public const string ComprasOrdenes = "/e-contax/compras/ordenes";
+    public const string ComprasOrdenNueva = "/e-contax/compras/ordenes/nueva";
+    public const string ComprasRecepciones = "/e-contax/compras/recepciones";
+    public const string ComprasRecepcionNueva = "/e-contax/compras/recepciones/nueva";
     public const string ComprasNuevaLiquidacion = "/e-contax/compras/nueva-liquidacion";
     public const string ComprasLiquidacionesGeneradas = "/e-contax/compras/liquidaciones-generadas";
     public const string CuentasPorCobrar = "/e-contax/cuentas-por-cobrar";

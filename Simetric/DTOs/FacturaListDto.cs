@@ -5,6 +5,9 @@ public class FacturaListDto
     public int Codfactura { get; set; }
     public string? Numfactura { get; set; }
     public string? Serie { get; set; }
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
+    public string? NombreSucursal { get; set; }
     public DateTime? FechaEmision { get; set; }
     public DateTime? FechaEmisionSri { get; set; }
     public DateTime? FechaSolicitud { get; set; }

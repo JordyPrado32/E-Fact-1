@@ -43,7 +43,9 @@ public sealed class EContaxSharedDataService
 
         if (!userContext.EsJefeEmpresa && userContext.IdSucursal is > 0)
         {
-            productosQuery = productosQuery.Where(producto => producto.Idsucursal == userContext.IdSucursal);
+            productosQuery = productosQuery.Where(producto => producto.Idsucursal == userContext.IdSucursal ||
+                context.EContaxProductosSucursales.Any(a => a.CodigoProducto == producto.Codigo &&
+                    a.IdEmpresa == userContext.IdEmpresa && a.IdSucursal == userContext.IdSucursal.Value));
         }
         else if (!userContext.EsJefeEmpresa)
         {

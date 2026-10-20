@@ -8,6 +8,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using System.Security.Claims
+@using Simetric.DTOs.EContax
 @using Simetric.Services
 @using Simetric.Services.EContax
 @using Simetric.Models
@@ -186,6 +187,20 @@
                     </select>
                 </div>
 
+                @if (contexto.EsJefeEmpresa)
+                {
+                    <div class="filter-box">
+                        <label class="filter-label" for="sucursalFiltro">Sucursal</label>
+                        <select id="sucursalFiltro" class="filter-select" value="@sucursalSeleccionada" @onchange="CambiarSucursalAsync">
+                            <option value="">Todas</option>
+                            @foreach (var sucursal in sucursales)
+                            {
+                                <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                            }
+                        </select>
+                    </div>
+                }
+
                 <div class="filter-box">
                     <label class="filter-label" for="pageSizeFiltro">Registros</label>
                     <select id="pageSizeFiltro" class="filter-select" @bind="CurrentPageSize">
@@ -268,6 +283,7 @@
                                 <th>Código</th>
                                 <th>Nombre</th>
                                 <th>Clasificacion</th>
+                                <th>Sucursales</th>
                                 <th class="list-extra-col">Detalles</th>
                                 <th>Precio</th>
                                 <th class="text-end">Acciones</th>
@@ -294,6 +310,9 @@
                                                 @GetSubcategoriaDescripcion(p.Idsubtipo)
                                             </span>
                                         </div>
+                                    </td>
+                                    <td data-label="Sucursales">
+                                        <span class="subcategory-line"><i class="bi bi-shop"></i> @(string.IsNullOrWhiteSpace(p.NombreSucursal) ? "Sin asignar" : p.NombreSucursal)</span>
                                     </td>
                                     <td class="list-extra-col" data-label="Detalles">
                                         <div class="compact-detail">
@@ -726,6 +745,27 @@
                         </div>
                         </details>
 
+                        <div class="row mb-3">
+                            <div class="col-md-12">
+                                <label class="form-label small fw-bold">Sucursal(es) asignada(s) *</label>
+                                @if (contexto.EsJefeEmpresa)
+                                {
+                                    <select class="form-select form-select-sm" multiple size="4" @bind="model.Idsucursales">
+                                        @foreach (var sucursal in sucursales)
+                                        {
+                                            <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                                        }
+                                    </select>
+                                    <small class="text-muted">El administrador puede asignar el mismo producto a una o varias sucursales.</small>
+                                }
+                                else
+                                {
+                                    <input class="form-control form-control-sm" value="@NombreSucursalUsuario" readonly />
+                                    <small class="text-muted">Los usuarios de sucursal solo pueden crear productos para su sucursal.</small>
+                                }
+                            </div>
+                        </div>
+
                         <div class="product-form-actions pt-3 border-top mt-4">
                             <button class="primary-btn" type="submit" disabled="@(isDemoMode || isSaving)">
                                 <i class="bi bi-save me-1"></i> @(isDemoMode ? "Guardar bloqueado" : isSaving ? "Guardando..." : (editando ? "Guardar Cambios" : "Crear Registro"))
@@ -1028,6 +1068,9 @@
 @code {
 
     private int usuarioLogueadoId = 0;
+    private EContaxUserScopeDto contexto = new();
+    private List<EContaxSucursalDto> sucursales = new();
+    private int? sucursalSeleccionada;
     private bool isDemoMode;
     private EmisionEstado? emisionEstado;
     private string PageBrandTitle => "Numerica E-Contax";
@@ -1044,6 +1087,8 @@
         public List<ImpuestoDto> impuestos { get; set; } = new();
         public List<IvaDto> ivas { get; set; } = new();
         public List<SubtipoDto> subtipos { get; set; } = new();
+        public List<EContaxSucursalDto> sucursales { get; set; } = new();
+        public EContaxUserScopeDto contexto { get; set; } = new();
     }
 
     private class TipoDto
@@ -1093,6 +1138,9 @@
         public bool? Estado { get; set; }
         public string? Observacion { get; set; }
         public int? Idusuario { get; set; }
+        public int? Idsucursal { get; set; }
+        public List<int> Idsucursales { get; set; } = new();
+        public string? NombreSucursal { get; set; }
     }
 
     private class CotizacionLinea
@@ -1125,6 +1173,7 @@
 
         public bool? Estado { get; set; } = true;
         public string? Observacion { get; set; }
+        public List<int> Idsucursales { get; set; } = new();
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
@@ -1437,6 +1486,9 @@
         }
     }
 
+    private string NombreSucursalUsuario => sucursales.FirstOrDefault(x => x.IdSucursal == contexto.IdSucursal)?.Nombre
+        ?? "Sucursal asignada";
+
     protected override void OnInitialized()
     {
         Nuevo();
@@ -1501,6 +1553,11 @@
                 subtiposProducto = respLook.subtipos
                     .OrderBy(x => x.Descripcion, StringComparer.OrdinalIgnoreCase)
                     .ToList();
+                contexto = respLook.contexto;
+                sucursales = respLook.sucursales
+                    .OrderBy(x => x.Nombre, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                sucursalSeleccionada = contexto.EsJefeEmpresa ? sucursalSeleccionada : contexto.IdSucursal;
 
                 if (filtroTipo.HasValue && !tiposProducto.Any(x => x.Idtipoproducto == filtroTipo.Value))
                 {
@@ -1513,7 +1570,10 @@
                 }
             }
 
-            productos = await Http.GetFromJsonAsync<List<ProductoDto>>($"api/e-contax/productos?userId={usuarioLogueadoId}") ?? new();
+            var productosUrl = $"api/e-contax/productos?userId={usuarioLogueadoId}";
+            if (contexto.EsJefeEmpresa && sucursalSeleccionada is > 0)
+                productosUrl += $"&sucursalId={sucursalSeleccionada.Value}";
+            productos = await Http.GetFromJsonAsync<List<ProductoDto>>(productosUrl) ?? new();
             await EmisorOnboardingService.RefreshRequirementAsync(usuarioLogueadoId);
             emisionEstado = await EmisionControlService.ObtenerEstadoAsync(usuarioLogueadoId);
         }
@@ -1526,6 +1586,13 @@
             cargando = false;
             AjustarPaginaActual();
         }
+    }
+
+    private async Task CambiarSucursalAsync(ChangeEventArgs args)
+    {
+        sucursalSeleccionada = int.TryParse(args.Value?.ToString(), out var id) && id > 0 ? id : null;
+        currentPage = 1;
+        await CargarTodo();
     }
 
     private void AbrirModalCategoriaDesdeProducto()
@@ -1786,7 +1853,10 @@
             ValorUnitario = null,
             Precio2 = null,
             Precio3 = null,
-            Observacion = null
+            Observacion = null,
+            Idsucursales = contexto.EsJefeEmpresa || contexto.IdSucursal is not > 0
+                ? new List<int>()
+                : new List<int> { contexto.IdSucursal.Value }
         };
 
         productEditContext = new EditContext(model);
@@ -2120,7 +2190,7 @@
             var creados = 0;
             if (dtoList.Any())
             {
-                var respuesta = await Http.PostAsJsonAsync($"api/productos/bulk?userId={usuarioLogueadoId}", dtoList);
+                var respuesta = await Http.PostAsJsonAsync($"api/e-contax/productos/bulk?userId={usuarioLogueadoId}", dtoList);
                 if (respuesta.IsSuccessStatusCode)
                 {
                     var result = await respuesta.Content.ReadFromJsonAsync<BulkImportResult>();
@@ -2369,7 +2439,8 @@
                 Codigoimpuesto = itemDemo.Codigoimpuesto,
                 Porcentajeimpuesto = itemDemo.Porcentajeimpuesto,
                 Estado = itemDemo.Estado,
-                Observacion = itemDemo.Observacion
+                Observacion = itemDemo.Observacion,
+                Idsucursales = itemDemo.Idsucursales.ToList()
             };
 
             editando = true;
@@ -2413,7 +2484,8 @@
                     Codigoimpuesto = item.Codigoimpuesto,
                     Porcentajeimpuesto = item.Porcentajeimpuesto,
                     Estado = item.Estado,
-                    Observacion = item.Observacion
+                    Observacion = item.Observacion,
+                    Idsucursales = item.Idsucursales.ToList()
                 };
 
                 editando = true;
@@ -2458,6 +2530,8 @@
         model.Codigoimpuesto = model.Codigoimpuesto?.Trim();
         model.Porcentajeimpuesto = model.Porcentajeimpuesto?.Trim();
         model.Observacion = model.Observacion?.Trim();
+        if (!contexto.EsJefeEmpresa && contexto.IdSucursal is > 0)
+            model.Idsucursales = new List<int> { contexto.IdSucursal.Value };
         NormalizarPreciosFormulario();
 
         if (!productEditContext.Validate())

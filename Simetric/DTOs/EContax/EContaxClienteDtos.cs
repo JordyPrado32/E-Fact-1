@@ -25,6 +25,15 @@ public sealed class EContaxClienteDto
     public int? Ciudad { get; set; }
     public int? Tipoidentificacion { get; set; }
     public int? Idempresa { get; set; }
+    public bool EsProveedor { get; set; }
+    public string? CuentaContableProveedor { get; set; }
+    public string? CreditoTributarioProveedor { get; set; }
+    public string? CodigoProveedor { get; set; }
+    public bool EsSujetoRetencionProveedor { get; set; }
+    public bool RegistraInformacionBancariaProveedor { get; set; }
+    public string? BancoProveedor { get; set; }
+    public string? TipoCuentaProveedor { get; set; }
+    public string? NumeroCuentaProveedor { get; set; }
 }
 
 public sealed class EContaxClienteUpsertDto
@@ -49,4 +58,13 @@ public sealed class EContaxClienteUpsertDto
     public int? Tipoidentificacion { get; set; }
     public List<string> CorreosAdicionales { get; set; } = new();
     public string? Oblgconta { get; set; }
+    public bool? EsProveedor { get; set; }
+    public string? CuentaContableProveedor { get; set; }
+    public string? CreditoTributarioProveedor { get; set; }
+    public string? CodigoProveedor { get; set; }
+    public bool EsSujetoRetencionProveedor { get; set; }
+    public bool RegistraInformacionBancariaProveedor { get; set; }
+    public string? BancoProveedor { get; set; }
+    public string? TipoCuentaProveedor { get; set; }
+    public string? NumeroCuentaProveedor { get; set; }
 }

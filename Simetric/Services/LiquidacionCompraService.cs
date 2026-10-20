@@ -519,6 +519,8 @@ public class LiquidacionCompraService
             Secuencial = preview.Secuencial,
             FechaEmision = preview.FechaEmision,
             CodEmisor = preview.CodEmisor,
+            IdEmpresa = preview.IdEmpresa,
+            IdSucursal = preview.IdSucursal,
             NombreEmisorEncontrado = preview.NombreEmisorEncontrado,
             RucEmisor = preview.RucEmisor,
             RazonSocialEmisor = preview.RazonSocialEmisor,
@@ -694,8 +696,8 @@ public class LiquidacionCompraService
                     IdVendedor = idVendedor,
                     Autorizado = "0",
                     Mensaje = "Liquidacion de compra manual registrada",
-                    IdEmpresa = emisor.IdEmpresa,
-                    IdSucursal = emisor.IdSucursal,
+                    IdEmpresa = persistible.IdEmpresa ?? emisor.IdEmpresa,
+                    IdSucursal = persistible.IdSucursal ?? emisor.IdSucursal,
                     Serie = persistible.Serie,
                     FechaAutoSRI = persistible.FechaEmision?.ToString("dd/MM/yyyy"),
                     TipoPago = string.IsNullOrWhiteSpace(persistible.FormaPago) ? "20" : persistible.FormaPago,
@@ -982,6 +984,8 @@ public class LiquidacionCompraService
             {
                 CodFactura = x.Compra.CodFactura,
                 Serie = x.Compra.Serie ?? "",
+                IdEmpresa = x.Compra.IdEmpresa,
+                IdSucursal = x.Compra.IdSucursal,
                 Secuencial = x.Compra.NumFactura ?? "",
                 FechaEmision = x.Compra.FchAutorizacion ?? x.Compra.FechaRegistro,
                 Proveedor = aliado == null

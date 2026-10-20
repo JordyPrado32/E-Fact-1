@@ -1,0 +1,79 @@
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
+IF OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ECONTAX_RECEPCION_COMPRA (
+        id_recepcion int IDENTITY(1,1) NOT NULL,
+        id_empresa int NOT NULL,
+        id_sucursal int NOT NULL,
+        id_orden_compra int NOT NULL,
+        numero_recepcion nvarchar(30) NOT NULL,
+        fecha_recepcion datetime2 NOT NULL CONSTRAINT DF_ECONTAX_RECEPCION_COMPRA_fecha_recepcion DEFAULT SYSDATETIME(),
+        estado nvarchar(20) NOT NULL CONSTRAINT DF_ECONTAX_RECEPCION_COMPRA_estado DEFAULT N'BORRADOR',
+        observacion nvarchar(1000) NULL,
+        usuario_creacion int NOT NULL,
+        fecha_creacion datetime2 NOT NULL CONSTRAINT DF_ECONTAX_RECEPCION_COMPRA_fecha_creacion DEFAULT SYSDATETIME(),
+        usuario_actualizacion int NULL,
+        fecha_actualizacion datetime2 NULL,
+        CONSTRAINT PK_ECONTAX_RECEPCION_COMPRA PRIMARY KEY (id_recepcion),
+        CONSTRAINT UQ_ECONTAX_RECEPCION_COMPRA_NUMERO UNIQUE (id_empresa, numero_recepcion),
+        CONSTRAINT FK_ECONTAX_RECEPCION_COMPRA_ORDEN FOREIGN KEY (id_orden_compra)
+            REFERENCES dbo.ECONTAX_ORDEN_COMPRA(id_orden_compra),
+        CONSTRAINT FK_ECONTAX_RECEPCION_COMPRA_SUCURSAL FOREIGN KEY (id_empresa, id_sucursal)
+            REFERENCES dbo.SUCURSAL(idEmpresa, idSucursal)
+    );
+END;
+
+IF OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA_DETALLE', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ECONTAX_RECEPCION_COMPRA_DETALLE (
+        id_detalle_recepcion int IDENTITY(1,1) NOT NULL,
+        id_recepcion int NOT NULL,
+        id_detalle_orden_compra int NOT NULL,
+        codigo_producto int NOT NULL,
+        codigo_principal nvarchar(100) NULL,
+        descripcion nvarchar(250) NOT NULL,
+        cantidad_ordenada decimal(18,4) NOT NULL,
+        cantidad_recibida decimal(18,4) NOT NULL,
+        cantidad_diferencia decimal(18,4) NOT NULL,
+        observacion nvarchar(500) NULL,
+        CONSTRAINT PK_ECONTAX_RECEPCION_COMPRA_DETALLE PRIMARY KEY (id_detalle_recepcion),
+        CONSTRAINT FK_ECONTAX_RECEPCION_COMPRA_DETALLE_RECEPCION FOREIGN KEY (id_recepcion)
+            REFERENCES dbo.ECONTAX_RECEPCION_COMPRA(id_recepcion) ON DELETE CASCADE,
+        CONSTRAINT FK_ECONTAX_RECEPCION_COMPRA_DETALLE_ORDEN FOREIGN KEY (id_detalle_orden_compra)
+            REFERENCES dbo.ECONTAX_ORDEN_COMPRA_DETALLE(id_detalle),
+        CONSTRAINT FK_ECONTAX_RECEPCION_COMPRA_DETALLE_PRODUCTO FOREIGN KEY (codigo_producto)
+            REFERENCES dbo.PRODUCTO(CODIGO)
+    );
+END;
+
+IF OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA_HISTORIAL', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ECONTAX_RECEPCION_COMPRA_HISTORIAL (
+        id_historial int IDENTITY(1,1) NOT NULL,
+        id_recepcion int NOT NULL,
+        estado_anterior nvarchar(20) NULL,
+        estado_nuevo nvarchar(20) NOT NULL,
+        observacion nvarchar(500) NULL,
+        usuario int NOT NULL,
+        fecha datetime2 NOT NULL CONSTRAINT DF_ECONTAX_RECEPCION_COMPRA_HISTORIAL_fecha DEFAULT SYSDATETIME(),
+        CONSTRAINT PK_ECONTAX_RECEPCION_COMPRA_HISTORIAL PRIMARY KEY (id_historial),
+        CONSTRAINT FK_ECONTAX_RECEPCION_COMPRA_HISTORIAL_RECEPCION FOREIGN KEY (id_recepcion)
+            REFERENCES dbo.ECONTAX_RECEPCION_COMPRA(id_recepcion) ON DELETE CASCADE
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ECONTAX_RECEPCION_COMPRA_EMPRESA_SUCURSAL_ESTADO' AND object_id = OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA'))
+    CREATE INDEX IX_ECONTAX_RECEPCION_COMPRA_EMPRESA_SUCURSAL_ESTADO ON dbo.ECONTAX_RECEPCION_COMPRA (id_empresa, id_sucursal, estado);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ECONTAX_RECEPCION_COMPRA_ORDEN' AND object_id = OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA'))
+    CREATE INDEX IX_ECONTAX_RECEPCION_COMPRA_ORDEN ON dbo.ECONTAX_RECEPCION_COMPRA (id_orden_compra, estado);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ECONTAX_RECEPCION_COMPRA_DETALLE_RECEPCION' AND object_id = OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA_DETALLE'))
+    CREATE INDEX IX_ECONTAX_RECEPCION_COMPRA_DETALLE_RECEPCION ON dbo.ECONTAX_RECEPCION_COMPRA_DETALLE (id_recepcion);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ECONTAX_RECEPCION_COMPRA_DETALLE_ORDEN' AND object_id = OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA_DETALLE'))
+    CREATE INDEX IX_ECONTAX_RECEPCION_COMPRA_DETALLE_ORDEN ON dbo.ECONTAX_RECEPCION_COMPRA_DETALLE (id_detalle_orden_compra);
+
+COMMIT;

@@ -2773,6 +2773,26 @@ IF @resultado < 0
                 .ToListAsync();
         }
 
+        public async Task<FacturaListDto?> ObtenerEstadoFacturaAsync(int codFactura)
+        {
+            await using var context = await _dbFactory.CreateDbContextAsync();
+
+            return await context.Facturas
+                .AsNoTracking()
+                .Where(f => f.Codfactura == codFactura)
+                .Select(f => new FacturaListDto
+                {
+                    Codfactura = f.Codfactura,
+                    Numfactura = f.Numfactura,
+                    EstadoSri = f.Estadoenviosri,
+                    Autorizado = f.Autorizado,
+                    NumeroAutorizacion = f.Numautorizacion,
+                    MensajeSri = f.Mensaje,
+                    FechaAutorizacion = f.Fchautorizacion
+                })
+                .FirstOrDefaultAsync();
+        }
+
         public async Task<List<PorcentajeIvaDto>> GetPorcentajesIvaActivosAsync()
         {
             await using var context = await _dbFactory.CreateDbContextAsync();
@@ -2820,6 +2840,12 @@ IF @resultado < 0
                     Codfactura = f.Codfactura,
                     Numfactura = f.Numfactura,
                     Serie = f.Serie,
+                IdEmpresa = f.Idempresa,
+                IdSucursal = f.Idsucursal,
+                    NombreSucursal = context.EContaxSucursales
+                        .Where(s => s.IdEmpresa == f.Idempresa && s.IdSucursal == f.Idsucursal)
+                        .Select(s => s.Nombre)
+                        .FirstOrDefault(),
                     FechaEmision = f.Fechaentrega,
                     EstadoSri = f.Estadoenviosri,
                     Autorizado = f.Autorizado,

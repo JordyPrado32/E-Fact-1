@@ -98,6 +98,13 @@ namespace Simetric.Data
         public DbSet<EContaxUsuarioContexto> EContaxUsuariosContexto { get; set; }
         public DbSet<EContaxPerfil> EContaxPerfiles { get; set; }
         public DbSet<EContaxInvitacion> EContaxInvitaciones { get; set; }
+        public DbSet<EContaxProductoSucursal> EContaxProductosSucursales { get; set; }
+        public DbSet<EContaxOrdenCompra> EContaxOrdenesCompra { get; set; }
+        public DbSet<EContaxOrdenCompraDetalle> EContaxOrdenesCompraDetalles { get; set; }
+        public DbSet<EContaxOrdenCompraEstadoHistorial> EContaxOrdenesCompraHistorial { get; set; }
+    public DbSet<EContaxRecepcionCompra> EContaxRecepcionesCompra { get; set; }
+    public DbSet<EContaxRecepcionCompraDetalle> EContaxRecepcionesCompraDetalles { get; set; }
+    public DbSet<EContaxRecepcionCompraHistorial> EContaxRecepcionesCompraHistorial { get; set; }
         public DbSet<EdeclareTarjeta> EdeclareTarjetas { get; set; }
         public DbSet<EsignTarjeta> EsignTarjetas { get; set; }
         public DbSet<EsignFirmaValidacionApiLog> EsignFirmaValidacionApiLogs { get; set; }
@@ -380,6 +387,152 @@ namespace Simetric.Data
                     .HasForeignKey(e => new { e.IdEmpresa, e.IdSucursal })
                     .HasPrincipalKey(e => new { e.IdEmpresa, e.IdSucursal })
                     .OnDelete(DeleteBehavior.NoAction);
+            });
+
+            modelBuilder.Entity<EContaxProductoSucursal>(entity =>
+            {
+                entity.ToTable("ECONTAX_PRODUCTO_SUCURSAL", "dbo");
+                entity.HasKey(e => new { e.CodigoProducto, e.IdEmpresa, e.IdSucursal });
+                entity.Property(e => e.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(e => e.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(e => e.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(e => e.FechaCreacion).HasColumnName("fecha_creacion");
+
+                entity.HasOne(e => e.Producto)
+                    .WithMany()
+                    .HasForeignKey(e => e.CodigoProducto)
+                    .OnDelete(DeleteBehavior.NoAction);
+                entity.HasOne(e => e.Sucursal)
+                    .WithMany()
+                    .HasForeignKey(e => new { e.IdEmpresa, e.IdSucursal })
+                    .HasPrincipalKey(e => new { e.IdEmpresa, e.IdSucursal })
+                    .OnDelete(DeleteBehavior.NoAction);
+            });
+
+            modelBuilder.Entity<EContaxOrdenCompra>(entity =>
+            {
+                entity.ToTable("ECONTAX_ORDEN_COMPRA", "dbo");
+                entity.HasKey(x => x.IdOrdenCompra);
+                entity.Property(x => x.IdOrdenCompra).HasColumnName("id_orden_compra");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(x => x.IdProveedorCliente).HasColumnName("id_proveedor_cliente");
+                entity.Property(x => x.NumeroOrden).HasColumnName("numero_orden").HasMaxLength(30).IsUnicode(false);
+                entity.Property(x => x.RucProveedor).HasColumnName("ruc_proveedor").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.NombreProveedor).HasColumnName("nombre_proveedor").HasMaxLength(200);
+                entity.Property(x => x.FechaEmision).HasColumnName("fecha_emision");
+                entity.Property(x => x.FechaEntregaEstimada).HasColumnName("fecha_entrega_estimada");
+                entity.Property(x => x.FormaPago).HasColumnName("forma_pago").HasMaxLength(50);
+                entity.Property(x => x.PlazoPago).HasColumnName("plazo_pago");
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(1000);
+                entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Subtotal).HasColumnName("subtotal").HasColumnType("decimal(18,2)");
+                entity.Property(x => x.Iva).HasColumnName("iva").HasColumnType("decimal(18,2)");
+                entity.Property(x => x.Total).HasColumnName("total").HasColumnType("decimal(18,2)");
+                entity.Property(x => x.UsuarioCreacion).HasColumnName("usuario_creacion");
+                entity.Property(x => x.FechaCreacion).HasColumnName("fecha_creacion");
+                entity.Property(x => x.UsuarioActualizacion).HasColumnName("usuario_actualizacion");
+                entity.Property(x => x.FechaActualizacion).HasColumnName("fecha_actualizacion");
+                entity.HasIndex(x => new { x.IdEmpresa, x.NumeroOrden }).IsUnique();
+            });
+
+            modelBuilder.Entity<EContaxOrdenCompraDetalle>(entity =>
+            {
+                entity.ToTable("ECONTAX_ORDEN_COMPRA_DETALLE", "dbo");
+                entity.HasKey(x => x.IdDetalle);
+                entity.Property(x => x.IdDetalle).HasColumnName("id_detalle");
+                entity.Property(x => x.IdOrdenCompra).HasColumnName("id_orden_compra");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.CodigoPrincipal).HasColumnName("codigo_principal").HasMaxLength(100).IsUnicode(false);
+                entity.Property(x => x.Descripcion).HasColumnName("descripcion").HasMaxLength(250);
+                entity.Property(x => x.Cantidad).HasColumnName("cantidad").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.PrecioUnitario).HasColumnName("precio_unitario").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.Descuento).HasColumnName("descuento").HasColumnType("decimal(18,2)");
+                entity.Property(x => x.TarifaIva).HasColumnName("tarifa_iva");
+                entity.Property(x => x.Subtotal).HasColumnName("subtotal").HasColumnType("decimal(18,2)");
+                entity.Property(x => x.Iva).HasColumnName("iva").HasColumnType("decimal(18,2)");
+                entity.Property(x => x.Total).HasColumnName("total").HasColumnType("decimal(18,2)");
+                entity.HasOne(x => x.OrdenCompra)
+                    .WithMany(x => x.Detalles)
+                    .HasForeignKey(x => x.IdOrdenCompra)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<EContaxOrdenCompraEstadoHistorial>(entity =>
+            {
+                entity.ToTable("ECONTAX_ORDEN_COMPRA_HISTORIAL", "dbo");
+                entity.HasKey(x => x.IdHistorial);
+                entity.Property(x => x.IdHistorial).HasColumnName("id_historial");
+                entity.Property(x => x.IdOrdenCompra).HasColumnName("id_orden_compra");
+                entity.Property(x => x.EstadoAnterior).HasColumnName("estado_anterior").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.EstadoNuevo).HasColumnName("estado_nuevo").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.Property(x => x.Usuario).HasColumnName("usuario");
+                entity.Property(x => x.Fecha).HasColumnName("fecha");
+                entity.HasOne(x => x.OrdenCompra)
+                    .WithMany(x => x.Historial)
+                    .HasForeignKey(x => x.IdOrdenCompra)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<EContaxRecepcionCompra>(entity =>
+            {
+                entity.ToTable("ECONTAX_RECEPCION_COMPRA", "dbo");
+                entity.HasKey(x => x.IdRecepcion);
+                entity.Property(x => x.IdRecepcion).HasColumnName("id_recepcion");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(x => x.IdOrdenCompra).HasColumnName("id_orden_compra");
+                entity.Property(x => x.NumeroRecepcion).HasColumnName("numero_recepcion").HasMaxLength(30).IsUnicode(false);
+                entity.Property(x => x.FechaRecepcion).HasColumnName("fecha_recepcion");
+                entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(1000);
+                entity.Property(x => x.UsuarioCreacion).HasColumnName("usuario_creacion");
+                entity.Property(x => x.FechaCreacion).HasColumnName("fecha_creacion");
+                entity.Property(x => x.UsuarioActualizacion).HasColumnName("usuario_actualizacion");
+                entity.Property(x => x.FechaActualizacion).HasColumnName("fecha_actualizacion");
+                entity.HasIndex(x => new { x.IdEmpresa, x.NumeroRecepcion }).IsUnique();
+                entity.HasOne<EContaxOrdenCompra>()
+                    .WithMany()
+                    .HasForeignKey(x => x.IdOrdenCompra)
+                    .OnDelete(DeleteBehavior.NoAction);
+            });
+
+            modelBuilder.Entity<EContaxRecepcionCompraDetalle>(entity =>
+            {
+                entity.ToTable("ECONTAX_RECEPCION_COMPRA_DETALLE", "dbo");
+                entity.HasKey(x => x.IdDetalleRecepcion);
+                entity.Property(x => x.IdDetalleRecepcion).HasColumnName("id_detalle_recepcion");
+                entity.Property(x => x.IdRecepcion).HasColumnName("id_recepcion");
+                entity.Property(x => x.IdDetalleOrdenCompra).HasColumnName("id_detalle_orden_compra");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.CodigoPrincipal).HasColumnName("codigo_principal").HasMaxLength(100).IsUnicode(false);
+                entity.Property(x => x.Descripcion).HasColumnName("descripcion").HasMaxLength(250);
+                entity.Property(x => x.CantidadOrdenada).HasColumnName("cantidad_ordenada").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CantidadRecibida).HasColumnName("cantidad_recibida").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CantidadDiferencia).HasColumnName("cantidad_diferencia").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.HasOne(x => x.Recepcion)
+                    .WithMany(x => x.Detalles)
+                    .HasForeignKey(x => x.IdRecepcion)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<EContaxRecepcionCompraHistorial>(entity =>
+            {
+                entity.ToTable("ECONTAX_RECEPCION_COMPRA_HISTORIAL", "dbo");
+                entity.HasKey(x => x.IdHistorial);
+                entity.Property(x => x.IdHistorial).HasColumnName("id_historial");
+                entity.Property(x => x.IdRecepcion).HasColumnName("id_recepcion");
+                entity.Property(x => x.EstadoAnterior).HasColumnName("estado_anterior").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.EstadoNuevo).HasColumnName("estado_nuevo").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.Property(x => x.Usuario).HasColumnName("usuario");
+                entity.Property(x => x.Fecha).HasColumnName("fecha");
+                entity.HasOne(x => x.Recepcion)
+                    .WithMany(x => x.Historial)
+                    .HasForeignKey(x => x.IdRecepcion)
+                    .OnDelete(DeleteBehavior.Cascade);
             });
 
             base.OnModelCreating(modelBuilder);

@@ -8,6 +8,8 @@ public class RetencionGeneradaListDto
 
     public string NumeroRetencion { get; set; } = "";
     public string Serie { get; set; } = "";
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
     public string NumeroCompleto => FormatearDocumento(Serie, NumeroRetencion);
 
     public string TipoIdentificacionProveedor { get; set; } = "";

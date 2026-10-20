@@ -76,6 +76,12 @@ namespace Simetric.Models
         [Column("usuario")]
         public int? Usuario { get; set; }
 
+        [Column("idEmpresa")]
+        public int? IdEmpresa { get; set; }
+
+        [Column("idSucursal")]
+        public int? IdSucursal { get; set; }
+
         [Column("estado")]
         public bool? Estado { get; set; }
 

@@ -852,6 +852,33 @@ public sealed class ESignMobileController : ControllerBase
         return File(resultado.Pdf, resultado.ContentType ?? "application/pdf", downloadFileName);
     }
 
+    [HttpGet("documentos/previsualizaciones/archivo")]
+    public IActionResult DescargarPrevisualizacion([FromQuery] string? nombreArchivo)
+    {
+        var userId = GetUserId();
+        if (userId <= 0) return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(nombreArchivo) ||
+            !string.Equals(nombreArchivo, Path.GetFileName(nombreArchivo), StringComparison.Ordinal) ||
+            !EsNombrePdfValido(nombreArchivo))
+        {
+            return BadRequest(new { mensaje = "El nombre de la previsualización no es válido." });
+        }
+
+        var physicalPath = Path.Combine(
+            _hostEnvironment.WebRootPath,
+            "uploads",
+            "e-rubrica",
+            "previsualizaciones",
+            userId.ToString(),
+            nombreArchivo);
+        if (!System.IO.File.Exists(physicalPath)) return NotFound();
+
+        var visibleName = ObtenerNombrePrevisualizacion(nombreArchivo);
+        Response.Headers.ContentDisposition = $"inline; filename*=UTF-8''{Uri.EscapeDataString(visibleName)}";
+        return PhysicalFile(physicalPath, "application/pdf", enableRangeProcessing: true);
+    }
+
     [HttpGet("documentos/pendientes")]
     public IActionResult ObtenerDocumentosPendientes()
     {
@@ -1230,7 +1257,7 @@ public sealed class ESignMobileController : ControllerBase
     {
         var name = Path.GetFileNameWithoutExtension(fileName);
         var parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 2 && parts[0].Length == 14 && Guid.TryParse(parts[1], out _))
+        if (parts.Length > 2 && parts[0].All(char.IsDigit) && parts[0].Length >= 7 && Guid.TryParse(parts[1], out _))
             name = string.Join("_", parts.Skip(2));
 
         // Si el usuario carga de nuevo un nombre existente se agrega un GUID al
@@ -1264,6 +1291,21 @@ public sealed class ESignMobileController : ControllerBase
         var nombre = EsNombrePdfValido(nombreOriginal) ? nombreOriginal! : fileName;
         var baseName = Path.GetFileNameWithoutExtension(Path.GetFileName(nombre)).Trim();
         return string.IsNullOrWhiteSpace(baseName) ? "documento" : baseName;
+    }
+
+    private static string ObtenerNombrePrevisualizacion(string fileName)
+    {
+        var nombre = Path.GetFileNameWithoutExtension(fileName);
+        var partes = nombre.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length > 3 &&
+            partes[0].Equals("preview", StringComparison.OrdinalIgnoreCase) &&
+            partes[1].Length == 14 &&
+            Guid.TryParse(partes[2], out _))
+        {
+            nombre = string.Join("_", partes.Skip(3));
+        }
+
+        return $"{nombre}.pdf";
     }
 
     private static bool EsPdfFirmadoValido(byte[] contenido)

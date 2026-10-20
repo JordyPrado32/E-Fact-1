@@ -82,6 +82,8 @@ builder.Services.AddScoped<EContaxTenantService>();
 builder.Services.AddScoped<EContaxOrganizacionService>();
 builder.Services.AddScoped<EContaxSeguridadService>();
 builder.Services.AddScoped<EContaxCatalogService>();
+builder.Services.AddScoped<EContaxOrdenCompraService>();
+builder.Services.AddScoped<EContaxRecepcionCompraService>();
 builder.Services.AddScoped<EDeclaraSharedDataService>();
 builder.Services.AddScoped<ContribuyenteEdeclaraService>();
 builder.Services.AddScoped<ComisionesService>();
@@ -274,7 +276,7 @@ builder.Services.AddHttpClient<FirmaInfoApiService>(client =>
 });
 builder.Services.AddHttpClient<FirmaStampApiService>(client =>
 {
-    client.Timeout = TimeSpan.FromSeconds(90);
+    client.Timeout = TimeSpan.FromSeconds(30);
 });
 builder.Services.AddScoped<SolicitudService>();
 builder.Services.AddScoped<SolicitudFirmaBorradorService>();
@@ -297,6 +299,8 @@ builder.Services.AddScoped<EContaxFacturacionService>();
 builder.Services.AddScoped<EContaxTenantService>();
 builder.Services.AddScoped<EContaxOrganizacionService>();
 builder.Services.AddScoped<EContaxCatalogService>();
+builder.Services.AddScoped<EContaxOrdenCompraService>();
+builder.Services.AddScoped<EContaxRecepcionCompraService>();
 builder.Services.AddScoped<EContaxOrganizacionBootstrapService>();
 builder.Services.AddScoped<EDeclaraSharedDataService>();
 builder.Services.AddScoped<IEDeclaraMenuService, EDeclaraMenuService>();

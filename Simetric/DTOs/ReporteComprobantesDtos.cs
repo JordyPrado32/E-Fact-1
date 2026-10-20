@@ -38,6 +38,9 @@ public sealed class ReporteComprobanteItemDto
     public string TipoDocumentoCodigo { get; set; } = string.Empty;
     public DateTime? FechaEmision { get; set; }
     public string NumeroDocumento { get; set; } = string.Empty;
+    public int? IdEmpresa { get; set; }
+    public int? IdSucursal { get; set; }
+    public string Sucursal { get; set; } = string.Empty;
     public string TerceroNombre { get; set; } = string.Empty;
     public string TerceroIdentificacion { get; set; } = string.Empty;
     public string TerceroRol { get; set; } = string.Empty;

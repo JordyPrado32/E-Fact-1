@@ -36,7 +36,7 @@ public sealed class EContaxCatalogService
         if (!incluirInactivos)
             query = query.Where(c => c.Estado == true);
 
-        return await query
+        var data = await query
             .OrderByDescending(c => c.Codcliente)
             .Select(c => new EContaxClienteDto
             {
@@ -69,6 +69,9 @@ public sealed class EContaxCatalogService
                 Idempresa = c.Idempresa
             })
             .ToListAsync();
+
+        await CompletarDatosProveedoresAsync(context, data);
+        return data;
     }
 
     public async Task EnsureConsumidorFinalAsync(int userId)
@@ -83,7 +86,7 @@ public sealed class EContaxCatalogService
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
 
-        return await BuildClientesEmpresaQuery(context, userContext)
+        var data = await BuildClientesEmpresaQuery(context, userContext)
             .Where(c => c.Codcliente == codCliente)
             .Select(c => new EContaxClienteDto
             {
@@ -116,6 +119,11 @@ public sealed class EContaxCatalogService
                 Idempresa = c.Idempresa
             })
             .FirstOrDefaultAsync();
+
+        if (data is not null)
+            await CompletarDatosProveedoresAsync(context, new[] { data });
+
+        return data;
     }
 
     public async Task<int> CrearClienteAsync(int userId, EContaxClienteUpsertDto dto)
@@ -161,6 +169,7 @@ public sealed class EContaxCatalogService
 
             context.Clientes.Add(entity);
             await context.SaveChangesAsync();
+            await SincronizarProveedorAsync(context, entity, dto, codigoIdentificacion);
             await GuardarCorreosClienteAsync(context, entity.Codcliente, dto.CorreosAdicionales);
             await context.SaveChangesAsync();
             await transaction.CommitAsync();
@@ -215,6 +224,7 @@ public sealed class EContaxCatalogService
             if (dto.Estado is not null)
                 cliente.Estado = dto.Estado;
 
+            await SincronizarProveedorAsync(context, cliente, dto, codigoIdentificacion);
             await GuardarCorreosClienteAsync(context, cliente.Codcliente, dto.CorreosAdicionales);
             await context.SaveChangesAsync();
             await transaction.CommitAsync();
@@ -416,6 +426,8 @@ public sealed class EContaxCatalogService
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
         var sucursales = await _tenantService.GetSucursalesEmpresaAsync(context, userContext.IdEmpresa);
+        if (!userContext.EsJefeEmpresa && userContext.IdSucursal is > 0)
+            sucursales = sucursales.Where(x => x.IdSucursal == userContext.IdSucursal).ToList();
         return (EContaxTenantService.ToScopeDto(userContext), sucursales);
     }
 
@@ -450,6 +462,8 @@ public sealed class EContaxCatalogService
                     .FirstOrDefault()
             })
             .ToListAsync();
+
+        await CompletarSucursalesAsync(context, userContext, data);
 
         return data;
     }
@@ -486,6 +500,9 @@ public sealed class EContaxCatalogService
             })
             .FirstOrDefaultAsync();
 
+        if (item is not null)
+            await CompletarSucursalesAsync(context, userContext, new[] { item });
+
         return item;
     }
 
@@ -494,9 +511,9 @@ public sealed class EContaxCatalogService
         await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Productos, EContaxAccion.Crear);
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
-        var targetSucursalId = await _tenantService.ResolveTargetSucursalAsync(userContext, model.Idsucursal);
+        var targetSucursalIds = await ResolverSucursalesProductoAsync(context, userContext, model.Idsucursales, model.Idsucursal);
 
-        await ValidarProductoAsync(context, userContext, targetSucursalId, model);
+        await ValidarProductoAsync(context, userContext, targetSucursalIds, model);
         NormalizarProducto(model);
 
         var entity = new Producto
@@ -515,10 +532,12 @@ public sealed class EContaxCatalogService
             Observacion = model.Observacion,
             Idusuario = userContext.IdUsuarioTitular,
             Idempresa = userContext.IdEmpresa,
-            Idsucursal = targetSucursalId
+            Idsucursal = targetSucursalIds[0]
         };
 
         context.Productos.Add(entity);
+        await context.SaveChangesAsync();
+        await ReemplazarSucursalesAsync(context, entity.Codigo, userContext.IdEmpresa, targetSucursalIds);
         await context.SaveChangesAsync();
         return entity.Codigo;
     }
@@ -534,11 +553,11 @@ public sealed class EContaxCatalogService
         if (producto is null)
             throw new InvalidOperationException("El producto no existe o no tiene permisos.");
 
-        var targetSucursalId = userContext.EsJefeEmpresa && model.Idsucursal is > 0
-            ? await _tenantService.ResolveTargetSucursalAsync(userContext, model.Idsucursal)
-            : producto.Idsucursal ?? await _tenantService.ResolveTargetSucursalAsync(userContext, null);
+        var targetSucursalIds = userContext.EsJefeEmpresa
+            ? await ResolverSucursalesProductoAsync(context, userContext, model.Idsucursales, producto.Idsucursal)
+            : await ObtenerSucursalesExistentesAsync(context, userContext, producto.Codigo, producto.Idsucursal);
 
-        await ValidarProductoAsync(context, userContext, targetSucursalId, model, codigo);
+        await ValidarProductoAsync(context, userContext, targetSucursalIds, model, codigo);
         NormalizarProducto(model);
 
         producto.Nombre = model.Nombre;
@@ -554,7 +573,7 @@ public sealed class EContaxCatalogService
         producto.Observacion = model.Observacion;
         producto.Idusuario = userContext.IdUsuarioTitular;
         producto.Idempresa = userContext.IdEmpresa;
-        producto.Idsucursal = targetSucursalId;
+        producto.Idsucursal = targetSucursalIds[0];
 
         if (model.Estado is not null)
         {
@@ -563,6 +582,7 @@ public sealed class EContaxCatalogService
             producto.Estado = model.Estado;
         }
 
+        await ReemplazarSucursalesAsync(context, producto.Codigo, userContext.IdEmpresa, targetSucursalIds);
         await context.SaveChangesAsync();
     }
 
@@ -586,6 +606,121 @@ public sealed class EContaxCatalogService
             .ExcluirClientesExclusivosBackOffice()
             .Where(c => c.Idempresa == userContext.IdEmpresa);
 
+    private static async Task CompletarDatosProveedoresAsync(
+        AppDbContext context,
+        IEnumerable<EContaxClienteDto> clientes)
+    {
+        var lista = clientes.ToList();
+        var identificaciones = lista
+            .Select(x => x.Numeroidentificacion?.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct()
+            .ToList();
+
+        if (identificaciones.Count == 0)
+            return;
+
+        var proveedores = await context.Proveedores
+            .AsNoTracking()
+            .Where(x => x.ruc != null && identificaciones.Contains(x.ruc) && x.estado != false)
+            .ToListAsync();
+
+        foreach (var cliente in lista)
+        {
+            var proveedor = proveedores.FirstOrDefault(x =>
+                string.Equals(x.ruc?.Trim(), cliente.Numeroidentificacion?.Trim(), StringComparison.Ordinal));
+
+            if (proveedor is null)
+                continue;
+
+            cliente.EsProveedor = true;
+            cliente.CuentaContableProveedor = proveedor.cuentaContable;
+            cliente.CreditoTributarioProveedor = proveedor.retIva1;
+            cliente.CodigoProveedor = proveedor.detalle;
+            cliente.EsSujetoRetencionProveedor = proveedor.llevaRetencion == true;
+            cliente.TipoCuentaProveedor = proveedor.tipoCuenta;
+            cliente.NumeroCuentaProveedor = proveedor.numeroCuenta;
+            cliente.BancoProveedor = proveedor.institucionFin?.ToString();
+            cliente.RegistraInformacionBancariaProveedor =
+                !string.IsNullOrWhiteSpace(cliente.TipoCuentaProveedor) ||
+                !string.IsNullOrWhiteSpace(cliente.NumeroCuentaProveedor) ||
+                !string.IsNullOrWhiteSpace(cliente.BancoProveedor);
+        }
+    }
+
+    private static async Task SincronizarProveedorAsync(
+        AppDbContext context,
+        Cliente cliente,
+        EContaxClienteUpsertDto dto,
+        string? codigoIdentificacion)
+    {
+        if (!dto.EsProveedor.HasValue)
+            return;
+
+        var identificacion = dto.Numeroidentificacion?.Trim();
+        if (string.IsNullOrWhiteSpace(identificacion))
+            return;
+
+        var proveedor = await context.Proveedores
+            .FirstOrDefaultAsync(x => x.ruc == identificacion);
+
+        if (dto.EsProveedor != true)
+        {
+            if (proveedor is not null && proveedor.estado != false)
+            {
+                proveedor.estado = false;
+                proveedor.fechaActualizacion = DateTime.Now;
+            }
+
+            return;
+        }
+
+        proveedor ??= new Proveedor { ruc = identificacion };
+        if (proveedor.idProveedor == 0)
+            context.Proveedores.Add(proveedor);
+
+        var nombres = SepararNombre(dto.Nombres);
+        var apellidos = SepararNombre(dto.Apellidos);
+
+        proveedor.estado = true;
+        proveedor.tipoIdentificacion = codigoIdentificacion;
+        proveedor.personaNatural = string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial) ? 'S' : 'N';
+        proveedor.primerNombre = proveedor.personaNatural == 'S' ? nombres.ElementAtOrDefault(0) : null;
+        proveedor.segundoNombre = proveedor.personaNatural == 'S' ? nombres.ElementAtOrDefault(1) : null;
+        proveedor.primerApellido = proveedor.personaNatural == 'S' ? apellidos.ElementAtOrDefault(0) : null;
+        proveedor.segundoApellido = proveedor.personaNatural == 'S' ? apellidos.ElementAtOrDefault(1) : null;
+        proveedor.nombreComercial = cliente.Nombrecomercial;
+        proveedor.nombre = ObtenerNombreProveedor(cliente);
+        proveedor.direccion = cliente.Direccion;
+        proveedor.telefono = cliente.Telefonoconvencional;
+        proveedor.telefonoMovil = cliente.Celular;
+        proveedor.email = cliente.Correo;
+        proveedor.obligado = cliente.Oblgconta == "SI" ? 'S' : 'N';
+        proveedor.cuentaContable = string.IsNullOrWhiteSpace(dto.CuentaContableProveedor)
+            ? "21311 - Proveedores"
+            : dto.CuentaContableProveedor.Trim();
+        proveedor.retIva1 = dto.CreditoTributarioProveedor?.Trim();
+        proveedor.llevaRetencion = dto.EsSujetoRetencionProveedor;
+        proveedor.detalle = dto.CodigoProveedor?.Trim();
+        proveedor.tipoCuenta = dto.RegistraInformacionBancariaProveedor ? dto.TipoCuentaProveedor?.Trim() : null;
+        proveedor.numeroCuenta = dto.RegistraInformacionBancariaProveedor ? dto.NumeroCuentaProveedor?.Trim() : null;
+        proveedor.institucionFin = dto.RegistraInformacionBancariaProveedor &&
+            int.TryParse(dto.BancoProveedor?.Trim(), out var bancoCodigo) ? bancoCodigo : null;
+        proveedor.fechaActualizacion = DateTime.Now;
+    }
+
+    private static string ObtenerNombreProveedor(Cliente cliente) =>
+        !string.IsNullOrWhiteSpace(cliente.Nombrerazonsocial)
+            ? cliente.Nombrerazonsocial.Trim()
+            : string.Join(" ", new[] { cliente.Nombres, cliente.Apellidos }
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!.Trim()));
+
+    private static List<string> SepararNombre(string? valor) =>
+        (valor ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
     private IQueryable<Producto> BuildProductosPermitidosQuery(AppDbContext context, EContaxUserContext userContext, int? sucursalId)
     {
         var query = context.Productos
@@ -594,14 +729,18 @@ public sealed class EContaxCatalogService
         if (userContext.EsJefeEmpresa)
         {
             if (sucursalId is > 0)
-                query = query.Where(p => p.Idsucursal == sucursalId.Value);
+                query = query.Where(p => p.Idsucursal == sucursalId.Value ||
+                    context.EContaxProductosSucursales.Any(a => a.CodigoProducto == p.Codigo &&
+                        a.IdEmpresa == userContext.IdEmpresa && a.IdSucursal == sucursalId.Value));
 
             return query;
         }
 
         if (userContext.IdSucursal is > 0)
         {
-            query = query.Where(p => p.Idsucursal == userContext.IdSucursal);
+            query = query.Where(p => p.Idsucursal == userContext.IdSucursal ||
+                context.EContaxProductosSucursales.Any(a => a.CodigoProducto == p.Codigo &&
+                    a.IdEmpresa == userContext.IdEmpresa && a.IdSucursal == userContext.IdSucursal.Value));
         }
         else
         {
@@ -609,6 +748,104 @@ public sealed class EContaxCatalogService
         }
 
         return query;
+    }
+
+    private async Task<List<int>> ResolverSucursalesProductoAsync(
+        AppDbContext context,
+        EContaxUserContext userContext,
+        IEnumerable<int>? sucursalesSolicitadas,
+        int? sucursalCompatibilidad = null)
+    {
+        if (!userContext.EsJefeEmpresa)
+            return new[] { await _tenantService.ResolveTargetSucursalAsync(userContext, null) }.ToList();
+
+        var ids = (sucursalesSolicitadas ?? Enumerable.Empty<int>())
+            .Concat(sucursalCompatibilidad is > 0 ? new[] { sucursalCompatibilidad.Value } : Enumerable.Empty<int>())
+            .Where(x => x > 0)
+            .Distinct()
+            .ToList();
+
+        if (ids.Count == 0)
+            ids.Add(await _tenantService.ResolveTargetSucursalAsync(userContext, null));
+
+        var validos = await context.EContaxSucursales
+            .AsNoTracking()
+            .Where(x => x.IdEmpresa == userContext.IdEmpresa && x.Estado && ids.Contains(x.IdSucursal))
+            .Select(x => x.IdSucursal)
+            .ToListAsync();
+
+        if (validos.Count != ids.Count)
+            throw new InvalidOperationException("Una o más sucursales seleccionadas no pertenecen a la empresa.");
+
+        return ids;
+    }
+
+    private async Task ReemplazarSucursalesAsync(AppDbContext context, int codigoProducto, int idEmpresa, IEnumerable<int> sucursales)
+    {
+        var actuales = await context.EContaxProductosSucursales
+            .Where(x => x.CodigoProducto == codigoProducto && x.IdEmpresa == idEmpresa)
+            .ToListAsync();
+        context.EContaxProductosSucursales.RemoveRange(actuales);
+        context.EContaxProductosSucursales.AddRange(sucursales.Distinct().Select(idSucursal => new EContaxProductoSucursal
+        {
+            CodigoProducto = codigoProducto,
+            IdEmpresa = idEmpresa,
+            IdSucursal = idSucursal
+        }));
+    }
+
+    private static async Task CompletarSucursalesAsync(
+        AppDbContext context,
+        EContaxUserContext userContext,
+        IEnumerable<EContaxProductoDto> productos)
+    {
+        var lista = productos.ToList();
+        if (lista.Count == 0)
+            return;
+
+        var codigos = lista.Select(x => x.Codigo).ToList();
+        var asignaciones = await context.EContaxProductosSucursales
+            .AsNoTracking()
+            .Where(x => x.IdEmpresa == userContext.IdEmpresa && codigos.Contains(x.CodigoProducto) &&
+                (userContext.EsJefeEmpresa || x.IdSucursal == userContext.IdSucursal))
+            .Join(context.EContaxSucursales,
+                productoSucursal => new { productoSucursal.IdEmpresa, productoSucursal.IdSucursal },
+                sucursal => new { IdEmpresa = sucursal.IdEmpresa, IdSucursal = sucursal.IdSucursal },
+                (productoSucursal, sucursal) => new { productoSucursal.CodigoProducto, productoSucursal.IdSucursal, sucursal.Nombre })
+            .ToListAsync();
+
+        foreach (var producto in lista)
+        {
+            var sucursales = asignaciones.Where(x => x.CodigoProducto == producto.Codigo).ToList();
+            producto.Idsucursales = sucursales.Count > 0
+                ? sucursales.Select(x => x.IdSucursal).Distinct().OrderBy(x => x).ToList()
+                : producto.Idsucursal is > 0 && (userContext.EsJefeEmpresa || producto.Idsucursal == userContext.IdSucursal)
+                    ? new List<int> { producto.Idsucursal.Value }
+                    : new List<int>();
+            producto.NombreSucursal = sucursales.Count > 0
+                ? string.Join(", ", sucursales.Select(x => x.Nombre).Distinct(StringComparer.OrdinalIgnoreCase))
+                : producto.NombreSucursal;
+        }
+    }
+
+    private async Task<List<int>> ObtenerSucursalesExistentesAsync(
+        AppDbContext context,
+        EContaxUserContext userContext,
+        int codigoProducto,
+        int? sucursalCompatibilidad)
+    {
+        var ids = await context.EContaxProductosSucursales
+            .Where(x => x.CodigoProducto == codigoProducto && x.IdEmpresa == userContext.IdEmpresa)
+            .Select(x => x.IdSucursal)
+            .ToListAsync();
+
+        if (ids.Count == 0 && sucursalCompatibilidad is > 0)
+            ids.Add(sucursalCompatibilidad.Value);
+
+        if (userContext.IdSucursal is not > 0 || !ids.Contains(userContext.IdSucursal.Value))
+            throw new InvalidOperationException("El producto no está asignado a tu sucursal.");
+
+        return ids;
     }
 
     private async Task EnsureConsumidorFinalEmpresaAsync(AppDbContext context, EContaxUserContext userContext)
@@ -805,7 +1042,7 @@ public sealed class EContaxCatalogService
         }
     }
 
-    private async Task ValidarProductoAsync(AppDbContext context, EContaxUserContext userContext, int targetSucursalId, EContaxProductoUpsertDto? model, int? codigoActual = null)
+    private async Task ValidarProductoAsync(AppDbContext context, EContaxUserContext userContext, IReadOnlyCollection<int> targetSucursalIds, EContaxProductoUpsertDto? model, int? codigoActual = null)
     {
         if (model is null)
             throw new InvalidOperationException("Datos invalidos.");
@@ -823,12 +1060,14 @@ public sealed class EContaxCatalogService
             var duplicado = await context.Productos.AnyAsync(p =>
                 p.Codigo != (codigoActual ?? 0) &&
                 p.Idempresa == userContext.IdEmpresa &&
-                p.Idsucursal == targetSucursalId &&
                 p.CodigoPrincipal == model.CodigoPrincipal &&
-                p.Estado == true);
+                p.Estado == true &&
+                (p.Idsucursal.HasValue && targetSucursalIds.Contains(p.Idsucursal.Value) ||
+                 context.EContaxProductosSucursales.Any(a => a.CodigoProducto == p.Codigo &&
+                     a.IdEmpresa == userContext.IdEmpresa && targetSucursalIds.Contains(a.IdSucursal))));
 
             if (duplicado)
-                throw new InvalidOperationException("Ya existe un producto con ese codigo en la sucursal seleccionada.");
+                throw new InvalidOperationException("Ya existe un producto con ese codigo en una de las sucursales seleccionadas.");
         }
 
         if (model.TipoProducto.HasValue)

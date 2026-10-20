@@ -1136,6 +1136,8 @@ public class NotaCreditoService
                 Sec = nc.Sec,
                 NumeroNotaCredito = nc.NumNotaCredito ?? "",
                 Serie = nc.Serie ?? "",
+                IdEmpresa = nc.IdEmpresa,
+                IdSucursal = nc.IdSucursal,
                 Cliente = c != null
                     ? (!string.IsNullOrWhiteSpace(c.Nombrerazonsocial)
                         ? c.Nombrerazonsocial
@@ -1179,6 +1181,8 @@ public class NotaCreditoService
             Sec = x.Sec,
             NumeroNotaCredito = x.NumeroNotaCredito,
             Serie = x.Serie,
+            IdEmpresa = x.IdEmpresa,
+            IdSucursal = x.IdSucursal,
             Cliente = x.Cliente,
             IdentificacionCliente = x.IdentificacionCliente,
             TipoIdentificacionCliente = x.TipoIdentificacionCliente,
@@ -1233,6 +1237,8 @@ public class NotaCreditoService
                 Sec = nc.Sec,
                 NumeroNotaCredito = nc.NumNotaCredito ?? "",
                 Serie = nc.Serie ?? "",
+                IdEmpresa = nc.IdEmpresa,
+                IdSucursal = nc.IdSucursal,
                 Cliente = c != null
                     ? (!string.IsNullOrWhiteSpace(c.Nombrerazonsocial)
                         ? c.Nombrerazonsocial
@@ -1277,6 +1283,8 @@ public class NotaCreditoService
             Sec = x.Sec,
             NumeroNotaCredito = x.NumeroNotaCredito,
             Serie = x.Serie,
+            IdEmpresa = x.IdEmpresa,
+            IdSucursal = x.IdSucursal,
             Cliente = x.Cliente,
             IdentificacionCliente = x.IdentificacionCliente,
             TipoIdentificacionCliente = x.TipoIdentificacionCliente,

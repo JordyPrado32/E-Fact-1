@@ -749,6 +749,8 @@ namespace Simetric.Services
                     Sec = x.Sec,
                     NumeroGuiaRemision = x.NumGuiaRemision ?? "",
                     Serie = x.Serie ?? "",
+                    IdEmpresa = x.IdEmpresa,
+                    IdSucursal = x.IdSucursal,
                     FechaEmision = x.Fecha,
                     FechaInicioTransporte = x.FechaIniTransporte,
                     FechaFinTransporte = x.FechaFinTransporte,

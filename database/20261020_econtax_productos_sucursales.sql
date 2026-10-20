@@ -1,0 +1,31 @@
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
+IF OBJECT_ID(N'dbo.ECONTAX_PRODUCTO_SUCURSAL', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ECONTAX_PRODUCTO_SUCURSAL (
+        codigo_producto int NOT NULL,
+        id_empresa int NOT NULL,
+        id_sucursal int NOT NULL,
+        fecha_creacion datetime2 NOT NULL CONSTRAINT DF_ECONTAX_PRODUCTO_SUCURSAL_fecha DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_ECONTAX_PRODUCTO_SUCURSAL PRIMARY KEY (codigo_producto, id_empresa, id_sucursal),
+        CONSTRAINT FK_ECONTAX_PRODUCTO_SUCURSAL_PRODUCTO FOREIGN KEY (codigo_producto) REFERENCES dbo.PRODUCTO(CODIGO),
+        CONSTRAINT FK_ECONTAX_PRODUCTO_SUCURSAL_SUCURSAL FOREIGN KEY (id_empresa, id_sucursal) REFERENCES dbo.SUCURSAL(idEmpresa, idSucursal)
+    );
+END;
+
+INSERT dbo.ECONTAX_PRODUCTO_SUCURSAL (codigo_producto, id_empresa, id_sucursal)
+SELECT p.CODIGO, p.IDEMPRESA, p.IDSUCURSAL
+FROM dbo.PRODUCTO p
+JOIN dbo.SUCURSAL s ON s.idEmpresa = p.IDEMPRESA AND s.idSucursal = p.IDSUCURSAL
+WHERE p.IDEMPRESA IS NOT NULL
+  AND p.IDSUCURSAL IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM dbo.ECONTAX_PRODUCTO_SUCURSAL a
+      WHERE a.codigo_producto = p.CODIGO
+        AND a.id_empresa = p.IDEMPRESA
+        AND a.id_sucursal = p.IDSUCURSAL
+  );
+
+COMMIT;
