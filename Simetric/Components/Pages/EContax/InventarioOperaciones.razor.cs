@@ -114,11 +114,65 @@ public class InventarioOperacionesBase : ComponentBase
 
     protected string NombreProducto(int codigo) => Productos.FirstOrDefault(x => x.CodigoProducto == codigo)?.NombreProducto ?? $"Producto #{codigo}";
 
-    protected void AgregarTransferencia() => AgregarLinea(LineasTransferencia, ref ProductoTransferenciaAgregar, ref CantidadTransferenciaAgregar);
+    protected void AgregarTransferencia()
+    {
+        if (Transferencia.IdSucursalOrigen is not > 0)
+        {
+            Error = "Selecciona la sucursal de origen antes de agregar productos.";
+            return;
+        }
+        ValidarDisponible(LineasTransferencia, ProductoTransferenciaAgregar, CantidadTransferenciaAgregar, Transferencia.IdSucursalOrigen.Value);
+        if (string.IsNullOrWhiteSpace(Error))
+        {
+            ProductoTransferenciaAgregar = 0;
+            CantidadTransferenciaAgregar = 0;
+        }
+    }
+
     protected void AgregarDevolucion() => AgregarLinea(LineasDevolucion, ref ProductoDevolucionAgregar, ref CantidadDevolucionAgregar);
-    protected void AgregarReserva() => AgregarLinea(LineasReserva, ref ProductoReservaAgregar, ref CantidadReservaAgregar);
+    protected void AgregarReserva()
+    {
+        if (SucursalToma <= 0)
+        {
+            Error = "Selecciona la sucursal de la reserva.";
+            return;
+        }
+        ValidarDisponible(LineasReserva, ProductoReservaAgregar, CantidadReservaAgregar, SucursalToma);
+        if (string.IsNullOrWhiteSpace(Error))
+        {
+            ProductoReservaAgregar = 0;
+            CantidadReservaAgregar = 0;
+        }
+    }
 
     protected void QuitarLinea(List<OperacionLinea> lineas, OperacionLinea linea) => lineas.Remove(linea);
+
+    protected decimal DisponibleEnSucursal(int codigoProducto, int? idSucursal) =>
+        idSucursal is > 0
+            ? Dashboard.Items.FirstOrDefault(x => x.CodigoProducto == codigoProducto && x.IdSucursal == idSucursal.Value)?.StockDisponibleVigente ?? 0
+            : 0;
+
+    private void ValidarDisponible(List<OperacionLinea> lineas, int codigoProducto, decimal cantidad, int idSucursal)
+    {
+        Error = null;
+        if (codigoProducto <= 0 || cantidad <= 0)
+        {
+            Error = "Selecciona un producto y una cantidad mayor que cero.";
+            return;
+        }
+
+        var acumulado = lineas.Where(x => x.CodigoProducto == codigoProducto).Sum(x => x.Cantidad) + cantidad;
+        var disponible = DisponibleEnSucursal(codigoProducto, idSucursal);
+        if (acumulado > disponible)
+        {
+            Error = $"La cantidad solicitada supera el disponible ({disponible:N2}).";
+            return;
+        }
+
+        var codigo = codigoProducto;
+        var cantidadAgregar = cantidad;
+        AgregarLinea(lineas, ref codigo, ref cantidadAgregar);
+    }
 
     private void AgregarLinea(List<OperacionLinea> lineas, ref int codigo, ref decimal cantidad)
     {

@@ -66,7 +66,9 @@ public sealed class EContaxInventarioService
             .Where(x => x.IdEmpresa == userContext.IdEmpresa && idsSucursal.Contains(x.IdSucursal) && codigos.Contains(x.CodigoProducto))
             .ToListAsync();
         var nombresSucursal = sucursales.ToDictionary(x => x.IdSucursal, x => x.Nombre);
-        var fechaLimiteVencimiento = DateTime.UtcNow.Date.AddDays(30);
+        var fechaHoy = DateTime.UtcNow.Date;
+        var fechaLimite7Dias = fechaHoy.AddDays(7);
+        var fechaLimiteVencimiento = fechaHoy.AddDays(30);
         var lotesReporte = await context.EContaxInventarioLotes.AsNoTracking()
             .Where(x => x.IdEmpresa == userContext.IdEmpresa && idsSucursal.Contains(x.IdSucursal) && codigos.Contains(x.CodigoProducto) && x.CantidadDisponible > 0)
             .Select(x => new { x.CodigoProducto, x.IdSucursal, x.CantidadDisponible, x.CostoUnitario, x.FechaVencimiento })
@@ -82,11 +84,26 @@ public sealed class EContaxInventarioService
                     var stock = existencia?.StockActual ?? 0;
                     var minimo = existencia?.StockMinimo ?? 0;
                     var maximo = existencia?.StockMaximo ?? 0;
-                    var lotePorVencer = lotesReporte
+                    var lotesProducto = lotesReporte.Where(x => x.CodigoProducto == producto.Codigo && x.IdSucursal == sucursal.IdSucursal).ToList();
+                    var stockLotesVigentes = lotesProducto.Count == 0
+                        ? stock
+                        : lotesProducto.Where(x => !x.FechaVencimiento.HasValue || x.FechaVencimiento.Value.Date > fechaHoy).Sum(x => x.CantidadDisponible);
+                    var stockDisponibleVigente = Math.Max(0, Math.Min(stock, stockLotesVigentes) - (existencia?.StockReservado ?? 0));
+                    var loteVencido = lotesReporte
                         .Where(x => x.CodigoProducto == producto.Codigo && x.IdSucursal == sucursal.IdSucursal &&
-                            x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date >= DateTime.UtcNow.Date && x.FechaVencimiento.Value.Date <= fechaLimiteVencimiento)
+                            x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date <= fechaHoy)
                         .OrderBy(x => x.FechaVencimiento)
                         .FirstOrDefault();
+                    var lotePorVencer = lotesReporte
+                        .Where(x => x.CodigoProducto == producto.Codigo && x.IdSucursal == sucursal.IdSucursal &&
+                            x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date > fechaHoy && x.FechaVencimiento.Value.Date <= fechaLimiteVencimiento)
+                        .OrderBy(x => x.FechaVencimiento)
+                        .FirstOrDefault();
+                    var alertaVencimiento = loteVencido is not null
+                        ? "VENCIDO"
+                        : lotePorVencer?.FechaVencimiento is { } fechaVencimiento && fechaVencimiento.Date <= fechaLimite7Dias
+                            ? "VENCE_7"
+                            : lotePorVencer is not null ? "VENCE_30" : null;
                     return new EContaxInventarioItemDto
                     {
                         CodigoProducto = producto.Codigo,
@@ -96,12 +113,14 @@ public sealed class EContaxInventarioService
                         NombreSucursal = nombresSucursal.GetValueOrDefault(sucursal.IdSucursal),
                         StockActual = stock,
                          StockReservado = existencia?.StockReservado ?? 0,
+                        StockDisponibleVigente = stockDisponibleVigente,
                         StockMinimo = minimo,
                         StockMaximo = maximo,
                         CostoPromedio = existencia?.CostoPromedio ?? 0,
                         Alerta = ObtenerAlerta(stock, minimo, maximo),
-                        TieneLotePorVencer = lotePorVencer is not null,
-                        ProximoVencimiento = lotePorVencer?.FechaVencimiento
+                        AlertaVencimiento = alertaVencimiento,
+                        TieneLotePorVencer = alertaVencimiento is "VENCE_7" or "VENCE_30",
+                        ProximoVencimiento = loteVencido?.FechaVencimiento ?? lotePorVencer?.FechaVencimiento
                     };
                 }))
             .ToList();
@@ -112,10 +131,12 @@ public sealed class EContaxInventarioService
             PuedeEditar = userContext.EsJefeEmpresa && await _seguridad.PuedeAccederRutaAsync(userId, EContaxRoutes.Inventarios, EContaxAccion.Editar),
             PuedeConsultarTodasSucursales = userContext.EsJefeEmpresa,
             TotalProductos = items.Select(x => x.CodigoProducto).Distinct().Count(),
-            StockTotal = items.Sum(x => x.StockActual),
+            StockTotal = items.Sum(x => x.StockDisponibleVigente),
             ProductosBajoMinimo = items.Count(x => x.Alerta == "MINIMO"),
             ProductosSobreMaximo = items.Count(x => x.Alerta == "MAXIMO"),
-            LotesPorVencer = lotesReporte.Count(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date >= DateTime.UtcNow.Date && x.FechaVencimiento.Value.Date <= fechaLimiteVencimiento),
+            LotesVencidos = lotesReporte.Count(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date <= fechaHoy),
+            LotesPorVencer7Dias = lotesReporte.Count(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date > fechaHoy && x.FechaVencimiento.Value.Date <= fechaLimite7Dias),
+            LotesPorVencer = lotesReporte.Count(x => x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date > fechaHoy && x.FechaVencimiento.Value.Date <= fechaLimiteVencimiento),
             ValorInventario = Math.Round(lotesReporte.Sum(x => x.CantidadDisponible * x.CostoUnitario), 4),
             Sucursales = userContext.EsJefeEmpresa ? sucursales : sucursalesConsulta,
             Items = items
@@ -158,25 +179,28 @@ public sealed class EContaxInventarioService
 
         var existencia = await context.EContaxInventarioExistencias.AsNoTracking().FirstOrDefaultAsync(x =>
             x.CodigoProducto == codigoProducto && x.IdEmpresa == userContext.IdEmpresa && x.IdSucursal == sucursal.IdSucursal);
-        var movimientos = await context.EContaxInventarioMovimientos.AsNoTracking()
-            .Where(x => x.CodigoProducto == codigoProducto && x.IdEmpresa == userContext.IdEmpresa && x.IdSucursal == sucursal.IdSucursal)
-            .OrderByDescending(x => x.FechaMovimiento)
-            .ThenByDescending(x => x.IdMovimiento)
-            .Select(x => new EContaxInventarioMovimientoDto
+        var movimientos = await (from movimiento in context.EContaxInventarioMovimientos.AsNoTracking()
+            join usuario in context.Usuarios.AsNoTracking() on movimiento.IdUsuario equals usuario.IdUsuario into usuarios
+            from usuario in usuarios.DefaultIfEmpty()
+            where movimiento.CodigoProducto == codigoProducto && movimiento.IdEmpresa == userContext.IdEmpresa && movimiento.IdSucursal == sucursal.IdSucursal
+            orderby movimiento.FechaMovimiento descending, movimiento.IdMovimiento descending
+            select new EContaxInventarioMovimientoDto
             {
-                IdMovimiento = x.IdMovimiento,
-                FechaMovimiento = x.FechaMovimiento,
-                TipoMovimiento = x.TipoMovimiento,
-                Cantidad = x.Cantidad,
-                CostoUnitario = x.CostoUnitario,
-                CostoTotal = x.CostoTotal,
-                SaldoCantidad = x.SaldoCantidad,
-                SaldoCosto = x.SaldoCosto,
-                 NumeroLote = x.NumeroLote,
-                 FechaVencimiento = x.FechaVencimiento,
-                MetodoValoracion = x.MetodoValoracion,
-                Referencia = x.Referencia,
-                Observacion = x.Observacion
+                IdMovimiento = movimiento.IdMovimiento,
+                IdUsuario = movimiento.IdUsuario,
+                NombreUsuario = usuario == null ? null : (usuario.Nombres + " " + usuario.Apellidos),
+                FechaMovimiento = movimiento.FechaMovimiento,
+                TipoMovimiento = movimiento.TipoMovimiento,
+                Cantidad = movimiento.Cantidad,
+                CostoUnitario = movimiento.CostoUnitario,
+                CostoTotal = movimiento.CostoTotal,
+                SaldoCantidad = movimiento.SaldoCantidad,
+                SaldoCosto = movimiento.SaldoCosto,
+                NumeroLote = movimiento.NumeroLote,
+                FechaVencimiento = movimiento.FechaVencimiento,
+                MetodoValoracion = movimiento.MetodoValoracion,
+                Referencia = movimiento.Referencia,
+                Observacion = movimiento.Observacion
             }).ToListAsync();
 
         return new EContaxInventarioKardexDto
@@ -371,6 +395,9 @@ public sealed class EContaxInventarioService
         IReadOnlyCollection<(int CodigoProducto, decimal Cantidad, decimal CostoUnitarioSinImpuestos, string? NumeroLote, DateTime? FechaVencimiento)> items,
         string? referencia)
     {
+        if (items.Any(x => x.Cantidad > 0 && x.FechaVencimiento is { } fecha && fecha.Date <= DateTime.UtcNow.Date))
+            throw new InvalidOperationException("No se puede ingresar inventario con lotes vencidos o que vencen hoy.");
+
         var metodo = await ObtenerMetodoAsync(context, idEmpresa);
         foreach (var grupo in items.Where(x => x.CodigoProducto > 0 && x.Cantidad > 0).GroupBy(x => x.CodigoProducto))
         {
@@ -605,9 +632,11 @@ public sealed class EContaxInventarioService
         var query = from movimiento in context.EContaxInventarioMovimientos.AsNoTracking()
                     join producto in context.Productos.AsNoTracking() on movimiento.CodigoProducto equals producto.Codigo
                     join sucursal in context.EContaxSucursales.AsNoTracking() on movimiento.IdSucursal equals sucursal.IdSucursal
+                    join usuario in context.Usuarios.AsNoTracking() on movimiento.IdUsuario equals usuario.IdUsuario into usuarios
+                    from usuario in usuarios.DefaultIfEmpty()
                     where movimiento.IdEmpresa == actor.IdEmpresa && producto.Idempresa == actor.IdEmpresa &&
                           sucursal.IdEmpresa == actor.IdEmpresa
-                    select new { movimiento, producto, sucursal };
+                    select new { movimiento, producto, sucursal, usuario };
 
         if (!actor.EsJefeEmpresa)
             query = query.Where(x => x.movimiento.IdSucursal == actor.IdSucursal);
@@ -635,6 +664,8 @@ public sealed class EContaxInventarioService
             .Select(x => new EContaxInventarioReporteMovimientoDto
             {
                 FechaMovimiento = x.movimiento.FechaMovimiento,
+                IdUsuario = x.movimiento.IdUsuario,
+                NombreUsuario = x.usuario == null ? null : (x.usuario.Nombres + " " + x.usuario.Apellidos),
                 CodigoProducto = x.movimiento.CodigoProducto,
                 CodigoPrincipal = x.producto.CodigoPrincipal,
                 NombreProducto = x.producto.Nombre,
@@ -802,7 +833,17 @@ public sealed class EContaxInventarioService
 
             var cantidad = grupo.Sum(x => x.Cantidad);
             var existencia = await ObtenerExistenciaAsync(context, actor.IdEmpresa, sucursal.IdSucursal, grupo.Key);
-            var disponible = existencia.StockActual - existencia.StockReservado;
+            var fechaHoy = DateTime.UtcNow.Date;
+            var lotesVigentes = await context.EContaxInventarioLotes
+                .Where(x => x.IdEmpresa == actor.IdEmpresa && x.IdSucursal == sucursal.IdSucursal &&
+                            x.CodigoProducto == grupo.Key && x.CantidadDisponible > 0 &&
+                            (!x.FechaVencimiento.HasValue || x.FechaVencimiento.Value.Date > fechaHoy))
+                .Select(x => x.CantidadDisponible)
+                .ToListAsync();
+            var stockVigente = lotesVigentes.Count == 0
+                ? existencia.StockActual
+                : Math.Min(existencia.StockActual, lotesVigentes.Sum());
+            var disponible = Math.Max(0, stockVigente - existencia.StockReservado);
             if (!liberar && cantidad > disponible) throw new InvalidOperationException($"La cantidad de '{producto.Nombre}' supera el stock disponible para reservar.");
             if (liberar && cantidad > existencia.StockReservado) throw new InvalidOperationException($"La cantidad de '{producto.Nombre}' supera el stock reservado.");
             existencia.StockReservado = Math.Round(existencia.StockReservado + (liberar ? -cantidad : cantidad), 4);
@@ -882,16 +923,21 @@ public sealed class EContaxInventarioService
         string metodo,
         List<LoteSalida>? lotesSalida = null)
     {
-        var stockDisponible = existencia.StockActual - existencia.StockReservado;
-        if (cantidad > stockDisponible)
-            throw new InvalidOperationException($"No se puede facturar ni retirar el producto: stock insuficiente. Disponible: {stockDisponible:N2}.");
+        var fechaHoy = DateTime.UtcNow.Date;
 
         var lotesQuery = context.EContaxInventarioLotes
             .Where(x => x.IdEmpresa == existencia.IdEmpresa && x.IdSucursal == existencia.IdSucursal &&
-                        x.CodigoProducto == existencia.CodigoProducto && x.CantidadDisponible > 0);
+                        x.CodigoProducto == existencia.CodigoProducto && x.CantidadDisponible > 0 &&
+                        (!x.FechaVencimiento.HasValue || x.FechaVencimiento.Value.Date > fechaHoy));
+        var lotesDisponibles = await lotesQuery.ToListAsync();
+        var stockLotesDisponible = lotesDisponibles.Sum(x => x.CantidadDisponible);
+        var stockDisponible = Math.Max(0, Math.Min(existencia.StockActual, stockLotesDisponible) - existencia.StockReservado);
+        if (cantidad > stockDisponible)
+            throw new InvalidOperationException($"No se puede retirar el producto: stock disponible no vencido: {stockDisponible:N2}.");
+
         var lotes = metodo == "LIFO"
-            ? await lotesQuery.OrderByDescending(x => x.FechaIngreso).ThenByDescending(x => x.IdLote).ToListAsync()
-            : await lotesQuery.OrderBy(x => x.FechaIngreso).ThenBy(x => x.IdLote).ToListAsync();
+            ? lotesDisponibles.OrderBy(x => x.FechaVencimiento ?? DateTime.MaxValue).ThenByDescending(x => x.FechaIngreso).ThenByDescending(x => x.IdLote).ToList()
+            : lotesDisponibles.OrderBy(x => x.FechaVencimiento ?? DateTime.MaxValue).ThenBy(x => x.FechaIngreso).ThenBy(x => x.IdLote).ToList();
         var costoPromedioSalida = existencia.CostoPromedio;
         var costo = metodo == "PROMEDIO" ? costoPromedioSalida : 0m;
         var restante = cantidad;

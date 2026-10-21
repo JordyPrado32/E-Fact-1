@@ -21,14 +21,16 @@ public sealed class EContaxOrdenesCompraController : EContaxApiControllerBase
     public async Task<ActionResult<List<EContaxOrdenCompraListaDto>>> Listar(
         [FromQuery] int userId,
         [FromQuery] string? search = null,
-        [FromQuery] string? estado = null)
+        [FromQuery] string? estado = null,
+        [FromQuery] DateTime? fechaDesde = null,
+        [FromQuery] DateTime? fechaHasta = null)
     {
         if (userId <= 0)
             return Unauthorized("Sesion no valida.");
 
         try
         {
-            return Ok(await _service.ListarAsync(userId, search, estado));
+            return Ok(await _service.ListarAsync(userId, search, estado, fechaDesde, fechaHasta));
         }
         catch (InvalidOperationException ex)
         {

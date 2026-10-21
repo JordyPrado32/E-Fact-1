@@ -5,10 +5,12 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.JSInterop
 @using Simetric.DTOs.EContax
+@using Simetric.Services
 @inject HttpClient Http
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
 @inject IJSRuntime JS
+@inject ISimpleExcelExportService ExcelExportService
 @rendermode InteractiveServer
 
 <PageTitle>Recepciones de compra | E-Contax</PageTitle>
@@ -68,9 +70,20 @@
                     </select>
                 </div>
                 <div class="col-md-3 col-lg-2">
+                    <label class="form-label">Desde</label>
+                    <input class="form-control" type="date" @bind="fechaDesde" />
+                </div>
+                <div class="col-md-3 col-lg-2">
+                    <label class="form-label">Hasta</label>
+                    <input class="form-control" type="date" @bind="fechaHasta" />
+                </div>
+                <div class="col-md-3 col-lg-2">
                     <button class="btn btn-outline-secondary w-100" type="button" @onclick="CargarAsync" disabled="@cargando">
                         <i class="ri-search-line me-1"></i>Consultar
                     </button>
+                </div>
+                <div class="col-md-3 col-lg-2">
+                    <button class="btn btn-outline-success w-100" type="button" @onclick="ExportarExcelAsync" disabled="@(cargando || recepciones.Count == 0)"><i class="ri-file-excel-2-line me-1"></i>Excel</button>
                 </div>
             </div>
         </div>
@@ -183,7 +196,7 @@
                         <div class="purchase-section-heading"><div><span>CONTROL DE ENTREGA</span><h3>Cantidades recibidas</h3></div><span class="purchase-count">@editor.Detalles.Count línea(s)</span></div>
                         <div class="table-responsive p-3">
                         <table class="table table-sm align-middle mb-0 purchase-lines-table">
-                            <thead><tr><th>Producto</th><th class="text-end">Ordenado</th><th class="text-end">Ya recibido</th><th class="text-end">Pendiente</th><th style="width: 145px">Recibir ahora</th><th style="width: 145px">Costo real</th><th style="width: 210px">Lote</th><th style="width: 150px">Vencimiento</th><th style="width: 210px">Diferencia / nota</th></tr></thead>
+                            <thead><tr><th>Producto</th><th class="text-end">Ordenado</th><th class="text-end">Ya recibido</th><th class="text-end">Pendiente</th><th class="text-end">Costo orden</th><th class="text-end">Variación</th><th style="width: 145px">Recibir ahora</th><th style="width: 145px">Costo real</th><th style="width: 210px">Lote</th><th style="width: 150px">Vencimiento</th><th style="width: 210px">Diferencia / nota</th></tr></thead>
                             <tbody>
                                 @foreach (var linea in editor.Detalles)
                                 {
@@ -192,10 +205,12 @@
                                         <td class="text-end">@linea.CantidadOrdenada.ToString("0.####")</td>
                                         <td class="text-end">@linea.CantidadYaRecibida.ToString("0.####")</td>
                                         <td class="text-end"><strong>@PendienteDespues(linea).ToString("0.####")</strong></td>
+                                        <td class="text-end">@linea.PrecioUnitarioOrden.ToString("C2")</td>
+                                        <td class="text-end">@TextoVariacionCosto(linea)</td>
                                         <td><input class="form-control form-control-sm" type="number" min="0" max="@linea.CantidadPendiente" step="0.0001" @bind="linea.CantidadRecibida" @bind:event="oninput" disabled="@(guardando || !PuedeEditar)" /></td>
                                         <td><input class="form-control form-control-sm" type="number" min="0" step="0.0001" @bind="linea.CostoUnitario" disabled="@(guardando || !PuedeEditar)" /></td>
                                         <td><input class="form-control form-control-sm" @bind="linea.NumeroLote" maxlength="80" disabled="@(guardando || !PuedeEditar)" /></td>
-                                        <td><input class="form-control form-control-sm" type="date" @bind="linea.FechaVencimiento" disabled="@(guardando || !PuedeEditar)" /></td>
+                                        <td><input class="form-control form-control-sm" type="date" min="@FechaMinimaLote" @bind="linea.FechaVencimiento" disabled="@(guardando || !PuedeEditar)" /></td>
                                         <td>
                                             <input class="form-control form-control-sm" @bind="linea.Observacion" maxlength="500" disabled="@(guardando || !PuedeEditar)" placeholder="Faltante, daño..." />
                                             <small class="text-muted">Diferencia: @Diferencia(linea).ToString("0.####")</small>
@@ -234,6 +249,8 @@
     private readonly List<EContaxRecepcionOrdenDto> ordenesDisponibles = new();
     private string filtro = string.Empty;
     private string estadoFiltro = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
     private string? error;
     private bool cargando;
     private bool guardando;
@@ -241,6 +258,7 @@
     private int usuarioId;
     private EditorModel editor = new();
     private bool PuedeEditar => editor.Id == 0 || editor.Estado == Borrador;
+    private string FechaMinimaLote => DateTime.Today.AddDays(1).ToString("yyyy-MM-dd");
     private int TotalBorradores => recepciones.Count(x => x.Estado == "BORRADOR");
     private int TotalCompletas => recepciones.Count(x => x.Estado == "RECIBIDA_COMPLETA");
     private int TotalParciales => recepciones.Count(x => x.Estado == "RECIBIDA_PARCIAL");
@@ -268,7 +286,8 @@
         error = null;
         try
         {
-            var url = $"{ApiUrl}?userId={usuarioId}&search={Uri.EscapeDataString(filtro)}&estado={Uri.EscapeDataString(estadoFiltro)}";
+            var url = $"{ApiUrl}?userId={usuarioId}&search={Uri.EscapeDataString(filtro)}&estado={Uri.EscapeDataString(estadoFiltro)}" +
+                $"&fechaDesde={Uri.EscapeDataString(fechaDesde?.ToString("yyyy-MM-dd") ?? string.Empty)}&fechaHasta={Uri.EscapeDataString(fechaHasta?.ToString("yyyy-MM-dd") ?? string.Empty)}";
             var resultado = await Http.GetFromJsonAsync<List<EContaxRecepcionCompraListaDto>>(url) ?? new();
             recepciones.Clear();
             recepciones.AddRange(resultado);
@@ -281,6 +300,28 @@
         {
             cargando = false;
         }
+    }
+
+    private async Task ExportarExcelAsync()
+    {
+        if (recepciones.Count == 0)
+            return;
+
+        var rows = recepciones.Select(x => (IReadOnlyList<string>)[
+            x.NumeroRecepcion,
+            x.NumeroOrden,
+            x.NombreProveedor,
+            x.FechaRecepcion.ToString("dd/MM/yyyy"),
+            TextoEstado(x.Estado),
+            x.TotalRecibido.ToString("N4"),
+            x.Lineas.ToString()
+        ]).ToList();
+        var archivo = ExcelExportService.Create(
+            $"recepciones_compra_{DateTime.Now:yyyyMMdd_HHmm}.xlsx",
+            new ExcelSheetData("Recepciones", ["Recepción", "Orden", "Proveedor", "Fecha", "Estado", "Cantidad recibida", "Líneas"], rows));
+        await using var stream = new MemoryStream(archivo.Content);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef);
     }
 
     private async Task AbrirNuevaAsync()
@@ -322,6 +363,7 @@
                 CodigoPrincipal = x.CodigoPrincipal,
                 Descripcion = x.Descripcion,
                 CantidadOrdenada = x.CantidadOrdenada,
+                PrecioUnitarioOrden = x.PrecioUnitarioOrden,
                 CantidadYaRecibida = x.CantidadYaRecibida,
                 CantidadPendiente = x.CantidadPendiente
             }).ToList();
@@ -428,6 +470,10 @@
             ? Math.Max(0, linea.CantidadPendiente - linea.CantidadRecibida)
             : linea.CantidadPendiente;
     private decimal Diferencia(EditorDetail linea) => Math.Max(0, linea.CantidadPendiente - linea.CantidadRecibida);
+    private static string TextoVariacionCosto(EditorDetail linea) =>
+        linea.CostoUnitario.HasValue && linea.PrecioUnitarioOrden > 0
+            ? $"{(linea.CostoUnitario.Value - linea.PrecioUnitarioOrden) / linea.PrecioUnitarioOrden:P2}"
+            : "-";
     private Task ImprimirAsync() => JS.InvokeVoidAsync("print").AsTask();
     private void CerrarEditor() => mostrarEditor = false;
 
@@ -484,6 +530,7 @@
                 CantidadYaRecibida = x.CantidadYaRecibida,
                 CantidadRecibida = x.CantidadRecibida,
                 CantidadPendiente = dto.Estado == Borrador ? x.CantidadPendiente + x.CantidadRecibida : x.CantidadPendiente,
+                PrecioUnitarioOrden = x.PrecioUnitarioOrden,
                 CostoUnitario = x.CostoUnitario,
                 Observacion = x.Observacion
                 ,NumeroLote = x.NumeroLote
@@ -502,6 +549,7 @@
         public decimal CantidadYaRecibida { get; set; }
         public decimal CantidadRecibida { get; set; }
         public decimal CantidadPendiente { get; set; }
+        public decimal PrecioUnitarioOrden { get; set; }
         public decimal? CostoUnitario { get; set; }
         public string? Observacion { get; set; }
         public string? NumeroLote { get; set; }

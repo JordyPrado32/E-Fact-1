@@ -10,10 +10,12 @@ public sealed class EContaxInventarioItemDto
     public decimal StockActual { get; set; }
     public decimal StockReservado { get; set; }
     public decimal StockDisponible => Math.Max(0, StockActual - StockReservado);
+    public decimal StockDisponibleVigente { get; set; }
     public decimal StockMinimo { get; set; }
     public decimal StockMaximo { get; set; }
     public decimal CostoPromedio { get; set; }
     public string? Alerta { get; set; }
+    public string? AlertaVencimiento { get; set; }
     public bool TieneLotePorVencer { get; set; }
     public DateTime? ProximoVencimiento { get; set; }
 }
@@ -28,6 +30,8 @@ public sealed class EContaxInventarioDashboardDto
     public int ProductosBajoMinimo { get; set; }
     public int ProductosSobreMaximo { get; set; }
     public int LotesPorVencer { get; set; }
+    public int LotesPorVencer7Dias { get; set; }
+    public int LotesVencidos { get; set; }
     public decimal ValorInventario { get; set; }
     public List<EContaxSucursalDto> Sucursales { get; set; } = new();
     public List<EContaxInventarioItemDto> Items { get; set; } = new();
@@ -36,6 +40,8 @@ public sealed class EContaxInventarioDashboardDto
 public sealed class EContaxInventarioMovimientoDto
 {
     public long IdMovimiento { get; set; }
+    public int IdUsuario { get; set; }
+    public string? NombreUsuario { get; set; }
     public DateTime FechaMovimiento { get; set; }
     public string TipoMovimiento { get; set; } = string.Empty;
     public decimal Cantidad { get; set; }
@@ -156,6 +162,8 @@ public sealed class EContaxInventarioReporteFiltroDto
 public sealed class EContaxInventarioReporteMovimientoDto
 {
     public DateTime FechaMovimiento { get; set; }
+    public int IdUsuario { get; set; }
+    public string? NombreUsuario { get; set; }
     public int CodigoProducto { get; set; }
     public string? CodigoPrincipal { get; set; }
     public string? NombreProducto { get; set; }

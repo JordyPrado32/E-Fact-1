@@ -32,7 +32,12 @@ public sealed class EContaxRecepcionCompraService
         _inventario = inventario;
     }
 
-    public async Task<List<EContaxRecepcionCompraListaDto>> ListarAsync(int userId, string? search = null, string? estado = null)
+    public async Task<List<EContaxRecepcionCompraListaDto>> ListarAsync(
+        int userId,
+        string? search = null,
+        string? estado = null,
+        DateTime? fechaDesde = null,
+        DateTime? fechaHasta = null)
     {
         await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.ComprasRecepciones, EContaxAccion.Ver);
         await using var context = await _dbFactory.CreateDbContextAsync();
@@ -55,6 +60,11 @@ public sealed class EContaxRecepcionCompraService
 
         if (!string.IsNullOrWhiteSpace(estado))
             query = query.Where(x => x.recepcion.Estado == estado.Trim().ToUpperInvariant());
+
+        if (fechaDesde.HasValue)
+            query = query.Where(x => x.recepcion.FechaRecepcion >= fechaDesde.Value.Date);
+        if (fechaHasta.HasValue)
+            query = query.Where(x => x.recepcion.FechaRecepcion < fechaHasta.Value.Date.AddDays(1));
 
         return await query
             .OrderByDescending(x => x.recepcion.IdRecepcion)
@@ -197,6 +207,8 @@ public sealed class EContaxRecepcionCompraService
         var totalActual = recepcion.Detalles.Sum(x => x.CantidadRecibida);
         if (totalActual <= 0)
             throw new InvalidOperationException("La recepción debe contener al menos una cantidad recibida.");
+        if (recepcion.Detalles.Any(x => x.CantidadRecibida > 0 && x.FechaVencimiento is { } fecha && fecha.Date <= DateTime.UtcNow.Date))
+            throw new InvalidOperationException("No se puede confirmar una recepción con lotes vencidos o que vencen hoy.");
 
         var completa = orden!.Detalles.All(detalle => recibidas.GetValueOrDefault(detalle.IdDetalle) +
             recepcion.Detalles.Where(x => x.IdDetalleOrdenCompra == detalle.IdDetalle).Sum(x => x.CantidadRecibida) >= detalle.Cantidad);
@@ -320,6 +332,8 @@ public sealed class EContaxRecepcionCompraService
                 throw new InvalidOperationException("La cantidad recibida no puede ser negativa.");
             if (item.CostoUnitario is < 0)
                 throw new InvalidOperationException("El costo unitario no puede ser negativo.");
+            if (item.CantidadRecibida > 0 && item.FechaVencimiento is { } fecha && fecha.Date <= DateTime.UtcNow.Date)
+                throw new InvalidOperationException("No se puede recibir un lote vencido o que vence hoy.");
             var original = ordenDetalle[item.IdDetalleOrdenCompra];
             var pendiente = original.Cantidad - recibidas.GetValueOrDefault(original.IdDetalle);
             if (item.CantidadRecibida > pendiente)
@@ -372,6 +386,7 @@ public sealed class EContaxRecepcionCompraService
             CodigoPrincipal = x.CodigoPrincipal,
             Descripcion = x.Descripcion,
             CantidadOrdenada = x.Cantidad,
+            PrecioUnitarioOrden = x.PrecioUnitario,
             CantidadYaRecibida = recibido.GetValueOrDefault(x.IdDetalle),
             CantidadPendiente = Math.Max(0, x.Cantidad - recibido.GetValueOrDefault(x.IdDetalle))
         }).ToList()
@@ -407,12 +422,21 @@ public sealed class EContaxRecepcionCompraService
                 CantidadRecibida = x.CantidadRecibida,
                 CantidadPendiente = Math.Max(0, x.CantidadOrdenada - recibido.GetValueOrDefault(x.IdDetalleOrdenCompra) - x.CantidadRecibida),
                 CantidadDiferencia = Math.Max(0, x.CantidadOrdenada - recibido.GetValueOrDefault(x.IdDetalleOrdenCompra) - x.CantidadRecibida),
+                PrecioUnitarioOrden = orden.Detalles.FirstOrDefault(d => d.IdDetalle == x.IdDetalleOrdenCompra)?.PrecioUnitario ?? 0,
                 CostoUnitario = x.CostoUnitario ?? orden.Detalles.FirstOrDefault(d => d.IdDetalle == x.IdDetalleOrdenCompra)?.PrecioUnitario,
+                VariacionCostoPct = CalcularVariacionCosto(x.CostoUnitario, orden.Detalles.FirstOrDefault(d => d.IdDetalle == x.IdDetalleOrdenCompra)?.PrecioUnitario),
                 Observacion = x.Observacion,
                 NumeroLote = x.NumeroLote,
                 FechaVencimiento = x.FechaVencimiento
             }).ToList()
         };
+
+    private static decimal? CalcularVariacionCosto(decimal? costo, decimal? precioOrden)
+    {
+        if (!costo.HasValue || !precioOrden.HasValue || precioOrden <= 0)
+            return null;
+        return Math.Round((costo.Value - precioOrden.Value) / precioOrden.Value * 100m, 2);
+    }
 
     private static void ValidarOrdenRecepcionable(EContaxOrdenCompra? orden)
     {

@@ -6,11 +6,13 @@
 @using Microsoft.JSInterop
 @using Simetric.DTOs
 @using Simetric.DTOs.EContax
+@using Simetric.Services
 @using Simetric.Services.EContax
 @inject HttpClient Http
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager NavManager
 @inject IJSRuntime JS
+@inject ISimpleExcelExportService ExcelExportService
 @rendermode InteractiveServer
 
 <PageTitle>Órdenes de compra | E-Contax</PageTitle>
@@ -75,9 +77,20 @@
                     </select>
                 </div>
                 <div class="col-md-3 col-lg-2">
+                    <label class="form-label">Desde</label>
+                    <input class="form-control" type="date" @bind="fechaDesde" />
+                </div>
+                <div class="col-md-3 col-lg-2">
+                    <label class="form-label">Hasta</label>
+                    <input class="form-control" type="date" @bind="fechaHasta" />
+                </div>
+                <div class="col-md-3 col-lg-2">
                     <button class="btn btn-outline-secondary w-100" type="button" @onclick="CargarAsync" disabled="@cargando">
                         <i class="ri-search-line me-1"></i>Consultar
                     </button>
+                </div>
+                <div class="col-md-3 col-lg-2">
+                    <button class="btn btn-outline-success w-100" type="button" @onclick="ExportarExcelAsync" disabled="@(cargando || ordenes.Count == 0)"><i class="ri-file-excel-2-line me-1"></i>Excel</button>
                 </div>
             </div>
         </div>
@@ -279,6 +292,8 @@
     private readonly List<ProductoLookupDetalleDto> productosBusqueda = new();
     private string filtro = string.Empty;
     private string estadoFiltro = string.Empty;
+    private DateTime? fechaDesde;
+    private DateTime? fechaHasta;
     private string filtroProducto = string.Empty;
     private string? error;
     private bool cargando;
@@ -318,7 +333,8 @@
         error = null;
         try
         {
-            var url = $"{ApiUrl}?userId={usuarioId}&search={Uri.EscapeDataString(filtro)}&estado={Uri.EscapeDataString(estadoFiltro)}";
+            var url = $"{ApiUrl}?userId={usuarioId}&search={Uri.EscapeDataString(filtro)}&estado={Uri.EscapeDataString(estadoFiltro)}" +
+                $"&fechaDesde={Uri.EscapeDataString(fechaDesde?.ToString("yyyy-MM-dd") ?? string.Empty)}&fechaHasta={Uri.EscapeDataString(fechaHasta?.ToString("yyyy-MM-dd") ?? string.Empty)}";
             var resultado = await Http.GetFromJsonAsync<List<EContaxOrdenCompraListaDto>>(url) ?? new();
             ordenes.Clear();
             ordenes.AddRange(resultado);
@@ -331,6 +347,29 @@
         {
             cargando = false;
         }
+    }
+
+    private async Task ExportarExcelAsync()
+    {
+        if (ordenes.Count == 0)
+            return;
+
+        var rows = ordenes.Select(x => (IReadOnlyList<string>)[
+            x.NumeroOrden,
+            x.NombreProveedor,
+            x.RucProveedor,
+            x.FechaEmision.ToString("dd/MM/yyyy"),
+            x.FechaEntregaEstimada?.ToString("dd/MM/yyyy") ?? string.Empty,
+            TextoEstado(x.Estado),
+            x.Total.ToString("N2"),
+            x.Lineas.ToString()
+        ]).ToList();
+        var archivo = ExcelExportService.Create(
+            $"ordenes_compra_{DateTime.Now:yyyyMMdd_HHmm}.xlsx",
+            new ExcelSheetData("Órdenes", ["Orden", "Proveedor", "Identificación", "Emisión", "Entrega estimada", "Estado", "Total", "Líneas"], rows));
+        await using var stream = new MemoryStream(archivo.Content);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("downloadFileFromStream", archivo.FileName, streamRef);
     }
 
     private async Task AbrirNuevaAsync()

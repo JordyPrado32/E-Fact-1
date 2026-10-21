@@ -110,7 +110,9 @@ public sealed class EContaxRecepcionCompraDetalleDto
     public decimal CantidadRecibida { get; set; }
     public decimal CantidadPendiente { get; set; }
     public decimal CantidadDiferencia { get; set; }
+    public decimal PrecioUnitarioOrden { get; set; }
     public decimal? CostoUnitario { get; set; }
+    public decimal? VariacionCostoPct { get; set; }
     public string? Observacion { get; set; }
     public string? NumeroLote { get; set; }
     public DateTime? FechaVencimiento { get; set; }
@@ -132,6 +134,7 @@ public sealed class EContaxRecepcionOrdenDetalleDto
     public string? CodigoPrincipal { get; set; }
     public string Descripcion { get; set; } = string.Empty;
     public decimal CantidadOrdenada { get; set; }
+    public decimal PrecioUnitarioOrden { get; set; }
     public decimal CantidadYaRecibida { get; set; }
     public decimal CantidadPendiente { get; set; }
 }

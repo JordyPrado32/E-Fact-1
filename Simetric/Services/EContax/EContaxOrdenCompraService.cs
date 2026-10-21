@@ -35,7 +35,12 @@ public sealed class EContaxOrdenCompraService
         _catalogService = catalogService;
     }
 
-    public async Task<List<EContaxOrdenCompraListaDto>> ListarAsync(int userId, string? search = null, string? estado = null)
+    public async Task<List<EContaxOrdenCompraListaDto>> ListarAsync(
+        int userId,
+        string? search = null,
+        string? estado = null,
+        DateTime? fechaDesde = null,
+        DateTime? fechaHasta = null)
     {
         await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.ComprasOrdenes, EContaxAccion.Ver);
         await using var context = await _dbFactory.CreateDbContextAsync();
@@ -56,6 +61,11 @@ public sealed class EContaxOrdenCompraService
 
         if (!string.IsNullOrWhiteSpace(estado))
             query = query.Where(x => x.Estado == estado.Trim().ToUpperInvariant());
+
+        if (fechaDesde.HasValue)
+            query = query.Where(x => x.FechaEmision >= fechaDesde.Value.Date);
+        if (fechaHasta.HasValue)
+            query = query.Where(x => x.FechaEmision < fechaHasta.Value.Date.AddDays(1));
 
         return await query
             .OrderByDescending(x => x.IdOrdenCompra)

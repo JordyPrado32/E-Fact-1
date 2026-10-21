@@ -106,6 +106,7 @@ public partial class InventarioReportes
             x.SaldoCosto.ToString("N4"),
             x.NumeroLote ?? string.Empty,
             x.FechaVencimiento?.ToString("dd/MM/yyyy") ?? string.Empty,
+            x.NombreUsuario ?? $"Usuario #{x.IdUsuario}",
             x.Referencia ?? x.Observacion ?? string.Empty
         ]).ToList();
 
@@ -113,7 +114,7 @@ public partial class InventarioReportes
             $"reporte_inventario_{DateTime.Now:yyyyMMdd_HHmm}.xlsx",
             new ExcelSheetData(
                 "Movimientos",
-                ["Fecha", "Producto", "Código", "Sucursal", "Movimiento", "Cantidad", "Costo unitario", "Costo total", "Saldo cantidad", "Saldo costo", "Lote", "Vencimiento", "Referencia"],
+                ["Fecha", "Producto", "Código", "Sucursal", "Movimiento", "Cantidad", "Costo unitario", "Costo total", "Saldo cantidad", "Saldo costo", "Lote", "Vencimiento", "Usuario", "Referencia"],
                 rows));
 
         await using var stream = new MemoryStream(archivo.Content);
@@ -127,7 +128,7 @@ public partial class InventarioReportes
             return;
 
         var builder = new StringBuilder();
-        builder.AppendLine(string.Join(";", ["Fecha", "Producto", "Código", "Sucursal", "Movimiento", "Cantidad", "Costo unitario", "Costo total", "Saldo cantidad", "Saldo costo", "Lote", "Vencimiento", "Referencia"]));
+        builder.AppendLine(string.Join(";", ["Fecha", "Producto", "Código", "Sucursal", "Movimiento", "Cantidad", "Costo unitario", "Costo total", "Saldo cantidad", "Saldo costo", "Lote", "Vencimiento", "Usuario", "Referencia"]));
         foreach (var item in reporte.Movimientos)
         {
             var values = new[]
@@ -144,6 +145,7 @@ public partial class InventarioReportes
                 item.SaldoCosto.ToString("N4"),
                 item.NumeroLote ?? string.Empty,
                 item.FechaVencimiento?.ToString("dd/MM/yyyy") ?? string.Empty,
+                item.NombreUsuario ?? $"Usuario #{item.IdUsuario}",
                 item.Referencia ?? item.Observacion ?? string.Empty
             };
             builder.AppendLine(string.Join(";", values.Select(EscapeCsv)));
