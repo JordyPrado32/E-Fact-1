@@ -4,6 +4,7 @@
 @using Microsoft.JSInterop
 @using Simetric.Extensions
 @using Simetric.Data
+@using Simetric.DTOs.EContax
 @using Simetric.Services
 @using Simetric.Services.EContax
 @using Simetric.Services.EDeclara
@@ -20,6 +21,7 @@
 @inject SelectedAppServiceStateService SelectedAppServiceState
 @inject AppAccessService AppAccessService
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject EContaxTenantService EContaxTenantService
 @inject ILogger<MainLayout> Logger
 
 @if (!ShouldRenderShell)
@@ -125,6 +127,19 @@ else
                     }
                 }
             </div>
+
+            @if (IsEContaxContext && _econtaxSucursales.Count > 1)
+            {
+                <label class="econtax-global-sucursal-selector">
+                    <span><i class="ri-store-2-line"></i> Sucursal activa</span>
+                    <select value="@_econtaxSucursalSeleccionada" @onchange="CambiarSucursalGlobalAsync" disabled="@_cargandoEcontaxSucursales">
+                        @foreach (var sucursal in _econtaxSucursales)
+                        {
+                            <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                        }
+                    </select>
+                </label>
+            }
 
             <AuthorizeView>
                 <Authorized>
@@ -912,6 +927,7 @@ else
     private const string OnboardingBotSessionStoragePrefix = "numerica:onboarding-bot-dismissed:";
     private const string DefaultAvatarUrl = "/images/Avatars/Avatar-Boy.jpg";
     private const string SessionMenuOutsideClickKey = "main-layout-session-menu";
+    private const string EContaxSucursalStoragePrefix = "numerica:econtax-sucursal:";
 
     private bool _cerrandoSesion;
     private bool _mostrarBienvenida;
@@ -940,6 +956,10 @@ else
     private string? _readyConfirmationStorageKey;
     private string? _onboardingBotSessionStorageKey;
     private string? _onboardingBotDismissedStepKey;
+    private readonly List<EContaxSucursalDto> _econtaxSucursales = new();
+    private int? _econtaxSucursalSeleccionada;
+    private int? _econtaxSucursalUsuarioActual;
+    private bool _cargandoEcontaxSucursales;
 
     private bool IsEContaxContext => IsEContaxPath(NavManager.Uri);
     private bool IsEDeclaraContext => IsEDeclaraPath(NavManager.Uri);
@@ -1111,6 +1131,8 @@ else
             {
                 await CargarServiciosHeaderAsync(user);
                 await RecordarModuloActualAsync(user, NavManager.Uri);
+                if (IsEContaxContext)
+                    await CargarSelectorSucursalAsync(user);
 
                 if (IsESignContext || IsEContaxContext || IsEDeclaraContext)
                 {
@@ -1218,17 +1240,20 @@ else
             await JS.InvokeVoidAsync("numericaUi.resetBodyScrollLock");
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
             var user = authState.User;
+            var isEContaxLocation = IsEContaxPath(e.Location);
+            var isEDeclaraLocation = IsEDeclaraPath(e.Location);
+            var isESignLocation = IsESignPath(e.Location);
 
             if (user.Identity?.IsAuthenticated == true)
             {
                 await CargarServiciosHeaderAsync(user);
                 await RecordarModuloActualAsync(user, e.Location);
+                if (isEContaxLocation)
+                    await CargarSelectorSucursalAsync(user);
+                else
+                    LimpiarSelectorSucursal();
 
             }
-            var isEContaxLocation = IsEContaxPath(e.Location);
-            var isEDeclaraLocation = IsEDeclaraPath(e.Location);
-            var isESignLocation = IsESignPath(e.Location);
-
             if (isEContaxLocation || isEDeclaraLocation || isESignLocation)
             {
                 _emisionEstado = null;
@@ -1260,6 +1285,76 @@ else
 
             StateHasChanged();
         });
+    }
+
+    private async Task CargarSelectorSucursalAsync(ClaimsPrincipal user)
+    {
+        var userId = ObtenerIdUsuario(user);
+        if (!userId.HasValue || userId.Value <= 0)
+        {
+            LimpiarSelectorSucursal();
+            return;
+        }
+
+        var idUsuario = userId.Value;
+
+        _cargandoEcontaxSucursales = true;
+        try
+        {
+            var contexto = await EContaxTenantService.GetContextAsync(idUsuario);
+            if (!contexto.EsJefeEmpresa)
+            {
+                LimpiarSelectorSucursal();
+                return;
+            }
+
+            var sucursales = await EContaxTenantService.GetSucursalesEmpresaAsync(contexto.IdEmpresa);
+            _econtaxSucursales.Clear();
+            _econtaxSucursales.AddRange(sucursales);
+            _econtaxSucursalUsuarioActual = idUsuario;
+
+            var guardada = await JS.InvokeAsync<string?>("localStorage.getItem", EContaxSucursalStoragePrefix + idUsuario);
+            var idGuardado = int.TryParse(guardada, out var parsed) ? parsed : 0;
+            _econtaxSucursalSeleccionada = _econtaxSucursales.Any(x => x.IdSucursal == idGuardado)
+                ? idGuardado
+                : contexto.IdSucursal is > 0 && _econtaxSucursales.Any(x => x.IdSucursal == contexto.IdSucursal.Value)
+                    ? contexto.IdSucursal
+                    : _econtaxSucursales.FirstOrDefault()?.IdSucursal;
+        }
+        catch (JSDisconnectedException)
+        {
+            LimpiarSelectorSucursal();
+        }
+        catch (InvalidOperationException)
+        {
+            LimpiarSelectorSucursal();
+        }
+        finally
+        {
+            _cargandoEcontaxSucursales = false;
+        }
+    }
+
+    private async Task CambiarSucursalGlobalAsync(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var id) ||
+            !_econtaxSucursales.Any(x => x.IdSucursal == id))
+            return;
+
+        _econtaxSucursalSeleccionada = id;
+        if (_econtaxSucursalUsuarioActual is > 0)
+            await JS.InvokeVoidAsync("localStorage.setItem", EContaxSucursalStoragePrefix + _econtaxSucursalUsuarioActual.Value, id.ToString());
+
+        var uri = NavManager.GetUriWithQueryParameter("sucursalId", id);
+        if (!string.Equals(uri, NavManager.Uri, StringComparison.Ordinal))
+            NavManager.NavigateTo(uri);
+    }
+
+    private void LimpiarSelectorSucursal()
+    {
+        _econtaxSucursales.Clear();
+        _econtaxSucursalSeleccionada = null;
+        _econtaxSucursalUsuarioActual = null;
     }
 
     private async Task EvaluarBienvenidaAsync(ClaimsPrincipal user, bool isEContaxContext, bool isEDeclaraContext, bool isESignContext)

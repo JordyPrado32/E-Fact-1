@@ -121,10 +121,33 @@ public sealed class EContaxInventarioService
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenant.GetContextAsync(context, userId);
         var sucursales = await _tenant.GetSucursalesEmpresaAsync(context, userContext.IdEmpresa);
-        var sucursal = ResolverSucursalUnica(userContext, sucursales, sucursalId);
-        var producto = await ObtenerProductoInventariableAsync(context, userContext.IdEmpresa, sucursal.IdSucursal, codigoProducto);
+        var producto = await context.Productos.AsNoTracking().FirstOrDefaultAsync(p =>
+            p.Codigo == codigoProducto && p.Idempresa == userContext.IdEmpresa && p.Estado == true &&
+            (p.Tipocompravena == null || p.Tipocompravena.ToUpper() != "SERVICIO"));
         if (producto is null)
             throw new InvalidOperationException("El producto no existe o no pertenece a la empresa.");
+
+        if (!sucursalId.HasValue && userContext.EsJefeEmpresa)
+        {
+            var idsSucursal = sucursales.Select(x => x.IdSucursal).ToHashSet();
+            sucursalId = producto.Idsucursal is > 0 && idsSucursal.Contains(producto.Idsucursal.Value)
+                ? producto.Idsucursal
+                : await context.EContaxProductosSucursales.AsNoTracking()
+                    .Where(x => x.CodigoProducto == codigoProducto && x.IdEmpresa == userContext.IdEmpresa && idsSucursal.Contains(x.IdSucursal))
+                    .OrderBy(x => x.IdSucursal)
+                    .Select(x => (int?)x.IdSucursal)
+                    .FirstOrDefaultAsync();
+            sucursalId ??= userContext.IdSucursal is > 0 && idsSucursal.Contains(userContext.IdSucursal.Value)
+                ? userContext.IdSucursal
+                : sucursales.FirstOrDefault()?.IdSucursal;
+        }
+
+        var sucursal = ResolverSucursalUnica(userContext, sucursales, sucursalId);
+        var perteneceASucursal = producto.Idsucursal == sucursal.IdSucursal ||
+            await context.EContaxProductosSucursales.AnyAsync(x =>
+                x.CodigoProducto == codigoProducto && x.IdEmpresa == userContext.IdEmpresa && x.IdSucursal == sucursal.IdSucursal);
+        if (!perteneceASucursal)
+            throw new InvalidOperationException("El producto no está asignado a la sucursal seleccionada.");
 
         var existencia = await context.EContaxInventarioExistencias.AsNoTracking().FirstOrDefaultAsync(x =>
             x.CodigoProducto == codigoProducto && x.IdEmpresa == userContext.IdEmpresa && x.IdSucursal == sucursal.IdSucursal);
