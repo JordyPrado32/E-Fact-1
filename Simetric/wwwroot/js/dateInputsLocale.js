@@ -103,6 +103,12 @@
         input.style.setProperty("pointer-events", "none", "important");
         input.setAttribute("aria-hidden", "true");
         input.tabIndex = -1;
+
+        const host = input.parentElement;
+        if (host && getComputedStyle(host).position === "static") {
+            host.classList.add("localized-date-host");
+        }
+
         input.before(visible);
         visible.after(pickerButton);
 
