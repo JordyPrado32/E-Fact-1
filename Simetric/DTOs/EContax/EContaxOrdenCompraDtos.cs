@@ -110,6 +110,7 @@ public sealed class EContaxRecepcionCompraDetalleDto
     public decimal CantidadRecibida { get; set; }
     public decimal CantidadPendiente { get; set; }
     public decimal CantidadDiferencia { get; set; }
+    public decimal? CostoUnitario { get; set; }
     public string? Observacion { get; set; }
     public string? NumeroLote { get; set; }
     public DateTime? FechaVencimiento { get; set; }
@@ -139,6 +140,8 @@ public sealed class EContaxRecepcionCompraUpsertDto
 {
     public int IdOrdenCompra { get; set; }
     public DateTime? FechaRecepcion { get; set; }
+    public string? NumeroFacturaProveedor { get; set; }
+    public string? ClaveAccesoProveedor { get; set; }
     public string? Observacion { get; set; }
     public List<EContaxRecepcionCompraDetalleUpsertDto> Detalles { get; set; } = new();
 }
@@ -147,6 +150,7 @@ public sealed class EContaxRecepcionCompraDetalleUpsertDto
 {
     public int IdDetalleOrdenCompra { get; set; }
     public decimal CantidadRecibida { get; set; }
+    public decimal? CostoUnitario { get; set; }
     public string? Observacion { get; set; }
     public string? NumeroLote { get; set; }
     public DateTime? FechaVencimiento { get; set; }

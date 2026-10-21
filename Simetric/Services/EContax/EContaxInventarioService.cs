@@ -69,7 +69,7 @@ public sealed class EContaxInventarioService
         var fechaLimiteVencimiento = DateTime.UtcNow.Date.AddDays(30);
         var lotesReporte = await context.EContaxInventarioLotes.AsNoTracking()
             .Where(x => x.IdEmpresa == userContext.IdEmpresa && idsSucursal.Contains(x.IdSucursal) && codigos.Contains(x.CodigoProducto) && x.CantidadDisponible > 0)
-            .Select(x => new { x.CantidadDisponible, x.CostoUnitario, x.FechaVencimiento })
+            .Select(x => new { x.CodigoProducto, x.IdSucursal, x.CantidadDisponible, x.CostoUnitario, x.FechaVencimiento })
             .ToListAsync();
         var items = productos
             .SelectMany(producto => sucursalesConsulta
@@ -82,6 +82,11 @@ public sealed class EContaxInventarioService
                     var stock = existencia?.StockActual ?? 0;
                     var minimo = existencia?.StockMinimo ?? 0;
                     var maximo = existencia?.StockMaximo ?? 0;
+                    var lotePorVencer = lotesReporte
+                        .Where(x => x.CodigoProducto == producto.Codigo && x.IdSucursal == sucursal.IdSucursal &&
+                            x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date >= DateTime.UtcNow.Date && x.FechaVencimiento.Value.Date <= fechaLimiteVencimiento)
+                        .OrderBy(x => x.FechaVencimiento)
+                        .FirstOrDefault();
                     return new EContaxInventarioItemDto
                     {
                         CodigoProducto = producto.Codigo,
@@ -94,7 +99,9 @@ public sealed class EContaxInventarioService
                         StockMinimo = minimo,
                         StockMaximo = maximo,
                         CostoPromedio = existencia?.CostoPromedio ?? 0,
-                        Alerta = ObtenerAlerta(stock, minimo, maximo)
+                        Alerta = ObtenerAlerta(stock, minimo, maximo),
+                        TieneLotePorVencer = lotePorVencer is not null,
+                        ProximoVencimiento = lotePorVencer?.FechaVencimiento
                     };
                 }))
             .ToList();
@@ -240,8 +247,9 @@ public sealed class EContaxInventarioService
         var producto = await ObtenerProductoInventariableAsync(context, userContext.IdEmpresa, sucursal.IdSucursal, dto.CodigoProducto);
         if (producto is null)
             throw new InvalidOperationException("El producto no existe, no está asignado a la sucursal o es un servicio.");
-        if (dto.Cantidad <= 0)
-            throw new InvalidOperationException("La cantidad debe ser mayor que cero.");
+        var tipo = (dto.TipoMovimiento ?? string.Empty).Trim().ToUpperInvariant();
+        if (dto.Cantidad < 0 || (dto.Cantidad == 0 && tipo != "AJUSTE"))
+            throw new InvalidOperationException("La cantidad debe ser mayor que cero, salvo para fijar el stock en cero.");
 
         var metodo = await ObtenerMetodoAsync(context, userContext.IdEmpresa);
         var existencia = await ObtenerExistenciaAsync(context, userContext.IdEmpresa, sucursal.IdSucursal, dto.CodigoProducto);
@@ -250,7 +258,6 @@ public sealed class EContaxInventarioService
         if (existencia.StockMaximo > 0 && existencia.StockMinimo > existencia.StockMaximo)
             throw new InvalidOperationException("El stock mínimo no puede ser mayor que el stock máximo.");
 
-        var tipo = (dto.TipoMovimiento ?? string.Empty).Trim().ToUpperInvariant();
         var huboMovimiento = false;
         var tipoMovimientoLog = tipo;
         var cantidadMovimiento = dto.Cantidad;
@@ -782,14 +789,26 @@ public sealed class EContaxInventarioService
         var actor = await _tenant.GetContextAsync(context, userId);
         var sucursales = await _tenant.GetSucursalesEmpresaAsync(context, actor.IdEmpresa);
         var sucursal = ResolverSucursalUnica(actor, sucursales, dto.IdSucursal);
-        if (dto.Cantidad <= 0) throw new InvalidOperationException("La cantidad de reserva debe ser mayor que cero.");
-        var existencia = await ObtenerExistenciaAsync(context, actor.IdEmpresa, sucursal.IdSucursal, dto.CodigoProducto);
-        var disponible = existencia.StockActual - existencia.StockReservado;
-        if (!liberar && dto.Cantidad > disponible) throw new InvalidOperationException("La cantidad supera el stock disponible para reservar.");
-        if (liberar && dto.Cantidad > existencia.StockReservado) throw new InvalidOperationException("La cantidad supera el stock reservado.");
-        existencia.StockReservado = Math.Round(existencia.StockReservado + (liberar ? -dto.Cantidad : dto.Cantidad), 4);
-        existencia.FechaActualizacion = DateTime.UtcNow;
-        context.EContaxInventarioMovimientos.Add(CrearMovimiento(existencia, userId, await ObtenerMetodoAsync(context, actor.IdEmpresa), liberar ? "RESERVA_LIBERADA" : "RESERVA", dto.Cantidad, dto.Observacion, "RESERVA", existencia.CostoPromedio, dto.Referencia));
+        var detalles = dto.Detalles.Count > 0
+            ? dto.Detalles
+            : [new EContaxInventarioOperacionDetalleDto { CodigoProducto = dto.CodigoProducto, Cantidad = dto.Cantidad }];
+        ValidarDetallesOperacion(detalles);
+        var metodo = await ObtenerMetodoAsync(context, actor.IdEmpresa);
+        foreach (var grupo in detalles.GroupBy(x => x.CodigoProducto))
+        {
+            var producto = await ObtenerProductoInventariableAsync(context, actor.IdEmpresa, sucursal.IdSucursal, grupo.Key);
+            if (producto is null)
+                throw new InvalidOperationException($"El producto {grupo.Key} no está asignado a la sucursal.");
+
+            var cantidad = grupo.Sum(x => x.Cantidad);
+            var existencia = await ObtenerExistenciaAsync(context, actor.IdEmpresa, sucursal.IdSucursal, grupo.Key);
+            var disponible = existencia.StockActual - existencia.StockReservado;
+            if (!liberar && cantidad > disponible) throw new InvalidOperationException($"La cantidad de '{producto.Nombre}' supera el stock disponible para reservar.");
+            if (liberar && cantidad > existencia.StockReservado) throw new InvalidOperationException($"La cantidad de '{producto.Nombre}' supera el stock reservado.");
+            existencia.StockReservado = Math.Round(existencia.StockReservado + (liberar ? -cantidad : cantidad), 4);
+            existencia.FechaActualizacion = DateTime.UtcNow;
+            context.EContaxInventarioMovimientos.Add(CrearMovimiento(existencia, userId, metodo, liberar ? "RESERVA_LIBERADA" : "RESERVA", cantidad, dto.Observacion, "RESERVA", existencia.CostoPromedio, dto.Referencia));
+        }
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
     }

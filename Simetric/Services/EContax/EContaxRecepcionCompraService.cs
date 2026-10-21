@@ -132,6 +132,8 @@ public sealed class EContaxRecepcionCompraService
             NumeroRecepcion = string.Empty,
             FechaRecepcion = dto.FechaRecepcion ?? ahora,
             Estado = Borrador,
+            NumeroFacturaProveedor = Normalizar(dto.NumeroFacturaProveedor),
+            ClaveAccesoProveedor = Normalizar(dto.ClaveAccesoProveedor),
             Observacion = Normalizar(dto.Observacion),
             UsuarioCreacion = userId,
             FechaCreacion = ahora,
@@ -165,6 +167,8 @@ public sealed class EContaxRecepcionCompraService
         var recibidas = await ObtenerCantidadesRecibidasAsync(context, actor, recepcion.IdOrdenCompra, id);
         var detalles = PrepararDetalles(orden!, dto.Detalles, recibidas);
         recepcion.FechaRecepcion = dto.FechaRecepcion ?? recepcion.FechaRecepcion;
+        recepcion.NumeroFacturaProveedor = Normalizar(dto.NumeroFacturaProveedor);
+        recepcion.ClaveAccesoProveedor = Normalizar(dto.ClaveAccesoProveedor);
         recepcion.Observacion = Normalizar(dto.Observacion);
         recepcion.UsuarioActualizacion = userId;
         recepcion.FechaActualizacion = DateTime.Now;
@@ -211,7 +215,7 @@ public sealed class EContaxRecepcionCompraService
             actor.IdEmpresa,
             recepcion.IdSucursal,
             recepcion.Detalles
-                .Select(x => (CodigoProducto: x.CodigoProducto, Cantidad: x.CantidadRecibida, CostoUnitarioSinImpuestos: costos.GetValueOrDefault(x.IdDetalleOrdenCompra), NumeroLote: x.NumeroLote, FechaVencimiento: x.FechaVencimiento))
+                .Select(x => (CodigoProducto: x.CodigoProducto, Cantidad: x.CantidadRecibida, CostoUnitarioSinImpuestos: x.CostoUnitario ?? costos.GetValueOrDefault(x.IdDetalleOrdenCompra), NumeroLote: x.NumeroLote, FechaVencimiento: x.FechaVencimiento))
                 .ToList(),
             recepcion.NumeroRecepcion);
         await context.SaveChangesAsync();
@@ -314,6 +318,8 @@ public sealed class EContaxRecepcionCompraService
         {
             if (item.CantidadRecibida < 0)
                 throw new InvalidOperationException("La cantidad recibida no puede ser negativa.");
+            if (item.CostoUnitario is < 0)
+                throw new InvalidOperationException("El costo unitario no puede ser negativo.");
             var original = ordenDetalle[item.IdDetalleOrdenCompra];
             var pendiente = original.Cantidad - recibidas.GetValueOrDefault(original.IdDetalle);
             if (item.CantidadRecibida > pendiente)
@@ -326,7 +332,8 @@ public sealed class EContaxRecepcionCompraService
                 Descripcion = original.Descripcion,
                 CantidadOrdenada = original.Cantidad,
                 CantidadRecibida = item.CantidadRecibida,
-                CantidadDiferencia = Math.Max(0, original.Cantidad - item.CantidadRecibida),
+                CantidadDiferencia = Math.Max(0, pendiente - item.CantidadRecibida),
+                CostoUnitario = item.CostoUnitario,
                 Observacion = Normalizar(item.Observacion),
                 NumeroLote = Normalizar(item.NumeroLote),
                 FechaVencimiento = item.FechaVencimiento?.Date
@@ -386,8 +393,8 @@ public sealed class EContaxRecepcionCompraService
             Lineas = recepcion.Detalles.Count,
             IdSucursal = recepcion.IdSucursal,
             Observacion = recepcion.Observacion,
-            NumeroFacturaProveedor = orden.NumeroFacturaProveedor,
-            ClaveAccesoProveedor = orden.ClaveAccesoProveedor,
+            NumeroFacturaProveedor = recepcion.NumeroFacturaProveedor ?? orden.NumeroFacturaProveedor,
+            ClaveAccesoProveedor = recepcion.ClaveAccesoProveedor ?? orden.ClaveAccesoProveedor,
             Detalles = recepcion.Detalles.Select(x => new EContaxRecepcionCompraDetalleDto
             {
                 IdDetalleRecepcion = x.IdDetalleRecepcion,
@@ -399,7 +406,8 @@ public sealed class EContaxRecepcionCompraService
                 CantidadYaRecibida = recibido.GetValueOrDefault(x.IdDetalleOrdenCompra),
                 CantidadRecibida = x.CantidadRecibida,
                 CantidadPendiente = Math.Max(0, x.CantidadOrdenada - recibido.GetValueOrDefault(x.IdDetalleOrdenCompra) - x.CantidadRecibida),
-                CantidadDiferencia = x.CantidadDiferencia,
+                CantidadDiferencia = Math.Max(0, x.CantidadOrdenada - recibido.GetValueOrDefault(x.IdDetalleOrdenCompra) - x.CantidadRecibida),
+                CostoUnitario = x.CostoUnitario ?? orden.Detalles.FirstOrDefault(d => d.IdDetalle == x.IdDetalleOrdenCompra)?.PrecioUnitario,
                 Observacion = x.Observacion,
                 NumeroLote = x.NumeroLote,
                 FechaVencimiento = x.FechaVencimiento

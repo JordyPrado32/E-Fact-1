@@ -15,6 +15,7 @@ public sealed class EContaxOrdenCompraService
     private const string Borrador = "BORRADOR";
     private const string Aprobada = "APROBADA";
     private const string Enviada = "ENVIADA";
+    private const string Cerrada = "CERRADA";
     private const string Cancelada = "CANCELADA";
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
@@ -218,7 +219,7 @@ public sealed class EContaxOrdenCompraService
         var nuevoEstado = estado.Trim().ToUpperInvariant();
         var accion = nuevoEstado == Cancelada ? EContaxAccion.Eliminar : EContaxAccion.Editar;
         await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.ComprasOrdenes, accion);
-        if (nuevoEstado is not (Aprobada or Enviada or Cancelada))
+        if (nuevoEstado is not (Aprobada or Enviada or Cerrada or Cancelada))
             throw new InvalidOperationException("Estado de orden de compra no válido.");
 
         await using var context = await _dbFactory.CreateDbContextAsync();
@@ -391,6 +392,7 @@ public sealed class EContaxOrdenCompraService
         (actual, nuevo) switch
         {
             (Borrador, Aprobada) or (Aprobada, Enviada) => true,
+            (Aprobada, Cerrada) or (Enviada, Cerrada) => true,
             (Borrador, Cancelada) or (Aprobada, Cancelada) or (Enviada, Cancelada) => true,
             _ => false
         };

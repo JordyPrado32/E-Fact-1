@@ -14,6 +14,8 @@ public sealed class EContaxInventarioItemDto
     public decimal StockMaximo { get; set; }
     public decimal CostoPromedio { get; set; }
     public string? Alerta { get; set; }
+    public bool TieneLotePorVencer { get; set; }
+    public DateTime? ProximoVencimiento { get; set; }
 }
 
 public sealed class EContaxInventarioDashboardDto
@@ -117,6 +119,7 @@ public sealed class EContaxInventarioReservaDto
     public int CodigoProducto { get; set; }
     public int? IdSucursal { get; set; }
     public decimal Cantidad { get; set; }
+    public List<EContaxInventarioOperacionDetalleDto> Detalles { get; set; } = new();
     public string? Referencia { get; set; }
     public string? Observacion { get; set; }
 }

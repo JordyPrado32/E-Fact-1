@@ -648,6 +648,8 @@ namespace Simetric.Data
                 entity.Property(x => x.FechaRecepcion).HasColumnName("fecha_recepcion");
                 entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(1000);
+                entity.Property(x => x.NumeroFacturaProveedor).HasColumnName("numero_factura_proveedor").HasMaxLength(50).IsUnicode(false);
+                entity.Property(x => x.ClaveAccesoProveedor).HasColumnName("clave_acceso_proveedor").HasMaxLength(60).IsUnicode(false);
                 entity.Property(x => x.UsuarioCreacion).HasColumnName("usuario_creacion");
                 entity.Property(x => x.FechaCreacion).HasColumnName("fecha_creacion");
                 entity.Property(x => x.UsuarioActualizacion).HasColumnName("usuario_actualizacion");
@@ -672,6 +674,7 @@ namespace Simetric.Data
                 entity.Property(x => x.CantidadOrdenada).HasColumnName("cantidad_ordenada").HasColumnType("decimal(18,4)");
                 entity.Property(x => x.CantidadRecibida).HasColumnName("cantidad_recibida").HasColumnType("decimal(18,4)");
                 entity.Property(x => x.CantidadDiferencia).HasColumnName("cantidad_diferencia").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnName("costo_unitario").HasColumnType("decimal(18,4)");
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
                 entity.Property(x => x.NumeroLote).HasColumnName("numero_lote").HasMaxLength(80).IsUnicode(false);
                 entity.Property(x => x.FechaVencimiento).HasColumnName("fecha_vencimiento");

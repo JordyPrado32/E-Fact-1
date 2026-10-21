@@ -1,0 +1,18 @@
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
+IF OBJECT_ID(N'dbo.ECONTAX_RECEPCION_COMPRA', N'U') IS NULL
+BEGIN
+    THROW 50001, 'Falta ejecutar la estructura base de recepciones de compra.', 1;
+END;
+
+IF COL_LENGTH('dbo.ECONTAX_RECEPCION_COMPRA', 'numero_factura_proveedor') IS NULL
+    ALTER TABLE dbo.ECONTAX_RECEPCION_COMPRA ADD numero_factura_proveedor VARCHAR(50) NULL;
+
+IF COL_LENGTH('dbo.ECONTAX_RECEPCION_COMPRA', 'clave_acceso_proveedor') IS NULL
+    ALTER TABLE dbo.ECONTAX_RECEPCION_COMPRA ADD clave_acceso_proveedor VARCHAR(60) NULL;
+
+IF COL_LENGTH('dbo.ECONTAX_RECEPCION_COMPRA_DETALLE', 'costo_unitario') IS NULL
+    ALTER TABLE dbo.ECONTAX_RECEPCION_COMPRA_DETALLE ADD costo_unitario DECIMAL(18,4) NULL;
+
+COMMIT;

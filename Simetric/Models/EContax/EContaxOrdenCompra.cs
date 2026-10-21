@@ -178,6 +178,12 @@ public sealed class EContaxRecepcionCompra
     [Column("observacion")]
     public string? Observacion { get; set; }
 
+    [Column("numero_factura_proveedor")]
+    public string? NumeroFacturaProveedor { get; set; }
+
+    [Column("clave_acceso_proveedor")]
+    public string? ClaveAccesoProveedor { get; set; }
+
     [Column("usuario_creacion")]
     public int UsuarioCreacion { get; set; }
 
@@ -224,6 +230,9 @@ public sealed class EContaxRecepcionCompraDetalle
 
     [Column("cantidad_diferencia", TypeName = "decimal(18,4)")]
     public decimal CantidadDiferencia { get; set; }
+
+    [Column("costo_unitario", TypeName = "decimal(18,4)")]
+    public decimal? CostoUnitario { get; set; }
 
     [Column("observacion")]
     public string? Observacion { get; set; }
