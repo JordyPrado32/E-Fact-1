@@ -447,6 +447,8 @@ public sealed class EContaxCatalogService
                 Precio2 = p.Precio2,
                 Precio3 = p.Precio3,
                 TipoCompravena = p.Tipocompravena,
+                UnidadMedida = p.UnidadMedida,
+                FactorConversionInventario = p.FactorConversionInventario,
                 TipoProducto = p.TipoProducto,
                 Idsubtipo = p.Idsubtipo,
                 Codigoimpuesto = p.Codigoimpuesto,
@@ -464,6 +466,29 @@ public sealed class EContaxCatalogService
             .ToListAsync();
 
         await CompletarSucursalesAsync(context, userContext, data);
+
+        var sucursalStock = userContext.EsJefeEmpresa
+            ? sucursalId ?? userContext.IdSucursal
+            : userContext.IdSucursal;
+        if (sucursalStock is > 0)
+        {
+            var stock = await context.EContaxInventarioExistencias
+                .AsNoTracking()
+                .Where(x => x.IdEmpresa == userContext.IdEmpresa && x.IdSucursal == sucursalStock.Value)
+                .ToDictionaryAsync(x => x.CodigoProducto);
+
+            foreach (var producto in data)
+            {
+                if (!stock.TryGetValue(producto.Codigo, out var existencia))
+                    continue;
+
+                producto.StockActual = existencia.StockActual;
+                producto.StockMinimo = existencia.StockMinimo;
+                producto.StockMaximo = existencia.StockMaximo;
+                producto.TieneAlertaInventario = existencia.StockMinimo > 0 && existencia.StockActual <= existencia.StockMinimo ||
+                    existencia.StockMaximo > 0 && existencia.StockActual > existencia.StockMaximo;
+            }
+        }
 
         return data;
     }
@@ -484,6 +509,8 @@ public sealed class EContaxCatalogService
                 Precio2 = p.Precio2,
                 Precio3 = p.Precio3,
                 TipoCompravena = p.Tipocompravena,
+                UnidadMedida = p.UnidadMedida,
+                FactorConversionInventario = p.FactorConversionInventario,
                 TipoProducto = p.TipoProducto,
                 Idsubtipo = p.Idsubtipo,
                 Codigoimpuesto = p.Codigoimpuesto,
@@ -524,6 +551,8 @@ public sealed class EContaxCatalogService
             Precio2 = model.Precio2,
             Precio3 = model.Precio3,
             Tipocompravena = model.TipoCompravena,
+            UnidadMedida = NormalizarUnidad(model.UnidadMedida),
+            FactorConversionInventario = ValidarFactorConversion(model.FactorConversionInventario),
             TipoProducto = model.TipoProducto,
             Idsubtipo = model.Idsubtipo,
             Codigoimpuesto = model.Codigoimpuesto,
@@ -566,6 +595,8 @@ public sealed class EContaxCatalogService
         producto.Precio2 = model.Precio2;
         producto.Precio3 = model.Precio3;
         producto.Tipocompravena = model.TipoCompravena;
+        producto.UnidadMedida = NormalizarUnidad(model.UnidadMedida);
+        producto.FactorConversionInventario = ValidarFactorConversion(model.FactorConversionInventario);
         producto.TipoProducto = model.TipoProducto;
         producto.Idsubtipo = model.Idsubtipo;
         producto.Codigoimpuesto = model.Codigoimpuesto;
@@ -1160,9 +1191,15 @@ public sealed class EContaxCatalogService
         model.Nombre = model.Nombre?.Trim();
         model.CodigoPrincipal = model.CodigoPrincipal?.Trim();
         model.TipoCompravena = model.TipoCompravena?.Trim().ToUpperInvariant();
+        model.UnidadMedida = string.IsNullOrWhiteSpace(model.UnidadMedida) ? "UNIDAD" : model.UnidadMedida.Trim().ToUpperInvariant();
+        model.FactorConversionInventario = model.FactorConversionInventario <= 0 ? 1m : model.FactorConversionInventario;
         model.Codigoimpuesto = model.Codigoimpuesto?.Trim();
         model.Porcentajeimpuesto = model.Porcentajeimpuesto?.Trim();
         model.Observacion = model.Observacion?.Trim();
     }
+
+    private static string NormalizarUnidad(string? unidad) => string.IsNullOrWhiteSpace(unidad) ? "UNIDAD" : unidad.Trim().ToUpperInvariant();
+
+    private static decimal ValidarFactorConversion(decimal factor) => factor <= 0 ? 1m : Math.Round(factor, 4, MidpointRounding.AwayFromZero);
 
 }

@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Simetric.Data;
 using Simetric.DTOs.EContax;
@@ -17,15 +18,18 @@ public sealed class EContaxRecepcionCompraService
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly EContaxTenantService _tenantService;
     private readonly EContaxSeguridadService _seguridad;
+    private readonly EContaxInventarioService _inventario;
 
     public EContaxRecepcionCompraService(
         IDbContextFactory<AppDbContext> dbFactory,
         EContaxTenantService tenantService,
-        EContaxSeguridadService seguridad)
+        EContaxSeguridadService seguridad,
+        EContaxInventarioService inventario)
     {
         _dbFactory = dbFactory;
         _tenantService = tenantService;
         _seguridad = seguridad;
+        _inventario = inventario;
     }
 
     public async Task<List<EContaxRecepcionCompraListaDto>> ListarAsync(int userId, string? search = null, string? estado = null)
@@ -175,7 +179,7 @@ public sealed class EContaxRecepcionCompraService
     {
         await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.ComprasRecepciones, EContaxAccion.Editar);
         await using var context = await _dbFactory.CreateDbContextAsync();
-        await using var transaction = await context.Database.BeginTransactionAsync();
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var actor = await _tenantService.GetContextAsync(context, userId);
         var recepcion = await ObtenerRecepcionAsync(context, actor, id);
         if (recepcion is null)
@@ -197,6 +201,19 @@ public sealed class EContaxRecepcionCompraService
         recepcion.UsuarioActualizacion = userId;
         recepcion.FechaActualizacion = DateTime.Now;
         AgregarHistorial(context, id, Borrador, nuevoEstado, recepcion.Observacion, userId, DateTime.Now);
+        if (recepcion.IdSucursal != orden.IdSucursal)
+            throw new InvalidOperationException("La sucursal de la recepción no coincide con la sucursal de la orden de compra.");
+
+        var costos = orden.Detalles.ToDictionary(x => x.IdDetalle, ObtenerCostoUnitarioInventario);
+        await _inventario.RegistrarEntradaCompraAsync(
+            context,
+            userId,
+            actor.IdEmpresa,
+            recepcion.IdSucursal,
+            recepcion.Detalles
+                .Select(x => (CodigoProducto: x.CodigoProducto, Cantidad: x.CantidadRecibida, CostoUnitarioSinImpuestos: costos.GetValueOrDefault(x.IdDetalleOrdenCompra), NumeroLote: x.NumeroLote, FechaVencimiento: x.FechaVencimiento))
+                .ToList(),
+            recepcion.NumeroRecepcion);
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
         return (await ObtenerAsync(userId, id))!;
@@ -206,13 +223,26 @@ public sealed class EContaxRecepcionCompraService
     {
         await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.ComprasRecepciones, EContaxAccion.Eliminar);
         await using var context = await _dbFactory.CreateDbContextAsync();
-        await using var transaction = await context.Database.BeginTransactionAsync();
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var actor = await _tenantService.GetContextAsync(context, userId);
         var recepcion = await ObtenerRecepcionAsync(context, actor, id);
         if (recepcion is null)
             throw new InvalidOperationException("La recepción no existe o no pertenece a tu contexto.");
         if (recepcion.Estado == Anulada)
             throw new InvalidOperationException("La recepción ya está anulada.");
+
+        if (recepcion.Estado is RecibidaParcial or RecibidaCompleta)
+        {
+            await _inventario.AnularEntradaCompraAsync(
+                context,
+                userId,
+                actor.IdEmpresa,
+                recepcion.IdSucursal,
+                recepcion.Detalles
+                    .Select(x => (CodigoProducto: x.CodigoProducto, Cantidad: x.CantidadRecibida))
+                    .ToList(),
+                recepcion.NumeroRecepcion);
+        }
 
         var anterior = recepcion.Estado;
         recepcion.Estado = Anulada;
@@ -297,7 +327,9 @@ public sealed class EContaxRecepcionCompraService
                 CantidadOrdenada = original.Cantidad,
                 CantidadRecibida = item.CantidadRecibida,
                 CantidadDiferencia = Math.Max(0, original.Cantidad - item.CantidadRecibida),
-                Observacion = Normalizar(item.Observacion)
+                Observacion = Normalizar(item.Observacion),
+                NumeroLote = Normalizar(item.NumeroLote),
+                FechaVencimiento = item.FechaVencimiento?.Date
             });
         }
         return resultado;
@@ -354,6 +386,8 @@ public sealed class EContaxRecepcionCompraService
             Lineas = recepcion.Detalles.Count,
             IdSucursal = recepcion.IdSucursal,
             Observacion = recepcion.Observacion,
+            NumeroFacturaProveedor = orden.NumeroFacturaProveedor,
+            ClaveAccesoProveedor = orden.ClaveAccesoProveedor,
             Detalles = recepcion.Detalles.Select(x => new EContaxRecepcionCompraDetalleDto
             {
                 IdDetalleRecepcion = x.IdDetalleRecepcion,
@@ -366,7 +400,9 @@ public sealed class EContaxRecepcionCompraService
                 CantidadRecibida = x.CantidadRecibida,
                 CantidadPendiente = Math.Max(0, x.CantidadOrdenada - recibido.GetValueOrDefault(x.IdDetalleOrdenCompra) - x.CantidadRecibida),
                 CantidadDiferencia = x.CantidadDiferencia,
-                Observacion = x.Observacion
+                Observacion = x.Observacion,
+                NumeroLote = x.NumeroLote,
+                FechaVencimiento = x.FechaVencimiento
             }).ToList()
         };
 
@@ -377,6 +413,11 @@ public sealed class EContaxRecepcionCompraService
         if (orden.Estado is not (Aprobada or Enviada))
             throw new InvalidOperationException("Solo se pueden recibir órdenes aprobadas o enviadas.");
     }
+
+    private static decimal ObtenerCostoUnitarioInventario(EContaxOrdenCompraDetalle detalle) =>
+        detalle.Cantidad <= 0
+            ? 0m
+            : Math.Round(Math.Max(0, detalle.Subtotal / detalle.Cantidad), 4, MidpointRounding.AwayFromZero);
 
     private static void AgregarHistorial(AppDbContext context, int idRecepcion, string? anterior, string nuevo, string? observacion, int userId, DateTime fecha) =>
         context.EContaxRecepcionesCompraHistorial.Add(new EContaxRecepcionCompraHistorial

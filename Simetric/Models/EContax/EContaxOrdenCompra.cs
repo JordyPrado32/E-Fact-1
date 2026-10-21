@@ -43,6 +43,12 @@ public sealed class EContaxOrdenCompra
     [Column("observacion")]
     public string? Observacion { get; set; }
 
+    [Column("numero_factura_proveedor")]
+    public string? NumeroFacturaProveedor { get; set; }
+
+    [Column("clave_acceso_proveedor")]
+    public string? ClaveAccesoProveedor { get; set; }
+
     [Column("estado")]
     public string Estado { get; set; } = "BORRADOR";
 
@@ -221,6 +227,12 @@ public sealed class EContaxRecepcionCompraDetalle
 
     [Column("observacion")]
     public string? Observacion { get; set; }
+
+    [Column("numero_lote")]
+    public string? NumeroLote { get; set; }
+
+    [Column("fecha_vencimiento")]
+    public DateTime? FechaVencimiento { get; set; }
 
     [ForeignKey(nameof(IdRecepcion))]
     public EContaxRecepcionCompra? Recepcion { get; set; }

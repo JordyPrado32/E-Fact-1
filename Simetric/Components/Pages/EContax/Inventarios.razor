@@ -1,0 +1,320 @@
+@page "/e-contax/inventarios"
+@page "/e-contax/inventarios/kardex"
+@using System.Net.Http.Json
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.DTOs.EContax
+@using Simetric.Services.EContax
+@inject HttpClient Http
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+@attribute [AllowAnonymous]
+@rendermode InteractiveServer
+
+<PageTitle>Inventarios | E-Contax</PageTitle>
+
+<div class="inventory-shell">
+    <section class="inventory-hero">
+        <div>
+            <span class="inventory-eyebrow">E-Contax · Control de existencias</span>
+            <h2>@(EsKardexRuta ? "Kardex de inventario" : "Inventarios")</h2>
+            <p>Consulta movimientos, costos y existencias de cada producto por sucursal.</p>
+            <nav class="inventory-view-switcher" aria-label="Sección de inventario">
+                <button type="button" class="@(EsKardexRuta ? "" : "is-active")" @onclick="VolverInventarios"><i class="ri-stack-line"></i> Existencias</button>
+                @if (EsKardexRuta)
+                {
+                    <span class="inventory-current-view"><i class="ri-file-list-3-line"></i> Kardex</span>
+                }
+                else
+                {
+                    <span class="inventory-view-hint">Seleccione “Ver Kardex” en un producto</span>
+                }
+            </nav>
+        </div>
+        <div class="inventory-hero-summary">
+            <span>Método de valoración</span>
+            <strong>@MetodoVisible</strong>
+            <small>@(EsKardexRuta ? kardex?.NombreSucursal : SucursalResumen)</small>
+        </div>
+    </section>
+
+    <div class="inventory-alert" role="alert">
+        <i class="ri-alert-line"></i>
+        <div><strong>Configuración con impacto contable</strong><span>El método <b>@MetodoVisible</b> se aplicará a los movimientos futuros y puede afectar los libros de inventario.</span></div>
+    </div>
+
+    @if (EsKardexRuta)
+    {
+        @if (cargando && kardex is null)
+        {
+            <section class="inventory-state-card"><span class="spinner-border text-primary" role="status"></span><strong>Cargando Kardex</strong><span>Consultando movimientos y costos del producto.</span></section>
+        }
+        else if (kardex is not null)
+        {
+            <section class="inventory-kardex-head">
+                <div class="inventory-product-heading"><span class="inventory-code">@(kardex.CodigoPrincipal ?? $"#{kardex.CodigoProducto}")</span><h3>@kardex.NombreProducto</h3><span><i class="ri-store-2-line"></i> @kardex.NombreSucursal</span></div>
+                <div class="inventory-kardex-actions">
+                    @if (kardex.Sucursales.Count > 1)
+                    {
+                        <label class="inventory-inline-filter"><span>Sucursal</span><select value="@SucursalSeleccionadaTexto" @onchange="CambiarSucursalAsync">
+                            @foreach (var sucursal in kardex.Sucursales)
+                            {
+                                <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+                            }
+                        </select></label>
+                    }
+                    <div class="inventory-stock-total"><span>Stock actual</span><strong>@kardex.StockActual.ToString("N2")</strong><small>Costo promedio @kardex.CostoPromedio.ToString("C2")</small></div>
+                    @if (kardex.PuedeEditar)
+                    {
+                        <button type="button" class="inventory-icon-button" title="Configurar método" @onclick="AbrirConfiguracion"><i class="ri-settings-3-line"></i></button>
+                    }
+                </div>
+            </section>
+
+            @if (!string.IsNullOrWhiteSpace(error))
+            {
+                <div class="inventory-status is-error"><i class="ri-error-warning-line"></i><span>@error</span></div>
+            }
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="inventory-status is-success"><i class="ri-checkbox-circle-line"></i><span>@mensaje</span></div>
+            }
+
+            <section class="inventory-table-card">
+                <div class="inventory-table-head"><div><span class="inventory-section-kicker">Historial de movimientos</span><h3>Kardex valorizado</h3></div><span class="inventory-table-badge">@kardex.Movimientos.Count movimientos</span></div>
+                @if (cargando)
+                {
+                    <div class="inventory-state-card compact"><span class="spinner-border spinner-border-sm text-primary" role="status"></span><span>Actualizando movimientos...</span></div>
+                }
+                else if (!kardex.Movimientos.Any())
+                {
+                    <div class="inventory-state-card compact"><i class="ri-inbox-2-line"></i><strong>Sin movimientos registrados</strong><span>El producto todavía no tiene entradas o salidas en esta sucursal.</span></div>
+                }
+                else
+                {
+                    <div class="inventory-table-wrap"><table class="table inventory-table mb-0"><thead><tr><th>Fecha</th><th>Movimiento</th><th class="text-end">Cantidad</th><th class="text-end">Costo unitario</th><th class="text-end">Costo total</th><th class="text-end">Saldo</th><th>Lote / vencimiento</th><th>Referencia</th></tr></thead><tbody>
+                        @foreach (var movimiento in kardex.Movimientos)
+                        {
+                            <tr @key="movimiento.IdMovimiento"><td>@movimiento.FechaMovimiento.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td><span class="inventory-movement-pill @(EsSalida(movimiento.TipoMovimiento) ? "is-out" : "is-in")"><i class="@(EsSalida(movimiento.TipoMovimiento) ? "ri-arrow-down-line" : "ri-arrow-up-line")"></i>@movimiento.TipoMovimiento</span></td><td class="text-end">@movimiento.Cantidad.ToString("N2")</td><td class="text-end">@movimiento.CostoUnitario.ToString("C2")</td><td class="text-end">@movimiento.CostoTotal.ToString("C2")</td><td class="text-end fw-semibold">@movimiento.SaldoCantidad.ToString("N2")</td><td>@(movimiento.NumeroLote ?? "-")@(movimiento.FechaVencimiento.HasValue ? $" · vence {movimiento.FechaVencimiento:dd/MM/yyyy}" : "")</td><td>@(movimiento.Referencia ?? movimiento.Observacion ?? "-")</td></tr>
+                        }
+                    </tbody></table></div>
+                }
+            </section>
+        }
+        else
+        {
+            <section class="inventory-state-card"><i class="ri-error-warning-line"></i><strong>No se pudo cargar el Kardex</strong><span>@(error ?? "Seleccione un producto desde el catálogo.")</span><button type="button" class="inventory-secondary-btn" @onclick="VolverInventarios">Volver a existencias</button></section>
+        }
+    }
+    else
+    {
+        <section class="inventory-kpi-grid">
+            <article class="inventory-kpi"><span class="inventory-kpi-icon is-blue"><i class="ri-box-3-line"></i></span><div><span>Productos inventariables</span><strong>@dashboard.TotalProductos</strong><small>Productos activos en la consulta</small></div></article>
+            <article class="inventory-kpi"><span class="inventory-kpi-icon is-green"><i class="ri-stack-line"></i></span><div><span>Stock disponible</span><strong>@dashboard.StockTotal.ToString("N2")</strong><small>Unidades disponibles</small></div></article>
+            <article class="inventory-kpi"><span class="inventory-kpi-icon is-red"><i class="ri-arrow-down-circle-line"></i></span><div><span>Bajo mínimo</span><strong>@dashboard.ProductosBajoMinimo</strong><small>Requieren reposición</small></div></article>
+            <article class="inventory-kpi"><span class="inventory-kpi-icon is-orange"><i class="ri-alert-line"></i></span><div><span>Sobre máximo</span><strong>@dashboard.ProductosSobreMaximo</strong><small>Revisar niveles de compra</small></div></article>
+            <article class="inventory-kpi"><span class="inventory-kpi-icon is-purple"><i class="ri-calendar-close-line"></i></span><div><span>Lotes por vencer</span><strong>@dashboard.LotesPorVencer</strong><small>Próximos 30 días</small></div></article>
+            <article class="inventory-kpi"><span class="inventory-kpi-icon is-teal"><i class="ri-money-dollar-circle-line"></i></span><div><span>Valor inventario</span><strong>@dashboard.ValorInventario.ToString("C2")</strong><small>Costo sin impuestos</small></div></article>
+        </section>
+
+        <section class="inventory-toolbar">
+            <div class="inventory-toolbar-heading"><span class="inventory-section-kicker">Consulta</span><h3>Filtrar existencias</h3><p>Use la búsqueda y los filtros para encontrar rápidamente un producto.</p></div>
+            <div class="inventory-filter-grid">
+                <label class="inventory-filter search-filter"><span>Buscar producto</span><div class="inventory-search-box"><i class="ri-search-line"></i><input @bind="filtro" @bind:event="oninput" placeholder="Nombre, código o código principal" @onkeydown="OnSearchKeyDown" /><button type="button" title="Buscar" @onclick="CargarDashboardAsync"><i class="ri-arrow-right-line"></i></button></div></label>
+                @if (dashboard.PuedeConsultarTodasSucursales)
+                {
+                    <label class="inventory-filter"><span>Sucursal</span><select value="@SucursalSeleccionadaTexto" @onchange="CambiarSucursalAsync"><option value="0">Todas las sucursales</option>@foreach (var sucursal in dashboard.Sucursales){<option value="@sucursal.IdSucursal">@sucursal.Nombre</option>}</select></label>
+                }
+                else
+                {
+                    <label class="inventory-filter"><span>Sucursal</span><select value="@SucursalSeleccionadaTexto" disabled><option value="@SucursalSeleccionadaTexto">@(dashboard.Sucursales.FirstOrDefault()?.Nombre ?? "Sucursal actual")</option></select></label>
+                }
+                <label class="inventory-filter"><span>Alertas</span><select @bind="filtroAlerta"><option value="">Todas</option><option value="MINIMO">Bajo mínimo</option><option value="MAXIMO">Sobre máximo</option><option value="SIN_ALERTA">Sin alerta</option></select></label>
+            </div>
+            <div class="inventory-toolbar-actions inventory-hero-action"><button type="button" class="inventory-secondary-btn" @onclick="AbrirReportes"><i class="ri-file-chart-line"></i> Reportes</button><button type="button" class="inventory-primary-btn" @onclick="AbrirOperaciones"><i class="ri-exchange-box-line"></i> Operaciones</button></div>
+            <div class="inventory-toolbar-actions"><button type="button" class="inventory-secondary-btn" @onclick="LimpiarFiltros"><i class="ri-filter-off-line"></i> Limpiar</button><button type="button" class="inventory-secondary-btn" @onclick="CargarDashboardAsync" disabled="@cargando"><i class="ri-refresh-line"></i> Actualizar</button>@if (dashboard.PuedeEditar){<button type="button" class="inventory-primary-btn" @onclick="AbrirConfiguracion"><i class="ri-settings-3-line"></i> Configurar valoración</button>}</div>
+        </section>
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <div class="inventory-status is-error"><i class="ri-error-warning-line"></i><span>@error</span></div>
+        }
+        @if (!string.IsNullOrWhiteSpace(mensaje))
+        {
+            <div class="inventory-status is-success"><i class="ri-checkbox-circle-line"></i><span>@mensaje</span></div>
+        }
+
+        <section class="inventory-table-card">
+            <div class="inventory-table-head"><div><span class="inventory-section-kicker">Existencias por sucursal</span><h3>Productos inventariables</h3></div><span class="inventory-table-badge">@ItemsFiltrados.Count registros</span></div>
+            @if (cargando)
+            {
+                <div class="inventory-state-card"><span class="spinner-border text-primary" role="status"></span><strong>Cargando inventario</strong><span>Consultando existencias, límites y alertas.</span></div>
+            }
+            else if (!ItemsFiltrados.Any())
+            {
+                <div class="inventory-state-card"><i class="ri-inbox-2-line"></i><strong>No hay existencias para mostrar</strong><span>Pruebe con otro criterio de búsqueda o ajuste los filtros.</span></div>
+            }
+            else
+            {
+                    <div class="inventory-table-wrap"><table class="table inventory-table mb-0"><thead><tr><th>Producto</th><th>Sucursal</th><th class="text-end">Stock actual</th><th class="text-end">Disponible</th><th class="text-end">Mínimo</th><th class="text-end">Máximo</th><th class="text-end">Costo promedio</th><th>Estado</th><th class="text-end">Acciones</th></tr></thead><tbody>
+                    @foreach (var item in ItemsFiltrados)
+                    {
+                        <tr @key="@($"{item.CodigoProducto}-{item.IdSucursal}")"><td><div class="inventory-product-cell"><strong>@item.NombreProducto</strong><span>@(item.CodigoPrincipal ?? $"#{item.CodigoProducto}")</span></div></td><td><span class="inventory-branch"><i class="ri-store-2-line"></i>@item.NombreSucursal</span></td><td class="text-end fw-bold">@item.StockActual.ToString("N2")</td><td class="text-end">@item.StockDisponible.ToString("N2")</td><td class="text-end">@item.StockMinimo.ToString("N2")</td><td class="text-end">@(item.StockMaximo > 0 ? item.StockMaximo.ToString("N2") : "-")</td><td class="text-end">@item.CostoPromedio.ToString("C2")</td><td><span class="inventory-alert-pill @(item.Alerta == "MINIMO" ? "is-min" : item.Alerta == "MAXIMO" ? "is-max" : "is-ok")">@(item.Alerta == "MINIMO" ? "Bajo mínimo" : item.Alerta == "MAXIMO" ? "Sobre máximo" : "Normal")</span></td><td class="text-end"><div class="inventory-action-group"><button type="button" class="inventory-icon-button" title="Ver Kardex" @onclick="() => AbrirKardex(item.CodigoProducto, item.IdSucursal)"><i class="ri-file-list-3-line"></i></button>@if (dashboard.PuedeEditar){<button type="button" class="inventory-icon-button is-edit" title="Ajustar existencias" @onclick="() => AbrirAjuste(item)"><i class="ri-edit-line"></i></button>}</div></td></tr>
+                    }
+                </tbody></table></div>
+            }
+        </section>
+    }
+</div>
+
+@if (mostrarConfiguracion)
+{
+    <div class="inventory-modal-backdrop"></div>
+    <section class="inventory-modal inventory-modal-small" role="dialog" aria-modal="true" aria-labelledby="inventarioConfigTitulo"><header class="inventory-modal-header"><div><span class="inventory-section-kicker">Configuración administrativa</span><h3 id="inventarioConfigTitulo">Método de valoración</h3><p>Este cambio aplicará a los movimientos futuros de la empresa.</p></div><button type="button" class="inventory-modal-close" @onclick="CerrarConfiguracion" disabled="@guardando"><i class="ri-close-line"></i></button></header><div class="inventory-modal-body"><div class="inventory-modal-warning"><i class="ri-alert-line"></i><span>FIFO, LIFO y promedio ponderado pueden producir costos y saldos contables diferentes. Confirme el cambio con autorización del administrador.</span></div><label class="inventory-modal-field"><span>Método de valoración</span><select @bind="metodoBorrador" disabled="@guardando">@foreach (var metodo in Metodos){<option value="@metodo">@metodo</option>}</select></label>@if (!string.IsNullOrWhiteSpace(error)){<div class="inventory-modal-error">@error</div>}</div><footer class="inventory-modal-footer"><button type="button" class="inventory-secondary-btn" @onclick="CerrarConfiguracion" disabled="@guardando">Cancelar</button><button type="button" class="inventory-primary-btn" @onclick="GuardarMetodoAsync" disabled="@guardando">@(guardando ? "Guardando..." : "Guardar configuración")</button></footer></section>
+}
+
+@if (mostrarAjuste && ajuste is not null)
+{
+    <div class="inventory-modal-backdrop"></div>
+    <section class="inventory-modal" role="dialog" aria-modal="true" aria-labelledby="inventarioAjusteTitulo"><header class="inventory-modal-header"><div><span class="inventory-section-kicker">Administrar existencias</span><h3 id="inventarioAjusteTitulo">Ajustar inventario</h3><p>@itemAjuste?.NombreProducto · @itemAjuste?.NombreSucursal</p></div><button type="button" class="inventory-modal-close" @onclick="CerrarAjuste" disabled="@guardando"><i class="ri-close-line"></i></button></header><div class="inventory-modal-body"><div class="inventory-current-stock"><span>Stock actual</span><strong>@itemAjuste?.StockActual.ToString("N2")</strong><small>Los límites generan alertas automáticas.</small></div><div class="inventory-form-grid"><label class="inventory-modal-field"><span>Movimiento</span><select @bind="ajuste.TipoMovimiento" disabled="@guardando"><option value="ENTRADA">Entrada</option><option value="SALIDA">Salida</option><option value="AJUSTE">Fijar stock</option></select></label><label class="inventory-modal-field"><span>@(ajuste.TipoMovimiento == "AJUSTE" ? "Stock objetivo" : "Cantidad")</span><input type="number" min="0" step="0.01" @bind="ajuste.Cantidad" disabled="@guardando" /></label><label class="inventory-modal-field"><span>Costo unitario</span><input type="number" min="0" step="0.01" @bind="ajuste.CostoUnitario" disabled="@guardando" /></label><label class="inventory-modal-field"><span>Stock mínimo</span><input type="number" min="0" step="0.01" @bind="ajuste.StockMinimo" disabled="@guardando" /></label><label class="inventory-modal-field"><span>Stock máximo</span><input type="number" min="0" step="0.01" @bind="ajuste.StockMaximo" disabled="@guardando" /></label><label class="inventory-modal-field is-wide"><span>Observación</span><textarea rows="3" @bind="ajuste.Observacion" disabled="@guardando"></textarea></label></div>@if (!string.IsNullOrWhiteSpace(error)){<div class="inventory-modal-error">@error</div>}</div><footer class="inventory-modal-footer"><button type="button" class="inventory-secondary-btn" @onclick="CerrarAjuste" disabled="@guardando">Cancelar</button><button type="button" class="inventory-primary-btn" @onclick="GuardarAjusteAsync" disabled="@guardando">@(guardando ? "Guardando..." : "Guardar ajuste")</button></footer></section>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "productoId")]
+    public int? ProductoId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "sucursalId")]
+    public int? SucursalIdQuery { get; set; }
+
+    private readonly string[] Metodos = ["FIFO", "LIFO", "PROMEDIO"];
+    private EContaxInventarioDashboardDto dashboard = new();
+    private EContaxInventarioKardexDto? kardex;
+    private EContaxInventarioItemDto? itemAjuste;
+    private EContaxInventarioAjusteDto? ajuste;
+    private string filtro = string.Empty;
+    private string filtroAlerta = string.Empty;
+    private string metodoSeleccionado = "PROMEDIO";
+    private string metodoBorrador = "PROMEDIO";
+    private int? SucursalSeleccionada { get; set; }
+    private int usuarioId;
+    private bool cargando = true;
+    private bool guardando;
+    private bool mostrarAjuste;
+    private bool mostrarConfiguracion;
+    private string? error;
+    private string? mensaje;
+    private bool EsKardexRuta => NavManager.Uri.Split('?', '#')[0].TrimEnd('/').EndsWith("/kardex", StringComparison.OrdinalIgnoreCase);
+    private string MetodoVisible => EsKardexRuta ? kardex?.MetodoValoracion ?? metodoSeleccionado : string.IsNullOrWhiteSpace(dashboard.MetodoValoracion) ? metodoSeleccionado : dashboard.MetodoValoracion;
+    private string SucursalSeleccionadaTexto => (SucursalSeleccionada ?? (dashboard.PuedeConsultarTodasSucursales ? 0 : dashboard.Sucursales.FirstOrDefault()?.IdSucursal ?? kardex?.IdSucursal ?? 0)).ToString();
+    private string? SucursalResumen => dashboard.PuedeConsultarTodasSucursales && (SucursalSeleccionada is null or 0) ? "Todas las sucursales" : dashboard.Sucursales.FirstOrDefault(x => x.IdSucursal == SucursalSeleccionada)?.Nombre ?? "Sucursal actual";
+    private List<EContaxInventarioItemDto> ItemsFiltrados => dashboard.Items.Where(CoincideAlerta).ToList();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        usuarioId = int.TryParse(user.FindFirst("IdUsuario")?.Value ?? user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 0;
+        if (usuarioId <= 0) { error = "Sesión no válida."; cargando = false; return; }
+        SucursalSeleccionada = SucursalIdQuery > 0 ? SucursalIdQuery : null;
+        if (EsKardexRuta && ProductoId is > 0) await CargarKardexAsync(ProductoId.Value);
+        else if (EsKardexRuta) { error = "Seleccione un producto desde el catálogo para consultar su Kardex."; cargando = false; }
+        else await CargarDashboardAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CargarDashboardAsync()
+    {
+        if (usuarioId <= 0) return;
+        cargando = true; error = null; mensaje = null;
+        try
+        {
+            var url = $"api/e-contax/inventarios?userId={usuarioId}";
+            if (SucursalSeleccionada.HasValue) url += $"&sucursalId={SucursalSeleccionada.Value}";
+            if (!string.IsNullOrWhiteSpace(filtro)) url += $"&filtro={Uri.EscapeDataString(filtro.Trim())}";
+            dashboard = await Http.GetFromJsonAsync<EContaxInventarioDashboardDto>(url) ?? new();
+            metodoSeleccionado = dashboard.MetodoValoracion;
+        }
+        catch (Exception ex) { error = ex.Message; }
+        finally { cargando = false; }
+    }
+
+    private async Task CargarKardexAsync(int codigo)
+    {
+        cargando = true; error = null; mensaje = null;
+        try
+        {
+            var url = $"api/e-contax/inventarios/{codigo}/kardex?userId={usuarioId}";
+            if (SucursalSeleccionada is > 0) url += $"&sucursalId={SucursalSeleccionada.Value}";
+            kardex = await Http.GetFromJsonAsync<EContaxInventarioKardexDto>(url);
+            if (kardex is not null) { SucursalSeleccionada = kardex.IdSucursal; metodoSeleccionado = kardex.MetodoValoracion; }
+        }
+        catch (Exception ex) { error = ex.Message; kardex = null; }
+        finally { cargando = false; }
+    }
+
+    private async Task CambiarSucursalAsync(ChangeEventArgs args)
+    {
+        SucursalSeleccionada = int.TryParse(args.Value?.ToString(), out var id) && id > 0 ? id : 0;
+        if (EsKardexRuta && ProductoId is > 0) await CargarKardexAsync(ProductoId.Value); else await CargarDashboardAsync();
+    }
+
+    private async Task OnSearchKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter") await CargarDashboardAsync();
+    }
+
+    private bool CoincideAlerta(EContaxInventarioItemDto item) => string.IsNullOrWhiteSpace(filtroAlerta) || filtroAlerta == "SIN_ALERTA" && string.IsNullOrWhiteSpace(item.Alerta) || string.Equals(item.Alerta, filtroAlerta, StringComparison.OrdinalIgnoreCase);
+    private static bool EsSalida(string tipo) => tipo.Contains("SALIDA", StringComparison.OrdinalIgnoreCase);
+    private void AbrirKardex(int codigo, int sucursal) => NavManager.NavigateTo($"{EContaxRoutes.InventariosKardex}?productoId={codigo}&sucursalId={sucursal}");
+    private void VolverInventarios() => NavManager.NavigateTo(EContaxRoutes.Inventarios);
+    private void AbrirOperaciones() => NavManager.NavigateTo(EContaxRoutes.InventariosOperaciones);
+    private void AbrirReportes() => NavManager.NavigateTo(EContaxRoutes.InventariosReportes);
+    private void AbrirConfiguracion() { metodoBorrador = MetodoVisible; error = null; mostrarConfiguracion = true; }
+    private void CerrarConfiguracion() { if (!guardando) mostrarConfiguracion = false; }
+
+    private void AbrirAjuste(EContaxInventarioItemDto item)
+    {
+        itemAjuste = item;
+        ajuste = new EContaxInventarioAjusteDto { CodigoProducto = item.CodigoProducto, IdSucursal = item.IdSucursal, Cantidad = item.StockActual, StockMinimo = item.StockMinimo, StockMaximo = item.StockMaximo, CostoUnitario = item.CostoPromedio };
+        error = null; mostrarAjuste = true;
+    }
+
+    private void CerrarAjuste() { mostrarAjuste = false; ajuste = null; itemAjuste = null; }
+
+    private async Task GuardarAjusteAsync()
+    {
+        if (ajuste is null || guardando) return;
+        guardando = true; error = null;
+        try
+        {
+            var response = await Http.PostAsJsonAsync($"api/e-contax/inventarios/ajuste?userId={usuarioId}", ajuste);
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException(await response.Content.ReadAsStringAsync());
+            CerrarAjuste(); mensaje = "El inventario se actualizó correctamente."; await CargarDashboardAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+        finally { guardando = false; }
+    }
+
+    private async Task GuardarMetodoAsync()
+    {
+        if (guardando) return;
+        guardando = true; error = null;
+        try
+        {
+            var response = await Http.PutAsJsonAsync($"api/e-contax/inventarios/configuracion?userId={usuarioId}", new EContaxInventarioConfiguracionDto { MetodoValoracion = metodoBorrador });
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException(await response.Content.ReadAsStringAsync());
+            dashboard.MetodoValoracion = metodoBorrador;
+            if (kardex is not null) kardex.MetodoValoracion = metodoBorrador;
+            metodoSeleccionado = metodoBorrador; mensaje = "Método de valoración actualizado."; mostrarConfiguracion = false;
+        }
+        catch (Exception ex) { error = ex.Message; }
+        finally { guardando = false; }
+    }
+
+    private async Task LimpiarFiltros()
+    {
+        filtro = string.Empty; filtroAlerta = string.Empty; SucursalSeleccionada = dashboard.PuedeConsultarTodasSucursales ? 0 : null;
+        await CargarDashboardAsync();
+    }
+}

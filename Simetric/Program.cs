@@ -82,6 +82,8 @@ builder.Services.AddScoped<EContaxTenantService>();
 builder.Services.AddScoped<EContaxOrganizacionService>();
 builder.Services.AddScoped<EContaxSeguridadService>();
 builder.Services.AddScoped<EContaxCatalogService>();
+builder.Services.AddScoped<EContaxInventarioService>();
+builder.Services.AddScoped<IEContaxInventarioReportePdfService, EContaxInventarioReportePdfService>();
 builder.Services.AddScoped<EContaxOrdenCompraService>();
 builder.Services.AddScoped<EContaxRecepcionCompraService>();
 builder.Services.AddScoped<EDeclaraSharedDataService>();

@@ -10,6 +10,7 @@ using Simetric.Data;
 using Simetric.DTOs;
 using Simetric.Models;
 using Simetric.Models.Glogales;
+using Simetric.Services.EContax;
 using System;
 using System.Collections.Concurrent;
 // Hola
@@ -49,6 +50,7 @@ namespace Simetric.Services
         private readonly FacturaPersistenceSchemaService _facturaPersistenceSchemaService;
         private readonly EmisorCertificadoProtector _certificadoProtector;
         private readonly FirmaPathResolver _firmaPathResolver;
+        private readonly EContaxInventarioService _eContaxInventarioService;
         public string? UltimoErrorGuardarFactura { get; private set; }
 
         public FacturacionService(
@@ -67,7 +69,8 @@ namespace Simetric.Services
             FacturaStoredProcedureBootstrapService facturaStoredProcedureBootstrapService,
             FacturaPersistenceSchemaService facturaPersistenceSchemaService,
             EmisorCertificadoProtector certificadoProtector,
-            FirmaPathResolver firmaPathResolver)
+            FirmaPathResolver firmaPathResolver,
+            EContaxInventarioService eContaxInventarioService)
         {
             _dbFactory = dbFactory;
             _emailService = emailService;
@@ -85,6 +88,7 @@ namespace Simetric.Services
             _facturaPersistenceSchemaService = facturaPersistenceSchemaService;
             _certificadoProtector = certificadoProtector;
             _firmaPathResolver = firmaPathResolver;
+            _eContaxInventarioService = eContaxInventarioService;
         }
 
         private static object SnapshotCliente(Cliente c) => new
@@ -1400,6 +1404,17 @@ namespace Simetric.Services
                         }
 
                         await VincularProductosManualesAsync(context, catalogOwnerId.Value, detalles);
+
+                        if (factura.Idempresa is > 0 && factura.Idsucursal is > 0)
+                        {
+                            await _eContaxInventarioService.PrepararSalidaVentaAsync(
+                                context,
+                                idUsuario,
+                                factura.Idempresa.Value,
+                                factura.Idsucursal.Value,
+                                detalles,
+                                factura.Codfactura.ToString(CultureInfo.InvariantCulture));
+                        }
 
                         if (factura.DescuentoGlobalPct == null)
                             factura.DescuentoGlobalPct = 0m;

@@ -11,6 +11,8 @@ public sealed class EContaxProductoDto
     public decimal? Precio2 { get; set; }
     public decimal? Precio3 { get; set; }
     public string? TipoCompravena { get; set; }
+    public string? UnidadMedida { get; set; }
+    public decimal FactorConversionInventario { get; set; } = 1m;
     public int? TipoProducto { get; set; }
     public int? Idsubtipo { get; set; }
     public string? Codigoimpuesto { get; set; }
@@ -22,6 +24,10 @@ public sealed class EContaxProductoDto
     public int? Idsucursal { get; set; }
     public string? NombreSucursal { get; set; }
     public List<int> Idsucursales { get; set; } = new();
+    public decimal StockActual { get; set; }
+    public decimal StockMinimo { get; set; }
+    public decimal StockMaximo { get; set; }
+    public bool TieneAlertaInventario { get; set; }
 }
 
 public sealed class EContaxProductoUpsertDto
@@ -33,6 +39,8 @@ public sealed class EContaxProductoUpsertDto
     public decimal? Precio2 { get; set; }
     public decimal? Precio3 { get; set; }
     public string? TipoCompravena { get; set; }
+    public string? UnidadMedida { get; set; }
+    public decimal FactorConversionInventario { get; set; } = 1m;
     public int? TipoProducto { get; set; }
     public int? Idsubtipo { get; set; }
     public string? Codigoimpuesto { get; set; }

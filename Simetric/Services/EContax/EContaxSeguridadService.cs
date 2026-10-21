@@ -161,6 +161,8 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             EContaxRoutes.ComprasOrdenNueva => EContaxRoutes.ComprasOrdenes,
             EContaxRoutes.ComprasRecepciones or
             EContaxRoutes.ComprasRecepcionNueva => EContaxRoutes.ComprasRecepciones,
+            EContaxRoutes.InventariosKardex => EContaxRoutes.Inventarios,
+            EContaxRoutes.InventariosReportes => EContaxRoutes.Inventarios,
             EContaxRoutes.AdministracionCajasSecuencias => EContaxRoutes.AdministracionRoles,
             EContaxRoutes.ConfiguracionSeguridad => EContaxRoutes.AdministracionRoles,
             EContaxRoutes.ConfiguracionFirma => EContaxRoutes.Emisor,

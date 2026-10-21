@@ -48,6 +48,10 @@ public static class EContaxRoutes
     public const string Clientes = "/e-contax/clientes";
     public const string Emisor = "/e-contax/emisor";
     public const string Productos = "/e-contax/productos";
+    public const string Inventarios = "/e-contax/inventarios";
+    public const string InventariosKardex = "/e-contax/inventarios/kardex";
+    public const string InventariosOperaciones = "/e-contax/inventarios/operaciones";
+    public const string InventariosReportes = "/e-contax/inventarios/reportes";
     public const string ConfiguracionCategorias = "/e-contax/configuracion/categorias";
     public const string ConfiguracionPuntosEmision = "/e-contax/configuracion/puntos-emision";
     public const string ConfiguracionTiposCliente = "/e-contax/configuracion/tipos-cliente";

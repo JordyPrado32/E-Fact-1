@@ -1,0 +1,78 @@
+@page "/e-contax/inventarios/reportes"
+@using System.Net.Http.Json
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.DTOs.EContax
+@using Simetric.Services
+@using Simetric.Services.EContax
+@inject HttpClient Http
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ISimpleExcelExportService ExcelExportService
+@attribute [AllowAnonymous]
+@rendermode InteractiveServer
+
+<PageTitle>Reportes de inventario | E-Contax</PageTitle>
+
+<div class="inventory-report-shell">
+    <section class="inventory-report-hero">
+        <div>
+            <span class="inventory-report-eyebrow">E-Contax · Inventarios</span>
+            <h2>Reportes y exportaciones</h2>
+            <p>Consulta entradas, salidas, costos, lotes y saldos por periodo y sucursal.</p>
+        </div>
+        <div class="inventory-report-export-actions">
+            <button type="button" class="inventory-report-secondary" @onclick="ExportarCsvAsync" disabled="@(cargando || reporte.Movimientos.Count == 0)"><i class="ri-file-text-line"></i> CSV</button>
+            <button type="button" class="inventory-report-secondary" @onclick="ExportarPdfAsync" disabled="@(cargando || reporte.Movimientos.Count == 0)"><i class="ri-file-pdf-2-line"></i> PDF</button>
+            <button type="button" class="inventory-report-primary" @onclick="ExportarExcelAsync" disabled="@(cargando || reporte.Movimientos.Count == 0)"><i class="ri-file-excel-2-line"></i> Excel</button>
+        </div>
+    </section>
+
+    <section class="inventory-report-filters">
+        <label><span>Desde</span><InputDate @bind-Value="filtro.FechaDesde" /></label>
+        <label><span>Hasta</span><InputDate @bind-Value="filtro.FechaHasta" /></label>
+        <label><span>Sucursal</span><select value="@SucursalSeleccionadaTexto" @onchange="CambiarSucursalAsync">
+            <option value="0">@(reporte.Sucursales.Count > 0 ? "Todas las sucursales" : "Sucursal actual")</option>
+            @foreach (var sucursal in reporte.Sucursales)
+            {
+                <option value="@sucursal.IdSucursal">@sucursal.Nombre</option>
+            }
+        </select></label>
+        <label><span>Producto</span><input @bind="filtro.Producto" placeholder="Nombre o código" /></label>
+        <label><span>Movimiento</span><select @bind="filtro.TipoMovimiento"><option value="">Todos</option>@foreach (var tipo in TiposMovimiento){<option value="@tipo">@tipo</option>}</select></label>
+        <div class="inventory-report-filter-actions"><button type="button" class="inventory-report-primary" @onclick="CargarAsync" disabled="@cargando">@(cargando ? "Consultando..." : "Consultar")</button><button type="button" class="inventory-report-secondary" @onclick="LimpiarAsync">Limpiar</button></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="inventory-report-error" role="alert"><i class="ri-error-warning-line"></i>@error</div>
+    }
+
+    <section class="inventory-report-kpis">
+        <article><span>Entradas</span><strong>@reporte.TotalEntradas.ToString("N2")</strong><small>@reporte.ValorEntradas.ToString("C2")</small></article>
+        <article><span>Salidas</span><strong>@reporte.TotalSalidas.ToString("N2")</strong><small>@reporte.ValorSalidas.ToString("C2")</small></article>
+        <article><span>Movimientos</span><strong>@reporte.Movimientos.Count.ToString("N0")</strong><small>Máximo 10.000 por consulta</small></article>
+    </section>
+
+    <section class="inventory-report-table-card">
+        <div class="inventory-report-table-head"><div><span>Detalle valorizado</span><h3>Movimientos de inventario</h3></div><span>@reporte.Movimientos.Count registros</span></div>
+        @if (cargando)
+        {
+            <div class="inventory-report-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Consultando movimientos...</div>
+        }
+        else if (reporte.Movimientos.Count == 0)
+        {
+            <div class="inventory-report-empty"><i class="ri-inbox-2-line"></i><strong>No hay movimientos para los filtros seleccionados.</strong></div>
+        }
+        else
+        {
+            <div class="inventory-report-table-wrap"><table><thead><tr><th>Fecha</th><th>Producto</th><th>Sucursal</th><th>Movimiento</th><th class="text-end">Cantidad</th><th class="text-end">Costo unitario</th><th class="text-end">Costo total</th><th>Lote / vencimiento</th><th>Referencia</th></tr></thead><tbody>
+                @foreach (var movimiento in reporte.Movimientos)
+                {
+                    <tr @key="@($"{movimiento.CodigoProducto}-{movimiento.FechaMovimiento.Ticks}-{movimiento.TipoMovimiento}")"><td>@movimiento.FechaMovimiento.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td><strong>@movimiento.NombreProducto</strong><small>@(movimiento.CodigoPrincipal ?? $"#{movimiento.CodigoProducto}")</small></td><td>@movimiento.NombreSucursal</td><td><span class="inventory-report-movement @(EsSalida(movimiento.TipoMovimiento) ? "is-out" : "is-in")">@movimiento.TipoMovimiento</span></td><td class="text-end">@movimiento.Cantidad.ToString("N2")</td><td class="text-end">@movimiento.CostoUnitario.ToString("C2")</td><td class="text-end">@movimiento.CostoTotal.ToString("C2")</td><td>@(movimiento.NumeroLote ?? "-")@(movimiento.FechaVencimiento.HasValue ? $" · {movimiento.FechaVencimiento:dd/MM/yyyy}" : "")</td><td>@(movimiento.Referencia ?? movimiento.Observacion ?? "-")</td></tr>
+                }
+            </tbody></table></div>
+        }
+    </section>
+</div>

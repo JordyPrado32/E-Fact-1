@@ -105,6 +105,18 @@ namespace Simetric.Data
     public DbSet<EContaxRecepcionCompra> EContaxRecepcionesCompra { get; set; }
     public DbSet<EContaxRecepcionCompraDetalle> EContaxRecepcionesCompraDetalles { get; set; }
     public DbSet<EContaxRecepcionCompraHistorial> EContaxRecepcionesCompraHistorial { get; set; }
+        public DbSet<EContaxInventarioConfiguracion> EContaxInventarioConfiguraciones { get; set; }
+        public DbSet<EContaxInventarioExistencia> EContaxInventarioExistencias { get; set; }
+        public DbSet<EContaxInventarioLote> EContaxInventarioLotes { get; set; }
+        public DbSet<EContaxInventarioMovimiento> EContaxInventarioMovimientos { get; set; }
+        public DbSet<EContaxInventarioMovimientoLote> EContaxInventarioMovimientosLotes { get; set; }
+        public DbSet<EContaxInventarioTransferencia> EContaxInventarioTransferencias { get; set; }
+        public DbSet<EContaxInventarioTransferenciaDetalle> EContaxInventarioTransferenciasDetalles { get; set; }
+        public DbSet<EContaxInventarioDevolucion> EContaxInventarioDevoluciones { get; set; }
+        public DbSet<EContaxInventarioDevolucionDetalle> EContaxInventarioDevolucionesDetalles { get; set; }
+        public DbSet<EContaxInventarioTomaFisica> EContaxInventarioTomasFisicas { get; set; }
+        public DbSet<EContaxInventarioTomaFisicaDetalle> EContaxInventarioTomasFisicasDetalles { get; set; }
+        public DbSet<EContaxInventarioValoracionHistorial> EContaxInventarioValoracionesHistorial { get; set; }
         public DbSet<EdeclareTarjeta> EdeclareTarjetas { get; set; }
         public DbSet<EsignTarjeta> EsignTarjetas { get; set; }
         public DbSet<EsignFirmaValidacionApiLog> EsignFirmaValidacionApiLogs { get; set; }
@@ -409,6 +421,153 @@ namespace Simetric.Data
                     .OnDelete(DeleteBehavior.NoAction);
             });
 
+            modelBuilder.Entity<EContaxInventarioConfiguracion>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_CONFIGURACION", "dbo");
+                entity.HasKey(x => x.IdEmpresa);
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.MetodoValoracion).HasColumnName("metodo_valoracion").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.IdUsuarioActualizacion).HasColumnName("id_usuario_actualizacion");
+                entity.Property(x => x.FechaActualizacion).HasColumnName("fecha_actualizacion");
+            });
+
+            modelBuilder.Entity<EContaxInventarioExistencia>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_EXISTENCIA", "dbo");
+                entity.HasKey(x => new { x.CodigoProducto, x.IdEmpresa, x.IdSucursal });
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(x => x.StockActual).HasColumnName("stock_actual").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.StockReservado).HasColumnName("stock_reservado").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.StockMinimo).HasColumnName("stock_minimo").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.StockMaximo).HasColumnName("stock_maximo").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoPromedio).HasColumnName("costo_promedio").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.FechaActualizacion).HasColumnName("fecha_actualizacion");
+            });
+
+            modelBuilder.Entity<EContaxInventarioLote>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_LOTE", "dbo");
+                entity.HasKey(x => x.IdLote);
+                entity.Property(x => x.IdLote).HasColumnName("id_lote");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(x => x.CantidadOriginal).HasColumnName("cantidad_original").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CantidadDisponible).HasColumnName("cantidad_disponible").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnName("costo_unitario").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.NumeroLote).HasColumnName("numero_lote").HasMaxLength(80).IsUnicode(false);
+                entity.Property(x => x.FechaVencimiento).HasColumnName("fecha_vencimiento");
+                entity.Property(x => x.FechaIngreso).HasColumnName("fecha_ingreso");
+                entity.Property(x => x.IdMovimientoEntrada).HasColumnName("id_movimiento_entrada");
+            });
+
+            modelBuilder.Entity<EContaxInventarioMovimiento>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_MOVIMIENTO", "dbo");
+                entity.HasKey(x => x.IdMovimiento);
+                entity.Property(x => x.IdMovimiento).HasColumnName("id_movimiento");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(x => x.TipoMovimiento).HasColumnName("tipo_movimiento").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Cantidad).HasColumnName("cantidad").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnName("costo_unitario").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoTotal).HasColumnName("costo_total").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.NumeroLote).HasColumnName("numero_lote").HasMaxLength(80).IsUnicode(false);
+                entity.Property(x => x.FechaVencimiento).HasColumnName("fecha_vencimiento");
+                entity.Property(x => x.SaldoCantidad).HasColumnName("saldo_cantidad").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.SaldoCosto).HasColumnName("saldo_costo").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.MetodoValoracion).HasColumnName("metodo_valoracion").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.ReferenciaTipo).HasColumnName("referencia_tipo").HasMaxLength(30).IsUnicode(false);
+                entity.Property(x => x.Referencia).HasColumnName("referencia").HasMaxLength(100).IsUnicode(false);
+                entity.Property(x => x.IdUsuario).HasColumnName("id_usuario");
+                entity.Property(x => x.FechaMovimiento).HasColumnName("fecha_movimiento");
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.HasIndex(x => new { x.IdEmpresa, x.IdSucursal, x.CodigoProducto, x.FechaMovimiento });
+            });
+
+            modelBuilder.Entity<EContaxInventarioMovimientoLote>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_MOVIMIENTO_LOTE", "dbo");
+                entity.HasKey(x => x.IdMovimientoLote);
+                entity.Property(x => x.IdMovimientoLote).HasColumnName("id_movimiento_lote");
+                entity.Property(x => x.IdMovimiento).HasColumnName("id_movimiento");
+                entity.Property(x => x.IdLote).HasColumnName("id_lote");
+                entity.Property(x => x.Cantidad).HasColumnName("cantidad").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnName("costo_unitario").HasColumnType("decimal(18,4)");
+                entity.HasIndex(x => new { x.IdMovimiento, x.IdLote }).IsUnique();
+            });
+
+            modelBuilder.Entity<EContaxInventarioTransferencia>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_TRANSFERENCIA", "dbo");
+                entity.HasKey(x => x.IdTransferencia);
+                entity.Property(x => x.NumeroTransferencia).HasColumnName("numero_transferencia").HasMaxLength(30).IsUnicode(false);
+                entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.HasIndex(x => new { x.IdEmpresa, x.NumeroTransferencia }).IsUnique();
+            });
+
+            modelBuilder.Entity<EContaxInventarioTransferenciaDetalle>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_TRANSFERENCIA_DET", "dbo");
+                entity.HasKey(x => x.IdDetalle);
+                entity.Property(x => x.Cantidad).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnType("decimal(18,4)");
+                entity.HasOne(x => x.Transferencia).WithMany(x => x.Detalles).HasForeignKey(x => x.IdTransferencia).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<EContaxInventarioDevolucion>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_DEVOLUCION", "dbo");
+                entity.HasKey(x => x.IdDevolucion);
+                entity.Property(x => x.NumeroDevolucion).HasColumnName("numero_devolucion").HasMaxLength(30).IsUnicode(false);
+                entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.HasIndex(x => new { x.IdEmpresa, x.NumeroDevolucion }).IsUnique();
+            });
+
+            modelBuilder.Entity<EContaxInventarioDevolucionDetalle>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_DEVOLUCION_DET", "dbo");
+                entity.HasKey(x => x.IdDetalle);
+                entity.Property(x => x.Cantidad).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnType("decimal(18,4)");
+                entity.HasOne(x => x.Devolucion).WithMany(x => x.Detalles).HasForeignKey(x => x.IdDevolucion).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<EContaxInventarioTomaFisica>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_TOMA_FISICA", "dbo");
+                entity.HasKey(x => x.IdToma);
+                entity.Property(x => x.NumeroToma).HasColumnName("numero_toma").HasMaxLength(30).IsUnicode(false);
+                entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.HasIndex(x => new { x.IdEmpresa, x.NumeroToma }).IsUnique();
+            });
+
+            modelBuilder.Entity<EContaxInventarioTomaFisicaDetalle>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_TOMA_FISICA_DET", "dbo");
+                entity.HasKey(x => x.IdDetalle);
+                entity.Property(x => x.StockSistema).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.StockContado).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.Diferencia).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnType("decimal(18,4)");
+                entity.HasOne(x => x.Toma).WithMany(x => x.Detalles).HasForeignKey(x => x.IdToma).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<EContaxInventarioValoracionHistorial>(entity =>
+            {
+                entity.ToTable("ECONTAX_INVENTARIO_VALORACION_HIST", "dbo");
+                entity.HasKey(x => x.IdHistorial);
+                entity.Property(x => x.MetodoAnterior).HasColumnName("metodo_anterior").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.MetodoNuevo).HasColumnName("metodo_nuevo").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+            });
+
             modelBuilder.Entity<EContaxOrdenCompra>(entity =>
             {
                 entity.ToTable("ECONTAX_ORDEN_COMPRA", "dbo");
@@ -425,6 +584,8 @@ namespace Simetric.Data
                 entity.Property(x => x.FormaPago).HasColumnName("forma_pago").HasMaxLength(50);
                 entity.Property(x => x.PlazoPago).HasColumnName("plazo_pago");
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(1000);
+                entity.Property(x => x.NumeroFacturaProveedor).HasColumnName("numero_factura_proveedor").HasMaxLength(50).IsUnicode(false);
+                entity.Property(x => x.ClaveAccesoProveedor).HasColumnName("clave_acceso_proveedor").HasMaxLength(60).IsUnicode(false);
                 entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
                 entity.Property(x => x.Subtotal).HasColumnName("subtotal").HasColumnType("decimal(18,2)");
                 entity.Property(x => x.Iva).HasColumnName("iva").HasColumnType("decimal(18,2)");
@@ -512,6 +673,8 @@ namespace Simetric.Data
                 entity.Property(x => x.CantidadRecibida).HasColumnName("cantidad_recibida").HasColumnType("decimal(18,4)");
                 entity.Property(x => x.CantidadDiferencia).HasColumnName("cantidad_diferencia").HasColumnType("decimal(18,4)");
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.Property(x => x.NumeroLote).HasColumnName("numero_lote").HasMaxLength(80).IsUnicode(false);
+                entity.Property(x => x.FechaVencimiento).HasColumnName("fecha_vencimiento");
                 entity.HasOne(x => x.Recepcion)
                     .WithMany(x => x.Detalles)
                     .HasForeignKey(x => x.IdRecepcion)

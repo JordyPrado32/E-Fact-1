@@ -131,6 +131,7 @@ public sealed class EContaxOrdenCompraService
         var actor = await _tenantService.GetContextAsync(context, userId);
         var sucursal = await _tenantService.ResolveTargetSucursalAsync(actor, dto.IdSucursal);
         var proveedor = await ObtenerProveedorAsync(context, actor, dto.IdProveedor);
+        await ValidarDocumentoProveedorAsync(context, actor.IdEmpresa, dto.NumeroFacturaProveedor, dto.ClaveAccesoProveedor, null);
         var detalles = await PrepararDetallesAsync(context, actor, sucursal, dto.Detalles);
 
         var ahora = DateTime.Now;
@@ -147,6 +148,8 @@ public sealed class EContaxOrdenCompraService
             FormaPago = Normalizar(dto.FormaPago),
             PlazoPago = dto.PlazoPago,
             Observacion = Normalizar(dto.Observacion),
+            NumeroFacturaProveedor = Normalizar(dto.NumeroFacturaProveedor),
+            ClaveAccesoProveedor = Normalizar(dto.ClaveAccesoProveedor),
             Estado = Borrador,
             UsuarioCreacion = userId,
             FechaCreacion = ahora
@@ -187,6 +190,7 @@ public sealed class EContaxOrdenCompraService
 
         var sucursal = await _tenantService.ResolveTargetSucursalAsync(actor, dto.IdSucursal ?? entity.IdSucursal);
         var proveedor = await ObtenerProveedorAsync(context, actor, dto.IdProveedor);
+        await ValidarDocumentoProveedorAsync(context, actor.IdEmpresa, dto.NumeroFacturaProveedor, dto.ClaveAccesoProveedor, id);
         var detalles = await PrepararDetallesAsync(context, actor, sucursal, dto.Detalles);
 
         entity.IdSucursal = sucursal;
@@ -197,6 +201,8 @@ public sealed class EContaxOrdenCompraService
         entity.FormaPago = Normalizar(dto.FormaPago);
         entity.PlazoPago = dto.PlazoPago;
         entity.Observacion = Normalizar(dto.Observacion);
+        entity.NumeroFacturaProveedor = Normalizar(dto.NumeroFacturaProveedor);
+        entity.ClaveAccesoProveedor = Normalizar(dto.ClaveAccesoProveedor);
         entity.UsuarioActualizacion = userId;
         entity.FechaActualizacion = DateTime.Now;
         context.EContaxOrdenesCompraDetalles.RemoveRange(entity.Detalles);
@@ -266,6 +272,18 @@ public sealed class EContaxOrdenCompraService
         return new ProveedorCompraInfo(
             ObtenerNombre(proveedor.Nombrerazonsocial, proveedor.Nombrecomercial, proveedor.Nombres, proveedor.Apellidos),
             proveedor.Numeroidentificacion ?? string.Empty);
+    }
+
+    private static async Task ValidarDocumentoProveedorAsync(AppDbContext context, int empresa, string? numeroFactura, string? claveAcceso, int? excluirId)
+    {
+        var numero = Normalizar(numeroFactura);
+        var clave = Normalizar(claveAcceso);
+        if (numero is null && clave is null) return;
+        var duplicado = await context.EContaxOrdenesCompra.AsNoTracking().AnyAsync(x => x.IdEmpresa == empresa && x.Estado != Cancelada &&
+            (!excluirId.HasValue || x.IdOrdenCompra != excluirId.Value) &&
+            ((numero != null && x.NumeroFacturaProveedor == numero) || (clave != null && x.ClaveAccesoProveedor == clave)));
+        if (duplicado)
+            throw new InvalidOperationException("La factura o clave de acceso del proveedor ya está registrada en otra compra.");
     }
 
     private async Task<List<EContaxOrdenCompraDetalle>> PrepararDetallesAsync(
@@ -349,6 +367,8 @@ public sealed class EContaxOrdenCompraService
         FormaPago = entity.FormaPago,
         PlazoPago = entity.PlazoPago,
         Observacion = entity.Observacion,
+        NumeroFacturaProveedor = entity.NumeroFacturaProveedor,
+        ClaveAccesoProveedor = entity.ClaveAccesoProveedor,
         Subtotal = entity.Subtotal,
         Iva = entity.Iva,
         Detalles = entity.Detalles.Select(x => new EContaxOrdenCompraDetalleDto

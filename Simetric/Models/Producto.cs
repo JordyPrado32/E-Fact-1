@@ -69,6 +69,12 @@ public partial class Producto
     // aquí guardaremos PRODUCTO o SERVICIO
     public string? Tipocompravena { get; set; }
 
+    [Column("UNIDAD_MEDIDA")]
+    public string? UnidadMedida { get; set; } = "UNIDAD";
+
+    [Column("FACTOR_CONVERSION_INVENTARIO", TypeName = "decimal(18,4)")]
+    public decimal FactorConversionInventario { get; set; } = 1m;
+
     public bool? Inventario { get; set; }
 
     [Column("IDSUBTIPO")]

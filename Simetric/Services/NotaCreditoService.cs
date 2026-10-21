@@ -4,6 +4,7 @@ using Simetric.Data;
 using Simetric.DTOs;
 using Simetric.Models;
 using Simetric.Models.Glogales;
+using Simetric.Services.EContax;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -26,6 +27,7 @@ public class NotaCreditoService
     private readonly EmisorSistemaService _emisorSistemaService;
     private readonly AliadoPortalService _aliadoPortalService;
     private readonly EDeclara.ComisionesService _comisionesEDeclaraService;
+    private readonly EContaxInventarioService _eContaxInventarioService;
 
     public NotaCreditoService(
         IDbContextFactory<AppDbContext> dbFactory,
@@ -40,7 +42,8 @@ public class NotaCreditoService
         FirmaPathResolver firmaPathResolver,
         EmisorSistemaService emisorSistemaService,
         AliadoPortalService aliadoPortalService,
-        EDeclara.ComisionesService comisionesEDeclaraService)
+        EDeclara.ComisionesService comisionesEDeclaraService,
+        EContaxInventarioService eContaxInventarioService)
     {
         _dbFactory = dbFactory;
         _env = env;
@@ -55,6 +58,7 @@ public class NotaCreditoService
         _emisorSistemaService = emisorSistemaService;
         _aliadoPortalService = aliadoPortalService;
         _comisionesEDeclaraService = comisionesEDeclaraService;
+        _eContaxInventarioService = eContaxInventarioService;
     }
 
     private async Task<CajaSerieResolucion> ResolverSerieNotaCreditoAsync(int userId, string? serieSolicitadaRaw = null)
@@ -2111,13 +2115,14 @@ public class NotaCreditoService
 
         if (DocumentoAutorizacionHelper.EstaAutorizado(nota.Autorizado))
         {
+            var advertenciaInventario = await IntentarReintegrarInventarioEContaxAsync(nota);
             return new EmisionSriNotaCreditoResultado
             {
                 Success = true,
                 Autorizada = true,
                 Sec = sec,
                 EstadoSri = DocumentoAutorizacionHelper.EstadoAutorizado,
-                Message = $"La nota de crédito {ObtenerNumeroNotaDocumento(nota)} ya está autorizada por el SRI."
+                Message = $"La nota de crédito {ObtenerNumeroNotaDocumento(nota)} ya está autorizada por el SRI." + advertenciaInventario
             };
         }
 
@@ -2195,7 +2200,8 @@ public class NotaCreditoService
             if (intentarEnviarCorreo)
                 resultadoCorreo = await IntentarEnviarNotaCreditoPorCorreoAsync(sec, rutaXml);
 
-            var mensajeOk = $"La nota de crédito {ObtenerNumeroNotaDocumento(nota)} fue autorizada correctamente por el SRI.";
+            var advertenciaInventario = await IntentarReintegrarInventarioEContaxAsync(nota);
+            var mensajeOk = $"La nota de crédito {ObtenerNumeroNotaDocumento(nota)} fue autorizada correctamente por el SRI." + advertenciaInventario;
             if (!string.IsNullOrWhiteSpace(resultadoCorreo?.Mensaje))
                 mensajeOk = $"{mensajeOk} {resultadoCorreo.Mensaje}";
 
@@ -2237,6 +2243,22 @@ public class NotaCreditoService
             RutaXml = rutaXml,
             RespuestaSri = respuestaSri
         };
+    }
+
+    private async Task<string> IntentarReintegrarInventarioEContaxAsync(NotaCredito nota)
+    {
+        if (nota.Usuario is not > 0)
+            return string.Empty;
+
+        try
+        {
+            await _eContaxInventarioService.ReintegrarNotaCreditoVentaAsync(nota.Usuario.Value, nota.Sec);
+            return string.Empty;
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $" Advertencia: la nota fue autorizada, pero el inventario no pudo reintegrarse automáticamente ({ex.Message}).";
+        }
     }
 
     public async Task ActualizarAutorizacionNCAsync(int codFactura, string numeroAutorizacion, string fechaAutorizacion, string mensaje, string autorizado)
@@ -2302,6 +2324,9 @@ public class NotaCreditoService
             var nota = await context.NotaCreditos.FirstOrDefaultAsync(n => n.Sec == sec);
             if (nota != null)
             {
+                if (nota.Estado == true && DocumentoAutorizacionHelper.EstaAutorizado(nota.Autorizado) && nota.Usuario is > 0)
+                    await _eContaxInventarioService.RevertirNotaCreditoVentaAsync(nota.Usuario.Value, nota.Sec);
+
                 nota.Estado = false;
                 await context.SaveChangesAsync();
 

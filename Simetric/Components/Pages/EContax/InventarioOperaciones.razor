@@ -1,0 +1,71 @@
+@page "/e-contax/inventarios/operaciones"
+@using Microsoft.AspNetCore.Authorization
+@using Simetric.DTOs.EContax
+@using Simetric.Services.EContax
+@attribute [AllowAnonymous]
+@rendermode InteractiveServer
+@inherits InventarioOperacionesBase
+
+<PageTitle>Operaciones de inventario | E-Contax</PageTitle>
+
+<div class="inventory-operations-shell">
+    <header class="inventory-operations-header">
+        <div><span class="inventory-section-kicker">E-Contax · Operaciones auditables</span><h2>Operaciones de inventario</h2><p>Traslade, devuelva, reserve y concilie existencias con trazabilidad de usuario, sucursal y costo.</p></div>
+        <button class="inventory-secondary-btn" type="button" @onclick="Volver"><i class="ri-arrow-left-line"></i> Inventarios</button>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(Error)) { <div class="inventory-status is-error"><i class="ri-error-warning-line"></i><span>@Error</span></div> }
+    @if (!string.IsNullOrWhiteSpace(Mensaje)) { <div class="inventory-status is-success"><i class="ri-checkbox-circle-line"></i><span>@Mensaje</span></div> }
+    @if (Cargando) { <section class="inventory-state-card"><span class="spinner-border text-primary"></span><strong>Cargando operación</strong><span>Consultando sucursales y productos.</span></section> }
+    else if (!PuedeEditar) { <section class="inventory-state-card"><i class="ri-lock-line"></i><strong>Acceso de solo consulta</strong><span>Solo el administrador de la empresa puede ejecutar movimientos.</span></section> }
+    else
+    {
+        <div class="inventory-operation-grid">
+            <section class="inventory-operation-card">
+                <div class="inventory-operation-title"><i class="ri-arrow-left-right-line"></i><div><h3>Transferir entre sucursales</h3><span>La salida y la entrada se confirman en una sola transacción.</span></div></div>
+                <div class="inventory-form-grid">
+                    <label><span>Origen</span><select @bind="Transferencia.IdSucursalOrigen"><option value="">Seleccione</option>@foreach (var sucursal in Sucursales){<option value="@sucursal.IdSucursal">@sucursal.Nombre</option>}</select></label>
+                    <label><span>Destino</span><select @bind="Transferencia.IdSucursalDestino"><option value="">Seleccione</option>@foreach (var sucursal in Sucursales){<option value="@sucursal.IdSucursal">@sucursal.Nombre</option>}</select></label>
+                    <label><span>Producto</span><select @bind="ProductoOperacion"><option value="0">Seleccione</option>@foreach (var producto in Productos){<option value="@producto.CodigoProducto">@producto.NombreProducto</option>}</select></label>
+                    <label><span>Cantidad</span><input type="number" min="0.0001" step="0.01" @bind="CantidadOperacion" /></label>
+                    <label class="is-wide"><span>Observación</span><input @bind="Transferencia.Observacion" maxlength="500" /></label>
+                </div>
+                <button class="inventory-primary-btn" type="button" @onclick="TransferirAsync" disabled="@Guardando">Aplicar transferencia</button>
+            </section>
+
+            <section class="inventory-operation-card">
+                <div class="inventory-operation-title"><i class="ri-arrow-go-back-line"></i><div><h3>Devolución a proveedor</h3><span>Revierte stock recibido sin alterar impuestos ni costos de venta.</span></div></div>
+                <div class="inventory-form-grid">
+                    <label><span>ID recepción confirmada</span><input type="number" min="1" @bind="Devolucion.IdRecepcion" /></label>
+                    <label><span>Producto</span><select @bind="ProductoOperacion"><option value="0">Seleccione</option>@foreach (var producto in Productos){<option value="@producto.CodigoProducto">@producto.NombreProducto</option>}</select></label>
+                    <label><span>Cantidad</span><input type="number" min="0.0001" step="0.01" @bind="CantidadOperacion" /></label>
+                    <label class="is-wide"><span>Observación</span><input @bind="Devolucion.Observacion" maxlength="500" /></label>
+                </div>
+                <button class="inventory-secondary-btn" type="button" @onclick="DevolverAsync" disabled="@Guardando">Aplicar devolución</button>
+            </section>
+
+            <section class="inventory-operation-card inventory-operation-wide">
+                <div class="inventory-operation-title"><i class="ri-clipboard-line"></i><div><h3>Toma física</h3><span>El sistema compara el conteo y genera solo la diferencia auditada.</span></div></div>
+                <label class="inventory-operation-branch"><span>Sucursal</span><select @bind="SucursalToma" @bind:after="PrepararToma"><option value="0">Seleccione</option>@foreach (var sucursal in Sucursales){<option value="@sucursal.IdSucursal">@sucursal.Nombre</option>}</select></label>
+                @if (LineasToma.Count > 0)
+                {
+                    <div class="inventory-table-wrap"><table class="table inventory-table mb-0"><thead><tr><th>Producto</th><th class="text-end">Sistema</th><th class="text-end">Conteo físico</th><th class="text-end">Diferencia</th></tr></thead><tbody>@foreach (var linea in LineasToma){<tr @key="linea.CodigoProducto"><td>@linea.Nombre</td><td class="text-end">@linea.StockSistema.ToString("N2")</td><td class="text-end"><input class="inventory-count-input" type="number" min="0" step="0.01" @bind="linea.StockContado" /></td><td class="text-end">@((linea.StockContado - linea.StockSistema).ToString("N2"))</td></tr>}</tbody></table></div>
+                    <div class="inventory-operation-footer"><input placeholder="Observación de la toma" @bind="ObservacionToma" maxlength="500" /><button class="inventory-primary-btn" type="button" @onclick="AplicarTomaAsync" disabled="@Guardando">Aplicar toma física</button></div>
+                }
+                else { <span class="inventory-operation-empty">Seleccione una sucursal con productos inventariables.</span> }
+            </section>
+
+            <section class="inventory-operation-card">
+                <div class="inventory-operation-title"><i class="ri-bookmark-3-line"></i><div><h3>Reservar stock</h3><span>Las reservas reducen el disponible, pero no el stock físico.</span></div></div>
+                <div class="inventory-form-grid"><label><span>Producto</span><select @bind="ProductoOperacion"><option value="0">Seleccione</option>@foreach (var producto in Productos){<option value="@producto.CodigoProducto">@producto.NombreProducto</option>}</select></label><label><span>Cantidad</span><input type="number" min="0.0001" step="0.01" @bind="CantidadOperacion" /></label></div>
+                <div class="inventory-operation-buttons"><button class="inventory-primary-btn" type="button" @onclick="ReservarAsync" disabled="@Guardando">Reservar</button><button class="inventory-secondary-btn" type="button" @onclick="LiberarReservaAsync" disabled="@Guardando">Liberar</button></div>
+            </section>
+
+            <section class="inventory-operation-card">
+                <div class="inventory-operation-title"><i class="ri-price-tag-3-line"></i><div><h3>Revalorizar costo</h3><span>Requiere autorización administrativa y deja registro en Kardex.</span></div></div>
+                <div class="inventory-form-grid"><label><span>Producto</span><select @bind="Revalorizacion.CodigoProducto"><option value="0">Seleccione</option>@foreach (var producto in Productos){<option value="@producto.CodigoProducto">@producto.NombreProducto</option>}</select></label><label><span>Nuevo costo sin impuestos</span><input type="number" min="0" step="0.0001" @bind="Revalorizacion.CostoUnitario" /></label><label class="is-wide"><span>Observación</span><input @bind="Revalorizacion.Observacion" maxlength="500" /></label></div>
+                <button class="inventory-secondary-btn" type="button" @onclick="RevalorizarAsync" disabled="@Guardando">Guardar revalorización</button>
+            </section>
+        </div>
+    }
+</div>
