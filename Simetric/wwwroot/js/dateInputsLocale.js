@@ -112,6 +112,20 @@
         input.before(visible);
         visible.after(pickerButton);
 
+        const positionPicker = () => {
+            const buttonWidth = pickerButton.offsetWidth;
+            const horizontalInset = 9;
+            pickerButton.style.top = `${visible.offsetTop + (visible.offsetHeight / 2)}px`;
+            pickerButton.style.left = `${visible.offsetLeft + visible.offsetWidth - buttonWidth - horizontalInset}px`;
+        };
+
+        requestAnimationFrame(positionPicker);
+        if (typeof ResizeObserver === "function") {
+            const resizeObserver = new ResizeObserver(positionPicker);
+            resizeObserver.observe(visible);
+            if (host) resizeObserver.observe(host);
+        }
+
         const synchronizeState = () => {
             visible.disabled = input.disabled;
             visible.readOnly = input.readOnly;
