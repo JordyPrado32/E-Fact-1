@@ -89,6 +89,7 @@ public class CajasController : ControllerBase
             idJefe = idUsuario.Value,
             IdEmpresa = principal?.IdEmpresa is > 0 ? principal.IdEmpresa : emisor?.IdEmpresa is > 0 ? emisor.IdEmpresa : 1,
             IdSucursal = principal?.IdSucursal is > 0 ? principal.IdSucursal : emisor?.IdSucursal is > 0 ? emisor.IdSucursal : 1,
+            NombreCaja = model.NombreCaja,
             SerieFactura = serie,
             SerieNotasCred = serie,
             SerieGuia = serie,
@@ -124,6 +125,8 @@ public class CajasController : ControllerBase
             return BadRequest($"La serie {serie} ya está configurada.");
 
         caja.SerieFactura = serie;
+        if (!string.IsNullOrWhiteSpace(model.NombreCaja))
+            caja.NombreCaja = model.NombreCaja;
         caja.SerieNotasCred = serie;
         caja.SerieGuia = serie;
         caja.SerieCompras = serie;
@@ -275,6 +278,7 @@ public class CajasController : ControllerBase
         {
             sec = caja.Sec,
             numCaja = caja.NumCaja,
+            nombreCaja = caja.NombreVisual,
             idUsuario = caja.IdUsuario,
             idEmpresa = caja.IdEmpresa,
             idSucursal = caja.IdSucursal,
@@ -494,6 +498,7 @@ public class CajasController : ControllerBase
     {
         public string? Establecimiento { get; set; }
         public string? PuntoEmision { get; set; }
+        public string? NombreCaja { get; set; }
     }
 
     public sealed class CajaSecuenciaInicialDto

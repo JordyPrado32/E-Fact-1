@@ -107,6 +107,7 @@ namespace Simetric.Services
             {
                 CajaSec = caja.Sec,
                 NumeroCaja = caja.NumCaja ?? 0,
+                NombreCaja = caja.NombreVisual,
                 Serie = serie
             };
         }
@@ -419,6 +420,7 @@ namespace Simetric.Services
     {
         public int CajaSec { get; set; }
         public int NumeroCaja { get; set; }
+        public string NombreCaja { get; set; } = string.Empty;
         public string Serie { get; set; } = string.Empty;
     }
 }

@@ -228,7 +228,8 @@ public sealed class EContaxFacturacionService
             partes[0],
             partes[1],
             serieVisual,
-            serieVisual.Replace("-", string.Empty));
+            serieVisual.Replace("-", string.Empty),
+            caja.NombreCaja);
     }
 
     private static string FormatearSerie(string? serie, int? numeroCaja)

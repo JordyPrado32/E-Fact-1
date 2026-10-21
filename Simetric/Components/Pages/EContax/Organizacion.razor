@@ -2,6 +2,7 @@
 
 @using Microsoft.AspNetCore.Components.Authorization
 @using Simetric.DTOs.EContax
+@using Simetric.Models
 @using Simetric.Models.EContax
 @using Simetric.Services
 @using Simetric.Services.EContax
@@ -10,6 +11,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject EContaxOrganizacionService OrganizacionService
 @inject EContaxSeguridadService SeguridadService
+@inject ConfiguracionService ConfiguracionService
 @inject NavigationManager NavManager
 @inject AppAccessService AppAccessService
 @inject SelectedAppServiceStateService SelectedAppServiceState
@@ -317,8 +319,17 @@
 
                             <div class="col-12">
                                 <label class="form-label small fw-bold">Punto de emisión</label>
-                                <InputText class="form-control form-control-sm" @bind-Value="sucursalModel.PuntoEmision" placeholder="Ej: 001" maxlength="3" inputmode="numeric" disabled="@(!puedeAdministrar)" />
-                                <small class="text-muted">Se registra como la serie de esta sucursal usando el establecimiento configurado.</small>
+                                <InputSelect class="form-select form-select-sm" @bind-Value="sucursalModel.PuntoEmision" disabled="@(!puedeAdministrar)">
+                                    @if (sucursalModel.IdSucursal <= 0 || string.IsNullOrWhiteSpace(sucursalModel.PuntoEmision))
+                                    {
+                                        <option value="">Sin punto asignado</option>
+                                    }
+                                    @foreach (var punto in PuntosEmisionDisponibles)
+                                    {
+                                        <option value="@punto.SerieFactura">@punto.SerieFactura · @NombreSucursalPunto(punto.IdSucursal)</option>
+                                    }
+                                </InputSelect>
+                                <small class="text-muted">Selecciona un punto activo configurado en Puntos de emisión. No se crean series desde este formulario.</small>
                             </div>
                         </div>
 
@@ -451,6 +462,7 @@
     private EContaxSucursalResumenDto? sucursalRoles;
     private EContaxEmpresaUpsertDto empresaModel = new();
     private EContaxSucursalUpsertDto sucursalModel = new();
+    private List<Caja> puntosEmision = new();
     private HashSet<int> menusRol = new();
     private Dictionary<int, EContaxAccion> accionesRol = new();
     private int rolSucursalId;
@@ -492,6 +504,12 @@
         .OrderBy(x => x.Nombre)
         ?? Enumerable.Empty<EContaxPerfil>();
 
+    private IEnumerable<Caja> PuntosEmisionDisponibles => puntosEmision
+        .Where(x => x.Estado == true && x.EsCajaSistema != true && x.IdSucursal is > 0 && !string.IsNullOrWhiteSpace(x.SerieFactura))
+        .Where(x => x.IdSucursal == sucursalModel.IdSucursal ||
+                    resumen?.Sucursales.Any(s => s.IdSucursal == x.IdSucursal) != true)
+        .OrderBy(x => x.SerieFactura);
+
     private IEnumerable<IGrouping<string, EContaxMenu>> GruposMenusRol => rolesResumen?.CatalogoMenus
         .Where(x => x.UrlMenu is not null)
         .GroupBy(NombreGrupoRol)
@@ -525,6 +543,9 @@
         try
         {
             resumen = await OrganizacionService.GetResumenAsync(usuarioId);
+            puntosEmision = (await ConfiguracionService.GetCajasCuentaActivasAsync(usuarioId))
+                .Where(x => x.IdEmpresa == resumen.Contexto.IdEmpresa)
+                .ToList();
             empresaModel = new EContaxEmpresaUpsertDto
             {
                 Nombre = resumen.Empresa.Nombre,
@@ -610,12 +631,12 @@
             Nombre = sucursal.Nombre,
             Codigo = sucursal.Codigo,
             Direccion = sucursal.Direccion,
-            PuntoEmision = new string((sucursal.PuntoEmision ?? string.Empty)
-                .Where(char.IsDigit)
-                .TakeLast(3)
-                .ToArray())
+            PuntoEmision = sucursal.PuntoEmision
         };
     }
+
+    private string NombreSucursalPunto(int? idSucursal)
+        => resumen?.Sucursales.FirstOrDefault(x => x.IdSucursal == idSucursal)?.Nombre ?? "Sin sucursal";
 
     private async Task CambiarEstadoSucursal(EContaxSucursalDto sucursal)
     {

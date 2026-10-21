@@ -2450,7 +2450,8 @@ IF @resultado < 0
                 Establecimiento: establecimiento,
                 PuntoEmision: puntoEmision,
                 SerieVisual: serieVisual,
-                SerieRaw: serieVisual.Replace("-", string.Empty));
+                SerieRaw: serieVisual.Replace("-", string.Empty),
+                NombreCaja: caja.NombreCaja);
         }
 
         private static async Task<int> EjecutarGuardarFacturaStoredProcedureAsync(

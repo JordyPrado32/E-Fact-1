@@ -14,6 +14,10 @@ public partial class Caja
     [Column("numCaja")]
     public int? NumCaja { get; set; }
 
+    [MaxLength(100)]
+    [Column("nombreCaja")]
+    public string? NombreCaja { get; set; }
+
     [Range(1, int.MaxValue, ErrorMessage = "Debe seleccionar un usuario válido.")]
     [Column("idUsuario")]
     public int? IdUsuario { get; set; }
@@ -61,4 +65,9 @@ public partial class Caja
 
     [NotMapped]
     public int? idJefe { get; set; }
+
+    [NotMapped]
+    public string NombreVisual => string.IsNullOrWhiteSpace(NombreCaja)
+        ? $"Caja número {NumCaja ?? 0}"
+        : NombreCaja.Trim();
 }

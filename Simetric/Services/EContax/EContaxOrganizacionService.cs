@@ -511,72 +511,22 @@ END");
         if (string.IsNullOrWhiteSpace(puntoEmision))
             return;
 
-        var punto = new string(puntoEmision.Where(char.IsDigit).ToArray());
-        if (punto.Length != 3 || punto == "000")
-            throw new InvalidOperationException("El punto de emisión debe contener tres dígitos y no puede ser 000.");
-
-        var establecimiento = await context.Emisores
-            .AsNoTracking()
-            .Where(x => x.Estado == true && x.IdEmpresa == actor.IdEmpresa && x.IdUsuario == actor.IdUsuarioTitular)
-            .Select(x => x.CodEstablecimiento)
-            .FirstOrDefaultAsync();
-        var codigoEstablecimiento = new string((establecimiento ?? string.Empty).Where(char.IsDigit).ToArray());
-        if (codigoEstablecimiento.Length != 3 || codigoEstablecimiento == "000")
-            codigoEstablecimiento = "001";
-
-        var serie = $"{codigoEstablecimiento}-{punto}";
-        var cajasSucursal = await context.Caja
-            .Where(x => x.Estado == true && x.EsCajaSistema != true &&
-                        x.IdEmpresa == actor.IdEmpresa && x.IdSucursal == sucursalId)
-            .OrderBy(x => x.Sec)
-            .ToListAsync();
-
-        if (cajasSucursal.Count > 1)
-            throw new InvalidOperationException("La sucursal tiene más de un punto de emisión activo. Debe quedar uno solo.");
-
-        var caja = cajasSucursal.FirstOrDefault();
-        var secCaja = caja?.Sec ?? 0;
-        var serieDuplicada = await context.Caja.AnyAsync(x =>
+        var caja = await context.Caja.FirstOrDefaultAsync(x =>
             x.Estado == true && x.EsCajaSistema != true &&
-            x.IdEmpresa == actor.IdEmpresa && x.Sec != secCaja &&
-            x.SerieFactura == serie);
-        if (serieDuplicada)
-            throw new InvalidOperationException($"La serie {serie} ya está asignada a otra sucursal.");
-
+            x.IdEmpresa == actor.IdEmpresa && x.SerieFactura == puntoEmision.Trim());
         if (caja is null)
-        {
-            var titulares = await context.Usuarios
-                .AsNoTracking()
-                .Where(x => x.IdUsuario == actor.IdUsuarioTitular ||
-                            (x.idJefe == actor.IdUsuarioTitular && x.estadoAsociado == true))
-                .Select(x => x.IdUsuario)
-                .ToListAsync();
-            var cajasCuenta = await context.Caja
-                .Where(x => x.Estado == true && x.EsCajaSistema != true && titulares.Contains(x.IdUsuario ?? 0))
-                .ToListAsync();
-            if (cajasCuenta.Count >= 50)
-                throw new InvalidOperationException("La cuenta alcanzó el máximo de puntos de emisión permitidos.");
+            throw new InvalidOperationException("Selecciona un punto de emisión activo configurado en Puntos de emisión.");
 
-            caja = new Caja
-            {
-                IdUsuario = actor.IdUsuarioTitular,
-                NumCaja = cajasCuenta.Select(x => x.NumCaja ?? 0).DefaultIfEmpty(0).Max() + 1,
-                IdEmpresa = actor.IdEmpresa,
-                IdSucursal = sucursalId,
-                Estado = true,
-                EsCajaSistema = false
-            };
-            context.Caja.Add(caja);
-        }
+        if (caja.IdSucursal is > 0 && caja.IdSucursal != sucursalId)
+            throw new InvalidOperationException("El punto de emisión seleccionado ya está asignado a otra sucursal.");
 
-        caja.IdEmpresa = actor.IdEmpresa;
+        var puntoActual = await context.Caja.AnyAsync(x =>
+            x.Estado == true && x.EsCajaSistema != true &&
+            x.IdEmpresa == actor.IdEmpresa && x.IdSucursal == sucursalId && x.Sec != caja.Sec);
+        if (puntoActual)
+            throw new InvalidOperationException("La sucursal ya tiene un punto de emisión activo asignado.");
+
         caja.IdSucursal = sucursalId;
-        caja.SerieFactura = serie;
-        caja.SerieNotasCred = serie;
-        caja.SerieGuia = serie;
-        caja.SerieCompras = serie;
-        caja.SerieDebitos = serie;
-        caja.Estado = true;
     }
 
     private static async Task AsegurarEmpresaBaseAsync(AppDbContext context, EContaxUserContext actor)

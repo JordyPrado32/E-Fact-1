@@ -38,7 +38,13 @@ public sealed record CajaSerieResolucion(
     string Establecimiento,
     string PuntoEmision,
     string SerieVisual,
-    string SerieRaw);
+    string SerieRaw,
+    string? NombreCaja = null)
+{
+    public string NombreVisual => string.IsNullOrWhiteSpace(NombreCaja)
+        ? $"Caja número {NumeroCaja}"
+        : NombreCaja.Trim();
+}
 
 internal enum CajaSerieDocumento
 {
@@ -104,7 +110,8 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
             Establecimiento: establecimiento,
             PuntoEmision: puntoEmision,
             SerieVisual: serieVisual,
-            SerieRaw: serieVisual.Replace("-", string.Empty));
+            SerieRaw: serieVisual.Replace("-", string.Empty),
+            NombreCaja: caja.NombreCaja);
     }
 
     public async Task<Caja?> ObtenerCajaAsync(int idUsuario, string? preferredSeriesRaw = null, bool tracking = false)
@@ -182,7 +189,8 @@ public sealed class CajaSerieResolver : ICajaSerieResolver
                     Establecimiento: ExtraerEstablecimiento(serieVisual),
                     PuntoEmision: ExtraerPuntoEmision(serieVisual),
                     SerieVisual: serieVisual,
-                    SerieRaw: serieVisual.Replace("-", string.Empty));
+                    SerieRaw: serieVisual.Replace("-", string.Empty),
+                    NombreCaja: c.NombreCaja);
             })
             .GroupBy(s => s.SerieRaw)
             .Select(g => g.First())

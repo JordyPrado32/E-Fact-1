@@ -309,6 +309,10 @@ public class ConfiguracionService
                 if ((modelo.IdEmpresa ?? 0) <= 0) return false;
 
                 // 2. Limpieza de Strings
+                modelo.NombreCaja = string.IsNullOrWhiteSpace(modelo.NombreCaja)
+                    ? $"Caja número {modelo.NumCaja}"
+                    : modelo.NombreCaja.Trim();
+                if (modelo.NombreCaja.Length > 100) return false;
                 modelo.SerieFactura = modelo.SerieFactura?.Trim();
                 modelo.SerieNotasCred = modelo.SerieNotasCred?.Trim();
                 modelo.SerieGuia = modelo.SerieGuia?.Trim();
