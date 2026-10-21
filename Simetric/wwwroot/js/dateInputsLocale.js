@@ -103,8 +103,28 @@
         input.style.setProperty("pointer-events", "none", "important");
         input.setAttribute("aria-hidden", "true");
         input.tabIndex = -1;
+
+        const host = input.parentElement;
+        if (host && getComputedStyle(host).position === "static") {
+            host.classList.add("localized-date-host");
+        }
+
         input.before(visible);
         visible.after(pickerButton);
+
+        const positionPicker = () => {
+            const buttonWidth = pickerButton.offsetWidth;
+            const horizontalInset = 9;
+            pickerButton.style.top = `${visible.offsetTop + (visible.offsetHeight / 2)}px`;
+            pickerButton.style.left = `${visible.offsetLeft + visible.offsetWidth - buttonWidth - horizontalInset}px`;
+        };
+
+        requestAnimationFrame(positionPicker);
+        if (typeof ResizeObserver === "function") {
+            const resizeObserver = new ResizeObserver(positionPicker);
+            resizeObserver.observe(visible);
+            if (host) resizeObserver.observe(host);
+        }
 
         const synchronizeState = () => {
             visible.disabled = input.disabled;
