@@ -14,7 +14,9 @@ public partial class InventarioReportes
     [
         "ENTRADA", "SALIDA", "DEVOLUCION_VENTA", "DEVOLUCION_COMPRA",
         "TRANSFER_ENTRADA", "TRANSFER_SALIDA", "TOMA_FISICA_ENTRADA",
-        "TOMA_FISICA_SALIDA", "AJUSTE_ENTRADA", "AJUSTE_SALIDA"
+        "TOMA_FISICA_SALIDA", "AJUSTE_ENTRADA", "AJUSTE_SALIDA",
+        "BAJA_VENCIDO", "ANULACION_RECEPCION", "REVALORIZACION",
+        "RESERVA", "RESERVA_LIBERADA", "DEVOLUCION_VENTA_REVERSA"
     ];
 
     private readonly EContaxInventarioReporteFiltroDto filtro = new();
@@ -50,6 +52,7 @@ public partial class InventarioReportes
 
         cargando = true;
         error = null;
+        reporte = new() { Sucursales = reporte.Sucursales };
         try
         {
             using var response = await Http.PostAsJsonAsync($"api/e-contax/inventarios/reportes?userId={usuarioId}", filtro);
@@ -90,9 +93,11 @@ public partial class InventarioReportes
 
     private async Task ExportarExcelAsync()
     {
+        await CargarAsync();
         if (reporte.Movimientos.Count == 0)
             return;
 
+        var resumen = ObtenerResumenExportacion();
         var rows = reporte.Movimientos.Select(x => (IReadOnlyList<string>)[
             x.FechaMovimiento.ToLocalTime().ToString("dd/MM/yyyy HH:mm"),
             x.NombreProducto ?? $"#{x.CodigoProducto}",
@@ -112,6 +117,7 @@ public partial class InventarioReportes
 
         var archivo = ExcelExportService.Create(
             $"reporte_inventario_{DateTime.Now:yyyyMMdd_HHmm}.xlsx",
+            new ExcelSheetData("Resumen", ["Indicador", "Valor"], resumen),
             new ExcelSheetData(
                 "Movimientos",
                 ["Fecha", "Producto", "Código", "Sucursal", "Movimiento", "Cantidad", "Costo unitario", "Costo total", "Saldo cantidad", "Saldo costo", "Lote", "Vencimiento", "Usuario", "Referencia"],
@@ -124,10 +130,15 @@ public partial class InventarioReportes
 
     private async Task ExportarCsvAsync()
     {
+        await CargarAsync();
         if (reporte.Movimientos.Count == 0)
             return;
 
         var builder = new StringBuilder();
+        builder.AppendLine("Filtro;Valor");
+        foreach (var item in ObtenerResumenExportacion())
+            builder.AppendLine(string.Join(";", item.Select(EscapeCsv)));
+        builder.AppendLine();
         builder.AppendLine(string.Join(";", ["Fecha", "Producto", "Código", "Sucursal", "Movimiento", "Cantidad", "Costo unitario", "Costo total", "Saldo cantidad", "Saldo costo", "Lote", "Vencimiento", "Usuario", "Referencia"]));
         foreach (var item in reporte.Movimientos)
         {
@@ -155,6 +166,21 @@ public partial class InventarioReportes
             $"reporte_inventario_{DateTime.Now:yyyyMMdd_HHmm}.csv",
             Encoding.UTF8.GetBytes("\uFEFF" + builder));
     }
+
+    private IReadOnlyList<IReadOnlyList<string>> ObtenerResumenExportacion() =>
+    [
+        ["Fecha desde", filtro.FechaDesde?.ToString("dd/MM/yyyy") ?? "Todas"],
+        ["Fecha hasta", filtro.FechaHasta?.ToString("dd/MM/yyyy") ?? "Todas"],
+        ["Sucursal", filtro.IdSucursal?.ToString() ?? "Todas"],
+        ["Producto", string.IsNullOrWhiteSpace(filtro.Producto) ? "Todos" : filtro.Producto],
+        ["Código producto", filtro.CodigoProducto?.ToString() ?? "Todos"],
+        ["Movimiento", string.IsNullOrWhiteSpace(filtro.TipoMovimiento) ? "Todos" : filtro.TipoMovimiento],
+        ["Movimientos exportados", reporte.Movimientos.Count.ToString("N0")],
+        ["Total entradas", reporte.TotalEntradas.ToString("N4")],
+        ["Valor entradas", reporte.ValorEntradas.ToString("N4")],
+        ["Total salidas", reporte.TotalSalidas.ToString("N4")],
+        ["Valor salidas", reporte.ValorSalidas.ToString("N4")]
+    ];
 
     private async Task ExportarPdfAsync()
     {
@@ -195,7 +221,9 @@ public partial class InventarioReportes
             : safe;
     }
 
-    private static bool EsSalida(string tipo) => tipo.Contains("SALIDA", StringComparison.OrdinalIgnoreCase) ||
+    private static bool EsSalida(string tipo) => tipo.Contains("SALIDA", StringComparison.OrdinalIgnoreCase) || tipo.Contains("BAJA", StringComparison.OrdinalIgnoreCase) ||
         tipo.Equals("SALIDA", StringComparison.OrdinalIgnoreCase) ||
-        tipo.Equals("DEVOLUCION_COMPRA", StringComparison.OrdinalIgnoreCase);
+        tipo.Equals("DEVOLUCION_COMPRA", StringComparison.OrdinalIgnoreCase) ||
+        tipo.Equals("ANULACION_RECEPCION", StringComparison.OrdinalIgnoreCase) ||
+        tipo.Equals("DEVOLUCION_VENTA_REVERSA", StringComparison.OrdinalIgnoreCase);
 }

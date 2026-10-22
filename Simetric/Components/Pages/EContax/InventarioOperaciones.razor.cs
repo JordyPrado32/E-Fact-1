@@ -49,7 +49,15 @@ public class InventarioOperacionesBase : ComponentBase
 
     private async Task CargarAsync()
     {
-        try { Dashboard = await Http.GetFromJsonAsync<EContaxInventarioDashboardDto>($"api/e-contax/inventarios?userId={_usuarioId}") ?? new(); SucursalToma = Dashboard.Sucursales.FirstOrDefault()?.IdSucursal ?? 0; PrepararToma(); }
+        var sucursalAnterior = SucursalToma;
+        try
+        {
+            Dashboard = await Http.GetFromJsonAsync<EContaxInventarioDashboardDto>($"api/e-contax/inventarios?userId={_usuarioId}") ?? new();
+            SucursalToma = Dashboard.Sucursales.Any(x => x.IdSucursal == sucursalAnterior)
+                ? sucursalAnterior
+                : Dashboard.Sucursales.FirstOrDefault()?.IdSucursal ?? 0;
+            PrepararToma();
+        }
         catch (Exception ex) { Error = ex.Message; }
         finally { Cargando = false; }
     }
@@ -73,7 +81,7 @@ public class InventarioOperacionesBase : ComponentBase
         if (string.IsNullOrWhiteSpace(Error)) LineasDevolucion.Clear();
     }
 
-    protected async Task AplicarTomaAsync() => await EjecutarAsync($"api/e-contax/inventarios/tomas-fisicas?userId={_usuarioId}", new EContaxInventarioTomaFisicaDto { IdSucursal = SucursalToma, Observacion = ObservacionToma, Detalles = LineasToma.Select(x => new EContaxInventarioTomaFisicaDetalleDto { CodigoProducto = x.CodigoProducto, StockContado = x.StockContado }).ToList() });
+    protected async Task AplicarTomaAsync() => await EjecutarAsync($"api/e-contax/inventarios/tomas-fisicas?userId={_usuarioId}", new EContaxInventarioTomaFisicaDto { IdSucursal = SucursalToma, Observacion = ObservacionToma, Detalles = LineasToma.Select(x => new EContaxInventarioTomaFisicaDetalleDto { CodigoProducto = x.CodigoProducto, StockContado = x.StockContado, NumeroLote = x.NumeroLote, FechaVencimiento = x.FechaVencimiento }).ToList() });
 
     protected async Task ReservarAsync() => await CambiarReservaAsync("reservas", false);
     protected async Task LiberarReservaAsync() => await CambiarReservaAsync("reservas/liberar", true);
@@ -194,6 +202,8 @@ public class InventarioOperacionesBase : ComponentBase
     protected sealed record LineaToma(int CodigoProducto, string Nombre, decimal StockSistema)
     {
         public decimal StockContado { get; set; } = StockSistema;
+        public string? NumeroLote { get; set; }
+        public DateTime? FechaVencimiento { get; set; }
     }
 
     protected sealed class OperacionLinea

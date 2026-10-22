@@ -83,6 +83,8 @@ public sealed class EContaxInventarioAjusteDto
     public decimal? CostoUnitario { get; set; }
     public decimal? StockMinimo { get; set; }
     public decimal? StockMaximo { get; set; }
+    public string? NumeroLote { get; set; }
+    public DateTime? FechaVencimiento { get; set; }
     public string? Observacion { get; set; }
 }
 
@@ -118,6 +120,8 @@ public sealed class EContaxInventarioTomaFisicaDetalleDto
 {
     public int CodigoProducto { get; set; }
     public decimal StockContado { get; set; }
+    public string? NumeroLote { get; set; }
+    public DateTime? FechaVencimiento { get; set; }
 }
 
 public sealed class EContaxInventarioReservaDto

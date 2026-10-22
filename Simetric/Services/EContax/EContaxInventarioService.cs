@@ -1,5 +1,6 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using Simetric.Data;
 using Simetric.DTOs.EContax;
 using Simetric.Models;
@@ -10,7 +11,7 @@ namespace Simetric.Services.EContax;
 public sealed class EContaxInventarioService
 {
     private static readonly string[] Metodos = ["FIFO", "LIFO", "PROMEDIO"];
-    private sealed record LoteSalida(long IdLote, decimal Cantidad, decimal CostoUnitario);
+    private sealed record LoteSalida(long IdLote, decimal Cantidad, decimal CostoUnitario, string? NumeroLote, DateTime? FechaVencimiento);
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly EContaxTenantService _tenant;
     private readonly EContaxSeguridadService _seguridad;
@@ -256,6 +257,7 @@ public sealed class EContaxInventarioService
                 Fecha = DateTime.UtcNow,
                 Observacion = "Cambio de método de valoración"
             });
+        RegistrarAuditoria(context, userId, "Configuración de valoración", new { Metodo = metodoAnterior }, new { Metodo = metodo }, new { Modulo = "Inventarios", Empresa = userContext.IdEmpresa });
         await context.SaveChangesAsync();
     }
 
@@ -277,6 +279,10 @@ public sealed class EContaxInventarioService
 
         var metodo = await ObtenerMetodoAsync(context, userContext.IdEmpresa);
         var existencia = await ObtenerExistenciaAsync(context, userContext.IdEmpresa, sucursal.IdSucursal, dto.CodigoProducto);
+        var stockAnterior = existencia.StockActual;
+        var costoAnterior = existencia.CostoPromedio;
+        if (dto.StockMinimo is < 0 || dto.StockMaximo is < 0)
+            throw new InvalidOperationException("Los stocks mínimo y máximo no pueden ser negativos.");
         if (dto.StockMinimo.HasValue) existencia.StockMinimo = Math.Max(0, dto.StockMinimo.Value);
         if (dto.StockMaximo.HasValue) existencia.StockMaximo = Math.Max(0, dto.StockMaximo.Value);
         if (existencia.StockMaximo > 0 && existencia.StockMinimo > existencia.StockMaximo)
@@ -286,11 +292,19 @@ public sealed class EContaxInventarioService
         var tipoMovimientoLog = tipo;
         var cantidadMovimiento = dto.Cantidad;
         decimal? costoMovimiento = null;
-        if (tipo == "ENTRADA")
+        List<LoteSalida>? lotesSalidaMovimiento = null;
+        if (tipo == "BAJA_VENCIDO")
+        {
+            lotesSalidaMovimiento = new();
+            costoMovimiento = await AplicarSalidaAsync(context, existencia, dto.Cantidad, metodo, lotesSalidaMovimiento, soloVencidos: true);
+            huboMovimiento = true;
+        }
+        else if (tipo == "ENTRADA")
         {
             var costo = dto.CostoUnitario ?? existencia.CostoPromedio;
             if (costo < 0) throw new InvalidOperationException("El costo unitario no puede ser negativo.");
-            AgregarEntrada(context, existencia, dto.Cantidad, costo, metodo);
+            await ValidarEntradaConLoteAsync(context, existencia, dto.Cantidad, dto.NumeroLote, dto.FechaVencimiento);
+            AgregarEntrada(context, existencia, dto.Cantidad, costo, metodo, dto.NumeroLote, dto.FechaVencimiento);
             costoMovimiento = costo;
             huboMovimiento = true;
         }
@@ -306,7 +320,8 @@ public sealed class EContaxInventarioService
             {
                 var costo = dto.CostoUnitario ?? existencia.CostoPromedio;
                 if (costo < 0) throw new InvalidOperationException("El costo unitario no puede ser negativo.");
-                AgregarEntrada(context, existencia, diferencia, costo, metodo);
+                await ValidarEntradaConLoteAsync(context, existencia, diferencia, dto.NumeroLote, dto.FechaVencimiento);
+                AgregarEntrada(context, existencia, diferencia, costo, metodo, dto.NumeroLote, dto.FechaVencimiento);
                 tipoMovimientoLog = "AJUSTE_ENTRADA";
                 cantidadMovimiento = diferencia;
                 costoMovimiento = costo;
@@ -328,7 +343,14 @@ public sealed class EContaxInventarioService
         }
 
         if (huboMovimiento)
-            context.EContaxInventarioMovimientos.Add(CrearMovimiento(existencia, userId, metodo, tipoMovimientoLog, cantidadMovimiento, dto.Observacion, "AJUSTE", costoMovimiento));
+        {
+            var lote = lotesSalidaMovimiento?.Count == 1 ? lotesSalidaMovimiento[0] : null;
+            context.EContaxInventarioMovimientos.Add(CrearMovimiento(
+                existencia, userId, metodo, tipo == "BAJA_VENCIDO" ? "BAJA_VENCIDO" : tipoMovimientoLog,
+                cantidadMovimiento, dto.Observacion, "AJUSTE", costoMovimiento, null,
+                lote?.NumeroLote ?? dto.NumeroLote, lote?.FechaVencimiento ?? dto.FechaVencimiento));
+        }
+        RegistrarAuditoria(context, userId, "Ajuste de inventario", new { Stock = stockAnterior, Costo = costoAnterior }, new { Stock = existencia.StockActual, Costo = existencia.CostoPromedio }, new { Modulo = "Inventarios", Tipo = tipoMovimientoLog, Producto = dto.CodigoProducto, Sucursal = sucursal.IdSucursal, Observacion = dto.Observacion });
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
     }
@@ -395,6 +417,8 @@ public sealed class EContaxInventarioService
         IReadOnlyCollection<(int CodigoProducto, decimal Cantidad, decimal CostoUnitarioSinImpuestos, string? NumeroLote, DateTime? FechaVencimiento)> items,
         string? referencia)
     {
+        if (items.Any(x => x.CodigoProducto <= 0 || x.Cantidad < 0 || x.CostoUnitarioSinImpuestos < 0))
+            throw new InvalidOperationException("La recepción contiene productos, cantidades o costos no válidos.");
         if (items.Any(x => x.Cantidad > 0 && x.FechaVencimiento is { } fecha && fecha.Date <= DateTime.UtcNow.Date))
             throw new InvalidOperationException("No se puede ingresar inventario con lotes vencidos o que vencen hoy.");
 
@@ -413,17 +437,16 @@ public sealed class EContaxInventarioService
 
             var existencia = await ObtenerExistenciaAsync(context, idEmpresa, idSucursal, grupo.Key);
             var factor = ObtenerFactorConversion(producto.FactorConversionInventario);
-            var cantidad = grupo.Sum(x => x.Cantidad);
-            var cantidadBase = cantidad * factor;
-            var costo = grupo.Sum(x => x.Cantidad * x.CostoUnitarioSinImpuestos) / cantidad;
-            var costoBase = costo / factor;
-            if (costo < 0)
-                throw new InvalidOperationException("El costo de compra no puede ser negativo.");
-            var item = grupo.First();
-            AgregarEntrada(context, existencia, cantidadBase, costoBase, metodo, item.NumeroLote, item.FechaVencimiento);
-            context.EContaxInventarioMovimientos.Add(CrearMovimiento(
-                existencia, userId, metodo, "ENTRADA", cantidadBase, "Recepción de compra", "RECEPCION", costoBase, referencia,
-                item.NumeroLote, item.FechaVencimiento));
+            foreach (var item in grupo.Where(x => x.Cantidad > 0))
+            {
+                var cantidadBase = item.Cantidad * factor;
+                var costoBase = item.CostoUnitarioSinImpuestos / factor;
+                await ValidarEntradaConLoteAsync(context, existencia, cantidadBase, item.NumeroLote, item.FechaVencimiento);
+                AgregarEntrada(context, existencia, cantidadBase, costoBase, metodo, item.NumeroLote, item.FechaVencimiento);
+                context.EContaxInventarioMovimientos.Add(CrearMovimiento(
+                    existencia, userId, metodo, "ENTRADA", cantidadBase, "Recepción de compra", "RECEPCION", costoBase, referencia,
+                    item.NumeroLote, item.FechaVencimiento));
+            }
         }
     }
 
@@ -686,7 +709,7 @@ public sealed class EContaxInventarioService
 
         return new EContaxInventarioReporteDto
         {
-            Sucursales = sucursales,
+            Sucursales = actor.EsJefeEmpresa ? sucursales : sucursales.Where(x => x.IdSucursal == actor.IdSucursal).ToList(),
             Movimientos = movimientos,
             TotalEntradas = movimientos.Where(x => EsEntradaReporte(x.TipoMovimiento)).Sum(x => x.Cantidad),
             TotalSalidas = movimientos.Where(x => EsSalidaReporte(x.TipoMovimiento)).Sum(x => x.Cantidad),
@@ -730,13 +753,17 @@ public sealed class EContaxInventarioService
                 throw new InvalidOperationException($"El producto {grupo.Key} no está disponible en la sucursal de origen.");
             var cantidad = grupo.Sum(x => x.Cantidad);
             var existenciaOrigen = await ObtenerExistenciaAsync(context, actor.IdEmpresa, origen.IdSucursal, grupo.Key);
-            var costo = await AplicarSalidaAsync(context, existenciaOrigen, cantidad, metodo);
+            var lotesSalida = new List<LoteSalida>();
+            var costo = await AplicarSalidaAsync(context, existenciaOrigen, cantidad, metodo, lotesSalida);
             var existenciaDestino = await ObtenerExistenciaAsync(context, actor.IdEmpresa, destino.IdSucursal, grupo.Key);
-            AgregarEntrada(context, existenciaDestino, cantidad, costo, metodo);
+            foreach (var lote in lotesSalida)
+                AgregarEntrada(context, existenciaDestino, lote.Cantidad, lote.CostoUnitario, metodo, lote.NumeroLote, lote.FechaVencimiento);
             transferencia.Detalles.Add(new EContaxInventarioTransferenciaDetalle { CodigoProducto = grupo.Key, Cantidad = cantidad, CostoUnitario = costo });
-            context.EContaxInventarioMovimientos.Add(CrearMovimiento(existenciaOrigen, userId, metodo, "TRANSFER_SALIDA", cantidad, dto.Observacion, "TRANSFERENCIA", costo, transferencia.NumeroTransferencia));
-            context.EContaxInventarioMovimientos.Add(CrearMovimiento(existenciaDestino, userId, metodo, "TRANSFER_ENTRADA", cantidad, dto.Observacion, "TRANSFERENCIA", costo, transferencia.NumeroTransferencia));
+            var loteMovimiento = lotesSalida.Count == 1 ? lotesSalida[0] : null;
+            context.EContaxInventarioMovimientos.Add(CrearMovimiento(existenciaOrigen, userId, metodo, "TRANSFER_SALIDA", cantidad, dto.Observacion, "TRANSFERENCIA", costo, transferencia.NumeroTransferencia, loteMovimiento?.NumeroLote, loteMovimiento?.FechaVencimiento));
+            context.EContaxInventarioMovimientos.Add(CrearMovimiento(existenciaDestino, userId, metodo, "TRANSFER_ENTRADA", cantidad, dto.Observacion, "TRANSFERENCIA", costo, transferencia.NumeroTransferencia, loteMovimiento?.NumeroLote, loteMovimiento?.FechaVencimiento));
         }
+        RegistrarAuditoria(context, userId, "Transferencia de inventario", null, new { Numero = transferencia.NumeroTransferencia, Origen = origen.IdSucursal, Destino = destino.IdSucursal }, new { Modulo = "Inventarios", Productos = dto.Detalles.Select(x => new { x.CodigoProducto, x.Cantidad }), Observacion = dto.Observacion });
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
         return new EContaxInventarioOperacionResultadoDto { Numero = transferencia.NumeroTransferencia, Mensaje = "Transferencia aplicada correctamente." };
@@ -773,6 +800,7 @@ public sealed class EContaxInventarioService
             devolucion.Detalles.Add(new EContaxInventarioDevolucionDetalle { CodigoProducto = grupo.Key, Cantidad = cantidad, CostoUnitario = costo });
             context.EContaxInventarioMovimientos.Add(CrearMovimiento(existencia, userId, metodo, "DEVOLUCION_COMPRA", cantidad, dto.Observacion, "DEVOLUCION_COMPRA", costo, devolucion.NumeroDevolucion));
         }
+        RegistrarAuditoria(context, userId, "Devolución de compra", null, new { Numero = devolucion.NumeroDevolucion }, new { Modulo = "Inventarios", Recepcion = dto.IdRecepcion, Productos = dto.Detalles.Select(x => new { x.CodigoProducto, x.Cantidad }), Observacion = dto.Observacion });
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
         return new EContaxInventarioOperacionResultadoDto { Numero = devolucion.NumeroDevolucion, Mensaje = "Devolución aplicada correctamente." };
@@ -802,11 +830,17 @@ public sealed class EContaxInventarioService
             var sistema = existencia.StockActual;
             var diferencia = item.Stock - sistema;
             var costo = existencia.CostoPromedio;
-            if (diferencia > 0) AgregarEntrada(context, existencia, diferencia, costo, metodo);
+            var detalle = dto.Detalles.Last(x => x.CodigoProducto == item.Key);
+            if (diferencia > 0)
+            {
+                await ValidarEntradaConLoteAsync(context, existencia, diferencia, detalle.NumeroLote, detalle.FechaVencimiento);
+                AgregarEntrada(context, existencia, diferencia, costo, metodo, detalle.NumeroLote, detalle.FechaVencimiento);
+            }
             else if (diferencia < 0) costo = await AplicarSalidaAsync(context, existencia, Math.Abs(diferencia), metodo);
             toma.Detalles.Add(new EContaxInventarioTomaFisicaDetalle { CodigoProducto = item.Key, StockSistema = sistema, StockContado = item.Stock, Diferencia = diferencia, CostoUnitario = costo });
             if (diferencia != 0) context.EContaxInventarioMovimientos.Add(CrearMovimiento(existencia, userId, metodo, diferencia > 0 ? "TOMA_FISICA_ENTRADA" : "TOMA_FISICA_SALIDA", Math.Abs(diferencia), dto.Observacion, "TOMA_FISICA", costo, toma.NumeroToma));
         }
+        RegistrarAuditoria(context, userId, "Toma física de inventario", null, new { Numero = toma.NumeroToma }, new { Modulo = "Inventarios", Sucursal = sucursal.IdSucursal, Productos = dto.Detalles.Select(x => new { x.CodigoProducto, x.StockContado }), Observacion = dto.Observacion });
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
         return new EContaxInventarioOperacionResultadoDto { Numero = toma.NumeroToma, Mensaje = "Toma física aplicada correctamente." };
@@ -850,6 +884,7 @@ public sealed class EContaxInventarioService
             existencia.FechaActualizacion = DateTime.UtcNow;
             context.EContaxInventarioMovimientos.Add(CrearMovimiento(existencia, userId, metodo, liberar ? "RESERVA_LIBERADA" : "RESERVA", cantidad, dto.Observacion, "RESERVA", existencia.CostoPromedio, dto.Referencia));
         }
+        RegistrarAuditoria(context, userId, liberar ? "Liberación de reserva" : "Reserva de inventario", null, new { Liberada = liberar }, new { Modulo = "Inventarios", Sucursal = sucursal.IdSucursal, Productos = detalles.Select(x => new { x.CodigoProducto, x.Cantidad }), Referencia = dto.Referencia, Observacion = dto.Observacion });
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
     }
@@ -865,10 +900,12 @@ public sealed class EContaxInventarioService
         var sucursal = ResolverSucursalUnica(actor, sucursales, dto.IdSucursal);
         if (dto.CostoUnitario < 0) throw new InvalidOperationException("El costo no puede ser negativo.");
         var existencia = await ObtenerExistenciaAsync(context, actor.IdEmpresa, sucursal.IdSucursal, dto.CodigoProducto);
+        var costoAnterior = existencia.CostoPromedio;
         existencia.CostoPromedio = Math.Round(dto.CostoUnitario, 4);
         var lotes = await context.EContaxInventarioLotes.Where(x => x.IdEmpresa == actor.IdEmpresa && x.IdSucursal == sucursal.IdSucursal && x.CodigoProducto == dto.CodigoProducto && x.CantidadDisponible > 0).ToListAsync();
         foreach (var lote in lotes) lote.CostoUnitario = existencia.CostoPromedio;
         context.EContaxInventarioMovimientos.Add(CrearMovimiento(existencia, userId, await ObtenerMetodoAsync(context, actor.IdEmpresa), "REVALORIZACION", 0, dto.Observacion, "REVALORIZACION", existencia.CostoPromedio));
+        RegistrarAuditoria(context, userId, "Revalorización de inventario", new { Costo = costoAnterior }, new { Costo = existencia.CostoPromedio }, new { Modulo = "Inventarios", Producto = dto.CodigoProducto, Sucursal = sucursal.IdSucursal, Observacion = dto.Observacion });
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
     }
@@ -921,14 +958,17 @@ public sealed class EContaxInventarioService
         EContaxInventarioExistencia existencia,
         decimal cantidad,
         string metodo,
-        List<LoteSalida>? lotesSalida = null)
+        List<LoteSalida>? lotesSalida = null,
+        bool soloVencidos = false)
     {
         var fechaHoy = DateTime.UtcNow.Date;
 
         var lotesQuery = context.EContaxInventarioLotes
             .Where(x => x.IdEmpresa == existencia.IdEmpresa && x.IdSucursal == existencia.IdSucursal &&
                         x.CodigoProducto == existencia.CodigoProducto && x.CantidadDisponible > 0 &&
-                        (!x.FechaVencimiento.HasValue || x.FechaVencimiento.Value.Date > fechaHoy));
+                        (soloVencidos
+                            ? x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date <= fechaHoy
+                            : !x.FechaVencimiento.HasValue || x.FechaVencimiento.Value.Date > fechaHoy));
         var lotesDisponibles = await lotesQuery.ToListAsync();
         var stockLotesDisponible = lotesDisponibles.Sum(x => x.CantidadDisponible);
         var stockDisponible = Math.Max(0, Math.Min(existencia.StockActual, stockLotesDisponible) - existencia.StockReservado);
@@ -946,7 +986,7 @@ public sealed class EContaxInventarioService
             if (restante <= 0) break;
             var tomado = Math.Min(restante, lote.CantidadDisponible);
             if (metodo != "PROMEDIO") costo += tomado * lote.CostoUnitario;
-            lotesSalida?.Add(new LoteSalida(lote.IdLote, tomado, lote.CostoUnitario));
+            lotesSalida?.Add(new LoteSalida(lote.IdLote, tomado, lote.CostoUnitario, lote.NumeroLote, lote.FechaVencimiento));
             lote.CantidadDisponible -= tomado;
             restante -= tomado;
         }
@@ -970,6 +1010,28 @@ public sealed class EContaxInventarioService
 
         existencia.FechaActualizacion = DateTime.UtcNow;
         return cantidad == 0 ? 0 : metodo == "PROMEDIO" ? costoPromedioSalida : costo / cantidad;
+    }
+
+    private static async Task ValidarEntradaConLoteAsync(
+        AppDbContext context,
+        EContaxInventarioExistencia existencia,
+        decimal cantidad,
+        string? numeroLote,
+        DateTime? fechaVencimiento)
+    {
+        if (cantidad <= 0)
+            return;
+        if (numeroLote?.Length > 80)
+            throw new InvalidOperationException("El número de lote no puede superar 80 caracteres.");
+        if (fechaVencimiento is { } fecha && fecha.Date <= DateTime.UtcNow.Date)
+            throw new InvalidOperationException("No se puede ingresar stock vencido o que vence hoy.");
+
+        var requiereLote = await context.EContaxInventarioLotes.AnyAsync(x =>
+            x.IdEmpresa == existencia.IdEmpresa && x.IdSucursal == existencia.IdSucursal &&
+            x.CodigoProducto == existencia.CodigoProducto && x.CantidadDisponible > 0 &&
+            (!string.IsNullOrWhiteSpace(x.NumeroLote) || x.FechaVencimiento.HasValue));
+        if (requiereLote && (string.IsNullOrWhiteSpace(numeroLote) || !fechaVencimiento.HasValue))
+            throw new InvalidOperationException("Este producto se maneja por lote. Indica el número de lote y la fecha de vencimiento.");
     }
 
     private static void AgregarEntrada(AppDbContext context, EContaxInventarioExistencia existencia, decimal cantidad, decimal costo, string metodo, string? numeroLote = null, DateTime? fechaVencimiento = null)
@@ -1075,7 +1137,20 @@ public sealed class EContaxInventarioService
         "ENTRADA" or "TRANSFER_ENTRADA" or "TOMA_FISICA_ENTRADA" or "DEVOLUCION_VENTA";
 
     private static bool EsSalidaReporte(string tipo) => tipo is
-        "SALIDA" or "TRANSFER_SALIDA" or "TOMA_FISICA_SALIDA" or "DEVOLUCION_COMPRA" or "DEVOLUCION_VENTA_REVERSA";
+        "SALIDA" or "BAJA_VENCIDO" or "TRANSFER_SALIDA" or "TOMA_FISICA_SALIDA" or "DEVOLUCION_COMPRA" or "DEVOLUCION_VENTA_REVERSA";
+
+    private static void RegistrarAuditoria(AppDbContext context, int userId, string accion, object? valoresPrevios, object? valorNuevo, object detalles)
+    {
+        context.Auditorias.Add(new Auditoria
+        {
+            IdUsuario = userId,
+            Fecha = DateTime.Now,
+            Accion = $"Inventarios: {accion}",
+            ValoresPrevios = valoresPrevios is null ? null : JsonSerializer.Serialize(valoresPrevios),
+            ValorNuevo = valorNuevo is null ? null : JsonSerializer.Serialize(valorNuevo),
+            Detalles = JsonSerializer.Serialize(detalles)
+        });
+    }
 
     private static void ExigirAdminEmpresa(EContaxUserContext context)
     {
