@@ -504,8 +504,14 @@ namespace Simetric.Data
             {
                 entity.ToTable("ECONTAX_INVENTARIO_TRANSFERENCIA", "dbo");
                 entity.HasKey(x => x.IdTransferencia);
+                entity.Property(x => x.IdTransferencia).HasColumnName("id_transferencia");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
                 entity.Property(x => x.NumeroTransferencia).HasColumnName("numero_transferencia").HasMaxLength(30).IsUnicode(false);
+                entity.Property(x => x.IdSucursalOrigen).HasColumnName("id_sucursal_origen");
+                entity.Property(x => x.IdSucursalDestino).HasColumnName("id_sucursal_destino");
                 entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.FechaTransferencia).HasColumnName("fecha_transferencia");
+                entity.Property(x => x.IdUsuario).HasColumnName("id_usuario");
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
                 entity.HasIndex(x => new { x.IdEmpresa, x.NumeroTransferencia }).IsUnique();
             });
@@ -514,8 +520,11 @@ namespace Simetric.Data
             {
                 entity.ToTable("ECONTAX_INVENTARIO_TRANSFERENCIA_DET", "dbo");
                 entity.HasKey(x => x.IdDetalle);
-                entity.Property(x => x.Cantidad).HasColumnType("decimal(18,4)");
-                entity.Property(x => x.CostoUnitario).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.IdDetalle).HasColumnName("id_detalle");
+                entity.Property(x => x.IdTransferencia).HasColumnName("id_transferencia");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.Cantidad).HasColumnName("cantidad").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnName("costo_unitario").HasColumnType("decimal(18,4)");
                 entity.HasOne(x => x.Transferencia).WithMany(x => x.Detalles).HasForeignKey(x => x.IdTransferencia).OnDelete(DeleteBehavior.Cascade);
             });
 
@@ -523,8 +532,14 @@ namespace Simetric.Data
             {
                 entity.ToTable("ECONTAX_INVENTARIO_DEVOLUCION", "dbo");
                 entity.HasKey(x => x.IdDevolucion);
+                entity.Property(x => x.IdDevolucion).HasColumnName("id_devolucion");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(x => x.IdRecepcion).HasColumnName("id_recepcion");
                 entity.Property(x => x.NumeroDevolucion).HasColumnName("numero_devolucion").HasMaxLength(30).IsUnicode(false);
                 entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.FechaDevolucion).HasColumnName("fecha_devolucion");
+                entity.Property(x => x.IdUsuario).HasColumnName("id_usuario");
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
                 entity.HasIndex(x => new { x.IdEmpresa, x.NumeroDevolucion }).IsUnique();
             });
@@ -533,8 +548,11 @@ namespace Simetric.Data
             {
                 entity.ToTable("ECONTAX_INVENTARIO_DEVOLUCION_DET", "dbo");
                 entity.HasKey(x => x.IdDetalle);
-                entity.Property(x => x.Cantidad).HasColumnType("decimal(18,4)");
-                entity.Property(x => x.CostoUnitario).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.IdDetalle).HasColumnName("id_detalle");
+                entity.Property(x => x.IdDevolucion).HasColumnName("id_devolucion");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.Cantidad).HasColumnName("cantidad").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnName("costo_unitario").HasColumnType("decimal(18,4)");
                 entity.HasOne(x => x.Devolucion).WithMany(x => x.Detalles).HasForeignKey(x => x.IdDevolucion).OnDelete(DeleteBehavior.Cascade);
             });
 
@@ -542,8 +560,13 @@ namespace Simetric.Data
             {
                 entity.ToTable("ECONTAX_INVENTARIO_TOMA_FISICA", "dbo");
                 entity.HasKey(x => x.IdToma);
+                entity.Property(x => x.IdToma).HasColumnName("id_toma");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
                 entity.Property(x => x.NumeroToma).HasColumnName("numero_toma").HasMaxLength(30).IsUnicode(false);
                 entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.FechaToma).HasColumnName("fecha_toma");
+                entity.Property(x => x.IdUsuario).HasColumnName("id_usuario");
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
                 entity.HasIndex(x => new { x.IdEmpresa, x.NumeroToma }).IsUnique();
             });
@@ -552,10 +575,13 @@ namespace Simetric.Data
             {
                 entity.ToTable("ECONTAX_INVENTARIO_TOMA_FISICA_DET", "dbo");
                 entity.HasKey(x => x.IdDetalle);
-                entity.Property(x => x.StockSistema).HasColumnType("decimal(18,4)");
-                entity.Property(x => x.StockContado).HasColumnType("decimal(18,4)");
-                entity.Property(x => x.Diferencia).HasColumnType("decimal(18,4)");
-                entity.Property(x => x.CostoUnitario).HasColumnType("decimal(18,4)");
+                entity.Property(x => x.IdDetalle).HasColumnName("id_detalle");
+                entity.Property(x => x.IdToma).HasColumnName("id_toma");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.StockSistema).HasColumnName("stock_sistema").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.StockContado).HasColumnName("stock_contado").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.Diferencia).HasColumnName("diferencia").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.CostoUnitario).HasColumnName("costo_unitario").HasColumnType("decimal(18,4)");
                 entity.HasOne(x => x.Toma).WithMany(x => x.Detalles).HasForeignKey(x => x.IdToma).OnDelete(DeleteBehavior.Cascade);
             });
 
@@ -563,8 +589,12 @@ namespace Simetric.Data
             {
                 entity.ToTable("ECONTAX_INVENTARIO_VALORACION_HIST", "dbo");
                 entity.HasKey(x => x.IdHistorial);
+                entity.Property(x => x.IdHistorial).HasColumnName("id_historial");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
                 entity.Property(x => x.MetodoAnterior).HasColumnName("metodo_anterior").HasMaxLength(20).IsUnicode(false);
                 entity.Property(x => x.MetodoNuevo).HasColumnName("metodo_nuevo").HasMaxLength(20).IsUnicode(false);
+                entity.Property(x => x.IdUsuario).HasColumnName("id_usuario");
+                entity.Property(x => x.Fecha).HasColumnName("fecha");
                 entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
             });
 
