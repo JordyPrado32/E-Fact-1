@@ -1773,8 +1773,7 @@ Atentamente,
             string.IsNullOrWhiteSpace(correoSolicitante) ? "No registrado" : correoSolicitante.Trim());
         var tipoFirmaSeguro = WebUtility.HtmlEncode(
             string.IsNullOrWhiteSpace(tipoFirma) ? "No especificado" : tipoFirma.Trim());
-        var vigenciaSegura = WebUtility.HtmlEncode(
-            string.IsNullOrWhiteSpace(vigencia) ? "No especificada" : vigencia.Trim());
+        var vigenciaSegura = WebUtility.HtmlEncode(ESignPricing.ObtenerEtiquetaVigencia(vigencia));
         var referenciaSegura = WebUtility.HtmlEncode(
             string.IsNullOrWhiteSpace(reference) ? "Pendiente de referencia" : reference.Trim());
         var autorizacionSegura = WebUtility.HtmlEncode(

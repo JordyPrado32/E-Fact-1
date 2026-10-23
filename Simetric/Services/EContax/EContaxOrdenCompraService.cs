@@ -132,7 +132,7 @@ public sealed class EContaxOrdenCompraService
     }
 
     public Task<List<ProductoLookupDetalleDto>> BuscarProductosAsync(int userId, string? filtro, int? idProveedor) =>
-        _catalogService.BuscarProductosFiltroAsync(userId, filtro ?? string.Empty, idProveedor);
+        _catalogService.BuscarProductosFiltroAsync(userId, filtro ?? string.Empty, idProveedor, soloProductos: true);
 
     public async Task<EContaxOrdenCompraDto> CrearAsync(int userId, EContaxOrdenCompraUpsertDto dto)
     {
@@ -353,12 +353,13 @@ public sealed class EContaxOrdenCompraService
         var productos = await context.Productos
             .AsNoTracking()
             .Where(p => p.Idempresa == actor.IdEmpresa && p.Estado == true && ids.Contains(p.Codigo) &&
+                p.Tipocompravena != null && p.Tipocompravena.ToUpper() == "PRODUCTO" &&
                 (p.Idsucursal == sucursal || context.EContaxProductosSucursales.Any(a =>
                     a.CodigoProducto == p.Codigo && a.IdEmpresa == actor.IdEmpresa && a.IdSucursal == sucursal)))
             .ToListAsync();
 
         if (productos.Count != ids.Count)
-            throw new InvalidOperationException("Uno o más productos no están activos o no pertenecen a la sucursal seleccionada.");
+            throw new InvalidOperationException("Uno o más registros no están catalogados como productos activos o no pertenecen a la sucursal seleccionada.");
 
         var resultado = new List<EContaxOrdenCompraDetalle>(items.Count);
         foreach (var item in items)

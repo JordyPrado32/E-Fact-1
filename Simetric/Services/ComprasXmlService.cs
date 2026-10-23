@@ -35,7 +35,7 @@ public class ComprasXmlService
         _initialSequencePromptService = initialSequencePromptService;
     }
 
-    public async Task<CompraXmlPreviewDto> LeerCompraDesdeXmlAsync(string xmlContent)
+    public async Task<CompraXmlPreviewDto> LeerCompraDesdeXmlAsync(string xmlContent, bool permitirFactura = false)
     {
         if (string.IsNullOrWhiteSpace(xmlContent))
             throw new Exception("El XML está vacío.");
@@ -45,6 +45,9 @@ public class ComprasXmlService
         XElement? liquidacionNode = doc.Root?.Name.LocalName == "liquidacionCompra"
             ? doc.Root
             : doc.Descendants().FirstOrDefault(x => x.Name.LocalName == "liquidacionCompra");
+
+        if (liquidacionNode != null && permitirFactura)
+            throw new InvalidOperationException("Este flujo requiere el XML de una factura electrónica, no una liquidación de compra.");
 
         if (liquidacionNode != null)
             return await LeerLiquidacionCompraDesdeXmlAsync(xmlContent, doc, liquidacionNode);
@@ -64,8 +67,9 @@ public class ComprasXmlService
         if (infoTributaria == null || infoFactura == null)
             throw new Exception("El XML no tiene la estructura esperada de liquidación de compra SRI.");
 
-        if (GetValue(infoTributaria, "codDoc") != "03")
-            throw new Exception("El XML seleccionado no es una liquidación de compra. Para retenciones carga un XML con codDoc 03.");
+        var codigoDocumento = GetValue(infoTributaria, "codDoc");
+        if (codigoDocumento != "03" && !(permitirFactura && codigoDocumento == "01"))
+            throw new Exception("El XML seleccionado no es una factura de compra válida.");
 
         string claveAcceso = GetValue(infoTributaria, "claveAcceso");
         string estab = GetValue(infoTributaria, "estab");

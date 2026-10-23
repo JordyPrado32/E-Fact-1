@@ -246,7 +246,7 @@ public sealed class EContaxCatalogService
         await context.SaveChangesAsync();
     }
 
-    public async Task<List<ProductoLookupDetalleDto>> BuscarProductosFiltroAsync(int userId, string filtro, int? idProveedor = null)
+    public async Task<List<ProductoLookupDetalleDto>> BuscarProductosFiltroAsync(int userId, string filtro, int? idProveedor = null, bool soloProductos = false)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
@@ -256,6 +256,9 @@ public sealed class EContaxCatalogService
             .Include(p => p.TipoProductoNavigation)
             .Include(p => p.IdsubtipoNavigation)
             .Where(p => p.Estado == true);
+
+        if (soloProductos)
+            query = query.Where(p => p.Tipocompravena != null && p.Tipocompravena.ToUpper() == "PRODUCTO");
 
         if (!string.IsNullOrWhiteSpace(filtroLower))
         {

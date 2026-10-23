@@ -33,6 +33,11 @@ public static class EContaxRoutes
     public const string ComprasLiquidacionesGeneradas = "/e-contax/compras/liquidaciones-generadas";
     public const string CuentasPorCobrar = "/e-contax/cuentas-por-cobrar";
     public const string CuentasPorCobrarEstadoCuenta = "/e-contax/cuentas-por-cobrar/estado-cuenta";
+    public const string CuentasPorPagar = "/e-contax/cuentas-por-pagar";
+    public const string CuentasPorPagarMisCompras = "/e-contax/mis-compras";
+    public const string CuentasPorPagarNuevaFactura = "/e-contax/compras/nueva-factura";
+    public const string CuentasPorPagarRegistrar = "/e-contax/cuentas-por-pagar/registrar";
+    public const string CuentasPorPagarEstadoCuenta = "/e-contax/cuentas-por-pagar/estado-cuenta";
     public const string ReportesDocumentos = "/e-contax/reportes/documentos";
     public const string ReportesLogs = "/e-contax/reportes/logs";
     public const string CompraDocumentos = "/e-contax/compra-documentos";
@@ -50,6 +55,7 @@ public static class EContaxRoutes
     public const string Productos = "/e-contax/productos";
     public const string Inventarios = "/e-contax/inventarios";
     public const string InventariosKardex = "/e-contax/inventarios/kardex";
+    public const string InventariosBodegas = "/e-contax/inventarios/bodegas";
     public const string InventariosOperaciones = "/e-contax/inventarios/operaciones";
     public const string InventariosReportes = "/e-contax/inventarios/reportes";
     public const string ConfiguracionCategorias = "/e-contax/configuracion/categorias";

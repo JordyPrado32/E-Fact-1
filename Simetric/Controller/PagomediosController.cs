@@ -134,64 +134,67 @@ namespace Simetric.Controllers
                     string.Join(", ", data.Keys.OrderBy(key => key)));
             }
 
-            await using var context = await _dbFactory.CreateDbContextAsync();
-            await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-            var solicitud = await context.UsuSolicitudFirma.FirstOrDefaultAsync(item => item.SolId == solId);
+            await using var strategyContext = await _dbFactory.CreateDbContextAsync();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            UsuSolicitudFirma? solicitud = null;
+            var pagoAprobadoRecien = false;
 
-            if (solicitud is null)
+            var solicitudEncontrada = await strategy.ExecuteAsync(async () =>
+            {
+                await using var context = await _dbFactory.CreateDbContextAsync();
+                await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+                solicitud = await context.UsuSolicitudFirma.FirstOrDefaultAsync(item => item.SolId == solId);
+
+                if (solicitud is null)
+                    return false;
+
+                var pagoYaAprobado = solicitud.SolPagoExitoso == true;
+                pagoAprobadoRecien = pagoAprobado && !pagoYaAprobado;
+
+                // Un callback tardio, duplicado o pendiente nunca debe revertir un pago aprobado.
+                if (pagoAprobado)
+                {
+                    solicitud.SolPagoExitoso = true;
+                    solicitud.SolIdTransaccionPago = FirstNonEmpty(reference, authorizationCode, solicitud.SolIdTransaccionPago);
+                }
+                else if (!pagoYaAprobado)
+                {
+                    solicitud.SolPagoExitoso = false;
+                    solicitud.SolIdTransaccionPago = FirstNonEmpty(reference, authorizationCode, solicitud.SolIdTransaccionPago);
+                }
+
+                if (pagoAprobado)
+                    solicitud.SolFechaPago ??= DateTime.Now;
+
+                // Registrar venta automatica en BackOffice de forma atomica con la solicitud
+                if (pagoAprobadoRecien)
+                {
+                    var vendedorNombre = await ResolverNombreVendedorAsync(context, solicitud.SolIdUsuarioCliente);
+                    context.ReporteVentasBackOffice.Add(new ReporteVentaBackOffice
+                    {
+                        Cliente = Truncate($"{solicitud.SolNombres} {solicitud.SolPrimerApellido} | {solicitud.SolCorreo1}", 150),
+                        Producto = "e-sign",
+                        PlanPaquete = Truncate(ESignPricing.ObtenerEtiquetaVigencia(solicitud.SolVigencia), 100),
+                        Valor = decimal.Round((solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero),
+                        Fecha = solicitud.SolFechaPago ?? DateTime.Now,
+                        Canal = "Web",
+                        Vendedor = vendedorNombre,
+                        Estado = "pagada",
+                        FormaPago = Truncate(string.IsNullOrWhiteSpace(cardBrand) ? "Tarjeta de Crédito" : cardBrand, 50),
+                        Observacion = Truncate($"Pago automático en línea (Pagomedios). Ref: {reference} / {authorizationCode}. Solicitud #{solicitud.SolId}", 500)
+                    });
+                }
+
+                await context.SaveChangesAsync();
+                await transaction.CommitAsync();
+                return true;
+            });
+
+            if (!solicitudEncontrada || solicitud is null)
             {
                 _logger.LogWarning("Pagomedios retorno una solicitud inexistente. SolId: {SolId}", solId);
                 return Redirect($"/solicitud/pago/resultado?solId={solId}&estado=no-encontrada");
             }
-
-            var pagoYaAprobado = solicitud.SolPagoExitoso == true;
-            var pagoAprobadoRecien = pagoAprobado && !pagoYaAprobado;
-
-            // Un callback tardio, duplicado o pendiente nunca debe revertir un pago aprobado.
-            if (pagoAprobado)
-            {
-                solicitud.SolPagoExitoso = true;
-                solicitud.SolIdTransaccionPago = FirstNonEmpty(reference, authorizationCode, solicitud.SolIdTransaccionPago);
-            }
-            else if (!pagoYaAprobado)
-            {
-                solicitud.SolPagoExitoso = false;
-                solicitud.SolIdTransaccionPago = FirstNonEmpty(reference, authorizationCode, solicitud.SolIdTransaccionPago);
-            }
-
-            if (pagoAprobado)
-            {
-                solicitud.SolFechaPago ??= DateTime.Now;
-            }
-
-            // Registrar venta automatica en BackOffice de forma atomica con la solicitud
-            if (pagoAprobadoRecien)
-            {
-                var vendedorNombre = await ResolverNombreVendedorAsync(context, solicitud.SolIdUsuarioCliente);
-                context.ReporteVentasBackOffice.Add(new ReporteVentaBackOffice
-                {
-                    Cliente = Truncate($"{solicitud.SolNombres} {solicitud.SolPrimerApellido} | {solicitud.SolCorreo1}", 150),
-                    Producto = "e-sign",
-                    PlanPaquete = Truncate(solicitud.SolVigencia switch
-                    {
-                        "1 AÑO" => "1 año",
-                        "2 AÑOS" => "2 años",
-                        "3 AÑOS" => "3 años",
-                        "4 AÑOS" => "4 años",
-                        _ => solicitud.SolVigencia ?? "1 año"
-                    }, 100),
-                    Valor = decimal.Round((solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero),
-                    Fecha = solicitud.SolFechaPago ?? DateTime.Now,
-                    Canal = "Web",
-                    Vendedor = vendedorNombre,
-                    Estado = "pagada",
-                    FormaPago = Truncate(string.IsNullOrWhiteSpace(cardBrand) ? "Tarjeta de Crédito" : cardBrand, 50),
-                    Observacion = Truncate($"Pago automático en línea (Pagomedios). Ref: {reference} / {authorizationCode}. Solicitud #{solicitud.SolId}", 500)
-                });
-            }
-
-            await context.SaveChangesAsync();
-            await transaction.CommitAsync();
 
             if (pagoAprobadoRecien)
             {

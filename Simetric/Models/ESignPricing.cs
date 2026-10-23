@@ -13,6 +13,21 @@ public static class ESignPricing
 
     public static decimal ObtenerSubtotal(string? vigencia) => ObtenerPrecioBase(vigencia);
 
+    public static string ObtenerEtiquetaVigencia(string? vigencia)
+    {
+        if (string.IsNullOrWhiteSpace(vigencia))
+            return "Sin vigencia";
+
+        var texto = vigencia.Trim().ToUpperInvariant().Replace('Ñ', 'N').Replace('Í', 'I');
+        var plazo = System.Text.RegularExpressions.Regex.Match(texto, @"(?<!\d)(\d+)\s*(ANIOS?|ANOS?|DIAS?)\b");
+        if (!plazo.Success || !int.TryParse(plazo.Groups[1].Value, out var cantidad))
+            return vigencia.Trim();
+
+        var esDias = plazo.Groups[2].Value.StartsWith("D", StringComparison.Ordinal);
+        var unidad = esDias ? (cantidad == 1 ? "día" : "días") : (cantidad == 1 ? "año" : "años");
+        return $"{cantidad} {unidad}";
+    }
+
     public static decimal ObtenerCostoProveedor(string? vigencia)
     {
         var texto = (vigencia ?? string.Empty).ToUpperInvariant().Replace('Ñ', 'N').Replace('Í', 'I');

@@ -15,7 +15,7 @@
 @rendermode InteractiveServer
 
 <PageTitle>Recepciones de compra | E-Contax</PageTitle>
-<link rel="stylesheet" href="/css/econtax-compras.css?v=20261020-compras-flow" />
+<link rel="stylesheet" href="/css/econtax-compras.css?v=20261023-compras-buttons" />
 
 <div class="container-fluid py-4 purchase-receptions-page purchase-flow-shell">
     <header class="purchase-hero">
@@ -227,11 +227,12 @@
                 else
                 {
                     <div class="purchase-editor-card">
-                        <div class="purchase-section-heading"><div><span>CONTROL DE ENTREGA</span><h3>Cantidades recibidas</h3></div><div class="purchase-section-heading-actions"><span class="purchase-count">@editor.Detalles.Count línea(s)</span>@if (PuedeEditar) { <button type="button" class="purchase-table-btn purchase-section-action" @onclick="RecibirTodoPendiente" disabled="@guardando"><i class="ri-check-double-line"></i><span>Recibir todo pendiente</span></button> }</div></div>
+                    <div class="purchase-section-heading"><div><span>CONTROL DE ENTREGA</span><h3>Verificación de la recepción</h3></div><div class="purchase-section-heading-actions"><span class="purchase-count">@editor.Detalles.Count línea(s)</span>@if (PuedeEditar) { <button type="button" class="purchase-table-btn purchase-section-action" @onclick="MarcarTodoVerificado" disabled="@guardando"><i class="ri-checkbox-multiple-line"></i><span>Marcar todo verificado</span></button><button type="button" class="purchase-table-btn purchase-section-action" @onclick="RecibirTodoPendiente" disabled="@guardando"><i class="ri-check-double-line"></i><span>Recibir todo pendiente</span></button> }</div></div>
                         <div class="reception-editor-summary" aria-label="Resumen de recepción">
                             <div><span>PENDIENTE</span><strong>@TotalPendienteEditor.ToString("0.####")</strong></div>
                             <div><span>RECIBIR AHORA</span><strong>@TotalRecibirEditor.ToString("0.####")</strong></div>
                             <div><span>CON DIFERENCIA</span><strong>@LineasConDiferencia</strong></div>
+                            <div><span>VERIFICADAS</span><strong>@LineasVerificadas/@editor.Detalles.Count</strong></div>
                         </div>
                         @if (MostrarErrorSinCantidad)
                         {
@@ -239,12 +240,18 @@
                         }
                         <div class="table-responsive p-3">
                         <table class="table table-sm align-middle mb-0 purchase-lines-table">
-                            <thead><tr><th>Producto</th><th class="text-end">Ordenado</th><th class="text-end">Ya recibido</th><th class="text-end">Pendiente</th><th class="text-end">Costo orden</th><th class="text-end">Variación</th><th style="width: 145px">Recibir ahora</th><th style="width: 145px">Costo real</th><th style="width: 210px">Lote</th><th style="width: 150px">Vencimiento</th><th style="width: 210px">Diferencia / nota</th></tr></thead>
+                            <thead><tr><th>Producto</th><th style="width: 135px">Verificación</th><th class="text-end">Ordenado</th><th class="text-end">Ya recibido</th><th class="text-end">Pendiente</th><th class="text-end">Costo orden</th><th class="text-end">Variación</th><th style="width: 145px">Recibir ahora</th><th style="width: 145px">Costo real</th><th style="width: 210px">Lote</th><th style="width: 150px">Vencimiento</th><th style="width: 220px">Novedad / observación</th></tr></thead>
                             <tbody>
                                 @foreach (var linea in editor.Detalles)
                                 {
                                     <tr @key="linea.IdDetalleOrdenCompra">
                                         <td>@linea.Descripcion<small class="d-block text-muted">@linea.CodigoPrincipal</small><span class="reception-line-state @ClaseEstadoLinea(linea)">@TextoEstadoLinea(linea)</span></td>
+                                        <td>
+                                            <label class="purchase-check-control @(linea.Verificado ? "is-checked" : string.Empty)">
+                                                <input type="checkbox" @bind="linea.Verificado" disabled="@(guardando || !PuedeEditar)" />
+                                                <span>@(linea.Verificado ? "Revisado" : "Pendiente")</span>
+                                            </label>
+                                        </td>
                                         <td class="text-end">@linea.CantidadOrdenada.ToString("0.####")</td>
                                         <td class="text-end">@linea.CantidadYaRecibida.ToString("0.####")</td>
                                         <td class="text-end"><strong>@PendienteDespues(linea).ToString("0.####")</strong></td>
@@ -255,7 +262,7 @@
                                         <td><input class="form-control form-control-sm" @bind="linea.NumeroLote" maxlength="80" disabled="@(guardando || !PuedeEditar)" /></td>
                                         <td><input class="form-control form-control-sm" type="date" min="@FechaMinimaLote" @bind="linea.FechaVencimiento" disabled="@(guardando || !PuedeEditar)" /></td>
                                         <td>
-                                            <input class="form-control form-control-sm" @bind="linea.Observacion" maxlength="500" disabled="@(guardando || !PuedeEditar)" placeholder="Faltante, daño..." />
+                                            <input class="form-control form-control-sm" @bind="linea.Observacion" maxlength="500" disabled="@(guardando || !PuedeEditar)" placeholder="Faltante, daño, empaque..." />
                                             <small class="text-muted">Diferencia: @Diferencia(linea).ToString("0.####")</small>
                                         </td>
                                     </tr>
@@ -331,6 +338,7 @@
     private decimal TotalPendienteEditor => editor.Detalles.Sum(x => x.CantidadPendiente);
     private decimal TotalRecibirEditor => editor.Detalles.Sum(x => x.CantidadRecibida);
     private int LineasConDiferencia => editor.Detalles.Count(x => Math.Abs(x.CantidadPendiente - x.CantidadRecibida) > 0.0001m);
+    private int LineasVerificadas => editor.Detalles.Count(x => x.Verificado);
 
     protected override async Task OnInitializedAsync()
     {
@@ -596,6 +604,15 @@
             linea.CantidadRecibida = linea.CantidadPendiente;
     }
 
+    private void MarcarTodoVerificado()
+    {
+        if (!PuedeEditar)
+            return;
+
+        foreach (var linea in editor.Detalles)
+            linea.Verificado = true;
+    }
+
     private static string TextoEstadoLinea(EditorDetail linea) => linea.CantidadRecibida switch
     {
         <= 0 => "Pendiente",
@@ -706,6 +723,7 @@
         public decimal PrecioUnitarioOrden { get; set; }
         public decimal? CostoUnitario { get; set; }
         public string? Observacion { get; set; }
+        public bool Verificado { get; set; }
         public string? NumeroLote { get; set; }
         public DateTime? FechaVencimiento { get; set; }
     }

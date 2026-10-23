@@ -19,8 +19,12 @@ public sealed class CuentasPagarService
         await using var context = await _dbFactory.CreateDbContextAsync();
         var compras = await CargarComprasAsync(context, idUsuario, codEmisor);
         var pagos = await CargarPagosAsync(context, compras.Select(x => x.Compra.CodFactura));
+        var totalesDetalle = await CargarTotalesDetalleAsync(context, compras.Select(x => x.Compra.CodFactura));
         return compras
-            .Select(x => CrearCuenta(x, pagos.GetValueOrDefault(x.Compra.CodFactura) ?? new List<CuentaPorPagarPago>()))
+            .Select(x => CrearCuenta(
+                x,
+                pagos.GetValueOrDefault(x.Compra.CodFactura) ?? new List<CuentaPorPagarPago>(),
+                totalesDetalle.GetValueOrDefault(x.Compra.CodFactura)))
             .Where(x => incluirPagadas || x.SaldoPendiente > 0m)
             .ToList();
     }
@@ -37,50 +41,63 @@ public sealed class CuentasPagarService
         if (importes.Count == 0)
             return false;
 
-        await using var context = await _dbFactory.CreateDbContextAsync();
-        var compras = await context.ComprasFacturas
-            .Where(x => importes.Keys.Contains(x.CodFactura) && x.Estado == true &&
-                ((x.CodDocumento == "03" && x.TipoDocumento == "LIQ") || (x.CodDocumento == "01" && x.TipoDocumento == "COMPRA")) &&
-                (x.TipoPago == "19" || (x.TiempoCredito ?? 0) > 0) &&
-                (codEmisor.HasValue ? x.CodEmisor == codEmisor.Value : x.Usuario == idUsuario))
-            .ToListAsync();
+        await using var strategyContext = await _dbFactory.CreateDbContextAsync();
+        var strategy = strategyContext.Database.CreateExecutionStrategy();
 
-        var nuevosPagos = new List<(ComprasFactura Compra, decimal Monto)>();
-        foreach (var item in importes)
+        return await strategy.ExecuteAsync(async () =>
         {
-            var compra = compras.FirstOrDefault(x => x.CodFactura == item.Key);
-            if (compra == null)
-                throw new InvalidOperationException("La cuenta por pagar no está disponible para este usuario.");
+            await using var context = await _dbFactory.CreateDbContextAsync();
+            var compras = await context.ComprasFacturas
+                .Where(x => importes.Keys.Contains(x.CodFactura) && x.Estado == true &&
+                    ((x.CodDocumento == "03" && x.TipoDocumento == "LIQ") || (x.CodDocumento == "01" && x.TipoDocumento == "COMPRA")) &&
+                    (x.TipoPago == "19" || (x.TiempoCredito ?? 0) > 0) &&
+                    (codEmisor.HasValue ? x.CodEmisor == codEmisor.Value : x.Usuario == idUsuario))
+                .ToListAsync();
+            var pagosRegistrados = await CargarPagosAsync(context, compras.Select(x => x.CodFactura));
+            var totalesDetalle = await CargarTotalesDetalleAsync(context, compras.Select(x => x.CodFactura));
 
-            if (item.Value > ResolverSaldo(compra) + 0.01m)
-                throw new InvalidOperationException($"El pago de la liquidación {FormatearDocumento(compra)} supera el saldo pendiente.");
-
-            nuevosPagos.Add((compra, item.Value));
-        }
-
-        await using var transaction = await context.Database.BeginTransactionAsync();
-        foreach (var item in nuevosPagos)
-        {
-            var saldoNuevo = decimal.Round(ResolverSaldo(item.Compra) - item.Monto, 2);
-            item.Compra.ValorApagar = saldoNuevo;
-            item.Compra.EstadoPago = saldoNuevo <= 0m ? "PAGADO" : "ABONO";
-            item.Compra.FechaCancelado = saldoNuevo <= 0m ? DateOnly.FromDateTime(DateTime.Today) : null;
-            context.CuentasPorPagarPagos.Add(new CuentaPorPagarPago
+            var nuevosPagos = new List<(ComprasFactura Compra, decimal Monto)>();
+            foreach (var item in importes)
             {
-                CodFactura = item.Compra.CodFactura,
-                Monto = item.Monto,
-                FormaPago = formaPago,
-                Referencia = referencia,
-                FechaPago = DateTime.Now,
-                IdUsuario = idUsuario,
-                Observacion = observacion,
-                Estado = true
-            });
-        }
+                var compra = compras.FirstOrDefault(x => x.CodFactura == item.Key);
+                if (compra == null)
+                    throw new InvalidOperationException("La cuenta por pagar no está disponible para este usuario.");
 
-        await context.SaveChangesAsync();
-        await transaction.CommitAsync();
-        return true;
+                var total = ObtenerTotal(compra, totalesDetalle.GetValueOrDefault(compra.CodFactura));
+                var pagos = pagosRegistrados.GetValueOrDefault(compra.CodFactura) ?? new List<CuentaPorPagarPago>();
+                var saldo = ResolverSaldo(compra, total, pagos.Sum(x => x.Monto));
+                if (item.Value > saldo + 0.01m)
+                    throw new InvalidOperationException($"El pago de la liquidación {FormatearDocumento(compra)} supera el saldo pendiente.");
+
+                nuevosPagos.Add((compra, item.Value));
+            }
+
+            await using var transaction = await context.Database.BeginTransactionAsync();
+            foreach (var item in nuevosPagos)
+            {
+                var total = ObtenerTotal(item.Compra, totalesDetalle.GetValueOrDefault(item.Compra.CodFactura));
+                var pagos = pagosRegistrados.GetValueOrDefault(item.Compra.CodFactura) ?? new List<CuentaPorPagarPago>();
+                var saldoNuevo = decimal.Round(ResolverSaldo(item.Compra, total, pagos.Sum(x => x.Monto)) - item.Monto, 2);
+                item.Compra.ValorApagar = saldoNuevo;
+                item.Compra.EstadoPago = saldoNuevo <= 0m ? "PAGADO" : "ABONO";
+                item.Compra.FechaCancelado = saldoNuevo <= 0m ? DateOnly.FromDateTime(DateTime.Today) : null;
+                context.CuentasPorPagarPagos.Add(new CuentaPorPagarPago
+                {
+                    CodFactura = item.Compra.CodFactura,
+                    Monto = item.Monto,
+                    FormaPago = formaPago,
+                    Referencia = referencia,
+                    FechaPago = DateTime.Now,
+                    IdUsuario = idUsuario,
+                    Observacion = observacion,
+                    Estado = true
+                });
+            }
+
+            await context.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return true;
+        });
     }
 
     public async Task<List<EstadoCuentaProveedorResumenVM>> ObtenerResumenProveedoresAsync(int idUsuario, int? codEmisor = null)
@@ -228,24 +245,31 @@ public sealed class CuentasPagarService
                     ((cliente.Nombres ?? "") + " " + (cliente.Apellidos ?? "")).Trim())
             }).ToListAsync();
 
-        var identificaciones = compras.Select(x => x.Identificacion).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList();
         var proveedores = await context.Proveedores.AsNoTracking()
-            .Where(x => identificaciones.Contains(x.ruc ?? ""))
-            .ToDictionaryAsync(x => x.ruc ?? "", StringComparer.OrdinalIgnoreCase);
+            .Where(x => x.estado != false && x.ruc != null)
+            .ToListAsync();
+        var proveedoresPorIdentificacion = proveedores
+            .Where(x => !string.IsNullOrWhiteSpace(x.ruc))
+            .GroupBy(x => NormalizarIdentificacion(x.ruc!), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
 
         return compras.Select(x =>
         {
-            proveedores.TryGetValue(x.Identificacion, out var proveedor);
+            var identificacion = NormalizarIdentificacion(x.Identificacion);
+            proveedoresPorIdentificacion.TryGetValue(identificacion, out var proveedor);
             return new CuentaPorPagarLookup
             {
                 Compra = x.Compra,
-                Identificacion = proveedor?.ruc ?? x.Identificacion,
+                Identificacion = NormalizarIdentificacion(proveedor?.ruc ?? x.Identificacion),
                 Nombre = string.IsNullOrWhiteSpace(proveedor?.nombre ?? proveedor?.nombreComercial)
                     ? x.NombreCliente
                     : (proveedor?.nombre ?? proveedor?.nombreComercial ?? "").Trim()
             };
         }).ToList();
     }
+
+    private static string NormalizarIdentificacion(string? identificacion) =>
+        new string((identificacion ?? "").Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
 
     private static async Task<Dictionary<int, List<CuentaPorPagarPago>>> CargarPagosAsync(AppDbContext context, IEnumerable<int> facturaIds)
     {
@@ -259,12 +283,31 @@ public sealed class CuentasPagarService
         return pagos.GroupBy(x => x.CodFactura).ToDictionary(x => x.Key, x => x.ToList());
     }
 
-    private static CuentaPorPagarVM CrearCuenta(CuentaPorPagarLookup item, IReadOnlyCollection<CuentaPorPagarPago> pagos)
+    private static async Task<Dictionary<int, decimal>> CargarTotalesDetalleAsync(AppDbContext context, IEnumerable<int> facturaIds)
+    {
+        var ids = facturaIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new();
+
+        return await context.ComprasDetalleFac.AsNoTracking()
+            .Where(x => ids.Contains(x.CodFactura))
+            .GroupBy(x => x.CodFactura)
+            .Select(x => new { x.Key, Total = x.Sum(d => d.ValorTotal ?? 0m) })
+            .ToDictionaryAsync(x => x.Key, x => decimal.Round(x.Total, 2));
+    }
+
+    private static CuentaPorPagarVM CrearCuenta(
+        CuentaPorPagarLookup item,
+        IReadOnlyCollection<CuentaPorPagarPago> pagos,
+        decimal? totalDetalle)
     {
         var compra = item.Compra;
-        var total = compra.ValorTotal ?? 0m;
-        var saldo = ResolverSaldo(compra);
-        var totalPagado = EsPagado(compra) ? total : Math.Max(total - saldo, 0m);
+        var total = ObtenerTotal(compra, totalDetalle);
+        var totalPagadoRegistrado = pagos.Sum(x => x.Monto);
+        var saldo = ResolverSaldo(compra, total, totalPagadoRegistrado);
+        var totalPagado = EsPagado(compra)
+            ? total
+            : totalPagadoRegistrado > 0m ? Math.Min(totalPagadoRegistrado, total) : Math.Max(total - saldo, 0m);
         var estado = saldo <= 0m || EsPagado(compra) ? "PAGADO" : compra.FechaVence?.Date < DateTime.Today ? "VENCIDO" : "PENDIENTE";
 
         return new CuentaPorPagarVM
@@ -283,12 +326,33 @@ public sealed class CuentasPagarService
         };
     }
 
-    private static decimal ResolverSaldo(ComprasFactura compra)
+    private static decimal ResolverSaldo(ComprasFactura compra, decimal total, decimal pagosRegistrados)
     {
         if (EsPagado(compra))
             return 0m;
 
-        return Math.Max(compra.ValorApagar ?? compra.ValorTotal ?? 0m, 0m);
+        if (pagosRegistrados > 0m)
+            return Math.Max(total - pagosRegistrados, 0m);
+
+        if (compra.ValorApagar.HasValue &&
+            (compra.EstadoPago?.Contains("ABONO", StringComparison.OrdinalIgnoreCase) ?? false))
+            return Math.Clamp(compra.ValorApagar.Value, 0m, total);
+
+        return total;
+    }
+
+    private static decimal ObtenerTotal(ComprasFactura compra, decimal? totalDetalle)
+    {
+        var totalAlmacenado = Math.Max(compra.ValorTotal ?? 0m, 0m);
+        var iva = Math.Max(compra.Iva ?? 0m, 0m);
+        var baseImponible = Math.Max((compra.Subtotal ?? 0m) - (compra.Descuentos ?? 0m), 0m);
+        var impuestosAdicionales = Math.Max(compra.ValorICE ?? 0m, 0m);
+        var totalCalculado = decimal.Round(baseImponible + iva + impuestosAdicionales, 2);
+
+        if (totalDetalle is > 0m && (totalAlmacenado <= 0m || totalAlmacenado <= iva + 0.01m))
+            return decimal.Round(totalDetalle.Value, 2);
+
+        return decimal.Round(totalAlmacenado > 0m ? totalAlmacenado : totalCalculado, 2);
     }
 
     private static bool EsPagado(ComprasFactura compra) =>

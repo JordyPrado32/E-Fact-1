@@ -27,6 +27,7 @@ namespace Simetric.Services
         Task<bool> CrearTipoYRolSimultaneo(string nombrePerfil);
         Task<bool> ActualizarOrdenMenus(List<Menu> menus);
         Task EnsureSchemaAsync();
+        Task EnsureCuentasPorPagarMenusAsync();
     }
 
     public class MenuService : IMenuService
@@ -253,6 +254,105 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ROL_MENU_IDROL_IDMENU
     CREATE INDEX IX_ROL_MENU_IDROL_IDMENU ON dbo.ROL_MENU (IDROL, IDMENU);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ROLES_TIPO_ESTADO' AND object_id = OBJECT_ID(N'dbo.ROLES'))
     CREATE INDEX IX_ROLES_TIPO_ESTADO ON dbo.ROLES (IDTIPOUSUARIO, ESTADOROL, IDROL);";
+            await db.ExecuteAsync(sql);
+        }
+
+        public async Task EnsureCuentasPorPagarMenusAsync()
+        {
+            using var db = Connection;
+            const string sql = """
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
+DECLARE @parentId INT;
+
+SELECT TOP (1) @parentId = [IDMENU]
+FROM [dbo].[MENUS]
+WHERE [RUTAMENU] = N'/cuentas-por-pagar';
+
+IF @parentId IS NULL
+BEGIN
+    INSERT INTO [dbo].[MENUS]
+        ([IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU], [orden_menu], [MOSTRAR_EFACT], [MOSTRAR_EDECLARA])
+    VALUES
+        (NULL, N'Cuentas por pagar', 1, N'/cuentas-por-pagar', N'ri-bank-card-line', 45, 1, 0);
+
+    SET @parentId = CONVERT(INT, SCOPE_IDENTITY());
+END
+ELSE
+BEGIN
+    UPDATE [dbo].[MENUS]
+    SET [IDMENUPADRE] = NULL,
+        [NOMBREMENU] = N'Cuentas por pagar',
+        [ESTADOMENU] = 1,
+        [ICONOMENU] = N'ri-bank-card-line',
+        [orden_menu] = 45,
+        [MOSTRAR_EFACT] = 1,
+        [MOSTRAR_EDECLARA] = 0
+    WHERE [IDMENU] = @parentId;
+END;
+
+DECLARE @menus TABLE
+(
+    [Ruta] NVARCHAR(200) NOT NULL,
+    [Nombre] NVARCHAR(100) NOT NULL,
+    [Icono] NVARCHAR(50) NOT NULL,
+    [Orden] INT NOT NULL
+);
+
+INSERT INTO @menus ([Ruta], [Nombre], [Icono], [Orden])
+VALUES
+    (N'/mis-compras', N'Mis compras', N'ri-shopping-bag-3-line', 10),
+    (N'/compras/nueva-factura', N'Nueva factura de compra', N'ri-file-add-line', 20),
+    (N'/cuentas-por-pagar/registrar', N'Registrar pago', N'ri-hand-coin-line', 30),
+    (N'/cuentas-por-pagar/estado-cuenta', N'Estado de cuenta', N'ri-file-list-3-line', 40);
+
+INSERT INTO [dbo].[MENUS]
+    ([IDMENUPADRE], [NOMBREMENU], [ESTADOMENU], [RUTAMENU], [ICONOMENU], [orden_menu], [MOSTRAR_EFACT], [MOSTRAR_EDECLARA])
+SELECT @parentId, m.[Nombre], 1, m.[Ruta], m.[Icono], m.[Orden], 1, 0
+FROM @menus m
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM [dbo].[MENUS] existing
+    WHERE existing.[RUTAMENU] = m.[Ruta]
+);
+
+UPDATE existing
+SET [IDMENUPADRE] = @parentId,
+    [NOMBREMENU] = m.[Nombre],
+    [ESTADOMENU] = 1,
+    [ICONOMENU] = m.[Icono],
+    [orden_menu] = m.[Orden],
+    [MOSTRAR_EFACT] = 1,
+    [MOSTRAR_EDECLARA] = 0
+FROM [dbo].[MENUS] existing
+INNER JOIN @menus m ON m.[Ruta] = existing.[RUTAMENU];
+
+INSERT INTO [dbo].[ROL_MENU] ([IDROL], [IDMENU])
+SELECT r.[IDROL], m.[IDMENU]
+FROM [dbo].[ROLES] r
+CROSS JOIN
+(
+    SELECT @parentId AS [IDMENU]
+    UNION ALL
+    SELECT existing.[IDMENU]
+    FROM [dbo].[MENUS] existing
+    INNER JOIN @menus m ON m.[Ruta] = existing.[RUTAMENU]
+) m
+WHERE r.[ESTADOROL] = 1
+  AND r.[IDTIPOUSUARIO] = 2
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM [dbo].[ROL_MENU] rm
+      WHERE rm.[IDROL] = r.[IDROL]
+        AND rm.[IDMENU] = m.[IDMENU]
+  );
+
+COMMIT TRANSACTION;
+""";
+
             await db.ExecuteAsync(sql);
         }
 

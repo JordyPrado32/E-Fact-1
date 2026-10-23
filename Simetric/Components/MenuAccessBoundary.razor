@@ -1,0 +1,100 @@
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@inject AuthenticationStateProvider Auth
+@inject IMenuService MenuService
+@inject NavigationManager Nav
+@inject MenuStateService MenuState
+@implements IDisposable
+
+@if (!esCuentasPorPagar || permitido || usuarioAutenticado == false)
+{
+    @ChildContent
+}
+else if (evaluando)
+{
+    <div class="alert alert-light m-4" role="status">Validando permisos...</div>
+}
+else
+{
+    <div class="alert alert-warning m-4" role="alert">
+        No tienes permisos para acceder a Cuentas por pagar.
+        <a href="/dashboard">Volver al inicio</a>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public RenderFragment ChildContent { get; set; } = null!;
+
+    private bool esCuentasPorPagar;
+    private bool permitido;
+    private bool evaluando;
+    private bool? usuarioAutenticado;
+
+    protected override void OnInitialized() => MenuState.OnMenuChanged += PermisosCambiados;
+
+    protected override Task OnParametersSetAsync() => EvaluarAsync();
+
+    private async Task EvaluarAsync()
+    {
+        var ruta = NormalizarRuta(Nav.ToBaseRelativePath(Nav.Uri));
+        esCuentasPorPagar = EsRutaCuentasPorPagar(ruta);
+
+        if (!esCuentasPorPagar)
+        {
+            permitido = true;
+            evaluando = false;
+            usuarioAutenticado = null;
+            return;
+        }
+
+        evaluando = true;
+        permitido = false;
+        usuarioAutenticado = null;
+
+        try
+        {
+            var user = (await Auth.GetAuthenticationStateAsync()).User;
+            usuarioAutenticado = user.Identity?.IsAuthenticated == true;
+            if (usuarioAutenticado != true)
+                return;
+
+            if (string.Equals(user.FindFirst("IdTipoUsuario")?.Value, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase))
+            {
+                permitido = true;
+                return;
+            }
+
+            var claimValue = user.FindFirst("IdTipoUsuario")?.Value ?? user.FindFirstValue(ClaimTypes.Role);
+            if (!int.TryParse(claimValue, out var idTipoUsuario))
+                return;
+
+            var menus = await MenuService.GetMenusByRol(idTipoUsuario, false);
+            permitido = menus.Any(menu => CoincideRuta(menu.RutaMenu, ruta));
+        }
+        finally
+        {
+            evaluando = false;
+        }
+    }
+
+    private void PermisosCambiados() => _ = InvokeAsync(async () =>
+    {
+        await EvaluarAsync();
+        StateHasChanged();
+    });
+
+    private static bool EsRutaCuentasPorPagar(string ruta) =>
+        ruta == "/mis-compras" ||
+        ruta == "/compras/nueva-factura" ||
+        ruta.StartsWith("/cuentas-por-pagar", StringComparison.OrdinalIgnoreCase);
+
+    private static bool CoincideRuta(string? rutaMenu, string rutaActual) =>
+        !string.IsNullOrWhiteSpace(rutaMenu) &&
+        NormalizarRuta(rutaMenu) == rutaActual;
+
+    private static string NormalizarRuta(string ruta) =>
+        "/" + ruta.Split('?', '#')[0].Trim('/');
+
+    public void Dispose() => MenuState.OnMenuChanged -= PermisosCambiados;
+}

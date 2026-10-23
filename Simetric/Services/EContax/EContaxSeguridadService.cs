@@ -150,6 +150,11 @@ public sealed class EContaxSeguridadService(IDbContextFactory<AppDbContext> fact
             EContaxRoutes.ComprasLiquidacionesGeneradas or
             EContaxRoutes.CuentasPorCobrar or
             EContaxRoutes.CuentasPorCobrarEstadoCuenta or
+            EContaxRoutes.CuentasPorPagar or
+            EContaxRoutes.CuentasPorPagarMisCompras or
+            EContaxRoutes.CuentasPorPagarNuevaFactura or
+            EContaxRoutes.CuentasPorPagarRegistrar or
+            EContaxRoutes.CuentasPorPagarEstadoCuenta or
             EContaxRoutes.ReportesDocumentos or
             EContaxRoutes.ReportesLogs or
             EContaxRoutes.SolicitudNueva or

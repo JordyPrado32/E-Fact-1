@@ -404,7 +404,7 @@ public sealed class ESignMobileController : ControllerBase
                 imagenBase64 = PaymentNotificationImageBuilder.CompraGenerada(
                     "FIRMA ELECTRONICA",
                     (solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate),
-                    solicitud.SolVigencia ?? "Servicio de firma electrónica")
+                    ESignPricing.ObtenerEtiquetaVigencia(solicitud.SolVigencia))
             });
     }
 
@@ -452,7 +452,7 @@ public sealed class ESignMobileController : ControllerBase
         {
             Cliente = Truncar($"{solicitud.SolNombres} {solicitud.SolPrimerApellido} | {solicitud.SolCorreo1}", 150),
             Producto = "e-sign",
-            PlanPaquete = Truncar($"Firma electrónica {solicitud.SolVigencia}", 100),
+            PlanPaquete = Truncar($"Firma electrónica {ESignPricing.ObtenerEtiquetaVigencia(solicitud.SolVigencia)}", 100),
             Valor = decimal.Round((solicitud.SolMontoPago ?? 0m) * (1m + ESignPricing.IvaRate), 2, MidpointRounding.AwayFromZero),
             Fecha = DateTime.Now,
             Canal = "Transferencia Móvil",
@@ -624,7 +624,7 @@ public sealed class ESignMobileController : ControllerBase
             {
                 Cliente = Truncar($"{nombres} {apellidos} | {correo}", 150),
                 Producto = "e-sign",
-                PlanPaquete = Truncar($"Firma electrónica {vigencia}", 100),
+                PlanPaquete = Truncar($"Firma electrónica {ESignPricing.ObtenerEtiquetaVigencia(vigencia)}", 100),
                 Valor = total,
                 Fecha = DateTime.Now,
                 Canal = "Transferencia Web - Numeros One",
@@ -715,7 +715,7 @@ public sealed class ESignMobileController : ControllerBase
                 ? PaymentNotificationImageBuilder.PagoAprobado(
                     "FIRMA ELECTRONICA",
                     total,
-                    solicitud.SolVigencia ?? "Solicitud de firma electrónica",
+                    ESignPricing.ObtenerEtiquetaVigencia(solicitud.SolVigencia),
                     "Tu solicitud de firma electrónica ha sido agregada a tu cuenta y continuará su proceso.")
                 : null,
             mensaje = aprobado

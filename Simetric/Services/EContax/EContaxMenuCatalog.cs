@@ -32,12 +32,18 @@ public static class EContaxMenuCatalog
         new("nota-debito", "Nota de Debito", EContaxRoutes.FacturacionNotaDebito, "ri-file-add-line", 4, "otros-documentos"),
         new("cuentas-cobrar", "Cuentas Por Cobrar", EContaxRoutes.CuentasPorCobrar, "ri-wallet-3-line", 6),
         new("estado-cuenta", "Estado de cuenta", EContaxRoutes.CuentasPorCobrarEstadoCuenta, "ri-file-list-3-line", 1, "cuentas-cobrar"),
+        new("cuentas-pagar", "Cuentas Por Pagar", EContaxRoutes.CuentasPorPagar, "ri-bank-card-line", 7),
+        new("cuentas-pagar-mis-compras", "Mis compras", EContaxRoutes.CuentasPorPagarMisCompras, "ri-shopping-bag-3-line", 1, "cuentas-pagar"),
+        new("cuentas-pagar-nueva-factura", "Nueva factura de compra", EContaxRoutes.CuentasPorPagarNuevaFactura, "ri-file-add-line", 2, "cuentas-pagar"),
+        new("cuentas-pagar-registrar", "Registrar pago", EContaxRoutes.CuentasPorPagarRegistrar, "ri-hand-coin-line", 3, "cuentas-pagar"),
+        new("cuentas-pagar-estado-cuenta", "Estado de cuenta", EContaxRoutes.CuentasPorPagarEstadoCuenta, "ri-file-list-3-line", 4, "cuentas-pagar"),
         new("productos", "Productos", EContaxRoutes.Productos, "ri-box-3-line", 7),
         new("categorias", "Categorias", EContaxRoutes.ConfiguracionCategorias, "ri-shopping-cart-line", 1, "productos"),
         new("cotizaciones", "Cotizaciones", EContaxRoutes.Cotizaciones, "ri-file-paper-2-line", 2, "productos"),
         new("inventarios", "Inventarios", EContaxRoutes.Inventarios, "ri-archive-stack-line", 8),
         new("inventarios-kardex", "Kardex", EContaxRoutes.InventariosKardex, "ri-file-list-3-line", 1, "inventarios"),
-        new("inventarios-reportes", "Reportes de inventario", EContaxRoutes.InventariosReportes, "ri-file-chart-line", 2, "inventarios"),
+        new("inventarios-bodegas", "Bodegas", EContaxRoutes.InventariosBodegas, "ri-store-2-line", 2, "inventarios"),
+        new("inventarios-reportes", "Reportes de inventario", EContaxRoutes.InventariosReportes, "ri-file-chart-line", 3, "inventarios"),
         new("reportes-documentos", "Reporte documentos", EContaxRoutes.ReportesDocumentos, "ri-file-chart-line", 9),
         new("administracion", "Administracion", null, "ri-admin-line", 10),
         new("roles", "Roles y permisos", EContaxRoutes.AdministracionRoles, "ri-shield-keyhole-line", 1, "administracion"),
@@ -125,5 +131,20 @@ public static class EContaxMenuCatalog
         }
 
         await context.SaveChangesAsync();
+
+        await context.Database.ExecuteSqlInterpolatedAsync($@"
+IF OBJECT_ID(N'[dbo].[ECONTAX_ROL_MENU]', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO [dbo].[ECONTAX_ROL_MENU] ([id_rol], [id_menu])
+    SELECT r.[id_rol], m.[id_menu]
+    FROM [dbo].[rol] r
+    INNER JOIN [dbo].[menu] m ON m.[url_menu] = {EContaxRoutes.InventariosBodegas}
+    WHERE r.[nombre_rol] = {EContaxTenantService.RolJefeEmpresa}
+      AND ISNULL(r.[estado_rol], 0) = 1
+      AND NOT EXISTS (
+          SELECT 1
+          FROM [dbo].[ECONTAX_ROL_MENU] rm
+          WHERE rm.[id_rol] = r.[id_rol] AND rm.[id_menu] = m.[id_menu]);
+END");
     }
 }

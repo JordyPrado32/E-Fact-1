@@ -247,7 +247,7 @@ public sealed class CompraDocumentosFacturacionService
             Documentos = 1,
             MontoTotal = montoTotal,
             Estado = "Aprobado",
-            Descripcion = $"Firma electronica E-Sign {solicitud.SolFormatoFirma} - {solicitud.SolVigencia}",
+            Descripcion = $"Firma electronica E-Sign {solicitud.SolFormatoFirma} - {ESignPricing.ObtenerEtiquetaVigencia(solicitud.SolVigencia)}",
             Reference = reference,
             AuthorizationCode = authorizationCode,
             CustomValue = solicitud.SolId.ToString()

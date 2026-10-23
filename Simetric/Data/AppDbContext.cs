@@ -96,6 +96,7 @@ namespace Simetric.Data
         public DbSet<EContaxMenu> EContaxMenus { get; set; }
         public DbSet<EContaxEmpresa> EContaxEmpresas { get; set; }
         public DbSet<EContaxSucursal> EContaxSucursales { get; set; }
+        public DbSet<EContaxBodega> EContaxBodegas { get; set; }
         public DbSet<EContaxUsuarioContexto> EContaxUsuariosContexto { get; set; }
         public DbSet<EContaxPerfil> EContaxPerfiles { get; set; }
         public DbSet<EContaxInvitacion> EContaxInvitaciones { get; set; }
@@ -371,6 +372,29 @@ namespace Simetric.Data
                 entity.HasOne(e => e.Empresa)
                     .WithMany(e => e.Sucursales)
                     .HasForeignKey(e => e.IdEmpresa)
+                    .OnDelete(DeleteBehavior.NoAction);
+            });
+
+            modelBuilder.Entity<EContaxBodega>(entity =>
+            {
+                entity.ToTable("ECONTAX_BODEGA", "dbo");
+                entity.HasKey(x => x.IdBodega);
+                entity.Property(x => x.IdBodega).HasColumnName("id_bodega");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.IdSucursal).HasColumnName("id_sucursal");
+                entity.Property(x => x.Nombre).HasColumnName("nombre").HasMaxLength(200);
+                entity.Property(x => x.Codigo).HasColumnName("codigo").HasMaxLength(30);
+                entity.Property(x => x.Direccion).HasColumnName("direccion").HasMaxLength(300);
+                entity.Property(x => x.Observacion).HasColumnName("observacion").HasMaxLength(500);
+                entity.Property(x => x.Estado).HasColumnName("estado").HasDefaultValue(true);
+                entity.Property(x => x.FechaCreacion).HasColumnName("fecha_creacion");
+                entity.Property(x => x.FechaActualizacion).HasColumnName("fecha_actualizacion");
+                entity.HasIndex(x => new { x.IdEmpresa, x.IdSucursal, x.Codigo }).IsUnique();
+                entity.HasIndex(x => new { x.IdEmpresa, x.IdSucursal, x.Nombre }).IsUnique();
+                entity.HasOne(x => x.Sucursal)
+                    .WithMany()
+                    .HasForeignKey(x => new { x.IdEmpresa, x.IdSucursal })
+                    .HasPrincipalKey(x => new { x.IdEmpresa, x.IdSucursal })
                     .OnDelete(DeleteBehavior.NoAction);
             });
 

@@ -1,17 +1,22 @@
 @page "/compras/nueva-factura"
+@page "/e-contax/compras/nueva-factura"
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
 @using Simetric.DTOs
 @using Simetric.Services
+@using Simetric.Services.EContax
 @using Simetric.ViewModels
 @using System.Globalization
 @attribute [AllowAnonymous]
 @inject FacturaCompraManualService FacturaCompraService
+@inject ComprasXmlService ComprasXmlService
 @inject LiquidacionCompraService LiquidacionCompraService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject SweetAlertService AlertService
 
+<link rel="stylesheet" href="/css/nueva-factura-shared.css?v=20261023-invoice-parity" />
 <PageTitle>Nueva factura de compra | Numerica e-fact</PageTitle>
 
 <div class="container-fluid py-3 px-3 px-md-4 bg-light-modern docs-unified-page">
@@ -20,7 +25,7 @@
         <div class="alert alert-danger border-0 rounded-3 mb-3">@error</div>
     }
 
-    <section class="docs-form-hero mb-4">
+    <section class="docs-form-hero" data-tour="invoice.hero">
         <div class="docs-form-hero-body">
             <div class="docs-form-hero-copy invoice-heading-card">
                 <div class="invoice-heading-head">
@@ -36,14 +41,22 @@
                     <div class="n-invoice-id-pill"><span>Documento</span><strong>Interno</strong></div>
                     <div class="n-invoice-id-pill"><span>SRI</span><strong>No aplica</strong></div>
                 </div>
-                <a class="n-btn n-btn-secondary" href="/mis-compras"><i class="bi bi-bag-check me-2"></i>Mis compras</a>
-                <a class="n-btn n-btn-secondary" href="/cuentas-por-pagar"><i class="bi bi-wallet2 me-2"></i>Cuentas por pagar</a>
+                <label class="n-btn n-btn-secondary n-xml-upload-btn">
+                    <i class="bi bi-filetype-xml me-2"></i>Subir XML
+                    <InputFile OnChange="OnXmlSelected" accept=".xml" />
+                </label>
+                @if (xmlCargado)
+                {
+                    <span class="n-xml-loaded-badge"><i class="bi bi-check-circle me-1"></i>XML cargado</span>
+                }
+                <a class="n-btn n-btn-secondary" href="@RutaCuentasPorPagar("/mis-compras", EContaxRoutes.CuentasPorPagarMisCompras)"><i class="bi bi-bag-check me-2"></i>Mis compras</a>
+                <a class="n-btn n-btn-secondary" href="@RutaCuentasPorPagar("/cuentas-por-pagar", EContaxRoutes.CuentasPorPagar)"><i class="bi bi-wallet2 me-2"></i>Cuentas por pagar</a>
                 <button type="button" class="n-btn n-btn-secondary" @onclick="LimpiarFormulario"><i class="bi bi-arrow-clockwise me-2"></i>Limpiar pantalla</button>
             </div>
         </div>
     </section>
 
-    <section class="n-client-search-strip mb-4">
+    <section class="n-client-search-strip" data-tour="invoice.client-search">
         <div class="n-client-search-strip-copy">
             <span class="n-client-search-eyebrow">Buscador de proveedor</span>
             <strong>Encuentra el proveedor que emitió la factura</strong>
@@ -67,8 +80,8 @@
         </div>
     </section>
 
-    <div class="n-card mb-4">
-        <div class="n-card-header"><h5><i class="bi bi-person-vcard me-2"></i>Información del proveedor / emisor</h5><small class="d-none d-sm-flex"><i class="bi bi-arrow-repeat me-1"></i>Datos del CRUD de proveedores</small></div>
+    <div class="n-card mb-4" data-tour="invoice.client-section">
+        <div class="n-card-header"><h5><i class="bi bi-person-vcard me-2"></i> Información del proveedor / emisor</h5><small class="d-none d-sm-flex"><i class="bi bi-arrow-repeat me-1"></i> Los datos se actualizarán automáticamente</small></div>
         <div class="n-card-body n-client-card-body">
             <div class="row g-3 n-client-block n-client-main-grid">
                 <div class="col-lg-3 col-md-6"><label class="n-label">Tipo identificación</label><div class="n-select-shell"><select class="n-select" @bind="model.TipoIdentificacion"><option value="">-- Seleccione --</option><option value="04">RUC</option><option value="05">Cédula</option><option value="06">Pasaporte</option></select></div></div>
@@ -81,35 +94,37 @@
                 <div class="col-lg-3 col-md-6"><label class="n-label">Fecha de emisión *</label><input class="n-input" type="date" @bind="model.FechaEmision" /></div>
             </div>
 
-            <div class="row g-3 n-client-block n-address-grid">
-                <div class="col-lg-4"><label class="n-label">Dirección</label><div class="n-input-wrapper"><i class="bi bi-geo-alt n-input-icon"></i><input class="n-input n-input-with-icon" @bind="model.Direccion" maxlength="100" /></div></div>
-                <div class="col-lg-3"><label class="n-label">Teléfono</label><div class="n-input-wrapper"><i class="bi bi-telephone n-input-icon"></i><input class="n-input n-input-with-icon" @bind="model.Telefono" maxlength="30" /></div></div>
-                <div class="col-lg-5"><label class="n-label">Correo electrónico</label><div class="n-input-wrapper"><i class="bi bi-envelope n-input-icon"></i><input class="n-input n-input-with-icon" type="email" @bind="model.Correo" maxlength="150" /></div></div>
-                <div class="col-12"><label class="n-label">Referencia / observación del proveedor</label><textarea class="n-textarea" rows="2" maxlength="500" @bind="model.Referencia"></textarea></div>
-            </div>
-
-            <div class="n-payment-card n-payment-card-inline mt-3">
-                <div class="n-card-body"><div class="n-payment-layout">
-                    <div class="n-payment-copy"><span class="n-payment-kicker">Cierre de compra</span><h6>Forma de pago de la factura</h6><p>Si es a crédito, el saldo se registra automáticamente en cuentas por pagar.</p></div>
-                    <div class="n-payment-control">
-                        <label class="n-label"><i class="bi bi-credit-card me-2"></i>Forma de pago</label>
-                        <select class="n-select n-payment-select" @bind="model.FormaPago" @bind:after="OnFormaPagoChanged"><option value="">-- Seleccione --</option>@foreach (var forma in formasPago) { <option value="@forma.Codigo">@forma.Codigo - @forma.Descripcion</option> }</select>
-                        <label class="n-label d-flex align-items-center gap-2 mt-2"><input type="checkbox" class="form-check-input mt-0" @bind="creditoSeleccionado" @bind:after="OnCreditoChanged" /><span>Es una factura a crédito</span></label>
-                        @if (creditoSeleccionado)
-                        {
-                            <div class="mt-2"><label class="n-label"><i class="bi bi-calendar3 me-2"></i>Días de crédito</label><input class="n-input" type="number" min="1" @bind="model.PlazoCredito" /></div>
-                        }
+            <div class="n-client-block n-client-contact-modern">
+                <div class="n-contact-field">
+                    <label class="n-label">Dirección (Max 100)</label>
+                    <div class="n-input-wrapper"><i class="bi bi-geo-alt n-input-icon"></i><input class="n-input n-input-with-icon" @bind="model.Direccion" maxlength="100" placeholder="Av. Principal y Calle Secundaria..." /></div>
+                    <div class="n-payment-card n-payment-card-inline" data-tour="invoice.payment-section">
+                        <div class="n-card-body"><div class="n-payment-layout">
+                            <div class="n-payment-copy"><span class="n-payment-kicker">Cierre de compra</span><h6>Forma de pago del comprobante</h6><p>Selecciona cómo se registra esta factura en cuentas por pagar.</p></div>
+                            <div class="n-payment-control">
+                                <label class="n-label"><i class="bi bi-credit-card me-2"></i>Forma de pago</label>
+                                <select class="n-select n-payment-select" @bind="model.FormaPago" @bind:after="OnFormaPagoChanged"><option value="">-- Seleccione --</option>@foreach (var forma in formasPago) { <option value="@forma.Codigo">@forma.Codigo - @forma.Descripcion</option> }</select>
+                                <div class="mt-2"><label class="n-label d-flex align-items-center gap-2"><input type="checkbox" class="form-check-input mt-0" @bind="creditoSeleccionado" @bind:after="OnCreditoChanged" /><span>Es una factura a crédito</span></label></div>
+                                @if (creditoSeleccionado)
+                                {
+                                    <div class="mt-2"><label class="n-label"><i class="bi bi-calendar3 me-2"></i>Días de crédito</label><input class="n-input" type="number" min="1" @bind="model.PlazoCredito" /></div>
+                                }
+                            </div>
+                        </div></div>
                     </div>
-                </div></div>
+                </div>
+                <div class="n-contact-field n-contact-phone-field"><label class="n-label">Teléfono (Opcional)</label><div class="n-input-wrapper"><i class="bi bi-phone n-input-icon"></i><input class="n-input n-input-with-icon" @bind="model.Telefono" maxlength="30" placeholder="+593 99 123 4567" /></div></div>
+                <div class="n-contact-field n-email-main-field"><div class="n-email-main-head"><label class="n-label mb-0">Correo electrónico principal</label></div><div class="n-email-primary-row"><div class="n-input-wrapper"><i class="bi bi-envelope n-input-icon"></i><input class="n-input n-input-with-icon" type="email" @bind="model.Correo" maxlength="150" placeholder="proveedor@ejemplo.com" /></div></div></div>
+                <div class="n-contact-reference"><div class="d-flex justify-content-between align-items-end mb-2"><label class="n-label mb-0">Referencia (Max 100 palabras)</label></div><textarea class="n-textarea" rows="2" maxlength="500" @bind="model.Referencia" placeholder="Ingrese notas adicionales sobre el proveedor aquí..."></textarea></div>
             </div>
         </div>
     </div>
 
-    <div class="n-card n-invoice-detail-card mb-4">
-        <div class="n-card-header n-header-dark"><div class="invoice-detail-head"><h5 class="mb-0"><i class="bi bi-cart4 me-2"></i>Detalle de factura</h5><button type="button" class="n-btn-primary" @onclick="AgregarDetalle"><i class="bi bi-plus-circle me-2"></i>Agregar línea</button></div></div>
+    <div class="n-card n-invoice-detail-card mb-4" data-tour="invoice.detail-section">
+        <div class="n-card-header n-header-dark"><div class="invoice-detail-head"><h5 class="mb-0"><i class="bi bi-cart4 me-2"></i>Detalle de Factura</h5></div></div>
         <div class="n-card-body">
             <div class="table-responsive n-table-container"><table class="table table-hover align-middle mb-0">
-                <thead class="n-table-header bg-light"><tr><th style="width:80px">Cód.</th><th style="min-width:180px">Concepto *</th><th style="min-width:220px">Detalle</th><th class="text-center" style="width:80px">Cant.</th><th class="text-end" style="width:100px">Precio</th><th class="text-end" style="width:110px">Descuento</th><th class="text-end" style="width:100px">Base Imp.</th><th class="text-center" style="width:100px">IVA</th><th class="text-end" style="width:110px">Total</th><th style="width:40px"></th></tr></thead>
+                <thead class="n-table-header bg-light"><tr><th style="width:80px">Cód.</th><th style="min-width:180px">Concepto</th><th style="min-width:260px">Detalle</th><th class="text-center" style="width:80px">Cant.</th><th class="text-end" style="width:100px">Precio</th><th class="text-center" style="width:168px">Descuento</th><th class="text-end" style="width:100px">Base Imp.</th><th class="text-end" style="width:120px">IVA</th><th class="text-end" style="width:110px">Total</th><th class="text-center" style="width:40px"></th></tr></thead>
                 <tbody>
                     @foreach (var detalle in model.Detalles)
                     {
@@ -129,23 +144,45 @@
                 </tbody>
             </table></div>
 
-            <div class="row justify-content-end mt-4"><div class="col-xl-5 col-lg-6"><div class="docs-total-card"><div class="docs-total-card-header"><span>Resumen</span><h6>Totales del comprobante</h6></div><div class="docs-total-fiscal-list">
-                <div class="docs-total-fiscal-row"><span>SUBTOTAL BASE GRAVADA</span><strong>$ @SubtotalGravado.ToString("N2")</strong></div>
-                <div class="docs-total-fiscal-row"><span>SUBTOTAL BASE 0%</span><strong>$ @SubtotalCero.ToString("N2")</strong></div>
-                <div class="docs-total-fiscal-row docs-total-fiscal-discount"><span>DESCUENTO</span><strong>$ @TotalDescuento.ToString("N2")</strong></div>
-                <div class="docs-total-fiscal-row"><span>SUBTOTAL CON DESCUENTO</span><strong>$ @model.Subtotal.ToString("N2")</strong></div>
-                @foreach (var tarifa in TarifasConIva)
-                {
-                    <div class="docs-total-fiscal-row docs-total-fiscal-tax"><span>IVA TARIFA @tarifa.ToString("0.##", CultureInfo.InvariantCulture)%</span><strong>$ @IvaPorTarifa(tarifa).ToString("N2")</strong></div>
-                }
-                <div class="docs-total-fiscal-row docs-total-fiscal-total"><span>TOTAL</span><strong>$ @model.Total.ToString("N2")</strong></div>
-            </div></div></div></div>
+            <div class="n-detail-table-actions">
+                <button type="button" class="n-table-add-product-btn" @onclick="AgregarDetalle"><i class="bi bi-plus-circle"></i><span>Agregar línea de detalle</span></button>
+            </div>
+
+            <div class="n-detail-bottom-layout">
+                <div class="n-detail-assist-column">
+                    <div class="n-frequent-concepts n-client-concepts-panel">
+                        <div class="n-frequent-concepts-head"><div><span>Detalle de compra</span><small>Completa los conceptos y valores de la factura del proveedor.</small></div></div>
+                        <div class="n-frequent-concepts-grid">
+                            <div class="n-frequent-concept-card"><span class="n-frequent-concept-icon"><i class="bi bi-box-seam"></i></span><span><strong>Compra manual</strong><small>Documento interno sin emisión al SRI</small></span></div>
+                            <div class="n-frequent-concept-card"><span class="n-frequent-concept-icon"><i class="bi bi-wallet2"></i></span><span><strong>Cuentas por pagar</strong><small>El crédito se registra automáticamente</small></span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="n-summary-column">
+                    <div class="n-summary-top-grid"><div class="docs-total-card" data-tour="invoice.totals-section"><div class="docs-total-card-header"><span>Resumen</span><h6>Totales del comprobante</h6></div><div class="docs-total-fiscal-list">
+                        <div class="docs-total-fiscal-row"><span>SUBTOTAL BASE GRAVADA</span><strong>$ @SubtotalGravado.ToString("N2")</strong></div>
+                        <div class="docs-total-fiscal-row"><span>SUBTOTAL BASE 0%</span><strong>$ @SubtotalCero.ToString("N2")</strong></div>
+                        <div class="docs-total-fiscal-row"><span>SUBTOTAL NO OBJETO IVA</span><strong>$ 0.00</strong></div>
+                        <div class="docs-total-fiscal-row"><span>SUBTOTAL EXENTO IVA</span><strong>$ 0.00</strong></div>
+                        <div class="docs-total-fiscal-row docs-total-fiscal-discount"><span>DESCUENTO</span><strong>$ @TotalDescuento.ToString("N2")</strong></div>
+                        <div class="docs-total-fiscal-row"><span>SUBTOTAL CON DESCUENTO</span><strong>$ @model.Subtotal.ToString("N2")</strong></div>
+                        <div class="docs-total-fiscal-row"><span>ICE</span><strong>$ 0.00</strong></div>
+                        @foreach (var tarifa in TarifasConIva)
+                        {
+                            <div class="docs-total-fiscal-row docs-total-fiscal-tax"><span>IVA TARIFA @tarifa.ToString("0.##", CultureInfo.InvariantCulture)%</span><strong>$ @IvaPorTarifa(tarifa).ToString("N2")</strong></div>
+                        }
+                        <div class="docs-total-fiscal-row"><span>SERVICIO 10%</span><strong>$ 0.00</strong></div>
+                        <div class="docs-total-fiscal-row"><span>IRBPNR</span><strong>$ 0.00</strong></div>
+                        <div class="docs-total-fiscal-row docs-total-fiscal-total"><span>TOTAL</span><strong>$ @model.Total.ToString("N2")</strong></div>
+                    </div></div></div>
+                </div>
+            </div>
 
             @if (model.EsCredito)
             {
                 <div class="alert alert-warning border-0 rounded-3 mt-4 mb-0"><i class="bi bi-wallet2 me-2"></i>Esta factura se agregará a cuentas por pagar con vencimiento a @Math.Max(model.PlazoCredito, 1) días.</div>
             }
-            <div class="n-detail-actions-row"><a class="n-btn-link" href="/cuentas-por-pagar">Cancelar / volver</a><button type="button" class="n-btn-primary" @onclick="GuardarAsync" disabled="@guardando">@(guardando ? "Guardando..." : "Guardar factura de compra")</button></div>
+            <div class="n-detail-actions-row"><a class="n-btn-link" href="@RutaCuentasPorPagar("/cuentas-por-pagar", EContaxRoutes.CuentasPorPagar)">Cancelar / volver</a><button type="button" class="n-btn-primary" @onclick="GuardarAsync" disabled="@guardando"><i class="bi bi-check2-circle fs-5 me-2"></i>@(guardando ? "Guardando..." : "Guardar factura de compra")</button></div>
         </div>
     </div>
 </div>
@@ -158,7 +195,13 @@
     private int currentUserId;
     private bool guardando;
     private bool creditoSeleccionado;
+    private bool xmlCargado;
     private string error = "";
+
+    private bool EsEContaxContext => Navigation.ToBaseRelativePath(Navigation.Uri)
+        .StartsWith("e-contax/", StringComparison.OrdinalIgnoreCase);
+
+    private string RutaCuentasPorPagar(string efact, string econtax) => EsEContaxContext ? econtax : efact;
 
     protected override async Task OnInitializedAsync()
     {
@@ -207,6 +250,58 @@
         sugerencias.Clear();
     }
 
+    private async Task OnXmlSelected(InputFileChangeEventArgs e)
+    {
+        error = "";
+        xmlCargado = false;
+        try
+        {
+            var file = e.File ?? throw new InvalidOperationException("No se seleccionó ningún archivo XML.");
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var preview = await ComprasXmlService.LeerCompraDesdeXmlAsync(await reader.ReadToEndAsync(), permitirFactura: true);
+
+            var tarifasPermitidas = new[] { 0, 5, 8, 12, 15 };
+            model = new FacturaCompraManualVM
+            {
+                RucProveedor = preview.RucProveedor,
+                Proveedor = preview.RazonSocialProveedor,
+                TipoIdentificacion = preview.RucProveedor.Count(char.IsDigit) == 13 ? "04" : "05",
+                NombreComercial = preview.RazonSocialProveedor,
+                Direccion = preview.DireccionProveedor,
+                Telefono = preview.TelefonoProveedor,
+                Correo = preview.EmailProveedor,
+                FechaEmision = preview.FechaEmision?.Date ?? DateTime.Today,
+                FormaPago = formasPago.Any(x => x.Codigo == preview.FormaPago) ? preview.FormaPago : "20",
+                Referencia = $"Importada desde XML {preview.Estab}-{preview.PtoEmi}-{preview.Secuencial}".Trim('-'),
+                Observacion = "Factura de compra cargada desde XML.",
+                Detalles = preview.Detalles.Select(x => new FacturaCompraManualDetalleVM
+                {
+                    Codigo = string.IsNullOrWhiteSpace(x.CodPrincipal) ? x.CodAuxiliar : x.CodPrincipal,
+                    Descripcion = x.Descripcion,
+                    Detalle = "Importado desde XML",
+                    Cantidad = x.Cantidad > 0 ? x.Cantidad : 1m,
+                    PrecioUnitario = x.PrecioUnitario,
+                    Descuento = x.Descuento,
+                    Tarifa = tarifasPermitidas.Contains(x.Tarifa) ? x.Tarifa : 0
+                }).ToList()
+            };
+
+            if (model.Detalles.Count == 0)
+                model.Detalles.Add(new());
+
+            creditoSeleccionado = model.FormaPago == "19";
+            model.PlazoCredito = creditoSeleccionado ? 30 : 0;
+            proveedorBusqueda = model.Proveedor;
+            sugerencias.Clear();
+            xmlCargado = true;
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudo cargar el XML: {ex.Message}";
+        }
+    }
+
     private void AgregarDetalle() => model.Detalles.Add(new());
     private void QuitarDetalle(FacturaCompraManualDetalleVM detalle) { if (model.Detalles.Count > 1) model.Detalles.Remove(detalle); }
 
@@ -245,6 +340,7 @@
         proveedorBusqueda = "";
         sugerencias.Clear();
         creditoSeleccionado = false;
+        xmlCargado = false;
     }
 
     private async Task GuardarAsync()
@@ -254,7 +350,7 @@
         {
             var id = await FacturaCompraService.GuardarAsync(currentUserId, model);
             await AlertService.ShowSuccessAsync($"Factura de compra guardada. Código interno: {id}");
-            Navigation.NavigateTo("/cuentas-por-pagar");
+            Navigation.NavigateTo(RutaCuentasPorPagar("/cuentas-por-pagar", EContaxRoutes.CuentasPorPagar));
         }
         catch (InvalidOperationException ex) { await AlertService.ShowErrorAsync(ex.Message); }
         catch (Exception ex) { error = $"No se pudo guardar la factura: {ex.Message}"; }

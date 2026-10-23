@@ -1,0 +1,256 @@
+@page "/e-contax/inventarios/bodegas"
+
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.DTOs.EContax
+@using Simetric.Models.EContax
+@using Simetric.Services
+@using Simetric.Services.EContax
+@using System.Security.Claims
+@inject AuthenticationStateProvider AuthStateProvider
+@inject AppAccessService AppAccessService
+@inject SelectedAppServiceStateService SelectedAppServiceState
+@inject EContaxSeguridadService SeguridadService
+@inject EContaxBodegaService BodegaService
+@inject NavigationManager Nav
+@rendermode InteractiveServer
+
+@{
+    var visibles = BodegasVisibles.ToList();
+    var activas = bodegas.Count(x => x.Estado);
+    var sucursalesConBodega = bodegas.Select(x => x.IdSucursal).Distinct().Count();
+}
+
+<PageTitle>Bodegas | Numerica E-Contax</PageTitle>
+
+<div class="bodega-shell">
+    <section class="bodega-hero">
+        <div>
+            <span class="bodega-eyebrow">E-Contax · Inventario</span>
+            <h2>Bodegas</h2>
+            <p>Define las bodegas de cada sucursal para separar las existencias del inventario.</p>
+        </div>
+        <div class="bodega-hero-summary">
+            <span>Catálogo operativo</span>
+            <strong>@activas activas</strong>
+            <small>@sucursalesConBodega sucursal(es) con bodega</small>
+        </div>
+    </section>
+
+    <section class="bodega-kpi-grid" aria-label="Resumen de bodegas">
+        <article class="bodega-kpi"><span class="bodega-kpi-icon is-blue"><i class="ri-store-2-line"></i></span><div><span>Total bodegas</span><strong>@bodegas.Count</strong><small>Incluye activas e inactivas</small></div></article>
+        <article class="bodega-kpi"><span class="bodega-kpi-icon is-green"><i class="ri-checkbox-circle-line"></i></span><div><span>Bodegas activas</span><strong>@activas</strong><small>Disponibles para inventario</small></div></article>
+        <article class="bodega-kpi"><span class="bodega-kpi-icon is-purple"><i class="ri-git-branch-line"></i></span><div><span>Sucursales cubiertas</span><strong>@sucursalesConBodega</strong><small>Con al menos una bodega</small></div></article>
+    </section>
+
+    <section class="bodega-toolbar">
+        <div class="bodega-toolbar-heading">
+            <span class="bodega-section-kicker">Catálogo</span>
+            <h3>Administrar bodegas</h3>
+            <p>Cada bodega pertenece a una sola sucursal y no se repiten nombres ni códigos dentro de ella.</p>
+        </div>
+        <div class="bodega-filter-grid">
+            <label class="bodega-filter"><span>Buscar</span><div class="bodega-search"><i class="ri-search-line"></i><input @bind="filtro" @bind:event="oninput" placeholder="Nombre, código o dirección" /></div></label>
+            <label class="bodega-filter"><span>Sucursal</span><select value="@filtroSucursalTexto" @onchange="CambiarFiltroSucursal"><option value="0">Todas las sucursales</option>@foreach (var sucursal in SucursalesDisponibles){<option value="@sucursal.IdSucursal">@sucursal.Nombre</option>}</select></label>
+            <label class="bodega-filter"><span>Estado</span><select @bind="filtroEstado"><option value="todos">Todas</option><option value="activas">Activas</option><option value="inactivas">Inactivas</option></select></label>
+        </div>
+        <div class="bodega-toolbar-actions">
+            <button type="button" class="bodega-secondary-btn" @onclick="CargarAsync" disabled="@cargando"><i class="ri-refresh-line"></i> Actualizar</button>
+            <button type="button" class="bodega-primary-btn" @onclick="Nueva" disabled="@(!PuedeAdministrar)"><i class="ri-add-line"></i> Nueva bodega</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="bodega-status is-error"><i class="ri-error-warning-line"></i><span>@error</span></div>
+    }
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="bodega-status is-success"><i class="ri-checkbox-circle-line"></i><span>@mensaje</span></div>
+    }
+
+    <section class="bodega-content-grid">
+        <section class="bodega-table-card">
+            <div class="bodega-table-head"><div><span class="bodega-section-kicker">Listado</span><h3>Bodegas registradas</h3></div><span class="bodega-badge">@visibles.Count de @bodegas.Count</span></div>
+            @if (cargando)
+            {
+                <div class="bodega-state"><span class="spinner-border spinner-border-sm text-primary" role="status"></span><strong>Cargando bodegas</strong></div>
+            }
+            else if (!visibles.Any())
+            {
+                <div class="bodega-state"><i class="ri-store-2-line"></i><strong>No hay bodegas para mostrar</strong><span>Crea una bodega o ajusta los filtros actuales.</span></div>
+            }
+            else
+            {
+                <div class="bodega-table-wrap"><table class="table bodega-table mb-0"><thead><tr><th>Bodega</th><th>Sucursal</th><th>Ubicación</th><th>Estado</th><th class="text-end">Acciones</th></tr></thead><tbody>
+                    @foreach (var bodega in visibles)
+                    {
+                        <tr @key="bodega.IdBodega">
+                            <td><div class="bodega-main"><strong>@bodega.Nombre</strong><span class="bodega-code">@bodega.Codigo</span>@if (!string.IsNullOrWhiteSpace(bodega.Observacion)){<small>@bodega.Observacion</small>}</div></td>
+                            <td><span class="bodega-branch"><i class="ri-git-branch-line"></i>@bodega.NombreSucursal</span></td>
+                            <td>@(bodega.Direccion ?? "Sin dirección")</td>
+                            <td><span class="bodega-status-pill @(bodega.Estado ? "is-active" : "is-inactive")">@(bodega.Estado ? "Activa" : "Inactiva")</span></td>
+                            <td class="text-end"><div class="bodega-action-group"><button type="button" class="bodega-icon-btn" title="Editar" @onclick="() => Editar(bodega)" disabled="@(!PuedeAdministrar)"><i class="ri-pencil-line"></i></button><button type="button" class="bodega-icon-btn @(bodega.Estado ? "is-danger" : "is-success")" title="@(bodega.Estado ? "Desactivar" : "Activar")" @onclick="() => CambiarEstadoAsync(bodega)" disabled="@(!PuedeAdministrar)"><i class="@(bodega.Estado ? "ri-pause-circle-line" : "ri-play-circle-line")"></i></button></div></td>
+                        </tr>
+                    }
+                </tbody></table></div>
+            }
+        </section>
+
+        <section class="bodega-editor-card">
+            <div class="bodega-editor-head"><div><span class="bodega-section-kicker">Formulario</span><h3>@(editando ? "Editar bodega" : "Nueva bodega")</h3><p>La asignación de sucursal es obligatoria.</p></div><span class="bodega-editor-badge">@(editando ? "Edición" : "Alta")</span></div>
+            <div class="bodega-form-grid">
+                <label class="bodega-field is-wide"><span>Sucursal</span><select @bind="modelo.IdSucursal" disabled="@(guardando || !PuedeAdministrar || !EsJefeEmpresa)"><option value="0">Selecciona una sucursal</option>@foreach (var sucursal in SucursalesDisponibles){<option value="@sucursal.IdSucursal">@sucursal.Nombre (@sucursal.Codigo)</option>}</select></label>
+                <label class="bodega-field"><span>Nombre *</span><input @bind="modelo.Nombre" maxlength="200" disabled="@(guardando || !PuedeAdministrar)" placeholder="Bodega principal" /></label>
+                <label class="bodega-field"><span>Código *</span><input @bind="modelo.Codigo" maxlength="30" disabled="@(guardando || !PuedeAdministrar)" placeholder="BOD-001" /></label>
+                <label class="bodega-field is-wide"><span>Dirección</span><input @bind="modelo.Direccion" maxlength="300" disabled="@(guardando || !PuedeAdministrar)" placeholder="Ubicación física" /></label>
+                <label class="bodega-field is-wide"><span>Observación</span><textarea @bind="modelo.Observacion" maxlength="500" rows="3" disabled="@(guardando || !PuedeAdministrar)" placeholder="Notas de la bodega"></textarea></label>
+            </div>
+            <div class="bodega-editor-actions"><button type="button" class="bodega-secondary-btn" @onclick="Nueva" disabled="@guardando">Limpiar</button><button type="button" class="bodega-primary-btn" @onclick="GuardarAsync" disabled="@(guardando || !PuedeAdministrar)"><i class="ri-save-3-line"></i>@(guardando ? "Guardando..." : "Guardar bodega")</button></div>
+        </section>
+    </section>
+</div>
+
+@code {
+    private readonly List<EContaxBodegaDto> bodegas = new();
+    private EContaxBodegaUpsertDto modelo = new();
+    private EContaxSeguridadResumen? seguridad;
+    private int usuarioId;
+    private int filtroSucursal;
+    private string filtro = string.Empty;
+    private string filtroEstado = "todos";
+    private bool cargando;
+    private bool guardando;
+    private bool editando;
+    private string? error;
+    private string? mensaje;
+
+    private bool PuedeAdministrar => seguridad?.EsAdmin == true;
+    private bool EsJefeEmpresa => seguridad?.Contexto.EsJefeEmpresa == true;
+    private string filtroSucursalTexto => filtroSucursal.ToString();
+    private IEnumerable<EContaxSucursal> SucursalesDisponibles => seguridad?.Sucursales.Where(x => x.Estado).OrderBy(x => x.Nombre) ?? Enumerable.Empty<EContaxSucursal>();
+    private IEnumerable<EContaxBodegaDto> BodegasVisibles => bodegas.Where(x =>
+        (string.IsNullOrWhiteSpace(filtro) || $"{x.Nombre} {x.Codigo} {x.Direccion}".Contains(filtro.Trim(), StringComparison.OrdinalIgnoreCase)) &&
+        (filtroEstado == "todos" || (filtroEstado == "activas" && x.Estado) || (filtroEstado == "inactivas" && !x.Estado)));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        if (!(user.Identity?.IsAuthenticated ?? false))
+        {
+            Nav.NavigateTo("/login", true);
+            return;
+        }
+
+        usuarioId = ObtenerIdUsuario(user);
+        var isSuperAdmin = string.Equals(user.FindFirst("IdTipoUsuario")?.Value, AppAccessService.AdminRoleId, StringComparison.OrdinalIgnoreCase);
+        var access = await AppAccessService.CanAccessAsync(usuarioId, EContaxRoutes.ServiceKey, isSuperAdmin);
+        if (!access.HasAccess)
+        {
+            Nav.NavigateTo($"/suscripciones?servicio={Uri.EscapeDataString(EContaxRoutes.ServiceKey)}", true);
+            return;
+        }
+
+        await SelectedAppServiceState.SetCurrentServiceKeyAsync(EContaxRoutes.ServiceKey);
+        seguridad = await SeguridadService.GetResumenAsync(usuarioId);
+        if (!EsJefeEmpresa)
+            filtroSucursal = seguridad.Contexto.IdSucursal ?? 0;
+        Nueva();
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        if (usuarioId <= 0) return;
+        cargando = true;
+        error = null;
+        try
+        {
+            var registros = await BodegaService.ListarAsync(usuarioId, filtroSucursal > 0 ? filtroSucursal : null);
+            bodegas.Clear();
+            bodegas.AddRange(registros);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task CambiarFiltroSucursal(ChangeEventArgs args)
+    {
+        filtroSucursal = int.TryParse(args.Value?.ToString(), out var value) ? value : 0;
+        await CargarAsync();
+    }
+
+    private async Task GuardarAsync()
+    {
+        error = null;
+        mensaje = null;
+        guardando = true;
+        try
+        {
+            await BodegaService.GuardarAsync(usuarioId, modelo);
+            mensaje = editando ? "Bodega actualizada correctamente." : "Bodega creada correctamente.";
+            Nueva();
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private void Nueva()
+    {
+        editando = false;
+        modelo = new EContaxBodegaUpsertDto
+        {
+            IdSucursal = EsJefeEmpresa && filtroSucursal > 0 ? filtroSucursal : seguridad?.Contexto.IdSucursal ?? 0
+        };
+    }
+
+    private void Editar(EContaxBodegaDto bodega)
+    {
+        if (!PuedeAdministrar) return;
+        editando = true;
+        modelo = new EContaxBodegaUpsertDto
+        {
+            IdBodega = bodega.IdBodega,
+            IdSucursal = bodega.IdSucursal,
+            Nombre = bodega.Nombre,
+            Codigo = bodega.Codigo,
+            Direccion = bodega.Direccion,
+            Observacion = bodega.Observacion
+        };
+    }
+
+    private async Task CambiarEstadoAsync(EContaxBodegaDto bodega)
+    {
+        error = null;
+        mensaje = null;
+        try
+        {
+            await BodegaService.CambiarEstadoAsync(usuarioId, bodega.IdBodega, !bodega.Estado);
+            mensaje = bodega.Estado ? "Bodega desactivada correctamente." : "Bodega activada correctamente.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private static int ObtenerIdUsuario(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("IdUsuario")?.Value ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(id, out var userId) ? userId : 0;
+    }
+}
