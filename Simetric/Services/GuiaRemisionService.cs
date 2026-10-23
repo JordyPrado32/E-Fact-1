@@ -319,7 +319,7 @@ namespace Simetric.Services
                 try
                 {
                     var facturaDb = codfactura.GetValueOrDefault() > 0
-                        ? await context.Facturas.FirstOrDefaultAsync(f => f.Codfactura == codfactura.Value && f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor))
+                        ? await context.Facturas.FirstOrDefaultAsync(f => f.Codfactura == codfactura.GetValueOrDefault() && f.Idusuario == idUsuario && (!codEmisor.HasValue || f.Codemisor == codEmisor))
                         : null;
                     if (codfactura.GetValueOrDefault() > 0 && facturaDb == null)
                         throw new Exception("La factura seleccionada no existe o no pertenece al usuario actual.");
@@ -383,7 +383,7 @@ namespace Simetric.Services
                         ? facturaDb.Codemisor
                         : codEmisor;
                     var emisorDb = codigoEmisor.GetValueOrDefault() > 0
-                        ? await context.Emisores.AsNoTracking().FirstOrDefaultAsync(e => e.Codigo == codigoEmisor.Value)
+                        ? await context.Emisores.AsNoTracking().FirstOrDefaultAsync(e => e.Codigo == codigoEmisor.GetValueOrDefault())
                         : null;
                     if (emisorDb == null)
                         throw new Exception("Debes configurar un emisor activo para generar la guia.");
@@ -551,8 +551,8 @@ namespace Simetric.Services
                         Serie = FormatearSerie(serieNorm),
                         Secuencial = secuencial,
                         NumeroCompleto = numeroCompleto,
-                        RutaXml = rutaXml,
-                        NombreArchivoXml = Path.GetFileName(rutaXml),
+                        RutaXml = rutaXml ?? string.Empty,
+                        NombreArchivoXml = Path.GetFileName(rutaXml ?? string.Empty),
                         RutaPdf = ConstruirPdfRutaLocal(emisorDb.Ruc, serieNorm, secuencial),
                         NombreArchivoPdf = ConstruirNombreArchivoPdf(emisorDb.Ruc, serieNorm, secuencial),
                         ClaveAcceso = claveAcceso,

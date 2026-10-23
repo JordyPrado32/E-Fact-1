@@ -261,6 +261,24 @@ BEGIN
         CONSTRAINT [PK_ECONTAX_INV_VALORACION_HIST] PRIMARY KEY ([id_historial])
     );
 END;
+IF OBJECT_ID(N'[dbo].[ECONTAX_PRODUCTO_PROVEEDOR]', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[ECONTAX_PRODUCTO_PROVEEDOR] (
+        [id_producto_proveedor] INT IDENTITY(1,1) NOT NULL,
+        [id_empresa] INT NOT NULL,
+        [codigo_producto] INT NOT NULL,
+        [id_proveedor_cliente] INT NOT NULL,
+        [codigo_producto_proveedor] VARCHAR(100) NULL,
+        [precio_compra] DECIMAL(18,4) NOT NULL CONSTRAINT [DF_ECONTAX_PROD_PROV_PRECIO] DEFAULT (0),
+        [es_principal] BIT NOT NULL CONSTRAINT [DF_ECONTAX_PROD_PROV_PRINCIPAL] DEFAULT (0),
+        [activo] BIT NOT NULL CONSTRAINT [DF_ECONTAX_PROD_PROV_ACTIVO] DEFAULT (1),
+        [fecha_actualizacion] DATETIME2 NOT NULL CONSTRAINT [DF_ECONTAX_PROD_PROV_FECHA] DEFAULT (SYSUTCDATETIME()),
+        CONSTRAINT [PK_ECONTAX_PRODUCTO_PROVEEDOR] PRIMARY KEY ([id_producto_proveedor]),
+        CONSTRAINT [UX_ECONTAX_PRODUCTO_PROVEEDOR] UNIQUE ([id_empresa], [codigo_producto], [id_proveedor_cliente])
+    );
+    CREATE INDEX [IX_ECONTAX_PRODUCTO_PROVEEDOR_PROVEEDOR]
+        ON [dbo].[ECONTAX_PRODUCTO_PROVEEDOR] ([id_empresa], [id_proveedor_cliente], [activo]);
+END;
 IF OBJECT_ID(N'[dbo].[ECONTAX_ORDEN_COMPRA]', N'U') IS NOT NULL AND COL_LENGTH('dbo.ECONTAX_ORDEN_COMPRA', 'numero_factura_proveedor') IS NULL
     ALTER TABLE [dbo].[ECONTAX_ORDEN_COMPRA] ADD [numero_factura_proveedor] VARCHAR(50) NULL;
 IF OBJECT_ID(N'[dbo].[ECONTAX_ORDEN_COMPRA]', N'U') IS NOT NULL AND COL_LENGTH('dbo.ECONTAX_ORDEN_COMPRA', 'clave_acceso_proveedor') IS NULL

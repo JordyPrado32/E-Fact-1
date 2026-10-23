@@ -3822,9 +3822,13 @@ IF @resultado < 0
 
             ValidarDatosAutorizacionFactura(factura);
 
+            var rucEmisor = factura.CodemisorNavigation?.Ruc;
+            if (string.IsNullOrWhiteSpace(rucEmisor))
+                throw new InvalidOperationException("El emisor de la factura no tiene RUC configurado.");
+
             string claveEsperada = GenerarClaveAcceso(
                 fechaEmision,
-                factura.CodemisorNavigation?.Ruc,
+                rucEmisor,
                 ambiente,
                 serieLimpia,
                 secuencial,

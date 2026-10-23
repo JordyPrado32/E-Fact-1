@@ -246,7 +246,7 @@ public sealed class EContaxCatalogService
         await context.SaveChangesAsync();
     }
 
-    public async Task<List<ProductoLookupDetalleDto>> BuscarProductosFiltroAsync(int userId, string filtro)
+    public async Task<List<ProductoLookupDetalleDto>> BuscarProductosFiltroAsync(int userId, string filtro, int? idProveedor = null)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();
         var userContext = await _tenantService.GetContextAsync(context, userId);
@@ -270,12 +270,34 @@ public sealed class EContaxCatalogService
                 ));
         }
 
+        if (idProveedor is > 0)
+        {
+            query = query.Where(p =>
+                !context.EContaxProductosProveedores.Any(x => x.IdEmpresa == userContext.IdEmpresa &&
+                    x.CodigoProducto == p.Codigo && x.Activo) ||
+                context.EContaxProductosProveedores.Any(x => x.IdEmpresa == userContext.IdEmpresa &&
+                    x.CodigoProducto == p.Codigo && x.IdProveedorCliente == idProveedor.Value && x.Activo));
+        }
+
         var productos = await query
             .OrderBy(p => p.Nombre)
             .Take(15)
             .ToListAsync();
 
-        return productos.Select(MapearProductoLookup).ToList();
+        var preciosProveedor = idProveedor is > 0
+            ? await context.EContaxProductosProveedores
+                .AsNoTracking()
+                .Where(x => x.IdEmpresa == userContext.IdEmpresa && x.IdProveedorCliente == idProveedor.Value && x.Activo)
+                .ToDictionaryAsync(x => x.CodigoProducto, x => x.PrecioCompra)
+            : new Dictionary<int, decimal>();
+
+        return productos.Select(producto =>
+        {
+            var resultado = MapearProductoLookup(producto);
+            if (preciosProveedor.TryGetValue(producto.Codigo, out var precio))
+                resultado.Costo = precio;
+            return resultado;
+        }).ToList();
     }
 
     public async Task<ProductoLookupDetalleDto?> BuscarProductoParaDetalleAsync(int userId, string criterio)
@@ -431,6 +453,36 @@ public sealed class EContaxCatalogService
         return (EContaxTenantService.ToScopeDto(userContext), sucursales);
     }
 
+    public async Task<List<EContaxProveedorLookupDto>> ListarProveedoresAsync(int userId)
+    {
+        await _seguridad.ExigirAccionAsync(userId, EContaxRoutes.Productos, EContaxAccion.Ver);
+        await using var context = await _dbFactory.CreateDbContextAsync();
+        var userContext = await _tenantService.GetContextAsync(context, userId);
+
+        var proveedores = await BuildClientesEmpresaQuery(context, userContext)
+            .AsNoTracking()
+            .Where(c => c.Estado == true && context.Proveedores.Any(p => p.ruc == c.Numeroidentificacion && p.estado != false))
+            .Select(c => new
+            {
+                c.Codcliente,
+                c.Nombrerazonsocial,
+                c.Nombres,
+                c.Apellidos,
+                c.Numeroidentificacion
+            })
+            .OrderBy(x => x.Nombrerazonsocial ?? x.Apellidos ?? x.Nombres)
+            .ToListAsync();
+
+        return proveedores.Select(x => new EContaxProveedorLookupDto
+        {
+            IdProveedor = x.Codcliente,
+            Nombre = string.IsNullOrWhiteSpace(x.Nombrerazonsocial)
+                ? string.Join(" ", new[] { x.Nombres, x.Apellidos }.Where(v => !string.IsNullOrWhiteSpace(v)))
+                : x.Nombrerazonsocial.Trim(),
+            Identificacion = x.Numeroidentificacion ?? string.Empty
+        }).ToList();
+    }
+
     public async Task<List<EContaxProductoDto>> GetProductosAsync(int userId, int? sucursalId = null)
     {
         await using var context = await _dbFactory.CreateDbContextAsync();
@@ -528,7 +580,10 @@ public sealed class EContaxCatalogService
             .FirstOrDefaultAsync();
 
         if (item is not null)
+        {
             await CompletarSucursalesAsync(context, userContext, new[] { item });
+            item.Proveedores = await ObtenerProveedoresProductoAsync(context, userContext.IdEmpresa, codigo);
+        }
 
         return item;
     }
@@ -567,6 +622,7 @@ public sealed class EContaxCatalogService
         context.Productos.Add(entity);
         await context.SaveChangesAsync();
         await ReemplazarSucursalesAsync(context, entity.Codigo, userContext.IdEmpresa, targetSucursalIds);
+        await ReemplazarProveedoresAsync(context, userContext.IdEmpresa, entity.Codigo, model.Proveedores);
         await context.SaveChangesAsync();
         return entity.Codigo;
     }
@@ -614,6 +670,7 @@ public sealed class EContaxCatalogService
         }
 
         await ReemplazarSucursalesAsync(context, producto.Codigo, userContext.IdEmpresa, targetSucursalIds);
+        await ReemplazarProveedoresAsync(context, userContext.IdEmpresa, producto.Codigo, model.Proveedores);
         await context.SaveChangesAsync();
     }
 
@@ -746,6 +803,98 @@ public sealed class EContaxCatalogService
             : string.Join(" ", new[] { cliente.Nombres, cliente.Apellidos }
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x!.Trim()));
+
+    private static async Task<List<EContaxProductoProveedorDto>> ObtenerProveedoresProductoAsync(
+        AppDbContext context,
+        int idEmpresa,
+        int codigoProducto)
+    {
+        var relaciones = await context.EContaxProductosProveedores
+            .AsNoTracking()
+            .Where(x => x.IdEmpresa == idEmpresa && x.CodigoProducto == codigoProducto && x.Activo)
+            .Join(context.Clientes.Where(c => c.Idempresa == idEmpresa),
+                relacion => relacion.IdProveedorCliente,
+                cliente => cliente.Codcliente,
+                (relacion, cliente) => new
+                {
+                    relacion.IdProveedorCliente,
+                    relacion.CodigoProductoProveedor,
+                    relacion.PrecioCompra,
+                    relacion.EsPrincipal,
+                    cliente.Nombrerazonsocial,
+                    cliente.Nombres,
+                    cliente.Apellidos,
+                    cliente.Numeroidentificacion
+                })
+            .Where(x => context.Proveedores.Any(p => p.ruc == x.Numeroidentificacion && p.estado != false))
+            .OrderByDescending(x => x.EsPrincipal)
+            .ThenBy(x => x.Nombrerazonsocial ?? x.Apellidos ?? x.Nombres)
+            .ToListAsync();
+
+        return relaciones.Select(x => new EContaxProductoProveedorDto
+        {
+            IdProveedor = x.IdProveedorCliente,
+            NombreProveedor = string.IsNullOrWhiteSpace(x.Nombrerazonsocial)
+                ? string.Join(" ", new[] { x.Nombres, x.Apellidos }.Where(v => !string.IsNullOrWhiteSpace(v)))
+                : x.Nombrerazonsocial.Trim(),
+            Identificacion = x.Numeroidentificacion ?? string.Empty,
+            CodigoProductoProveedor = x.CodigoProductoProveedor,
+            PrecioCompra = x.PrecioCompra,
+            EsPrincipal = x.EsPrincipal,
+            Activo = true
+        }).ToList();
+    }
+
+    private static async Task ReemplazarProveedoresAsync(
+        AppDbContext context,
+        int idEmpresa,
+        int codigoProducto,
+        IEnumerable<EContaxProductoProveedorUpsertDto>? modelos)
+    {
+        var items = (modelos ?? Enumerable.Empty<EContaxProductoProveedorUpsertDto>()).ToList();
+        var ids = items.Select(x => x.IdProveedor).ToList();
+
+        if (ids.Any(x => x <= 0) || ids.Count != ids.Distinct().Count())
+            throw new InvalidOperationException("Los proveedores del producto no son válidos o están repetidos.");
+        if (items.Any(x => x.PrecioCompra < 0))
+            throw new InvalidOperationException("El precio de compra no puede ser negativo.");
+
+        if (ids.Count > 0)
+        {
+            var proveedoresValidos = await context.Clientes
+                .AsNoTracking()
+                .Where(c => c.Idempresa == idEmpresa && c.Estado == true && ids.Contains(c.Codcliente) &&
+                    context.Proveedores.Any(p => p.ruc == c.Numeroidentificacion && p.estado != false))
+                .Select(c => c.Codcliente)
+                .ToListAsync();
+
+            if (proveedoresValidos.Count != ids.Count)
+                throw new InvalidOperationException("Uno o más proveedores no están activos o no pertenecen a la empresa.");
+        }
+
+        var actuales = await context.EContaxProductosProveedores
+            .Where(x => x.IdEmpresa == idEmpresa && x.CodigoProducto == codigoProducto)
+            .ToListAsync();
+        context.EContaxProductosProveedores.RemoveRange(actuales);
+
+        var indicePrincipal = items.FindIndex(x => x.EsPrincipal);
+        if (indicePrincipal < 0 && items.Count > 0)
+            indicePrincipal = 0;
+
+        context.EContaxProductosProveedores.AddRange(items.Select((item, index) => new EContaxProductoProveedor
+        {
+            IdEmpresa = idEmpresa,
+            CodigoProducto = codigoProducto,
+            IdProveedorCliente = item.IdProveedor,
+            CodigoProductoProveedor = string.IsNullOrWhiteSpace(item.CodigoProductoProveedor)
+                ? null
+                : item.CodigoProductoProveedor.Trim(),
+            PrecioCompra = item.PrecioCompra,
+            EsPrincipal = index == indicePrincipal,
+            Activo = true,
+            FechaActualizacion = DateTime.Now
+        }));
+    }
 
     private static List<string> SepararNombre(string? valor) =>
         (valor ?? string.Empty)

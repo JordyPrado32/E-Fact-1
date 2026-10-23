@@ -251,6 +251,8 @@ builder.Services.AddScoped<ComprobanteRetencionGenerator>();
 builder.Services.AddScoped<NotaCreditoService>();
 builder.Services.AddScoped<ComprasXmlService>();
 builder.Services.AddScoped<AbonoService>();
+builder.Services.AddScoped<CuentasPagarService>();
+builder.Services.AddScoped<FacturaCompraManualService>();
 builder.Services.AddScoped<LiquidacionCompraService>();
 builder.Services.AddScoped<LiquidacionCompraXmlGenerator>();
 builder.Services.AddScoped<RetencionCorreoService>();

@@ -94,7 +94,7 @@ namespace Simetric.Services
 
             return await _context.Tipoclientes
                 .AsNoTracking()
-                .Where(t => t.TclDescripcion.Contains(criterio) ||
+                .Where(t => (t.TclDescripcion ?? string.Empty).Contains(criterio) ||
                             t.TclCodigo.ToString().Contains(criterio))
                 .ToListAsync();
         }

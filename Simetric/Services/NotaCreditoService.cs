@@ -1168,7 +1168,7 @@ public class NotaCreditoService
                     ? (f.Fechavence
                         ?? ((f.Fchautorizacion ?? f.Fechaentrega).HasValue
                             ? (c != null && c.DiasCredito.HasValue
-                                ? (f.Fchautorizacion ?? f.Fechaentrega)!.Value.AddDays(c.DiasCredito.Value)
+                                ? (f.Fchautorizacion ?? f.Fechaentrega).GetValueOrDefault().AddDays(c.DiasCredito.GetValueOrDefault())
                                 : (DateTime?)null)
                             : null))
                     : null,
@@ -1270,7 +1270,7 @@ public class NotaCreditoService
                     ? (f.Fechavence
                         ?? ((f.Fchautorizacion ?? f.Fechaentrega).HasValue
                             ? (c != null && c.DiasCredito.HasValue
-                                ? (f.Fchautorizacion ?? f.Fechaentrega)!.Value.AddDays(c.DiasCredito.Value)
+                                ? (f.Fchautorizacion ?? f.Fechaentrega).GetValueOrDefault().AddDays(c.DiasCredito.GetValueOrDefault())
                                 : (DateTime?)null)
                             : null))
                     : null,

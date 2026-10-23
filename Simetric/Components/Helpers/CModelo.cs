@@ -15,16 +15,11 @@ namespace ConsultaDeRucApi.Services
             string Estado = "";
             Uri Url = new Uri("https://www.google.com/");
 
-            System.Net.WebRequest WebRequest;
-            WebRequest = System.Net.WebRequest.Create(Url);
-            System.Net.WebResponse objetoResp;
-
             try
             {
-                objetoResp = WebRequest.GetResponse();
-                Estado = "Con Coneccion";
-                objetoResp.Close();
-
+                using var client = new System.Net.Http.HttpClient();
+                using var response = client.Send(new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, Url));
+                Estado = response.IsSuccessStatusCode ? "Con Coneccion" : "No se pudo conectar a Internet";
                 return Estado;
             }
             catch (Exception e)

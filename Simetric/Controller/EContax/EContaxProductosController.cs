@@ -35,6 +35,7 @@ public sealed class EContaxProductosController : EContaxApiControllerBase
         {
             var userContext = await _tenantService.GetContextAsync(userId);
             var lookupsContext = await _catalogService.GetProductoLookupsContextAsync(userId);
+            var proveedores = await _catalogService.ListarProveedoresAsync(userId);
 
             var tipos = await _db.Productotipos
                 .AsNoTracking()
@@ -69,6 +70,7 @@ public sealed class EContaxProductosController : EContaxApiControllerBase
                 subtipos,
                 impuestos,
                 ivas,
+                proveedores,
                 sucursales = lookupsContext.Sucursales,
                 contexto = lookupsContext.Contexto
             });

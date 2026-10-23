@@ -72,14 +72,14 @@ public sealed class EContaxOrdenesCompraController : EContaxApiControllerBase
     }
 
     [HttpGet("productos")]
-    public async Task<ActionResult> Productos([FromQuery] int userId, [FromQuery] string? search = null)
+    public async Task<ActionResult> Productos([FromQuery] int userId, [FromQuery] string? search = null, [FromQuery] int? idProveedor = null)
     {
         if (userId <= 0)
             return Unauthorized("Sesion no valida.");
 
         try
         {
-            return Ok(await _service.BuscarProductosAsync(userId, search));
+            return Ok(await _service.BuscarProductosAsync(userId, search, idProveedor));
         }
         catch (InvalidOperationException ex)
         {

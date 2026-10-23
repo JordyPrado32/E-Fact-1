@@ -1,0 +1,18 @@
+IF OBJECT_ID(N'dbo.CXP_PAGOS', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.CXP_PAGOS
+    (
+        idPago INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_CXP_PAGOS PRIMARY KEY,
+        codFactura INT NOT NULL,
+        monto DECIMAL(18,2) NOT NULL,
+        formaPago NVARCHAR(50) NULL,
+        referencia NVARCHAR(100) NULL,
+        fechaPago DATETIME2 NOT NULL CONSTRAINT DF_CXP_PAGOS_FECHA DEFAULT SYSDATETIME(),
+        idUsuario INT NULL,
+        observacion NVARCHAR(500) NULL,
+        estado BIT NOT NULL CONSTRAINT DF_CXP_PAGOS_ESTADO DEFAULT 1
+    );
+
+    CREATE INDEX IX_CXP_PAGOS_FACTURA_ESTADO
+        ON dbo.CXP_PAGOS(codFactura, estado);
+END;

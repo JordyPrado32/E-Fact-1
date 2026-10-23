@@ -285,9 +285,9 @@ namespace Simetric.Controllers
 
                     var usuario = new Usuario
                     {
-                        Nombres = request.TipoCliente == 2 ? request.RazonSocial.Trim() : request.Nombres.Trim(),
+                Nombres = request.TipoCliente == 2 ? request.RazonSocial?.Trim() ?? string.Empty : request.Nombres?.Trim() ?? string.Empty,
                         Apellidos = request.TipoCliente == 2 ? string.Empty : (request.Apellidos ?? string.Empty).Trim(),
-                        NombreEmpresa = request.TipoCliente == 2 ? request.RazonSocial.Trim() : string.Empty,
+                NombreEmpresa = request.TipoCliente == 2 ? request.RazonSocial?.Trim() ?? string.Empty : string.Empty,
                         Email = email,
                         DireccionEmpresa = request.Direccion?.Trim(),
                         AvatarUrl = finalAvatarUrl,

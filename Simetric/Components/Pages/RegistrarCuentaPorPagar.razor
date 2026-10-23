@@ -1,0 +1,133 @@
+@page "/cuentas-por-pagar/registrar"
+@using System.Globalization
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@using Simetric.ViewModels
+@attribute [AllowAnonymous]
+@inject CuentasPagarService CuentasPagarService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject SweetAlertService AlertService
+
+<PageTitle>Registrar pago a proveedor | Numerica e-fact</PageTitle>
+
+<div class="container-fluid py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div><span class="text-muted text-uppercase small fw-semibold">Cuentas por pagar</span><h1 class="h3 mb-1">Registrar pago a proveedor</h1><p class="text-muted mb-0">Aplica pagos totales o abonos a liquidaciones emitidas a crédito.</p></div>
+        <a class="btn btn-outline-secondary" href="/cuentas-por-pagar">Volver a cuentas por pagar</a>
+    </div>
+
+    @if (cargando)
+    {
+        <div class="alert alert-light border">Cargando cuentas pendientes...</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="alert alert-danger border-0 rounded-3">@error</div>
+    }
+    else if (!cuentas.Any())
+    {
+        <div class="alert alert-success">No hay cuentas por pagar pendientes.</div>
+    }
+    else
+    {
+        <div class="row g-4">
+            <div class="col-lg-8">
+                <div class="card border-0 shadow-sm"><div class="card-body">
+                    <div class="mb-3"><input class="form-control" @bind="busqueda" @bind:event="oninput" placeholder="Buscar proveedor, RUC o liquidación..." /></div>
+                    <div class="table-responsive"><table class="table align-middle">
+                        <thead><tr><th>Liquidación</th><th>Proveedor</th><th class="text-end">Saldo</th><th style="min-width:150px">Monto a pagar</th></tr></thead>
+                        <tbody>
+                            @foreach (var cuenta in CuentasFiltradas)
+                            {
+                                <tr @key="cuenta.IdFactura">
+                                    <td><strong>@cuenta.NumeroDocumento</strong><br /><small class="text-muted">Vence @cuenta.FechaVencimiento?.ToString("dd/MM/yyyy")</small></td>
+                                    <td>@cuenta.Proveedor<br /><small class="text-muted">@cuenta.IdentificacionProveedor</small></td>
+                                    <td class="text-end fw-semibold">$@cuenta.SaldoPendiente.ToString("N2")</td>
+                                    <td><input class="form-control form-control-sm text-end" type="number" min="0" max="@cuenta.SaldoPendiente" step="0.01" value="@Monto(cuenta)" @oninput="e => CambiarMonto(cuenta, e.Value?.ToString())" /></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table></div>
+                </div></div>
+            </div>
+            <div class="col-lg-4">
+                <div class="card border-0 shadow-sm"><div class="card-body">
+                    <h2 class="h5">Detalle del pago</h2>
+                    <div class="mb-3"><label class="form-label">Forma de pago</label><select class="form-select" @bind="formaPago"><option>Transferencia</option><option>Cheque</option><option>Efectivo</option><option>Tarjeta</option><option>Otro</option></select></div>
+                    <div class="mb-3"><label class="form-label">Referencia</label><input class="form-control" @bind="referencia" maxlength="100" placeholder="Número de transferencia, cheque..." /></div>
+                    <div class="mb-3"><label class="form-label">Observación</label><textarea class="form-control" @bind="observacion" maxlength="500" rows="3"></textarea></div>
+                    <div class="d-flex justify-content-between border-top pt-3 mb-3"><span>Total a registrar</span><strong>$@pagos.Sum(x => x.Value).ToString("N2")</strong></div>
+                    <button class="btn btn-primary w-100" @onclick="GuardarAsync" disabled="@guardando">@(guardando ? "Guardando..." : "Registrar pago")</button>
+                </div></div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<CuentaPorPagarVM> cuentas = new();
+    private readonly Dictionary<int, decimal> pagos = new();
+    private int currentUserId;
+    private bool cargando = true;
+    private bool guardando;
+    private string busqueda = "";
+    private string formaPago = "Transferencia";
+    private string referencia = "";
+    private string observacion = "";
+    private string error = "";
+
+    private IEnumerable<CuentaPorPagarVM> CuentasFiltradas => cuentas.Where(x => string.IsNullOrWhiteSpace(busqueda) || x.Proveedor.Contains(busqueda, StringComparison.OrdinalIgnoreCase) || x.IdentificacionProveedor.Contains(busqueda, StringComparison.OrdinalIgnoreCase) || x.NumeroDocumento.Contains(busqueda, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        currentUserId = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id) ? id : 0;
+        if (currentUserId <= 0) { Navigation.NavigateTo("/login", true); return; }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        cargando = true;
+        error = "";
+        try
+        {
+            cuentas = await CuentasPagarService.ListarAsync(currentUserId);
+            pagos.Clear();
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudieron cargar las cuentas pendientes: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private string Monto(CuentaPorPagarVM cuenta) => pagos.TryGetValue(cuenta.IdFactura, out var monto) ? monto.ToString("0.00", CultureInfo.InvariantCulture) : "0.00";
+
+    private void CambiarMonto(CuentaPorPagarVM cuenta, string? valor)
+    {
+        if (decimal.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out var monto) || decimal.TryParse(valor, NumberStyles.Any, CultureInfo.CurrentCulture, out monto))
+            pagos[cuenta.IdFactura] = Math.Min(Math.Max(monto, 0m), cuenta.SaldoPendiente);
+    }
+
+    private async Task GuardarAsync()
+    {
+        if (pagos.Values.Sum() <= 0m) { await AlertService.ShowWarningAsync("Ingresa al menos un monto para registrar."); return; }
+        guardando = true;
+        try
+        {
+            if (await CuentasPagarService.RegistrarPagoAsync(currentUserId, pagos, formaPago, referencia, observacion))
+            {
+                await AlertService.ShowSuccessAsync("Pago registrado correctamente.");
+                await CargarAsync();
+            }
+        }
+        catch (InvalidOperationException ex) { await AlertService.ShowErrorAsync(ex.Message); }
+        finally { guardando = false; }
+    }
+}

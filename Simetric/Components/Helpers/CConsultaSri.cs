@@ -156,7 +156,7 @@ namespace ConsultaDeRucApi.Services
                     Cookie,
                     tokenValor);
                 html = LeerRespuesta(mipymeRequest);
-                datosPersona.Persona_MiPyme = JsonSerializer.Deserialize<Persona_MiPyme>(html, JsonOptions);
+                datosPersona.Persona_MiPyme = JsonSerializer.Deserialize<Persona_MiPyme>(html, JsonOptions) ?? new Persona_MiPyme();
             }
             catch (Exception ex)
             {
@@ -182,28 +182,37 @@ namespace ConsultaDeRucApi.Services
             return datosPersona;
         }
 
-        private static HttpWebRequest CrearRequest(string url, CookieContainer? cookieContainer = null, string? authorization = null)
+        private HttpRequestMessage CrearRequest(string url, CookieContainer? cookieContainer = null, string? authorization = null)
         {
-            var request = (HttpWebRequest)WebRequest.Create(url);
-            request.Credentials = CredentialCache.DefaultCredentials;
-            request.CookieContainer = cookieContainer ?? new CookieContainer();
-            request.UserAgent = "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:67.0) Gecko/20100101 Firefox/67.0";
-            request.ContentType = "application/json; charset=utf-8";
+            Cookie = cookieContainer ?? Cookie;
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:67.0) Gecko/20100101 Firefox/67.0");
 
             if (!string.IsNullOrWhiteSpace(authorization))
             {
-                request.Headers.Add("Authorization", authorization);
+                request.Headers.TryAddWithoutValidation("Authorization", authorization);
             }
 
             return request;
         }
 
-        private static string LeerRespuesta(HttpWebRequest request)
+        private string LeerRespuesta(HttpRequestMessage request)
         {
-            using var response = (HttpWebResponse)request.GetResponse();
-            using var stream = response.GetResponseStream();
-            using var reader = new StreamReader(stream!);
-            return HttpUtility.HtmlDecode(reader.ReadToEnd());
+            using (request)
+            using (var handler = new HttpClientHandler
+            {
+                CookieContainer = Cookie,
+                UseCookies = true,
+                Credentials = CredentialCache.DefaultCredentials
+            })
+            using (var client = new HttpClient(handler))
+            using (var response = client.Send(request))
+            {
+                response.EnsureSuccessStatusCode();
+                using var stream = response.Content.ReadAsStream();
+                using var reader = new StreamReader(stream);
+                return HttpUtility.HtmlDecode(reader.ReadToEnd());
+            }
         }
 
         private static string NormalizarEstadoContribuyente(string? estado) =>

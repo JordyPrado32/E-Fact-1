@@ -530,7 +530,7 @@ namespace Simetric.Services
             var facturas = await query.Select(f => new FacturaPendienteVM
             {
                 IdFactura = f.Codfactura,
-                NumFactura = f.Numfactura,
+                NumFactura = f.Numfactura ?? string.Empty,
                 IdCliente = f.Codclientes ?? 0,
                 NumeroIdentificacion = f.CodclientesNavigation != null ? (f.CodclientesNavigation.Numeroidentificacion ?? string.Empty) : string.Empty,
                 NombreCliente = f.CodclientesNavigation != null
@@ -573,7 +573,7 @@ namespace Simetric.Services
                 .Select(f => new FacturaPendienteVM
             {
                 IdFactura = f.Codfactura,
-                NumFactura = f.Numfactura,
+                NumFactura = f.Numfactura ?? string.Empty,
                 IdCliente = f.Codclientes ?? 0,
                 NumeroIdentificacion = f.CodclientesNavigation != null ? (f.CodclientesNavigation.Numeroidentificacion ?? string.Empty) : string.Empty,
                 NombreCliente = f.CodclientesNavigation != null

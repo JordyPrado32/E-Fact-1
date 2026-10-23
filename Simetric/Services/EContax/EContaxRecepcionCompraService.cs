@@ -230,6 +230,7 @@ public sealed class EContaxRecepcionCompraService
                 .Select(x => (CodigoProducto: x.CodigoProducto, Cantidad: x.CantidadRecibida, CostoUnitarioSinImpuestos: x.CostoUnitario ?? costos.GetValueOrDefault(x.IdDetalleOrdenCompra), NumeroLote: x.NumeroLote, FechaVencimiento: x.FechaVencimiento))
                 .ToList(),
             recepcion.NumeroRecepcion);
+        await ActualizarPreciosProveedorAsync(context, actor.IdEmpresa, orden.IdProveedorCliente, recepcion.Detalles, orden.Detalles);
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
         return (await ObtenerAsync(userId, id))!;
@@ -450,6 +451,44 @@ public sealed class EContaxRecepcionCompraService
         detalle.Cantidad <= 0
             ? 0m
             : Math.Round(Math.Max(0, detalle.Subtotal / detalle.Cantidad), 4, MidpointRounding.AwayFromZero);
+
+    private static async Task ActualizarPreciosProveedorAsync(
+        AppDbContext context,
+        int idEmpresa,
+        int idProveedor,
+        IEnumerable<EContaxRecepcionCompraDetalle> detalles,
+        IEnumerable<EContaxOrdenCompraDetalle> detallesOrden)
+    {
+        var ordenPorDetalle = detallesOrden.ToDictionary(x => x.IdDetalle);
+        foreach (var detalle in detalles.Where(x => x.CantidadRecibida > 0))
+        {
+            var precio = detalle.CostoUnitario ?? ordenPorDetalle[detalle.IdDetalleOrdenCompra].PrecioUnitario;
+            var relacion = await context.EContaxProductosProveedores.FirstOrDefaultAsync(x =>
+                x.IdEmpresa == idEmpresa && x.CodigoProducto == detalle.CodigoProducto && x.IdProveedorCliente == idProveedor);
+
+            if (relacion is null)
+            {
+                var tienePrincipal = await context.EContaxProductosProveedores.AnyAsync(x =>
+                    x.IdEmpresa == idEmpresa && x.CodigoProducto == detalle.CodigoProducto && x.Activo && x.EsPrincipal);
+                context.EContaxProductosProveedores.Add(new EContaxProductoProveedor
+                {
+                    IdEmpresa = idEmpresa,
+                    CodigoProducto = detalle.CodigoProducto,
+                    IdProveedorCliente = idProveedor,
+                    PrecioCompra = precio,
+                    EsPrincipal = !tienePrincipal,
+                    Activo = true,
+                    FechaActualizacion = DateTime.Now
+                });
+            }
+            else
+            {
+                relacion.PrecioCompra = precio;
+                relacion.Activo = true;
+                relacion.FechaActualizacion = DateTime.Now;
+            }
+        }
+    }
 
     private static void AgregarHistorial(AppDbContext context, int idRecepcion, string? anterior, string nuevo, string? observacion, int userId, DateTime fecha) =>
         context.EContaxRecepcionesCompraHistorial.Add(new EContaxRecepcionCompraHistorial

@@ -442,7 +442,12 @@ public class NotaDebitoService
                 }
 
                 if (notaDebito.CodEmisor != EmisorSistemaService.CodigoEmisorBackOffice)
+                {
+                    if (notaDebito.Usuario is not > 0)
+                        throw new InvalidOperationException("La nota de débito no tiene un usuario válido para consumir el documento.");
+
                     await _emisionControlService.ConsumirDocumentoAsync(db, notaDebito.Usuario.Value);
+                }
                 await tx.CommitAsync();
 
                 return notaDebito.Sec;

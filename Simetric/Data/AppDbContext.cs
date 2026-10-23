@@ -26,6 +26,7 @@ namespace Simetric.Data
         public DbSet<FormasPago> FormasPago { get; set; }
         public DbSet<AbonoMultiple> AbonoMultiples { get; set; }
         public DbSet<Abonos> Abonos { get; set; }
+        public DbSet<CuentaPorPagarPago> CuentasPorPagarPagos { get; set; }
         public DbSet<AbonoTipo> AbonoTipos { get; set; }
         public DbSet<DetalleNotaCredito> DetallesNotaCredito { get; set; }
         public DbSet<DetalleNotaDebito> DetallesNotaDebito { get; set; }
@@ -99,6 +100,7 @@ namespace Simetric.Data
         public DbSet<EContaxPerfil> EContaxPerfiles { get; set; }
         public DbSet<EContaxInvitacion> EContaxInvitaciones { get; set; }
         public DbSet<EContaxProductoSucursal> EContaxProductosSucursales { get; set; }
+        public DbSet<EContaxProductoProveedor> EContaxProductosProveedores { get; set; }
         public DbSet<EContaxOrdenCompra> EContaxOrdenesCompra { get; set; }
         public DbSet<EContaxOrdenCompraDetalle> EContaxOrdenesCompraDetalles { get; set; }
         public DbSet<EContaxOrdenCompraEstadoHistorial> EContaxOrdenesCompraHistorial { get; set; }
@@ -419,6 +421,23 @@ namespace Simetric.Data
                     .HasForeignKey(e => new { e.IdEmpresa, e.IdSucursal })
                     .HasPrincipalKey(e => new { e.IdEmpresa, e.IdSucursal })
                     .OnDelete(DeleteBehavior.NoAction);
+            });
+
+            modelBuilder.Entity<EContaxProductoProveedor>(entity =>
+            {
+                entity.ToTable("ECONTAX_PRODUCTO_PROVEEDOR", "dbo");
+                entity.HasKey(x => x.IdProductoProveedor);
+                entity.Property(x => x.IdProductoProveedor).HasColumnName("id_producto_proveedor");
+                entity.Property(x => x.IdEmpresa).HasColumnName("id_empresa");
+                entity.Property(x => x.CodigoProducto).HasColumnName("codigo_producto");
+                entity.Property(x => x.IdProveedorCliente).HasColumnName("id_proveedor_cliente");
+                entity.Property(x => x.CodigoProductoProveedor).HasColumnName("codigo_producto_proveedor").HasMaxLength(100).IsUnicode(false);
+                entity.Property(x => x.PrecioCompra).HasColumnName("precio_compra").HasColumnType("decimal(18,4)");
+                entity.Property(x => x.EsPrincipal).HasColumnName("es_principal");
+                entity.Property(x => x.Activo).HasColumnName("activo");
+                entity.Property(x => x.FechaActualizacion).HasColumnName("fecha_actualizacion");
+                entity.HasIndex(x => new { x.IdEmpresa, x.CodigoProducto, x.IdProveedorCliente }).IsUnique();
+                entity.HasIndex(x => new { x.IdEmpresa, x.IdProveedorCliente, x.Activo });
             });
 
             modelBuilder.Entity<EContaxInventarioConfiguracion>(entity =>
@@ -790,6 +809,16 @@ namespace Simetric.Data
                 entity.Property(e => e.abono).HasPrecision(18, 2);
                 entity.Property(e => e.BaseImporte).HasPrecision(18, 2);
                 entity.Property(e => e.porcentaje).HasPrecision(18, 2);
+            });
+
+            modelBuilder.Entity<CuentaPorPagarPago>(entity =>
+            {
+                entity.ToTable("CXP_PAGOS");
+                entity.HasKey(e => e.IdPago);
+                entity.Property(e => e.Monto).HasPrecision(18, 2);
+                entity.Property(e => e.FormaPago).HasMaxLength(50);
+                entity.Property(e => e.Referencia).HasMaxLength(100);
+                entity.Property(e => e.Observacion).HasMaxLength(500);
             });
             // =========================
             // CODIGOIMPUESTO

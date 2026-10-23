@@ -1034,11 +1034,11 @@ WHERE NOT EXISTS (
 
         if (emisorId is > 0)
         {
-            query = query.Where(e => e.Codigo == emisorId.Value || usuarios.Contains(e.IdUsuario.Value));
+            query = query.Where(e => e.Codigo == emisorId.Value || usuarios.Contains(e.IdUsuario ?? 0));
         }
         else
         {
-            query = query.Where(e => usuarios.Contains(e.IdUsuario.Value));
+            query = query.Where(e => usuarios.Contains(e.IdUsuario ?? 0));
         }
 
         var rucs = await query

@@ -178,6 +178,10 @@ public class LiquidacionCompraService
             .Select(x => new LiquidacionProveedorLookupDto
             {
                 CodCliente = x.Codcliente,
+                IdProveedor = context.Proveedores
+                    .Where(p => p.estado == true && (p.ruc ?? "") == (x.Numeroidentificacion ?? ""))
+                    .Select(p => (int?)p.idProveedor)
+                    .FirstOrDefault(),
                 Identificacion = x.Numeroidentificacion ?? "",
                 TipoIdentificacion = x.Tipoidentificacion ?? "",
                 RazonSocial = !string.IsNullOrWhiteSpace(x.Nombrerazonsocial)
@@ -210,19 +214,27 @@ public class LiquidacionCompraService
                 ))
             .Select(x => new LiquidacionProveedorLookupDto
             {
+                IdProveedor = x.idProveedor,
                 Identificacion = x.ruc ?? "",
                 TipoIdentificacion = x.tipoIdentificacion ?? "",
                 RazonSocial = !string.IsNullOrWhiteSpace(x.nombre) ? x.nombre! : (x.nombreComercial ?? ""),
                 Direccion = x.direccion ?? "",
                 TelefonoFijo = x.telefono ?? "",
                 TelefonoMovil = x.telefonoMovil ?? "",
-                Correo = x.email ?? ""
+                Correo = x.email ?? "",
+                FormaPago = x.formaPago ?? "",
+                PlazoPago = x.plazoPago,
+                CuentaContable = x.cuentaContable ?? "",
+                LlevaRetencion = x.llevaRetencion == true,
+                TipoCuenta = x.tipoCuenta ?? "",
+                NumeroCuenta = x.numeroCuenta ?? "",
+                InstitucionFin = x.institucionFin
             })
             .Take(20)
             .ToListAsync();
 
-        var combinados = clientes
-            .Concat(proveedores)
+        var combinados = proveedores
+            .Concat(clientes)
             .Where(x => !string.IsNullOrWhiteSpace(x.Identificacion) || !string.IsNullOrWhiteSpace(x.RazonSocial))
             .GroupBy(x => (x.Identificacion ?? "").Trim(), StringComparer.OrdinalIgnoreCase)
             .Select(g => CombinarProveedorLookup(g))
@@ -709,6 +721,11 @@ public class LiquidacionCompraService
                     Ambiente = persistible.Ambiente,
                     Estado = true,
                     TiempoCredito = persistible.Plazo ?? 0,
+                    ValorApagar = EsLiquidacionCredito(persistible) ? persistible.ImporteTotal : 0m,
+                    EstadoPago = EsLiquidacionCredito(persistible) ? "PENDIENTE" : "PAGADO",
+                    FechaCancelado = EsLiquidacionCredito(persistible)
+                        ? null
+                        : DateOnly.FromDateTime((persistible.FechaEmision ?? DateTime.Today).Date),
                     TipoDocumento = "LIQ",
                     FechaRegistro = DateTime.Now,
                     Inventario = false,
@@ -1147,7 +1164,7 @@ public class LiquidacionCompraService
             {
                 estado = DocumentoAutorizacionHelper.EstadoAutorizado,
                 autorizacion = compra.NumAutorizacion ?? string.Empty,
-                fecha = compra.FechaAutoSRI ?? compra.FchAutorizacion?.ToString(CultureInfo.InvariantCulture),
+                fecha = compra.FechaAutoSRI ?? compra.FchAutorizacion?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
                 mensaje = "La liquidación de compra ya se encuentra autorizada."
             };
         }
@@ -1881,6 +1898,26 @@ public class LiquidacionCompraService
 
         if (string.IsNullOrWhiteSpace(preview.TipoIdentificacionProveedor) && !string.IsNullOrWhiteSpace(proveedor.tipoIdentificacion))
             preview.TipoIdentificacionProveedor = proveedor.tipoIdentificacion!.Trim();
+
+        if (string.IsNullOrWhiteSpace(preview.FormaPago) && !string.IsNullOrWhiteSpace(proveedor.formaPago))
+            preview.FormaPago = proveedor.formaPago.Trim();
+
+        if (!preview.Plazo.HasValue && proveedor.plazoPago.HasValue)
+            preview.Plazo = proveedor.plazoPago;
+
+        if (string.IsNullOrWhiteSpace(preview.CuentaContableProveedor))
+            preview.CuentaContableProveedor = proveedor.cuentaContable?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(preview.TipoCuentaProveedor))
+            preview.TipoCuentaProveedor = proveedor.tipoCuenta?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(preview.NumeroCuentaProveedor))
+            preview.NumeroCuentaProveedor = proveedor.numeroCuenta?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(preview.BancoProveedor) && proveedor.institucionFin.HasValue)
+            preview.BancoProveedor = proveedor.institucionFin.Value.ToString(CultureInfo.InvariantCulture);
+
+        preview.EsSujetoRetencionProveedor = proveedor.llevaRetencion == true;
     }
 
     private async Task<string> ObtenerSerieComprasAsync(int? usuario, Emisor? emisor, AppDbContext context)
@@ -2496,13 +2533,21 @@ public class LiquidacionCompraService
         return new LiquidacionProveedorLookupDto
         {
             CodCliente = lista.Select(x => x.CodCliente).FirstOrDefault(x => x.HasValue),
+            IdProveedor = lista.Select(x => x.IdProveedor).FirstOrDefault(x => x.HasValue),
             Identificacion = Tomar(lista.Select(x => x.Identificacion).ToArray()),
             TipoIdentificacion = Tomar(lista.Select(x => x.TipoIdentificacion).ToArray()),
             RazonSocial = Tomar(lista.Select(x => x.RazonSocial).ToArray()),
             Direccion = Tomar(lista.Select(x => x.Direccion).ToArray()),
             TelefonoFijo = Tomar(lista.Select(x => x.TelefonoFijo).ToArray()),
             TelefonoMovil = Tomar(lista.Select(x => x.TelefonoMovil).ToArray()),
-            Correo = Tomar(lista.Select(x => x.Correo).ToArray())
+            Correo = Tomar(lista.Select(x => x.Correo).ToArray()),
+            FormaPago = Tomar(lista.Select(x => x.FormaPago).ToArray()),
+            PlazoPago = lista.Select(x => x.PlazoPago).FirstOrDefault(x => x.HasValue),
+            CuentaContable = Tomar(lista.Select(x => x.CuentaContable).ToArray()),
+            LlevaRetencion = lista.Any(x => x.LlevaRetencion),
+            TipoCuenta = Tomar(lista.Select(x => x.TipoCuenta).ToArray()),
+            NumeroCuenta = Tomar(lista.Select(x => x.NumeroCuenta).ToArray()),
+            InstitucionFin = lista.Select(x => x.InstitucionFin).FirstOrDefault(x => x.HasValue)
         };
     }
 
@@ -2519,6 +2564,10 @@ public class LiquidacionCompraService
 
         return fechaEmision.Value.Date.AddDays(Math.Max(plazo ?? 0, 0));
     }
+
+    private static bool EsLiquidacionCredito(LiquidacionCompraPreviewDto preview) =>
+        string.Equals((preview.FormaPago ?? "").Trim(), "19", StringComparison.OrdinalIgnoreCase) ||
+        preview.Plazo.GetValueOrDefault() > 0;
 
     private static string ObtenerTelefonoFijo(LiquidacionCompraPreviewDto preview)
     {

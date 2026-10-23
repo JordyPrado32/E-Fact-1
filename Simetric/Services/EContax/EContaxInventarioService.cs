@@ -373,7 +373,7 @@ public sealed class EContaxInventarioService
             .ToDictionaryAsync(x => x.Codigo);
         var metodo = await ObtenerMetodoAsync(context, idEmpresa);
         var movimientosConLotes = new List<(EContaxInventarioMovimiento Movimiento, List<LoteSalida> Lotes)>();
-        foreach (var grupo in detalles.Where(x => x.Codproducto > 0 && x.Cantproducto > 0).GroupBy(x => x.Codproducto))
+        foreach (var grupo in detalles.Where(x => x.Codproducto > 0 && x.Cantproducto > 0).GroupBy(x => x.Codproducto).OrderBy(x => x.Key))
         {
             if (!productos.TryGetValue(grupo.Key, out var producto) ||
                 string.Equals(producto.Tipocompravena, "SERVICIO", StringComparison.OrdinalIgnoreCase))
@@ -943,8 +943,16 @@ public sealed class EContaxInventarioService
 
     private static async Task<EContaxInventarioExistencia> ObtenerExistenciaAsync(AppDbContext context, int empresa, int sucursal, int producto)
     {
-        var existencia = await context.EContaxInventarioExistencias.FirstOrDefaultAsync(x =>
-            x.IdEmpresa == empresa && x.IdSucursal == sucursal && x.CodigoProducto == producto);
+        var existencia = await context.EContaxInventarioExistencias
+            .FromSqlInterpolated($@"
+                SELECT [codigo_producto], [id_empresa], [id_sucursal], [stock_actual],
+                       [stock_reservado], [stock_minimo], [stock_maximo], [costo_promedio], [fecha_actualizacion]
+                FROM [dbo].[ECONTAX_INVENTARIO_EXISTENCIA] WITH (UPDLOCK, HOLDLOCK)
+                WHERE [id_empresa] = {empresa}
+                  AND [id_sucursal] = {sucursal}
+                  AND [codigo_producto] = {producto}")
+            .AsTracking()
+            .FirstOrDefaultAsync();
         if (existencia is not null)
             return existencia;
 
@@ -964,8 +972,15 @@ public sealed class EContaxInventarioService
         var fechaHoy = DateTime.UtcNow.Date;
 
         var lotesQuery = context.EContaxInventarioLotes
-            .Where(x => x.IdEmpresa == existencia.IdEmpresa && x.IdSucursal == existencia.IdSucursal &&
-                        x.CodigoProducto == existencia.CodigoProducto && x.CantidadDisponible > 0 &&
+            .FromSqlInterpolated($@"
+                SELECT [id_lote], [codigo_producto], [id_empresa], [id_sucursal],
+                       [cantidad_original], [cantidad_disponible], [costo_unitario],
+                       [numero_lote], [fecha_vencimiento], [fecha_ingreso], [id_movimiento_entrada]
+                FROM [dbo].[ECONTAX_INVENTARIO_LOTE] WITH (UPDLOCK, HOLDLOCK)
+                WHERE [id_empresa] = {existencia.IdEmpresa}
+                  AND [id_sucursal] = {existencia.IdSucursal}
+                  AND [codigo_producto] = {existencia.CodigoProducto}")
+            .Where(x => x.CantidadDisponible > 0 &&
                         (soloVencidos
                             ? x.FechaVencimiento.HasValue && x.FechaVencimiento.Value.Date <= fechaHoy
                             : !x.FechaVencimiento.HasValue || x.FechaVencimiento.Value.Date > fechaHoy));

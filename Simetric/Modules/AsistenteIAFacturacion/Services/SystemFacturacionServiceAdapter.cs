@@ -120,12 +120,14 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
         if (ownerId <= 0)
             return Fail("No fue posible resolver el usuario propietario de la factura.");
 
-        if (draft.Cliente?.Id <= 0)
+        if (draft.Cliente is null || draft.Cliente.Id <= 0)
             return Fail("La factura no tiene un cliente válido.");
+
+        var clienteDraft = draft.Cliente;
 
         var cliente = await context.Clientes
             .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.Codcliente == draft.Cliente.Id && c.Usuario == ownerId, cancellationToken);
+            .FirstOrDefaultAsync(c => c.Codcliente == clienteDraft.Id && c.Usuario == ownerId, cancellationToken);
         if (cliente is null)
             return Fail("El cliente seleccionado ya no existe en el sistema.");
 
@@ -242,9 +244,9 @@ public sealed class SystemFacturacionServiceAdapter : IFacturacionService
             Estado = true,
             Autorizado = false,
             Idusuario = userId,
-            Nombread = draft.Cliente.Nombre,
-            Correoad = draft.Cliente.Correo,
-            Direccionad = draft.Cliente.Direccion,
+            Nombread = clienteDraft.Nombre,
+            Correoad = clienteDraft.Correo,
+            Direccionad = clienteDraft.Direccion,
             DescuentoGlobalPct = draft.DescuentoGlobalPorcentaje,
             DescuentoGlobalValor = draft.DescuentoGlobalValor,
             Tiempocredito = esCredito ? diasCredito : null,

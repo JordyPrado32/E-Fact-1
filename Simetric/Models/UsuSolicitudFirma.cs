@@ -499,13 +499,14 @@ namespace Simetric.Models
 
         private static bool EsCedulaEcuatorianaValida(string cedula)
         {
-            if (!Regex.IsMatch(cedula ?? string.Empty, @"^\d{10}$"))
+            var valorCedula = cedula ?? string.Empty;
+            if (!Regex.IsMatch(valorCedula, @"^\d{10}$"))
             {
                 return false;
             }
 
-            var provincia = int.Parse(cedula[..2]);
-            var tercerDigito = int.Parse(cedula[2].ToString());
+            var provincia = int.Parse(valorCedula[..2]);
+            var tercerDigito = int.Parse(valorCedula[2].ToString());
             if (provincia < 1 || provincia > 24 || tercerDigito > 6)
             {
                 return false;
@@ -514,7 +515,7 @@ namespace Simetric.Models
             var suma = 0;
             for (var i = 0; i < 9; i++)
             {
-                var digito = int.Parse(cedula[i].ToString());
+                var digito = int.Parse(valorCedula[i].ToString());
                 if (i % 2 == 0)
                 {
                     digito *= 2;
@@ -528,30 +529,31 @@ namespace Simetric.Models
             }
 
             var verificadorCalculado = (10 - (suma % 10)) % 10;
-            var verificador = int.Parse(cedula[9].ToString());
+            var verificador = int.Parse(valorCedula[9].ToString());
 
             return verificadorCalculado == verificador;
         }
 
         private static bool EsRucEcuatorianoValido(string ruc)
         {
-            if (!Regex.IsMatch(ruc ?? string.Empty, @"^\d{13}$"))
+            var valorRuc = ruc ?? string.Empty;
+            if (!Regex.IsMatch(valorRuc, @"^\d{13}$"))
             {
                 return false;
             }
 
-            var provincia = int.Parse(ruc[..2]);
+            var provincia = int.Parse(valorRuc[..2]);
             if (provincia < 1 || provincia > 24)
             {
                 return false;
             }
 
-            var tercerDigito = int.Parse(ruc[2].ToString());
+            var tercerDigito = int.Parse(valorRuc[2].ToString());
             return tercerDigito switch
             {
-                <= 5 => EsCedulaEcuatorianaValida(ruc[..10]) && ruc[10..] != "000",
-                6 => ruc[9..] != "0000",
-                9 => ruc[10..] != "000",
+                <= 5 => EsCedulaEcuatorianaValida(valorRuc[..10]) && valorRuc[10..] != "000",
+                6 => valorRuc[9..] != "0000",
+                9 => valorRuc[10..] != "000",
                 _ => false
             };
         }

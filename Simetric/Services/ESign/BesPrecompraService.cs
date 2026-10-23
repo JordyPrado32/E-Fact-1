@@ -247,7 +247,7 @@ public sealed class UanatacaApiService
     private async Task<T?> SendAsync<T>(
         HttpMethod method,
         string path,
-        string bearerToken,
+        string? bearerToken,
         IReadOnlyDictionary<string, string?>? query,
         CancellationToken cancellationToken)
     {
@@ -282,7 +282,7 @@ public sealed class UanatacaApiService
     private async Task<string?> SendRawAsync(
         HttpMethod method,
         string path,
-        string bearerToken,
+        string? bearerToken,
         IReadOnlyDictionary<string, string?>? query,
         CancellationToken cancellationToken,
         bool notFoundAsEmpty = false)

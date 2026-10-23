@@ -444,7 +444,7 @@ public sealed class AliadoPortalService
             cliente.TotalCompras = compras.Count;
             cliente.ComprasEFact = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-FACT");
             cliente.ComprasERubrica = compras.Count(x => AliadoServicioHelper.Clasificar(x.Producto) == "E-RÚBRICA");
-            cliente.NivelAlerta = ObtenerNivelAlerta(cliente);
+            cliente.NivelAlerta = ObtenerNivelAlerta(cliente) ?? "warning";
             cliente.Alerta = ObtenerDescripcionAlerta(cliente);
         }
 
@@ -2694,7 +2694,7 @@ public sealed class AliadoPortalService
             select new
             {
                 compra.CodFactura,
-                IdUsuario = compra.Usuario.Value
+                IdUsuario = compra.Usuario.GetValueOrDefault()
             })
             .FirstOrDefaultAsync();
 

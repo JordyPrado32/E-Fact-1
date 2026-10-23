@@ -1,0 +1,147 @@
+@page "/cuentas-por-pagar"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@using Simetric.ViewModels
+@attribute [AllowAnonymous]
+@inject CuentasPagarService CuentasPagarService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject SweetAlertService AlertService
+
+<PageTitle>Cuentas por pagar | Numerica e-fact</PageTitle>
+
+<div class="container-fluid py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <span class="text-muted text-uppercase small fw-semibold">Proveedores</span>
+            <h1 class="h3 mb-1">Cuentas por pagar</h1>
+            <p class="text-muted mb-0">Liquidaciones y facturas de compra registradas a crédito.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary" href="/mis-compras"><i class="bi bi-bag-check me-1"></i>Mis compras</a>
+            <a class="btn btn-primary" href="/cuentas-por-pagar/registrar"><i class="bi bi-hand-index-thumb me-1"></i>Registrar pago</a>
+            <a class="btn btn-outline-primary" href="/cuentas-por-pagar/estado-cuenta"><i class="bi bi-file-text me-1"></i>Estado de cuenta</a>
+            <button class="btn btn-outline-secondary" @onclick="CargarAsync" disabled="@cargando"><i class="bi bi-arrow-clockwise me-1"></i>Actualizar</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="alert alert-danger border-0 rounded-3">@error</div>
+    }
+
+    @if (cargando)
+    {
+        <div class="alert alert-light border">Cargando cuentas por pagar...</div>
+    }
+    else
+    {
+        <div class="row g-3 mb-4">
+            <div class="col-md-4"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Saldo pendiente</small><div class="fs-4 fw-semibold">$@CuentasFiltradas.Sum(x => x.SaldoPendiente).ToString("N2")</div></div></div></div>
+                    <div class="col-md-4"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Documentos pendientes</small><div class="fs-4 fw-semibold">@CuentasFiltradas.Count(x => x.SaldoPendiente > 0)</div></div></div></div>
+            <div class="col-md-4"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Vencidas</small><div class="fs-4 fw-semibold text-danger">@CuentasFiltradas.Count(x => x.EstaVencida)</div></div></div></div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="row g-2 mb-3">
+                    <div class="col-md-8"><input class="form-control" @bind="busqueda" @bind:event="oninput" placeholder="Buscar por proveedor, RUC o liquidación..." /></div>
+                    <div class="col-md-4"><select class="form-select" @bind="filtroEstado"><option value="TODOS">Todos</option><option value="PENDIENTE">Pendientes</option><option value="VENCIDO">Vencidas</option><option value="PAGADO">Pagadas</option></select></div>
+                </div>
+                @if (!CuentasFiltradas.Any())
+                {
+                    <div class="text-center text-muted py-5">No existen cuentas por pagar con los filtros seleccionados.</div>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table align-middle">
+                            <thead><tr><th>Documento</th><th>Proveedor</th><th>Emisión</th><th>Vencimiento</th><th class="text-end">Total</th><th class="text-end">Saldo</th><th>Estado</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var cuenta in CuentasFiltradas)
+                                {
+                                    <tr @key="cuenta.IdFactura">
+                                        <td><strong>@cuenta.NumeroDocumento</strong><br /><small class="text-muted">#@cuenta.IdFactura</small></td>
+                                        <td>@cuenta.Proveedor<br /><small class="text-muted">@cuenta.IdentificacionProveedor</small></td>
+                                        <td>@cuenta.FechaEmision?.ToString("dd/MM/yyyy")</td>
+                                        <td>@cuenta.FechaVencimiento?.ToString("dd/MM/yyyy")</td>
+                                        <td class="text-end">$@cuenta.Total.ToString("N2")</td>
+                                        <td class="text-end fw-semibold">$@cuenta.SaldoPendiente.ToString("N2")</td>
+                                        <td><span class="badge @(cuenta.Estado == "VENCIDO" ? "text-bg-danger" : cuenta.Estado == "PAGADO" ? "text-bg-success" : "text-bg-warning")">@cuenta.Estado</span></td>
+                                        <td class="text-end">
+                                            @if (cuenta.SaldoPendiente > 0)
+                                            {
+                                                <button class="btn btn-sm btn-primary" @onclick="() => MarcarPagadaAsync(cuenta)">Marcar pagada</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<CuentaPorPagarVM> cuentas = new();
+    private int currentUserId;
+    private bool cargando = true;
+    private string busqueda = "";
+    private string filtroEstado = "TODOS";
+    private string error = "";
+
+    private IEnumerable<CuentaPorPagarVM> CuentasFiltradas => cuentas.Where(x =>
+        (string.IsNullOrWhiteSpace(busqueda) || x.Proveedor.Contains(busqueda, StringComparison.OrdinalIgnoreCase) || x.IdentificacionProveedor.Contains(busqueda, StringComparison.OrdinalIgnoreCase) || x.NumeroDocumento.Contains(busqueda, StringComparison.OrdinalIgnoreCase)) &&
+        (filtroEstado == "TODOS" || x.Estado == filtroEstado));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        currentUserId = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id) ? id : 0;
+        if (currentUserId <= 0)
+        {
+            Navigation.NavigateTo("/login", true);
+            return;
+        }
+
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        if (currentUserId <= 0) return;
+        cargando = true;
+        error = "";
+        try
+        {
+            cuentas = await CuentasPagarService.ListarAsync(currentUserId, incluirPagadas: true);
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudieron cargar las cuentas por pagar: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task MarcarPagadaAsync(CuentaPorPagarVM cuenta)
+    {
+        if (!await AlertService.ConfirmAsync($"¿Marcar como pagado el documento {cuenta.NumeroDocumento}?", "Confirmar pago", "Sí, marcar pagada")) return;
+        try
+        {
+            if (await CuentasPagarService.MarcarPagadaAsync(currentUserId, cuenta.IdFactura))
+            {
+                await AlertService.ShowSuccessAsync("Cuenta por pagar actualizada.");
+                await CargarAsync();
+            }
+        }
+        catch (InvalidOperationException ex) { await AlertService.ShowErrorAsync(ex.Message); }
+        catch (Exception ex) { error = $"No se pudo actualizar la cuenta: {ex.Message}"; }
+    }
+}

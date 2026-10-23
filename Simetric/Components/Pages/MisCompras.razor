@@ -1,0 +1,223 @@
+@page "/mis-compras"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Simetric.Services
+@using Simetric.ViewModels
+@attribute [AllowAnonymous]
+@inject FacturaCompraManualService FacturaCompraService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject SweetAlertService AlertService
+
+<PageTitle>Mis compras | Numerica e-fact</PageTitle>
+
+<div class="container-fluid py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <span class="text-muted text-uppercase small fw-semibold">Compras internas</span>
+            <h1 class="h3 mb-1">Mis compras</h1>
+            <p class="text-muted mb-0">Consulta las facturas de compra registradas manualmente y anula las que no correspondan.</p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-primary" href="/compras/nueva-factura"><i class="bi bi-plus-circle me-1"></i>Nueva factura</a>
+            <a class="btn btn-outline-primary" href="/cuentas-por-pagar"><i class="bi bi-wallet2 me-1"></i>Cuentas por pagar</a>
+            <button class="btn btn-outline-secondary" @onclick="CargarAsync" disabled="@cargando"><i class="bi bi-arrow-clockwise me-1"></i>Actualizar</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="alert alert-danger border-0 rounded-3"><i class="bi bi-exclamation-triangle me-2"></i>@error</div>
+    }
+
+    @if (cargando)
+    {
+        <div class="card border-0 shadow-sm"><div class="card-body text-center py-5"><div class="spinner-border text-primary mb-3" role="status"></div><div>Cargando compras...</div></div></div>
+    }
+    else
+    {
+        <div class="row g-3 mb-4">
+            <div class="col-md-4"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Compras registradas</small><div class="fs-4 fw-semibold">@ComprasFiltradas.Count()</div></div></div></div>
+            <div class="col-md-4"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Total activo</small><div class="fs-4 fw-semibold">$@ComprasFiltradas.Where(x => x.Estado == "ACTIVA").Sum(x => x.Total).ToString("N2")</div></div></div></div>
+            <div class="col-md-4"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Anuladas</small><div class="fs-4 fw-semibold text-danger">@ComprasFiltradas.Count(x => x.Estado == "ANULADA")</div></div></div></div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="row g-2 mb-3">
+                    <div class="col-md-8"><input class="form-control" @bind="busqueda" @bind:event="oninput" placeholder="Buscar por proveedor, identificación o documento interno..." /></div>
+                    <div class="col-md-4"><select class="form-select" @bind="filtroEstado"><option value="TODAS">Todas</option><option value="ACTIVA">Activas</option><option value="ANULADA">Anuladas</option></select></div>
+                </div>
+
+                @if (!ComprasFiltradas.Any())
+                {
+                    <div class="text-center text-muted py-5">No existen compras manuales con los filtros seleccionados.</div>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table align-middle">
+                            <thead><tr><th>Documento interno</th><th>Proveedor</th><th>Emisión</th><th>Pago</th><th class="text-end">Total</th><th class="text-end">Saldo</th><th>Estado</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var compra in ComprasFiltradas)
+                                {
+                                    <tr @key="compra.IdFactura">
+                                        <td><strong>@compra.NumeroDocumento</strong><br /><small class="text-muted">#@compra.IdFactura</small></td>
+                                        <td>@compra.Proveedor<br /><small class="text-muted">@compra.IdentificacionProveedor</small></td>
+                                        <td>@compra.FechaEmision?.ToString("dd/MM/yyyy")</td>
+                                        <td>@(string.IsNullOrWhiteSpace(compra.FormaPago) ? "No definida" : compra.FormaPago)<br /><small class="text-muted">@compra.EstadoPago</small></td>
+                                        <td class="text-end">$@compra.Total.ToString("N2")</td>
+                                        <td class="text-end fw-semibold">$@compra.SaldoPendiente.ToString("N2")</td>
+                                        <td><span class="badge @(compra.Estado == "ANULADA" ? "text-bg-danger" : "text-bg-success")">@compra.Estado</span></td>
+                                        <td class="text-end text-nowrap">
+                                            <button class="btn btn-sm btn-outline-primary" @onclick="() => VerDetalleAsync(compra.IdFactura)" disabled="@(cargandoDetalle && seleccionadoId == compra.IdFactura)"><i class="bi bi-eye me-1"></i>Detalle</button>
+                                            @if (compra.Estado == "ACTIVA")
+                                            {
+                                                <button class="btn btn-sm btn-outline-danger ms-1" @onclick="() => AnularAsync(compra)" disabled="@(anulandoId.HasValue)"><i class="bi bi-x-circle me-1"></i>Anular</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                    @if (seleccionadoId == compra.IdFactura)
+                                    {
+                                        <tr><td colspan="8" class="bg-light">
+                                            @if (cargandoDetalle)
+                                            {
+                                                <div class="py-3 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Cargando detalle...</div>
+                                            }
+                                            else if (seleccionada is not null)
+                                            {
+                                                <div class="py-2"><div class="d-flex justify-content-between align-items-center mb-2"><strong>Detalle de @seleccionada.NumeroDocumento</strong><button class="btn btn-sm btn-link" @onclick="CerrarDetalle">Cerrar</button></div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Código</th><th>Concepto</th><th>Detalle</th><th class="text-end">Cant.</th><th class="text-end">Precio</th><th class="text-end">Base</th><th class="text-end">IVA</th><th class="text-end">Total</th></tr></thead><tbody>@foreach (var detalle in seleccionada.Detalles) { <tr><td>@detalle.Codigo</td><td>@detalle.Descripcion</td><td>@detalle.Detalle</td><td class="text-end">@detalle.Cantidad.ToString("N2")</td><td class="text-end">$@detalle.PrecioUnitario.ToString("N2")</td><td class="text-end">$@detalle.Base.ToString("N2")</td><td class="text-end">$@detalle.Iva.ToString("N2")</td><td class="text-end">$@detalle.Total.ToString("N2")</td></tr> }</tbody></table></div><small class="text-muted">@seleccionada.Observacion</small></div>
+                                            }
+                                        </td></tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<CompraManualVM> compras = new();
+    private CompraManualVM? seleccionada;
+    private int? seleccionadoId;
+    private int? anulandoId;
+    private int currentUserId;
+    private bool cargando = true;
+    private bool cargandoDetalle;
+    private string busqueda = "";
+    private string filtroEstado = "TODAS";
+    private string error = "";
+
+    private IEnumerable<CompraManualVM> ComprasFiltradas => compras.Where(x =>
+        (filtroEstado == "TODAS" || x.Estado == filtroEstado) &&
+        (string.IsNullOrWhiteSpace(busqueda) ||
+         x.Proveedor.Contains(busqueda, StringComparison.OrdinalIgnoreCase) ||
+         x.IdentificacionProveedor.Contains(busqueda, StringComparison.OrdinalIgnoreCase) ||
+         x.NumeroDocumento.Contains(busqueda, StringComparison.OrdinalIgnoreCase)));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        currentUserId = int.TryParse(auth.User.FindFirst("IdUsuario")?.Value, out var id) ? id : 0;
+        if (currentUserId <= 0)
+        {
+            Navigation.NavigateTo("/login", true);
+            return;
+        }
+
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        if (currentUserId <= 0) return;
+        cargando = true;
+        error = "";
+        try
+        {
+            compras = await FacturaCompraService.ListarAsync(currentUserId);
+            if (seleccionadoId.HasValue && !compras.Any(x => x.IdFactura == seleccionadoId.Value))
+                CerrarDetalle();
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudieron cargar las compras: {ex.Message}";
+        }
+        finally
+        {
+            cargando = false;
+        }
+    }
+
+    private async Task VerDetalleAsync(int idFactura)
+    {
+        if (seleccionadoId == idFactura)
+        {
+            CerrarDetalle();
+            return;
+        }
+
+        seleccionadoId = idFactura;
+        seleccionada = null;
+        cargandoDetalle = true;
+        error = "";
+        try
+        {
+            seleccionada = await FacturaCompraService.ObtenerAsync(currentUserId, idFactura);
+            if (seleccionada == null)
+                error = "La compra ya no está disponible.";
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudo cargar el detalle: {ex.Message}";
+        }
+        finally
+        {
+            cargandoDetalle = false;
+        }
+    }
+
+    private void CerrarDetalle()
+    {
+        seleccionadoId = null;
+        seleccionada = null;
+        cargandoDetalle = false;
+    }
+
+    private async Task AnularAsync(CompraManualVM compra)
+    {
+        if (anulandoId.HasValue) return;
+        if (!await AlertService.ConfirmAsync($"¿Anular la compra {compra.NumeroDocumento}? Esta acción la retirará de CxP.", "Confirmar anulación", "Sí, anular")) return;
+
+        anulandoId = compra.IdFactura;
+        error = "";
+        try
+        {
+            if (!await FacturaCompraService.AnularAsync(currentUserId, compra.IdFactura))
+            {
+                await AlertService.ShowErrorAsync("La compra no está disponible o ya fue anulada.");
+                return;
+            }
+
+            await AlertService.ShowSuccessAsync("Compra anulada correctamente.");
+            CerrarDetalle();
+            await CargarAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            await AlertService.ShowErrorAsync(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudo anular la compra: {ex.Message}";
+        }
+        finally
+        {
+            anulandoId = null;
+        }
+    }
+}

@@ -131,8 +131,8 @@ public sealed class EContaxOrdenCompraService
         }).ToList();
     }
 
-    public Task<List<ProductoLookupDetalleDto>> BuscarProductosAsync(int userId, string? filtro) =>
-        _catalogService.BuscarProductosFiltroAsync(userId, filtro ?? string.Empty);
+    public Task<List<ProductoLookupDetalleDto>> BuscarProductosAsync(int userId, string? filtro, int? idProveedor) =>
+        _catalogService.BuscarProductosFiltroAsync(userId, filtro ?? string.Empty, idProveedor);
 
     public async Task<EContaxOrdenCompraDto> CrearAsync(int userId, EContaxOrdenCompraUpsertDto dto)
     {
@@ -167,6 +167,7 @@ public sealed class EContaxOrdenCompraService
         };
         AplicarTotales(entity, detalles);
         entity.Detalles = detalles;
+        await SincronizarRelacionesProveedorProductoAsync(context, actor.IdEmpresa, dto.IdProveedor, detalles);
         context.EContaxOrdenesCompra.Add(entity);
         await context.SaveChangesAsync();
 
@@ -219,6 +220,7 @@ public sealed class EContaxOrdenCompraService
         context.EContaxOrdenesCompraDetalles.RemoveRange(entity.Detalles);
         entity.Detalles = detalles;
         AplicarTotales(entity, detalles);
+        await SincronizarRelacionesProveedorProductoAsync(context, actor.IdEmpresa, dto.IdProveedor, detalles);
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
         return Map(entity);
@@ -295,6 +297,43 @@ public sealed class EContaxOrdenCompraService
             ((numero != null && x.NumeroFacturaProveedor == numero) || (clave != null && x.ClaveAccesoProveedor == clave)));
         if (duplicado)
             throw new InvalidOperationException("La factura o clave de acceso del proveedor ya está registrada en otra compra.");
+    }
+
+    private static async Task SincronizarRelacionesProveedorProductoAsync(
+        AppDbContext context,
+        int idEmpresa,
+        int idProveedor,
+        IEnumerable<EContaxOrdenCompraDetalle> detalles)
+    {
+        foreach (var detalle in detalles)
+        {
+            var relacion = await context.EContaxProductosProveedores
+                .FirstOrDefaultAsync(x => x.IdEmpresa == idEmpresa && x.CodigoProducto == detalle.CodigoProducto &&
+                    x.IdProveedorCliente == idProveedor);
+
+            if (relacion is null)
+            {
+                var tienePrincipal = await context.EContaxProductosProveedores
+                    .AnyAsync(x => x.IdEmpresa == idEmpresa && x.CodigoProducto == detalle.CodigoProducto && x.Activo && x.EsPrincipal);
+                relacion = new EContaxProductoProveedor
+                {
+                    IdEmpresa = idEmpresa,
+                    CodigoProducto = detalle.CodigoProducto,
+                    IdProveedorCliente = idProveedor,
+                    PrecioCompra = detalle.PrecioUnitario,
+                    EsPrincipal = !tienePrincipal,
+                    Activo = true,
+                    FechaActualizacion = DateTime.Now
+                };
+                context.EContaxProductosProveedores.Add(relacion);
+            }
+            else
+            {
+                relacion.PrecioCompra = detalle.PrecioUnitario;
+                relacion.Activo = true;
+                relacion.FechaActualizacion = DateTime.Now;
+            }
+        }
     }
 
     private async Task<List<EContaxOrdenCompraDetalle>> PrepararDetallesAsync(
