@@ -19,16 +19,15 @@
 <PageTitle>Órdenes de compra | E-Contax</PageTitle>
 <link rel="stylesheet" href="/css/econtax-compras.css?v=20261023-compras-buttons" />
 
-<div class="container-fluid py-4 purchase-orders-page purchase-flow-shell">
+<div class="container-fluid purchase-orders-page purchase-flow-shell">
     <header class="purchase-hero">
         <div class="purchase-hero-copy">
-            <div class="purchase-hero-icon"><i class="ri-file-list-3-line"></i></div>
             <div>
-                <span class="purchase-eyebrow">ABASTECIMIENTO · E-CONTAX</span>
                 <h1>Órdenes de compra</h1>
-                <p>Planifica tus compras, solicita aprobación y deja cada pedido listo para recepción.</p>
+                <p>Gestiona tus órdenes de compra, consulta su estado y da seguimiento hasta la recepción.</p>
             </div>
         </div>
+        <div class="purchase-hero-art" aria-hidden="true"><i class="ri-robot-2-line"></i><span><i class="ri-box-3-line"></i><i class="ri-checkbox-multiple-line"></i></span></div>
         <div class="purchase-hero-actions">
             <button class="purchase-secondary-btn" type="button" @onclick='() => NavManager.NavigateTo("/e-contax/proveedores")'>
                 <i class="ri-truck-line"></i><span>Proveedores</span>
@@ -39,19 +38,12 @@
         </div>
     </header>
 
-    <nav class="purchase-flow-steps" aria-label="Flujo de compras">
-        <button type="button" class="purchase-flow-step is-done" @onclick='() => NavManager.NavigateTo("/e-contax/proveedores")'><span>1</span><strong>Proveedores</strong></button>
-        <i class="ri-arrow-right-line"></i>
-        <button type="button" class="purchase-flow-step is-active" aria-current="step" disabled><span>2</span><strong>Orden de compra</strong></button>
-        <i class="ri-arrow-right-line"></i>
-        <button type="button" class="purchase-flow-step" @onclick='() => NavManager.NavigateTo("/e-contax/compras/recepciones")'><span>3</span><strong>Recepción</strong></button>
-    </nav>
-
     <section class="purchase-kpis" aria-label="Resumen de órdenes">
-        <article class="purchase-kpi"><span><i class="ri-draft-line"></i>Borradores</span><strong>@TotalBorradores</strong><small>En preparación</small></article>
-        <article class="purchase-kpi purchase-kpi-success"><span><i class="ri-checkbox-circle-line"></i>Aprobadas</span><strong>@TotalAprobadas</strong><small>Listas para enviar</small></article>
-        <article class="purchase-kpi purchase-kpi-info"><span><i class="ri-send-plane-line"></i>Enviadas</span><strong>@TotalEnviadas</strong><small>Esperando recepción</small></article>
-        <article class="purchase-kpi purchase-kpi-total"><span><i class="ri-money-dollar-circle-line"></i>Valor filtrado</span><strong>@TotalOrdenes.ToString("C2")</strong><small>@ordenes.Count orden(es)</small></article>
+        <article class="purchase-kpi"><i class="ri-file-list-3-line"></i><div><span>Borradores</span><strong>@TotalBorradores</strong><small>Órdenes por completar</small></div><b style="--progress:@Porcentaje(TotalBorradores)%"></b></article>
+        <article class="purchase-kpi purchase-kpi-warning"><i class="ri-time-line"></i><div><span>Por aprobar</span><strong>@TotalAprobadas</strong><small>Pendientes de revisión</small></div><b style="--progress:@Porcentaje(TotalAprobadas)%"></b></article>
+        <article class="purchase-kpi purchase-kpi-info"><i class="ri-send-plane-line"></i><div><span>Enviadas</span><strong>@TotalEnviadas</strong><small>Esperando recepción</small></div><b style="--progress:@Porcentaje(TotalEnviadas)%"></b></article>
+        <article class="purchase-kpi purchase-kpi-success"><i class="ri-box-3-line"></i><div><span>Recepcionadas</span><strong>@TotalRecepcionadas</strong><small>Completadas</small></div><b style="--progress:@Porcentaje(TotalRecepcionadas)%"></b></article>
+        <article class="purchase-kpi purchase-kpi-total"><i class="ri-coins-line"></i><div><span>Valor total (filtrado)</span><strong>@TotalOrdenes.ToString("C2")</strong><small>@OrdenesVisibles.Count() orden(es)</small></div></article>
     </section>
 
     @if (!string.IsNullOrWhiteSpace(error))
@@ -127,7 +119,7 @@
                     {
                         <tr><td colspan="7"><div class="purchase-table-state" aria-live="polite"><i class="ri-loader-4-line"></i><span>Cargando órdenes...</span></div></td></tr>
                     }
-                    else if (ordenes.Count == 0)
+                    else if (!OrdenesVisibles.Any())
                     {
                         <tr><td colspan="7"><div class="purchase-table-state is-empty" aria-live="polite"><i class="ri-file-list-3-line"></i><span>No hay órdenes de compra para los filtros seleccionados.</span></div></td></tr>
                     }
@@ -351,7 +343,24 @@
     private int TotalBorradores => ordenes.Count(x => x.Estado == "BORRADOR");
     private int TotalAprobadas => ordenes.Count(x => x.Estado == "APROBADA");
     private int TotalEnviadas => ordenes.Count(x => x.Estado == "ENVIADA");
-    private decimal TotalOrdenes => ordenes.Sum(x => x.Total);
+    private int TotalRecepcionadas => ordenes.Count(x => x.Estado is "RECEPCIONADA" or "RECIBIDA");
+    private int TotalCanceladas => ordenes.Count(x => x.Estado == "CANCELADA");
+    private int Porcentaje(int cantidad) =>
+        ordenes.Count == 0 ? 0 : (int)Math.Round(cantidad * 100d / ordenes.Count);
+    private decimal TotalOrdenes => OrdenesVisibles.Sum(x => x.Total);
+    private IEnumerable<EContaxOrdenCompraListaDto> OrdenesVisibles => ordenes.Where(x =>
+        (string.IsNullOrWhiteSpace(estadoFiltro) ||
+         x.Estado == estadoFiltro ||
+         (estadoFiltro == "RECEPCIONADA" && x.Estado == "RECIBIDA")) &&
+        (!fechaDesde.HasValue || x.FechaEmision.Date >= fechaDesde.Value.Date) &&
+        (!fechaHasta.HasValue || x.FechaEmision.Date <= fechaHasta.Value.Date));
+    private IEnumerable<EstadoResumen> EstadosResumen =>
+    [
+        new("BORRADOR", "Borradores", TotalBorradores, "is-draft"),
+        new("APROBADA", "Por aprobar", TotalAprobadas, "is-warning"),
+        new("ENVIADA", "Enviadas", TotalEnviadas, "is-sent"),
+        new("RECEPCIONADA", "Recepcionadas", TotalRecepcionadas, "is-received")
+    ];
     private decimal SubtotalEditor => editor.Detalles.Sum(x => x.Subtotal);
     private decimal IvaEditor => editor.Detalles.Sum(x => x.Iva);
     private decimal TotalEditor => SubtotalEditor + IvaEditor;
@@ -681,6 +690,8 @@
         "CANCELADA" => "text-bg-danger",
         _ => "text-bg-secondary"
     };
+
+    private sealed record EstadoResumen(string Valor, string Texto, int Total, string Clase);
 
     private sealed class EditorModel
     {
