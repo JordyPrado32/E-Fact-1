@@ -234,6 +234,24 @@
                             <div><span>CON DIFERENCIA</span><strong>@LineasConDiferencia</strong></div>
                             <div><span>VERIFICADAS</span><strong>@LineasVerificadas/@editor.Detalles.Count</strong></div>
                         </div>
+                        <div class="row g-2 align-items-end px-3 pt-3">
+                            <div class="col-lg-6">
+                                <label class="form-label" for="codigo-barras-recepcion"><i class="ri-barcode-line me-1"></i>Escanear código de barras</label>
+                                <input id="codigo-barras-recepcion"
+                                       class="form-control"
+                                       @bind="codigoBarrasRecepcion"
+                                       @bind:event="oninput"
+                                       @onkeydown="ProcesarCodigoBarrasRecepcionAsync"
+                                       placeholder="Escanea el producto y presiona Enter"
+                                       autocomplete="off"
+                                       disabled="@(guardando || !PuedeEditar)" />
+                                <small class="text-muted">Cada lectura suma una unidad a la línea pendiente.</small>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(mensajeEscaneoRecepcion))
+                        {
+                            <div class="alert alert-info py-2 mx-3 mt-3 mb-0">@mensajeEscaneoRecepcion</div>
+                        }
                         @if (MostrarErrorSinCantidad)
                         {
                             <div class="purchase-inline-error">Registra al menos una cantidad recibida antes de guardar.</div>
@@ -304,6 +322,9 @@
     private string? error;
     private bool cargando;
     private bool guardando;
+    private string codigoBarrasRecepcion = string.Empty;
+    private string? mensajeEscaneoRecepcion;
+    private bool procesandoCodigoBarrasRecepcion;
     private bool mostrarEditor;
     private bool mostrarErrores;
     private int usuarioId;
@@ -419,6 +440,8 @@
     {
         error = null;
         editor = new EditorModel { FechaRecepcion = DateTime.Today };
+        codigoBarrasRecepcion = string.Empty;
+        mensajeEscaneoRecepcion = null;
         mostrarErrores = false;
         try
         {
@@ -493,6 +516,8 @@
             if (detalle is null)
                 return;
             editor = EditorModel.From(detalle);
+            codigoBarrasRecepcion = string.Empty;
+            mensajeEscaneoRecepcion = null;
             mostrarErrores = false;
             editorSnapshot = JsonSerializer.Serialize(editor);
             mostrarEditor = true;
@@ -604,6 +629,47 @@
             linea.CantidadRecibida = linea.CantidadPendiente;
     }
 
+    private Task ProcesarCodigoBarrasRecepcionAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter" || guardando || !PuedeEditar || procesandoCodigoBarrasRecepcion)
+            return Task.CompletedTask;
+
+        var codigo = (codigoBarrasRecepcion ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(codigo))
+            return Task.CompletedTask;
+
+        procesandoCodigoBarrasRecepcion = true;
+        try
+        {
+            var linea = editor.Detalles.FirstOrDefault(x =>
+                string.Equals(x.CodigoPrincipal?.Trim(), codigo, StringComparison.OrdinalIgnoreCase) ||
+                x.CodigoProducto.ToString() == codigo);
+
+            if (linea is null)
+            {
+                mensajeEscaneoRecepcion = $"No se encontró el producto {codigo} en la orden seleccionada.";
+                return Task.CompletedTask;
+            }
+
+            if (linea.CantidadRecibida >= linea.CantidadPendiente)
+            {
+                mensajeEscaneoRecepcion = $"{linea.Descripcion} ya completó la cantidad pendiente.";
+                return Task.CompletedTask;
+            }
+
+            linea.CantidadRecibida = Math.Min(linea.CantidadPendiente, linea.CantidadRecibida + 1m);
+            linea.Verificado = true;
+            mensajeEscaneoRecepcion = $"Producto recibido: {linea.Descripcion} ({linea.CantidadRecibida:0.####}).";
+            error = null;
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            codigoBarrasRecepcion = string.Empty;
+            procesandoCodigoBarrasRecepcion = false;
+        }
+    }
+
     private void MarcarTodoVerificado()
     {
         if (!PuedeEditar)
@@ -642,6 +708,8 @@
             return;
         mostrarEditor = false;
         editorSnapshot = null;
+        codigoBarrasRecepcion = string.Empty;
+        mensajeEscaneoRecepcion = null;
         mostrarErrores = false;
     }
 

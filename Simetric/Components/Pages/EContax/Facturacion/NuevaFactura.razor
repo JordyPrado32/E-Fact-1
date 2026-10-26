@@ -772,6 +772,21 @@
                     </div>
                 }
 
+                <div class="row g-2 align-items-end mb-3">
+                    <div class="col-lg-6">
+                        <label class="n-label" for="codigo-barras-venta"><i class="bi bi-upc-scan me-1"></i>Escanear código de barras</label>
+                        <input id="codigo-barras-venta"
+                               class="n-input"
+                               @bind="codigoBarrasVenta"
+                               @bind:event="oninput"
+                               @onkeydown="ProcesarCodigoBarrasVentaAsync"
+                               placeholder="Escanea o escribe el código y presiona Enter"
+                               autocomplete="off"
+                               disabled="@sinCaja" />
+                        <small class="text-muted">Usa el código principal configurado en el producto.</small>
+                    </div>
+                </div>
+
                 <div class="table-responsive n-table-container">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="n-table-header bg-light">
@@ -1508,7 +1523,7 @@
                                 </div>
 
                                 <div class="col-md-4">
-                                    <label class="n-label">Codigo *</label>
+                                    <label class="n-label">Código de barras / código principal *</label>
                                     <div class="n-field-shell">
                                         <InputText class="n-input" @bind-Value="productoModal.CodigoPrincipal" placeholder="10001" />
                                     </div>
@@ -2027,6 +2042,8 @@
 
     // ===================== PRODUCTOS =====================
     private List<ProductoLookupDetalleDto>? sugerenciasProductos;
+    private string codigoBarrasVenta = string.Empty;
+    private bool procesandoCodigoBarrasVenta;
     private string nuevoCodProducto = "";
     private string nuevoDescripcion = "";
     private decimal nuevoCantidad = 1;
@@ -4341,6 +4358,46 @@
         nuevoCodProducto = e.Value?.ToString() ?? "";
         productoLookup = null;
         sugerenciasProductos = await FacturacionService.BuscarProductosFiltroAsync(UsuarioProductos, nuevoCodProducto, EsContextoBackOffice);
+    }
+
+    private async Task ProcesarCodigoBarrasVentaAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter" || sinCaja || procesandoCodigoBarrasVenta)
+            return;
+
+        var codigo = (codigoBarrasVenta ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(codigo))
+            return;
+
+        procesandoCodigoBarrasVenta = true;
+        try
+        {
+            var producto = await FacturacionService.BuscarProductoParaDetalleAsync(UsuarioProductos, codigo, EsContextoBackOffice);
+            if (producto is null)
+            {
+                msgDetalle = $"No existe un producto con el código de barras {codigo}.";
+                return;
+            }
+
+            var detalleExistente = detallesDto.FirstOrDefault(x => x.Codproducto == producto.Codproducto);
+            if (detalleExistente is null)
+            {
+                AgregarProductoAlDetalle(producto);
+            }
+            else
+            {
+                OnCantidadDetalleInput(
+                    detalleExistente,
+                    (detalleExistente.Cantidad + 1m).ToString("0.##", CultureInfo.InvariantCulture));
+            }
+
+            msgDetalle = $"Producto escaneado: {producto.Descripcion}.";
+        }
+        finally
+        {
+            codigoBarrasVenta = string.Empty;
+            procesandoCodigoBarrasVenta = false;
+        }
     }
 
     private async Task MostrarSugerenciasProductosAsync(FocusEventArgs _)

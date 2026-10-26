@@ -389,7 +389,8 @@ public sealed class EDeclaraComprasService
     public async Task<EDeclaraImportacionResultado> ConsultarSriAsync(
         int userId, int contribuyenteId, int anio, int periodo, int tipoDocumento)
     {
-        var clave = await _credentialService.ObtenerClaveContribuyenteAsync(userId, contribuyenteId);
+        var clave = await _credentialService.ObtenerClaveContribuyenteAsync(userId, contribuyenteId)
+            ?? await _credentialService.ObtenerClaveAsync(userId);
         if (string.IsNullOrWhiteSpace(clave))
             throw new InvalidOperationException("Configura la clave SRI del contribuyente antes de consultar.");
         var ruc = await ValidarContribuyenteAsync(userId, contribuyenteId);
