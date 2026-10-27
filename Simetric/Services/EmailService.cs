@@ -161,7 +161,6 @@ public class EmailService : IEmailService
     private const string EfactLogoUrl = "https://efact.numericasoftware.com/images/services/efact.png";
     private const string ContabilidadNotificacionPagos = "contabilidad@numericasoftware.com";
     private const string AdministrativoDocumentosAgotados = "administrativo@numericasoftware.com";
-
     private readonly AppDbContext _db;
     private readonly AuditService _auditService;
     private readonly ILogger<EmailService> _logger;

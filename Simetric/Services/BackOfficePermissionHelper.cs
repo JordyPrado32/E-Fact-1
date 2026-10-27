@@ -7,7 +7,6 @@ namespace Simetric.Services;
 public static class BackOfficePermissionHelper
 {
     private const string UsuarioERubricaEmail = "servicioalcliente@numerosasesores.com";
-    private const string AdministradorUanacreditosEmail = "jordypm180806@gmail.com";
     private const string GestorCatalogoBackOfficeEmail = "lguairacaja@numerosasesores.com";
     public const string UsuarioBackOfficeMultiServicioEmail = "backoffice@numericasoftware.com";
 
@@ -32,12 +31,10 @@ public static class BackOfficePermissionHelper
     public static bool PuedeVerERubrica(string? email) =>
         string.Equals(email?.Trim(), UsuarioERubricaEmail, StringComparison.OrdinalIgnoreCase);
 
-    public static bool PuedeGestionarUanacreditos(string? email) =>
-        string.Equals(email?.Trim(), AdministradorUanacreditosEmail, StringComparison.OrdinalIgnoreCase);
+    public static bool PuedeGestionarUanacreditos(string? email) => false;
 
     public static bool PuedeGestionarCatalogo(string? email) =>
-        string.Equals(email?.Trim(), GestorCatalogoBackOfficeEmail, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(email?.Trim(), AdministradorUanacreditosEmail, StringComparison.OrdinalIgnoreCase);
+        string.Equals(email?.Trim(), GestorCatalogoBackOfficeEmail, StringComparison.OrdinalIgnoreCase);
 
     public static async Task<bool> PuedeGestionarCatalogoAsync(
         ClaimsPrincipal user,
